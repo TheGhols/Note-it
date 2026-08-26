@@ -9,8 +9,8 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum LayerMode {
     #[default]
-    Desktop,
     Overlay,
+    Desktop,
     Hidden,
 }
 
@@ -39,11 +39,11 @@ fn default_y() -> i32 {
 }
 
 fn default_width() -> i32 {
-    280
+    360
 }
 
 fn default_height() -> i32 {
-    320
+    300
 }
 
 fn default_true() -> bool {
@@ -55,8 +55,8 @@ impl Default for NoteWindowState {
         Self {
             x: 100,
             y: 100,
-            width: 280,
-            height: 320,
+            width: 360,
+            height: 300,
             is_open: true,
             monitor: None,
         }
@@ -126,8 +126,8 @@ mod tests {
             NoteWindowState {
                 x: 200,
                 y: 150,
-                width: 300,
-                height: 350,
+                width: 360,
+                height: 300,
                 is_open: true,
                 monitor: Some("DP-1".to_string()),
             },

@@ -69,6 +69,9 @@ impl NoteWindow {
             .user_content_manager(&content_manager)
             .build();
 
+        // Ensure transparent webview background so custom post-it border radius renders cleanly
+        webview.set_background_color(&gtk4::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+
         // Connect Webview Messages
         let doc_clone = Rc::clone(&doc_rc);
         let storage_clone = options.storage.clone();

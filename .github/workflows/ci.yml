@@ -38,6 +38,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -45,16 +50,16 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ./ui
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: TypeScript Lint
         working-directory: ./ui
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Run Frontend Tests
         working-directory: ./ui
-        run: npm run test
+        run: pnpm run test
 
       - name: Build Frontend Bundle
         working-directory: ./ui
-        run: npm run build
+        run: pnpm run build

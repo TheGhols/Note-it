@@ -41,8 +41,8 @@ fn main() -> glib::ExitCode {
         let parsed = match CliArgs::try_parse_from(&args_vec) {
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!("{e}");
-                return glib::ExitCode::FAILURE;
+                let _ = e.print();
+                return glib::ExitCode::SUCCESS;
             }
         };
 
@@ -53,6 +53,5 @@ fn main() -> glib::ExitCode {
         glib::ExitCode::SUCCESS
     });
 
-    let empty_args: [&str; 0] = [];
-    app.run_with_args(&empty_args)
+    app.run()
 }

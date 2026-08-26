@@ -32,6 +32,16 @@ function setFontSize(size: number): void {
   document.documentElement.style.setProperty('--note-font-size', `${clamped}px`);
 }
 
+function flushSave(): void {
+  if (activeNoteId && noteEditor) {
+    const markdown = noteEditor.getMarkdown();
+    bridge.sendMessage({
+      type: 'content_changed',
+      payload: { id: activeNoteId, content: markdown },
+    });
+  }
+}
+
 function initUI(): void {
   const editorContainer = document.getElementById('editor-container');
   if (!editorContainer) return;
@@ -69,6 +79,7 @@ function initUI(): void {
   btnClose?.addEventListener('click', (e) => {
     e.preventDefault();
     if (activeNoteId) {
+      flushSave();
       bridge.sendMessage({
         type: 'close_requested',
         payload: { id: activeNoteId },
@@ -81,10 +92,12 @@ function initUI(): void {
     if (e.ctrlKey || e.metaKey) {
       if (e.key === 'n' || e.key === 'N') {
         e.preventDefault();
+        flushSave();
         bridge.sendMessage({ type: 'new_note_requested' });
       } else if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
         if (activeNoteId) {
+          flushSave();
           bridge.sendMessage({
             type: 'close_requested',
             payload: { id: activeNoteId },
@@ -110,6 +123,11 @@ function initUI(): void {
         }
       }
     }
+  });
+
+  // Flush save on blur / beforeunload
+  window.addEventListener('beforeunload', () => {
+    flushSave();
   });
 
   // External link interceptor

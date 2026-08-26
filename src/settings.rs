@@ -26,11 +26,11 @@ fn default_font_size() -> u32 {
 }
 
 fn default_note_width() -> i32 {
-    280
+    360
 }
 
 fn default_note_height() -> i32 {
-    320
+    300
 }
 
 fn default_autosave_interval_ms() -> u32 {

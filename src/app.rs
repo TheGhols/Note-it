@@ -4,6 +4,7 @@ use crate::note_window::{NoteWindow, NoteWindowOptions};
 use crate::settings::AppConfig;
 use crate::state::{AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
+use gio::prelude::*;
 use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,10 +23,14 @@ pub struct AppContext {
 pub struct NoteItApp {
     app: gtk4::Application,
     context: Rc<RefCell<AppContext>>,
+    _hold_guard: gio::ApplicationHoldGuard,
 }
 
 impl NoteItApp {
     pub fn new(app: &gtk4::Application) -> Self {
+        // Hold the application guard to keep GTK process alive across window hide/close
+        let hold_guard = app.hold();
+
         let storage = StorageManager::new().expect("Failed to initialize XDG storage");
         let config = AppConfig::load_from_file(&storage.config_file_path());
         let state = AppState::load_from_file(&storage.state_file_path());
@@ -42,6 +47,7 @@ impl NoteItApp {
         Self {
             app: app.clone(),
             context,
+            _hold_guard: hold_guard,
         }
     }
 
@@ -86,7 +92,7 @@ impl NoteItApp {
             let ctx = self.context.borrow();
             let ids = ctx.storage.list_notes().unwrap_or_default();
             let mode = if is_background {
-                LayerMode::Desktop
+                LayerMode::Hidden
             } else {
                 ctx.state.active_layer_mode
             };
@@ -197,6 +203,7 @@ impl NoteItApp {
         let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
     }
 
+    #[allow(dead_code)]
     pub fn close_note(&self, id: &Uuid) {
         let mut ctx = self.context.borrow_mut();
         if let Some(win) = ctx.windows.remove(id) {
@@ -240,19 +247,77 @@ pub struct NoteItAppClone {
 
 impl NoteItAppClone {
     pub fn create_new_note(&self) {
-        let app = NoteItApp {
-            app: self.app.clone(),
-            context: Rc::clone(&self.context),
+        let ctx_clone = Rc::clone(&self.context);
+        let mut ctx = ctx_clone.borrow_mut();
+        let mut doc = NoteDocument::new_empty();
+        doc.metadata.color = ctx.config.default_color.clone();
+        doc.metadata.font_size = ctx.config.default_font_size;
+
+        let _ = ctx.storage.save_note_atomic(&doc);
+
+        let note_id = doc.metadata.id;
+        let win_state = NoteWindowState {
+            x: 120 + (ctx.windows.len() as i32 * 30),
+            y: 120 + (ctx.windows.len() as i32 * 30),
+            width: ctx.config.default_width,
+            height: ctx.config.default_height,
+            is_open: true,
+            monitor: None,
         };
-        app.create_new_note();
+
+        let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
+            LayerMode::Overlay
+        } else {
+            ctx.state.active_layer_mode
+        };
+
+        let self_clone1 = self.clone();
+        let on_new_note = Rc::new(move || {
+            self_clone1.create_new_note();
+        });
+
+        let self_clone2 = self.clone();
+        let on_close = Rc::new(move |id| {
+            self_clone2.close_note(&id);
+        });
+
+        let note_window = NoteWindow::new(NoteWindowOptions {
+            app: &self.app,
+            document: doc,
+            state: win_state.clone(),
+            layer_mode: mode,
+            storage: ctx.storage.clone(),
+            ui_dist_path: &ctx.ui_dist_path,
+            on_new_note,
+            on_close,
+        });
+
+        ctx.state.notes.insert(note_id, win_state);
+        ctx.windows.insert(note_id, note_window);
+        ctx.state.active_layer_mode = mode;
+        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
     }
 
+    #[allow(dead_code)]
     pub fn close_note(&self, id: &Uuid) {
-        let app = NoteItApp {
+        let mut ctx = self.context.borrow_mut();
+        if let Some(win) = ctx.windows.remove(id) {
+            win.save_now();
+            win.window.close();
+        }
+        if let Some(entry) = ctx.state.notes.get_mut(id) {
+            entry.is_open = false;
+        }
+        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+    }
+}
+
+impl Clone for NoteItAppClone {
+    fn clone(&self) -> Self {
+        Self {
             app: self.app.clone(),
             context: Rc::clone(&self.context),
-        };
-        app.close_note(id);
+        }
     }
 }
 
