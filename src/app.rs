@@ -1,4 +1,8 @@
 use crate::cli::CliCommand;
+use crate::layer_shell::{
+    calculate_cascade_position, find_monitor_by_connector, DEFAULT_MONITOR_HEIGHT,
+    DEFAULT_MONITOR_WIDTH,
+};
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
 use crate::settings::AppConfig;
@@ -27,7 +31,6 @@ pub struct NoteItApp {
 
 impl NoteItApp {
     pub fn new(app: &gtk4::Application) -> Self {
-        // Hold the application guard to keep GTK process alive across window hide/close
         let hold_guard = app.hold();
 
         let storage = StorageManager::new().expect("Failed to initialize XDG storage");
@@ -50,44 +53,59 @@ impl NoteItApp {
         }
     }
 
+    pub fn controller(&self) -> NoteItAppClone {
+        NoteItAppClone {
+            app: self.app.clone(),
+            context: Rc::clone(&self.context),
+        }
+    }
+
     pub fn handle_command(&self, command: Option<CliCommand>, is_background: bool) {
+        let controller = self.controller();
         match command {
             Some(CliCommand::New) => {
-                self.create_new_note();
+                controller.create_new_note();
             }
             Some(CliCommand::Toggle) => {
-                let mut ctx = self.context.borrow_mut();
-                let next_mode = match ctx.state.active_layer_mode {
+                let current_mode = controller.context.borrow().state.active_layer_mode;
+                let next_mode = match current_mode {
                     LayerMode::Desktop => LayerMode::Overlay,
                     LayerMode::Overlay => LayerMode::Desktop,
                     LayerMode::Hidden => LayerMode::Overlay,
                 };
-                self.set_layer_mode_internal(&mut ctx, next_mode);
+                controller.set_layer_mode(next_mode);
             }
             Some(CliCommand::Show) => {
-                let mut ctx = self.context.borrow_mut();
-                self.set_layer_mode_internal(&mut ctx, LayerMode::Overlay);
+                controller.set_layer_mode(LayerMode::Overlay);
             }
             Some(CliCommand::Hide) => {
-                let mut ctx = self.context.borrow_mut();
-                self.set_layer_mode_internal(&mut ctx, LayerMode::Hidden);
+                controller.set_layer_mode(LayerMode::Hidden);
             }
             Some(CliCommand::Quit) => {
-                let mut ctx = self.context.borrow_mut();
-                self.save_and_quit(&mut ctx);
+                controller.save_and_quit();
             }
             None => {
-                if is_background {
-                    self.restore_saved_notes(true);
-                } else {
-                    self.restore_saved_notes(false);
-                }
+                controller.restore_saved_notes(is_background);
             }
         }
     }
+}
 
-    fn restore_saved_notes(&self, is_background: bool) {
-        let (note_ids, target_mode) = {
+#[derive(Clone)]
+pub struct NoteItAppClone {
+    pub app: gtk4::Application,
+    pub context: Rc<RefCell<AppContext>>,
+}
+
+impl NoteItAppClone {
+    pub fn restore_saved_notes(&self, is_background: bool) {
+        if is_background {
+            let mut ctx = self.context.borrow_mut();
+            ctx.state.active_layer_mode = LayerMode::Hidden;
+            return;
+        }
+
+        let (all_ids, mut target_mode) = {
             let ctx = self.context.borrow();
             let ids = match ctx.storage.list_notes() {
                 Ok(ids) => ids,
@@ -96,123 +114,108 @@ impl NoteItApp {
                     Vec::new()
                 }
             };
-            let mode = if is_background {
-                LayerMode::Hidden
+            let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
+                LayerMode::Overlay
             } else {
                 ctx.state.active_layer_mode
             };
             (ids, mode)
         };
 
-        if note_ids.is_empty() && !is_background {
+        if target_mode == LayerMode::Hidden {
+            target_mode = LayerMode::Overlay;
+        }
+
+        // Filter only notes that are open (is_open == true). Unsaved state defaults to is_open = true for backward compatibility.
+        let open_ids: Vec<Uuid> = {
+            let ctx = self.context.borrow();
+            all_ids
+                .into_iter()
+                .filter(|id| ctx.state.notes.get(id).map(|s| s.is_open).unwrap_or(true))
+                .collect()
+        };
+
+        if open_ids.is_empty() {
             self.create_new_note();
             return;
         }
 
-        let mut ctx = self.context.borrow_mut();
-        for id in note_ids {
-            if !ctx.windows.contains_key(&id) {
-                match ctx.storage.load_note(&id) {
-                    Ok(doc) => {
-                        let win_state = ctx
-                            .state
-                            .notes
-                            .get(&id)
-                            .cloned()
-                            .unwrap_or_else(NoteWindowState::default);
-
-                        let on_new_note = {
-                            let self_clone = self.clone_rc();
-                            Rc::new(move || {
-                                self_clone.create_new_note();
-                            })
-                        };
-
-                        let on_close = {
-                            let self_clone = self.clone_rc();
-                            Rc::new(move |note_id| self_clone.close_note(&note_id))
-                        };
-
-                        let note_window = NoteWindow::new(NoteWindowOptions {
-                            app: &self.app,
-                            document: doc,
-                            state: win_state,
-                            layer_mode: target_mode,
-                            storage: ctx.storage.clone(),
-                            ui_dist_path: &ctx.ui_dist_path,
-                            on_new_note,
-                            on_close,
-                        });
-
-                        ctx.windows.insert(id, note_window);
-                    }
-                    Err(error) => eprintln!("Failed to load note {id}: {error}"),
-                }
-            }
+        for id in open_ids {
+            self.instantiate_note_by_id(id, target_mode);
         }
 
+        let mut ctx = self.context.borrow_mut();
         ctx.state.active_layer_mode = target_mode;
     }
 
     pub fn create_new_note(&self) {
-        let mut ctx = self.context.borrow_mut();
         let mut doc = NoteDocument::new_empty();
-        doc.metadata.color = ctx.config.default_color.clone();
-        doc.metadata.font_size = ctx.config.default_font_size;
+        let note_id = doc.metadata.id;
 
-        if let Err(error) = ctx.storage.save_note_atomic(&doc) {
-            eprintln!("Failed to create note {}: {error}", doc.metadata.id);
-            return;
+        let (mut target_mode, win_state) = {
+            let ctx = self.context.borrow();
+            doc.metadata.color = ctx.config.default_color.clone();
+            doc.metadata.font_size = ctx.config.default_font_size;
+
+            if let Err(error) = ctx.storage.save_note_atomic(&doc) {
+                eprintln!("Failed to save new note {note_id}: {error}");
+                return;
+            }
+
+            let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
+                LayerMode::Overlay
+            } else {
+                ctx.state.active_layer_mode
+            };
+
+            let display = gtk4::gdk::Display::default();
+            let (_, conn_name, mon_w, mon_h) = find_monitor_by_connector(display.as_ref(), None);
+
+            let (cx, cy) = calculate_cascade_position(
+                ctx.windows.len(),
+                mon_w,
+                mon_h,
+                ctx.config.default_width,
+                ctx.config.default_height,
+            );
+
+            let win_state = NoteWindowState {
+                x: cx,
+                y: cy,
+                width: ctx.config.default_width,
+                height: ctx.config.default_height,
+                is_open: true,
+                monitor: conn_name,
+            };
+
+            (mode, win_state)
+        };
+
+        if target_mode == LayerMode::Hidden {
+            target_mode = LayerMode::Overlay;
         }
 
-        let note_id = doc.metadata.id;
-        let win_state = NoteWindowState {
-            x: 120 + (ctx.windows.len() as i32 * 30),
-            y: 120 + (ctx.windows.len() as i32 * 30),
-            width: ctx.config.default_width,
-            height: ctx.config.default_height,
-            is_open: true,
-            monitor: None,
+        let note_window = {
+            let ctx = self.context.borrow();
+            instantiate_note_window(
+                &self.app,
+                &ctx,
+                self.clone(),
+                doc,
+                win_state.clone(),
+                target_mode,
+            )
         };
 
-        let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
-            LayerMode::Overlay
-        } else {
-            ctx.state.active_layer_mode
-        };
-
-        let on_new_note = {
-            let self_clone = self.clone_rc();
-            Rc::new(move || {
-                self_clone.create_new_note();
-            })
-        };
-
-        let on_close = {
-            let self_clone = self.clone_rc();
-            Rc::new(move |id| self_clone.close_note(&id))
-        };
-
-        let note_window = NoteWindow::new(NoteWindowOptions {
-            app: &self.app,
-            document: doc,
-            state: win_state.clone(),
-            layer_mode: mode,
-            storage: ctx.storage.clone(),
-            ui_dist_path: &ctx.ui_dist_path,
-            on_new_note,
-            on_close,
-        });
-
+        let mut ctx = self.context.borrow_mut();
         ctx.state.notes.insert(note_id, win_state);
         ctx.windows.insert(note_id, note_window);
-        ctx.state.active_layer_mode = mode;
+        ctx.state.active_layer_mode = target_mode;
         if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
             eprintln!("Failed to persist application state after note creation: {error}");
         }
     }
 
-    #[allow(dead_code)]
     pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
         let mut ctx = self.context.borrow_mut();
         if !ctx.windows.contains_key(id) {
@@ -232,17 +235,69 @@ impl NoteItApp {
         Ok(())
     }
 
-    fn set_layer_mode_internal(&self, ctx: &mut AppContext, mode: LayerMode) {
-        ctx.state.active_layer_mode = mode;
-        for window in ctx.windows.values() {
-            window.set_layer_mode(mode);
+    pub fn update_geometry(&self, id: Uuid, geom: NoteWindowState) {
+        let mut ctx = self.context.borrow_mut();
+        ctx.state.notes.insert(id, geom);
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist updated note geometry: {error}");
         }
+    }
+
+    pub fn set_layer_mode(&self, mode: LayerMode) {
+        let needs_instantiation = {
+            let mut ctx = self.context.borrow_mut();
+            ctx.state.active_layer_mode = mode;
+
+            match mode {
+                LayerMode::Hidden => {
+                    // Flush pending saves on all windows before closing them to free memory
+                    for (id, window) in &ctx.windows {
+                        if let Err(e) = window.save_now() {
+                            eprintln!("Failed to save note {id} on hide: {e}");
+                        }
+                        window.close_after_save();
+                    }
+                    ctx.windows.clear();
+                    false
+                }
+                LayerMode::Desktop | LayerMode::Overlay => {
+                    if ctx.windows.is_empty() {
+                        true
+                    } else {
+                        for window in ctx.windows.values() {
+                            window.set_layer_mode(mode);
+                        }
+                        false
+                    }
+                }
+            }
+        };
+
+        if needs_instantiation && mode != LayerMode::Hidden {
+            let all_ids = {
+                let ctx = self.context.borrow();
+                ctx.storage.list_notes().unwrap_or_default()
+            };
+            let open_ids: Vec<Uuid> = {
+                let ctx = self.context.borrow();
+                all_ids
+                    .into_iter()
+                    .filter(|id| ctx.state.notes.get(id).map(|s| s.is_open).unwrap_or(true))
+                    .collect()
+            };
+            for id in open_ids {
+                self.instantiate_note_by_id(id, mode);
+            }
+        }
+
+        let ctx = self.context.borrow();
         if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
             eprintln!("Failed to persist layer mode: {error}");
         }
     }
 
-    fn save_and_quit(&self, ctx: &mut AppContext) {
+    pub fn save_and_quit(&self) {
+        let ctx = self.context.borrow();
         let mut save_failed = false;
         for (id, window) in &ctx.windows {
             if let Err(error) = window.save_now() {
@@ -261,103 +316,86 @@ impl NoteItApp {
         self.app.quit();
     }
 
-    fn clone_rc(&self) -> NoteItAppClone {
-        NoteItAppClone {
-            app: self.app.clone(),
-            context: Rc::clone(&self.context),
-        }
-    }
-}
-
-pub struct NoteItAppClone {
-    pub app: gtk4::Application,
-    pub context: Rc<RefCell<AppContext>>,
-}
-
-impl NoteItAppClone {
-    pub fn create_new_note(&self) {
-        let ctx_clone = Rc::clone(&self.context);
-        let mut ctx = ctx_clone.borrow_mut();
-        let mut doc = NoteDocument::new_empty();
-        doc.metadata.color = ctx.config.default_color.clone();
-        doc.metadata.font_size = ctx.config.default_font_size;
-
-        if let Err(error) = ctx.storage.save_note_atomic(&doc) {
-            eprintln!("Failed to create note {}: {error}", doc.metadata.id);
+    fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
+        if self.context.borrow().windows.contains_key(&id) {
             return;
         }
 
-        let note_id = doc.metadata.id;
-        let win_state = NoteWindowState {
-            x: 120 + (ctx.windows.len() as i32 * 30),
-            y: 120 + (ctx.windows.len() as i32 * 30),
-            width: ctx.config.default_width,
-            height: ctx.config.default_height,
-            is_open: true,
-            monitor: None,
+        let (doc_res, win_state) = {
+            let ctx = self.context.borrow();
+            let doc = ctx.storage.load_note(&id);
+            let win_state = ctx
+                .state
+                .notes
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(NoteWindowState::default);
+            (doc, win_state)
         };
 
-        let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
-            LayerMode::Overlay
-        } else {
-            ctx.state.active_layer_mode
-        };
+        match doc_res {
+            Ok(doc) => {
+                let note_window = {
+                    let ctx = self.context.borrow();
+                    instantiate_note_window(&self.app, &ctx, self.clone(), doc, win_state, mode)
+                };
 
-        let self_clone1 = self.clone();
-        let on_new_note = Rc::new(move || {
-            self_clone1.create_new_note();
-        });
-
-        let self_clone2 = self.clone();
-        let on_close = Rc::new(move |id| self_clone2.close_note(&id));
-
-        let note_window = NoteWindow::new(NoteWindowOptions {
-            app: &self.app,
-            document: doc,
-            state: win_state.clone(),
-            layer_mode: mode,
-            storage: ctx.storage.clone(),
-            ui_dist_path: &ctx.ui_dist_path,
-            on_new_note,
-            on_close,
-        });
-
-        ctx.state.notes.insert(note_id, win_state);
-        ctx.windows.insert(note_id, note_window);
-        ctx.state.active_layer_mode = mode;
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
-            eprintln!("Failed to persist application state after note creation: {error}");
+                let mut ctx = self.context.borrow_mut();
+                ctx.windows.insert(id, note_window);
+            }
+            Err(error) => eprintln!("Failed to load note {id}: {error}"),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
-        let mut ctx = self.context.borrow_mut();
-        if !ctx.windows.contains_key(id) {
-            return Err("note window is not instantiated".to_string());
-        }
-
-        let previous_state = ctx.state.clone();
-        ctx.state.notes.entry(*id).or_default().is_open = false;
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
-            ctx.state = previous_state;
-            return Err(format!("failed to persist closed note state: {error}"));
-        }
-
-        if let Some(win) = ctx.windows.remove(id) {
-            win.close_after_save();
-        }
-        Ok(())
     }
 }
 
-impl Clone for NoteItAppClone {
-    fn clone(&self) -> Self {
-        Self {
-            app: self.app.clone(),
-            context: Rc::clone(&self.context),
-        }
-    }
+fn instantiate_note_window(
+    app: &gtk4::Application,
+    ctx: &AppContext,
+    app_controller: NoteItAppClone,
+    doc: NoteDocument,
+    win_state: NoteWindowState,
+    layer_mode: LayerMode,
+) -> NoteWindow {
+    let display = gtk4::gdk::Display::default();
+    let (monitor, monitor_name, mon_w, mon_h) =
+        find_monitor_by_connector(display.as_ref(), win_state.monitor.as_deref());
+
+    let app_clone1 = app_controller.clone();
+    let on_new_note = Rc::new(move || {
+        app_clone1.create_new_note();
+    });
+
+    let app_clone2 = app_controller.clone();
+    let on_close = Rc::new(move |id| app_clone2.close_note(&id));
+
+    let app_clone3 = app_controller.clone();
+    let on_geometry_changed = Rc::new(move |id, geom| {
+        app_clone3.update_geometry(id, geom);
+    });
+
+    NoteWindow::new(NoteWindowOptions {
+        app,
+        document: doc,
+        state: win_state,
+        layer_mode,
+        storage: ctx.storage.clone(),
+        ui_dist_path: &ctx.ui_dist_path,
+        monitor,
+        monitor_name,
+        monitor_width: if mon_w > 0 {
+            mon_w
+        } else {
+            DEFAULT_MONITOR_WIDTH
+        },
+        monitor_height: if mon_h > 0 {
+            mon_h
+        } else {
+            DEFAULT_MONITOR_HEIGHT
+        },
+        on_new_note,
+        on_close,
+        on_geometry_changed,
+    })
 }
 
 fn find_ui_dist_path() -> PathBuf {

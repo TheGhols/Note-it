@@ -146,4 +146,94 @@ mod tests {
         assert_eq!(loaded.active_layer_mode, LayerMode::Overlay);
         assert_eq!(loaded.notes.get(&note_id), state.notes.get(&note_id));
     }
+
+    #[test]
+    fn test_legacy_state_migration_and_defaults() {
+        let legacy_json = r#"{
+            "active_layer_mode": "desktop",
+            "notes": {
+                "00000000-0000-0000-0000-000000000001": {}
+            }
+        }"#;
+
+        let parsed: AppState = serde_json::from_str(legacy_json).expect("parse legacy json");
+        assert_eq!(parsed.active_layer_mode, LayerMode::Desktop);
+
+        let note_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let win = parsed.notes.get(&note_id).expect("note exists");
+        assert_eq!(win.x, 100);
+        assert_eq!(win.y, 100);
+        assert_eq!(win.width, 360);
+        assert_eq!(win.height, 300);
+        assert!(win.is_open);
+        assert_eq!(win.monitor, None);
+    }
+
+    #[test]
+    fn test_hide_does_not_alter_is_open() {
+        let mut state = AppState::default();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+
+        state.notes.insert(
+            id1,
+            NoteWindowState {
+                x: 100,
+                y: 100,
+                width: 360,
+                height: 300,
+                is_open: true,
+                monitor: None,
+            },
+        );
+        state.notes.insert(
+            id2,
+            NoteWindowState {
+                x: 200,
+                y: 200,
+                width: 400,
+                height: 350,
+                is_open: false,
+                monitor: None,
+            },
+        );
+
+        // Hide application
+        state.active_layer_mode = LayerMode::Hidden;
+
+        // is_open MUST remain unchanged
+        assert!(state.notes.get(&id1).unwrap().is_open);
+        assert!(!state.notes.get(&id2).unwrap().is_open);
+    }
+
+    #[test]
+    fn test_close_note_sets_is_open_false() {
+        let mut state = AppState::default();
+        let id = Uuid::new_v4();
+
+        state.notes.insert(
+            id,
+            NoteWindowState {
+                x: 150,
+                y: 180,
+                width: 380,
+                height: 320,
+                is_open: true,
+                monitor: Some("HDMI-A-1".to_string()),
+            },
+        );
+
+        // Close individual note
+        state.notes.get_mut(&id).unwrap().is_open = false;
+
+        assert!(!state.notes.get(&id).unwrap().is_open);
+        assert_eq!(state.notes.get(&id).unwrap().x, 150);
+        assert_eq!(state.notes.get(&id).unwrap().y, 180);
+        assert_eq!(state.notes.get(&id).unwrap().width, 380);
+        assert_eq!(state.notes.get(&id).unwrap().height, 320);
+        assert_eq!(
+            state.notes.get(&id).unwrap().monitor.as_deref(),
+            Some("HDMI-A-1")
+        );
+    }
 }

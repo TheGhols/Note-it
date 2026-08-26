@@ -178,4 +178,66 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0], doc.metadata.id);
     }
+
+    #[test]
+    fn test_scale_listing_200_notes_without_ui_instantiation() {
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let config_dir = tmp.path().join("config");
+        let state_dir = tmp.path().join("state");
+        let runtime_dir = tmp.path().join("runtime");
+
+        let manager =
+            StorageManager::with_custom_paths(notes_dir, config_dir, state_dir, runtime_dir)
+                .expect("Init storage manager");
+
+        let count = 200;
+        let mut ids = Vec::with_capacity(count);
+        for i in 0..count {
+            let mut doc = NoteDocument::new_empty();
+            doc.content = format!("Scale test note {i}");
+            manager.save_note_atomic(&doc).expect("save note");
+            ids.push(doc.metadata.id);
+        }
+
+        let listed = manager.list_notes().expect("list notes");
+        assert_eq!(listed.len(), count);
+
+        // Verify that in a background scenario, filtering is_open produces zero active notes
+        // if no state is marked open, or only those marked open
+        let mut state = crate::state::AppState::default();
+        // Mark only 2 notes as is_open=true
+        state.notes.insert(
+            ids[0],
+            crate::state::NoteWindowState {
+                is_open: true,
+                ..Default::default()
+            },
+        );
+        state.notes.insert(
+            ids[1],
+            crate::state::NoteWindowState {
+                is_open: true,
+                ..Default::default()
+            },
+        );
+        for id in &ids[2..] {
+            state.notes.insert(
+                *id,
+                crate::state::NoteWindowState {
+                    is_open: false,
+                    ..Default::default()
+                },
+            );
+        }
+
+        let open_notes: Vec<Uuid> = listed
+            .into_iter()
+            .filter(|id| state.notes.get(id).map(|s| s.is_open).unwrap_or(true))
+            .collect();
+
+        assert_eq!(open_notes.len(), 2);
+        assert!(open_notes.contains(&ids[0]));
+        assert!(open_notes.contains(&ids[1]));
+    }
 }
