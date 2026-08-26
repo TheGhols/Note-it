@@ -9,6 +9,7 @@ mod storage;
 mod webview_bridge;
 
 use app::NoteItApp;
+use clap::error::ErrorKind;
 use clap::Parser;
 use cli::CliArgs;
 use gio::prelude::*;
@@ -18,6 +19,15 @@ use std::rc::Rc;
 const APPLICATION_ID: &str = "io.github.theghols.NoteIt";
 
 fn main() -> glib::ExitCode {
+    if let Err(error) = CliArgs::try_parse() {
+        let exit_code = match error.kind() {
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => glib::ExitCode::SUCCESS,
+            _ => glib::ExitCode::FAILURE,
+        };
+        let _ = error.print();
+        return exit_code;
+    }
+
     let app = gtk4::Application::builder()
         .application_id(APPLICATION_ID)
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)

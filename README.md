@@ -37,42 +37,34 @@ Each note is persisted as a standard Markdown (`.md`) file on disk, combining cl
   - Rust (stable) & Cargo
   - Node.js (>= 20) & npm / pnpm
 
-## Getting Started
+## Executando o Note-it localmente
 
-### 1. Install System Dependencies (Arch Linux)
+No Arch Linux com Niri, instale os pré-requisitos uma vez:
 
 ```bash
 sudo pacman -S --needed gtk4 gtk4-layer-shell webkitgtk-6.0 rust nodejs pnpm pkgconf base-devel
 ```
 
-### 2. Clone and Build Frontend UI
+Depois, a partir da raiz do repositório, inicie normalmente com um único comando:
 
 ```bash
-cd ui
-pnpm install
-pnpm build
-cd ..
+./scripts/run-note-it
 ```
 
-### 3. Build and Run Application
+O runner prepara o frontend quando necessário, executa o build incremental do host e inicia a instância única do aplicativo. Para iniciar apenas o daemon, sem criar WebViews ou superfícies:
 
 ```bash
-cargo build
-cargo run
+./scripts/run-note-it --background
 ```
 
-## CLI Usage
-
-Note-it supports single-instance control via command line arguments:
+Use o mesmo comando para controlar a instância em execução:
 
 ```bash
-note-it             # Opens Note-it or brings notes forward
-note-it --background# Starts background daemon without showing notes
-note-it new         # Creates a new note immediately
-note-it toggle      # Toggles notes between desktop and overlay layers
-note-it show        # Shows notes in overlay mode
-note-it hide        # Hides all notes
-note-it quit        # Saves state and closes Note-it
+./scripts/run-note-it new      # cria uma nota (Ctrl+N também funciona no editor)
+./scripts/run-note-it show     # mostra as notas em modo Overlay
+./scripts/run-note-it hide     # esconde todas as notas após salvar
+./scripts/run-note-it toggle   # alterna entre Desktop e Overlay
+./scripts/run-note-it quit     # salva e encerra o aplicativo
 ```
 
 ## Niri Compositor Integration

@@ -51,6 +51,25 @@ impl LifecycleCoordinator {
     fn is_active(&self) -> bool {
         self.active.is_some()
     }
+
+    fn ensure_structural_action_allowed(&self, action: &str) -> Result<(), String> {
+        if let Some(active) = self.active {
+            return Err(format!(
+                "{action} is unavailable while lifecycle operation {active:?} is in progress"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StartupPlan {
+    Background,
+    CreateNew,
+    Restore {
+        note_ids: Vec<Uuid>,
+        mode: LayerMode,
+    },
 }
 
 struct FlushBatch {
@@ -176,97 +195,63 @@ pub struct NoteItAppClone {
 
 impl NoteItAppClone {
     pub fn restore_saved_notes(&self, is_background: bool) {
-        if !should_instantiate_saved_notes(is_background) {
+        if is_background {
             let mut ctx = self.context.borrow_mut();
             ctx.state.active_layer_mode = LayerMode::Hidden;
             return;
         }
 
-        let (all_ids, mut target_mode) = {
+        let plan = {
             let ctx = self.context.borrow();
-            let ids = match ctx.storage.list_notes() {
+            let all_ids = match ctx.storage.list_notes() {
                 Ok(ids) => ids,
                 Err(error) => {
                     eprintln!("Failed to list saved notes: {error}");
                     Vec::new()
                 }
             };
-            let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
-                LayerMode::Overlay
-            } else {
-                ctx.state.active_layer_mode
-            };
-            (ids, mode)
+            plan_startup(false, all_ids, &ctx.state)
         };
 
-        if target_mode == LayerMode::Hidden {
-            target_mode = LayerMode::Overlay;
+        match plan {
+            StartupPlan::Background => {}
+            StartupPlan::CreateNew => self.create_new_note(),
+            StartupPlan::Restore { note_ids, mode } => {
+                for id in note_ids {
+                    self.instantiate_note_by_id(id, mode);
+                }
+                self.context.borrow_mut().state.active_layer_mode = mode;
+            }
         }
-
-        // Filter only notes that are open (is_open == true). Unsaved state defaults to is_open = true for backward compatibility.
-        let open_ids: Vec<Uuid> = {
-            let ctx = self.context.borrow();
-            note_ids_to_restore(all_ids, &ctx.state)
-        };
-
-        if open_ids.is_empty() {
-            self.create_new_note();
-            return;
-        }
-
-        for id in open_ids {
-            self.instantiate_note_by_id(id, target_mode);
-        }
-
-        let mut ctx = self.context.borrow_mut();
-        ctx.state.active_layer_mode = target_mode;
     }
 
     pub fn create_new_note(&self) {
-        let mut doc = NoteDocument::new_empty();
+        if let Err(error) = self.ensure_structural_action_allowed("new note creation") {
+            eprintln!("New note creation rejected: {error}");
+            return;
+        }
+
+        let display = gtk4::gdk::Display::default();
+        let (_, conn_name, mon_w, mon_h) = find_monitor_by_connector(display.as_ref(), None);
+        let (doc, win_state, target_mode) = {
+            let ctx = self.context.borrow();
+            prepare_new_note(
+                &ctx.config,
+                ctx.state.active_layer_mode,
+                ctx.windows.len(),
+                conn_name,
+                mon_w,
+                mon_h,
+            )
+        };
         let note_id = doc.metadata.id;
 
-        let (mut target_mode, win_state) = {
+        {
             let ctx = self.context.borrow();
-            doc.metadata.color = ctx.config.default_color.clone();
-            doc.metadata.font_size = ctx.config.default_font_size;
-
             if let Err(error) = ctx.storage.save_note_atomic(&doc) {
                 eprintln!("Failed to save new note {note_id}: {error}");
                 return;
             }
-
-            let mode = if ctx.state.active_layer_mode == LayerMode::Hidden {
-                LayerMode::Overlay
-            } else {
-                ctx.state.active_layer_mode
-            };
-
-            let display = gtk4::gdk::Display::default();
-            let (_, conn_name, mon_w, mon_h) = find_monitor_by_connector(display.as_ref(), None);
-
-            let (cx, cy) = calculate_cascade_position(
-                ctx.windows.len(),
-                mon_w,
-                mon_h,
-                ctx.config.default_width,
-                ctx.config.default_height,
-            );
-
-            let win_state = NoteWindowState {
-                x: cx,
-                y: cy,
-                width: ctx.config.default_width,
-                height: ctx.config.default_height,
-                is_open: true,
-                monitor: conn_name,
-            };
-
-            (mode, win_state)
-        };
-
-        if target_mode == LayerMode::Hidden {
-            target_mode = LayerMode::Overlay;
         }
 
         let note_window = {
@@ -291,6 +276,7 @@ impl NoteItAppClone {
     }
 
     pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
+        self.ensure_structural_action_allowed("closing a note")?;
         let mut ctx = self.context.borrow_mut();
         if !ctx.windows.contains_key(id) {
             return Err("note window is not instantiated".to_string());
@@ -310,6 +296,10 @@ impl NoteItAppClone {
     }
 
     pub fn update_geometry(&self, id: Uuid, geom: NoteWindowState) {
+        if let Err(error) = self.ensure_structural_action_allowed("changing note geometry") {
+            eprintln!("Geometry update rejected: {error}");
+            return;
+        }
         let mut ctx = self.context.borrow_mut();
         ctx.state.notes.insert(id, geom);
         if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
@@ -408,16 +398,19 @@ impl NoteItAppClone {
         };
 
         if needs_instantiation {
-            let all_ids = {
+            let plan = {
                 let ctx = self.context.borrow();
-                ctx.storage.list_notes().unwrap_or_default()
+                let all_ids = ctx.storage.list_notes().unwrap_or_default();
+                plan_startup(false, all_ids, &ctx.state)
             };
-            let open_ids: Vec<Uuid> = {
-                let ctx = self.context.borrow();
-                note_ids_to_restore(all_ids, &ctx.state)
-            };
-            for id in open_ids {
-                self.instantiate_note_by_id(id, mode);
+            match plan {
+                StartupPlan::Background => {}
+                StartupPlan::CreateNew => self.create_new_note(),
+                StartupPlan::Restore { note_ids, .. } => {
+                    for id in note_ids {
+                        self.instantiate_note_by_id(id, mode);
+                    }
+                }
             }
         }
 
@@ -461,6 +454,13 @@ impl NoteItAppClone {
 
     fn finish_lifecycle(&self, operation: LifecycleOperation) {
         self.context.borrow_mut().lifecycle.finish(operation);
+    }
+
+    fn ensure_structural_action_allowed(&self, action: &str) -> Result<(), String> {
+        self.context
+            .borrow()
+            .lifecycle
+            .ensure_structural_action_allowed(action)
     }
 
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
@@ -522,15 +522,65 @@ where
     Ok(())
 }
 
-fn should_instantiate_saved_notes(is_background: bool) -> bool {
-    !is_background
-}
-
 fn note_ids_to_restore(all_ids: Vec<Uuid>, state: &AppState) -> Vec<Uuid> {
     all_ids
         .into_iter()
         .filter(|id| state.notes.get(id).map(|note| note.is_open).unwrap_or(true))
         .collect()
+}
+
+fn plan_startup(is_background: bool, all_ids: Vec<Uuid>, state: &AppState) -> StartupPlan {
+    if is_background {
+        return StartupPlan::Background;
+    }
+
+    let note_ids = note_ids_to_restore(all_ids, state);
+    if note_ids.is_empty() {
+        return StartupPlan::CreateNew;
+    }
+
+    let mode = if state.active_layer_mode == LayerMode::Hidden {
+        LayerMode::Overlay
+    } else {
+        state.active_layer_mode
+    };
+    StartupPlan::Restore { note_ids, mode }
+}
+
+fn prepare_new_note(
+    config: &AppConfig,
+    active_mode: LayerMode,
+    window_count: usize,
+    monitor_name: Option<String>,
+    monitor_width: i32,
+    monitor_height: i32,
+) -> (NoteDocument, NoteWindowState, LayerMode) {
+    let mut document = NoteDocument::new_empty();
+    document.metadata.color = config.default_color.clone();
+    document.metadata.font_size = config.default_font_size;
+
+    let (x, y) = calculate_cascade_position(
+        window_count,
+        monitor_width,
+        monitor_height,
+        config.default_width,
+        config.default_height,
+    );
+    let state = NoteWindowState {
+        x,
+        y,
+        width: config.default_width,
+        height: config.default_height,
+        is_open: true,
+        monitor: monitor_name,
+    };
+    let mode = if active_mode == LayerMode::Hidden {
+        LayerMode::Overlay
+    } else {
+        active_mode
+    };
+
+    (document, state, mode)
 }
 
 fn instantiate_note_window(
@@ -616,12 +666,14 @@ fn find_ui_dist_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_hidden_transition, commit_quit, should_instantiate_saved_notes, FlushBatch,
-        LifecycleCoordinator, LifecycleOperation,
+        commit_hidden_transition, commit_quit, plan_startup, prepare_new_note, FlushBatch,
+        LifecycleCoordinator, LifecycleOperation, StartupPlan,
     };
+    use crate::settings::AppConfig;
     use crate::state::{AppState, LayerMode};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use uuid::Uuid;
 
     #[test]
     fn multiple_windows_require_all_confirmations() {
@@ -710,6 +762,96 @@ mod tests {
 
     #[test]
     fn background_continues_creating_zero_webviews() {
-        assert!(!should_instantiate_saved_notes(true));
+        let state = AppState::default();
+        assert_eq!(
+            plan_startup(true, vec![Uuid::new_v4()], &state),
+            StartupPlan::Background
+        );
+    }
+
+    #[test]
+    fn normal_startup_restores_only_open_notes() {
+        let open_id = Uuid::new_v4();
+        let closed_id = Uuid::new_v4();
+        let mut state = AppState {
+            active_layer_mode: LayerMode::Hidden,
+            ..AppState::default()
+        };
+        state.notes.entry(open_id).or_default().is_open = true;
+        state.notes.entry(closed_id).or_default().is_open = false;
+
+        assert_eq!(
+            plan_startup(false, vec![open_id, closed_id], &state),
+            StartupPlan::Restore {
+                note_ids: vec![open_id],
+                mode: LayerMode::Overlay,
+            }
+        );
+    }
+
+    #[test]
+    fn normal_startup_without_open_notes_creates_one() {
+        let closed_id = Uuid::new_v4();
+        let mut state = AppState::default();
+        state.notes.entry(closed_id).or_default().is_open = false;
+
+        assert_eq!(
+            plan_startup(false, vec![closed_id], &state),
+            StartupPlan::CreateNew
+        );
+    }
+
+    #[test]
+    fn normal_note_creation_uses_defaults_and_unique_ids() {
+        let config = AppConfig {
+            default_color: "blue".to_string(),
+            default_font_size: 18,
+            default_width: 380,
+            default_height: 280,
+            ..AppConfig::default()
+        };
+        let (first, first_state, first_mode) = prepare_new_note(
+            &config,
+            LayerMode::Hidden,
+            0,
+            Some("eDP-1".to_string()),
+            1920,
+            1080,
+        );
+        let (second, second_state, _) = prepare_new_note(
+            &config,
+            LayerMode::Overlay,
+            1,
+            Some("eDP-1".to_string()),
+            1920,
+            1080,
+        );
+
+        assert_ne!(first.metadata.id, second.metadata.id);
+        assert_eq!(first.metadata.color, "blue");
+        assert_eq!(first.metadata.font_size, 18);
+        assert_eq!(first_state.width, 380);
+        assert_eq!(first_state.height, 280);
+        assert!(first_state.is_open);
+        assert_eq!(first_state.monitor.as_deref(), Some("eDP-1"));
+        assert_ne!(
+            (first_state.x, first_state.y),
+            (second_state.x, second_state.y)
+        );
+        assert_eq!(first_mode, LayerMode::Overlay);
+    }
+
+    #[test]
+    fn note_creation_during_lifecycle_is_rejected() {
+        let mut coordinator = LifecycleCoordinator::default();
+        coordinator
+            .begin(LifecycleOperation::Hide)
+            .expect("start hide");
+
+        let error = coordinator
+            .ensure_structural_action_allowed("new note creation")
+            .expect_err("creation must be rejected");
+        assert!(error.contains("Hide"));
+        assert_eq!(coordinator.active, Some(LifecycleOperation::Hide));
     }
 }

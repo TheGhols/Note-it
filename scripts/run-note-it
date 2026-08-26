@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+fail() {
+  printf 'Note-it: %s\n' "$*" >&2
+  exit 1
+}
+
+for required_command in cargo pnpm pkg-config; do
+  command -v "$required_command" >/dev/null 2>&1 \
+    || fail "missing required command: $required_command"
+done
+
+for required_package in gtk4 gtk4-layer-shell-0 webkitgtk-6.0; do
+  pkg-config --exists "$required_package" \
+    || fail "missing required system package: $required_package"
+done
+
+[[ -n "${WAYLAND_DISPLAY:-}" ]] \
+  || fail "WAYLAND_DISPLAY is not set; start Note-it inside a Wayland session"
+
+ui_index="ui/dist/index.html"
+ui_source_changed="$(
+  if [[ -f "$ui_index" ]]; then
+    find ui/src ui/index.html ui/package.json ui/pnpm-lock.yaml \
+      -type f -newer "$ui_index" -print -quit
+  fi
+)"
+
+if [[ ! -f "$ui_index" || -n "$ui_source_changed" ]]; then
+  printf '%s\n' '==> Preparing Note-it frontend'
+  (
+    cd ui
+    pnpm install --frozen-lockfile
+    pnpm run build
+  )
+fi
+
+printf '%s\n' '==> Building Note-it host'
+cargo build
+
+exec "$repo_root/target/debug/note-it" "$@"
