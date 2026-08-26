@@ -52,6 +52,7 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - Close and `Ctrl+W` send the latest editor content in one save-and-close request; the window closes only after persistence succeeds.
 - **Transactional Flush on Hide and Quit:**
   - `note-it hide` and `note-it quit` explicitly request latest buffer content from all active WebViews, cancel debounces, and await atomic write confirmation for every note before destroying surfaces or exiting.
-  - If any note fails to save, the operation aborts and in-memory contents and windows are preserved.
+  - A missing, expired, or invalid WebView response is a flush failure; the host never substitutes its potentially stale in-memory document as a successful confirmation.
+  - If any note fails to confirm or save, the operation aborts: hide keeps every surface open in the previous mode, and quit keeps the daemon running. Without confirmation of current WebView content, neither operation destroys surfaces or exits.
 - **Standard YAML Front Matter:**
   - Note ID, paper color, font size, and timestamps stored cleanly in note headers.

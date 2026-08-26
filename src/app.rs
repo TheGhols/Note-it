@@ -9,7 +9,7 @@ use crate::settings::AppConfig;
 use crate::state::{AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use gio::prelude::*;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -18,12 +18,85 @@ use uuid::Uuid;
 
 static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
 
+type LifecycleCallback = Box<dyn FnOnce(Result<(), String>)>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleOperation {
+    Hide,
+    Quit,
+}
+
+#[derive(Debug, Default)]
+struct LifecycleCoordinator {
+    active: Option<LifecycleOperation>,
+}
+
+impl LifecycleCoordinator {
+    fn begin(&mut self, operation: LifecycleOperation) -> Result<(), String> {
+        if let Some(active) = self.active {
+            return Err(format!(
+                "lifecycle operation {active:?} is already in progress"
+            ));
+        }
+        self.active = Some(operation);
+        Ok(())
+    }
+
+    fn finish(&mut self, operation: LifecycleOperation) {
+        if self.active == Some(operation) {
+            self.active = None;
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+}
+
+struct FlushBatch {
+    remaining: usize,
+    first_error: Option<String>,
+    on_complete: Option<LifecycleCallback>,
+}
+
+impl FlushBatch {
+    fn new(total: usize, on_complete: LifecycleCallback) -> Self {
+        Self {
+            remaining: total,
+            first_error: None,
+            on_complete: Some(on_complete),
+        }
+    }
+
+    fn record(
+        &mut self,
+        result: Result<(), String>,
+    ) -> Option<(LifecycleCallback, Result<(), String>)> {
+        if self.remaining == 0 {
+            return None;
+        }
+        if let Err(error) = result {
+            if self.first_error.is_none() {
+                self.first_error = Some(error);
+            }
+        }
+        self.remaining -= 1;
+        if self.remaining != 0 {
+            return None;
+        }
+
+        let result = self.first_error.take().map_or(Ok(()), Err);
+        self.on_complete.take().map(|callback| (callback, result))
+    }
+}
+
 pub struct AppContext {
     pub storage: StorageManager,
     pub config: AppConfig,
     pub state: AppState,
     pub windows: HashMap<Uuid, NoteWindow>,
     pub ui_dist_path: PathBuf,
+    lifecycle: LifecycleCoordinator,
 }
 
 pub struct NoteItApp {
@@ -47,6 +120,7 @@ impl NoteItApp {
             state,
             windows: HashMap::new(),
             ui_dist_path,
+            lifecycle: LifecycleCoordinator::default(),
         }));
 
         Self {
@@ -102,7 +176,7 @@ pub struct NoteItAppClone {
 
 impl NoteItAppClone {
     pub fn restore_saved_notes(&self, is_background: bool) {
-        if is_background {
+        if !should_instantiate_saved_notes(is_background) {
             let mut ctx = self.context.borrow_mut();
             ctx.state.active_layer_mode = LayerMode::Hidden;
             return;
@@ -132,10 +206,7 @@ impl NoteItAppClone {
         // Filter only notes that are open (is_open == true). Unsaved state defaults to is_open = true for backward compatibility.
         let open_ids: Vec<Uuid> = {
             let ctx = self.context.borrow();
-            all_ids
-                .into_iter()
-                .filter(|id| ctx.state.notes.get(id).map(|s| s.is_open).unwrap_or(true))
-                .collect()
+            note_ids_to_restore(all_ids, &ctx.state)
         };
 
         if open_ids.is_empty() {
@@ -257,36 +328,19 @@ impl NoteItAppClone {
             return;
         }
 
-        let total = windows.len();
-        let completed = Rc::new(Cell::new(0usize));
-        let error_slot = Rc::new(RefCell::new(None::<String>));
-        let on_complete_rc = Rc::new(RefCell::new(Some(on_complete)));
+        let batch = Rc::new(RefCell::new(FlushBatch::new(
+            windows.len(),
+            Box::new(on_complete),
+        )));
         let request_id = NEXT_FLUSH_ID.fetch_add(1, Ordering::SeqCst);
 
         for window in windows {
-            let completed_clone = Rc::clone(&completed);
-            let error_slot_clone = Rc::clone(&error_slot);
-            let on_complete_slot = Rc::clone(&on_complete_rc);
+            let batch_clone = Rc::clone(&batch);
 
             window.request_flush(request_id, move |result| {
-                if let Err(e) = result {
-                    let mut err_guard = error_slot_clone.borrow_mut();
-                    if err_guard.is_none() {
-                        *err_guard = Some(e);
-                    }
-                }
-                let next = completed_clone.get() + 1;
-                completed_clone.set(next);
-
-                if next == total {
-                    let maybe_error = error_slot_clone.borrow_mut().take();
-                    if let Some(cb) = on_complete_slot.borrow_mut().take() {
-                        if let Some(err) = maybe_error {
-                            cb(Err(err));
-                        } else {
-                            cb(Ok(()));
-                        }
-                    }
+                let completion = batch_clone.borrow_mut().record(result);
+                if let Some((callback, result)) = completion {
+                    callback(result);
                 }
             });
         }
@@ -294,25 +348,49 @@ impl NoteItAppClone {
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
         if mode == LayerMode::Hidden {
+            if let Err(error) = self.begin_lifecycle(LifecycleOperation::Hide) {
+                eprintln!("Hide operation rejected: {error}");
+                return;
+            }
             let self_clone = self.clone();
             self.flush_all_windows(move |result| match result {
                 Ok(()) => {
                     let mut ctx = self_clone.context.borrow_mut();
-                    for window in ctx.windows.values() {
-                        window.close_after_save();
+                    let AppContext {
+                        storage,
+                        state,
+                        windows,
+                        lifecycle,
+                        ..
+                    } = &mut *ctx;
+                    let state_path = storage.state_file_path();
+                    let commit_result = commit_hidden_transition(
+                        state,
+                        |next_state| next_state.save_to_file(&state_path),
+                        || {
+                            for window in windows.values() {
+                                window.close_after_save();
+                            }
+                            windows.clear();
+                        },
+                    );
+                    if let Err(error) = commit_result {
+                        eprintln!("Hide operation aborted before closing windows: {error}");
                     }
-                    ctx.windows.clear();
-                    ctx.state.active_layer_mode = LayerMode::Hidden;
-                    if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
-                        eprintln!("Failed to persist Hidden layer mode: {error}");
-                    }
+                    lifecycle.finish(LifecycleOperation::Hide);
                 }
                 Err(error) => {
                     eprintln!(
                         "Hide operation aborted because one or more notes failed to save: {error}"
                     );
+                    self_clone.finish_lifecycle(LifecycleOperation::Hide);
                 }
             });
+            return;
+        }
+
+        if self.context.borrow().lifecycle.is_active() {
+            eprintln!("Layer mode change rejected while a lifecycle operation is in progress");
             return;
         }
 
@@ -336,10 +414,7 @@ impl NoteItAppClone {
             };
             let open_ids: Vec<Uuid> = {
                 let ctx = self.context.borrow();
-                all_ids
-                    .into_iter()
-                    .filter(|id| ctx.state.notes.get(id).map(|s| s.is_open).unwrap_or(true))
-                    .collect()
+                note_ids_to_restore(all_ids, &ctx.state)
             };
             for id in open_ids {
                 self.instantiate_note_by_id(id, mode);
@@ -353,22 +428,39 @@ impl NoteItAppClone {
     }
 
     pub fn save_and_quit(&self) {
+        if let Err(error) = self.begin_lifecycle(LifecycleOperation::Quit) {
+            eprintln!("Quit operation rejected: {error}");
+            return;
+        }
         let self_clone = self.clone();
         self.flush_all_windows(move |result| match result {
             Ok(()) => {
-                let ctx = self_clone.context.borrow();
-                if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+                if let Err(error) = commit_quit(
+                    || {
+                        let ctx = self_clone.context.borrow();
+                        ctx.state.save_to_file(&ctx.storage.state_file_path())
+                    },
+                    || self_clone.app.quit(),
+                ) {
                     eprintln!(
                         "Quit cancelled because application state could not be saved: {error}"
                     );
-                    return;
+                    self_clone.finish_lifecycle(LifecycleOperation::Quit);
                 }
-                self_clone.app.quit();
             }
             Err(error) => {
                 eprintln!("Quit cancelled because one or more notes could not be saved: {error}");
+                self_clone.finish_lifecycle(LifecycleOperation::Quit);
             }
         });
+    }
+
+    fn begin_lifecycle(&self, operation: LifecycleOperation) -> Result<(), String> {
+        self.context.borrow_mut().lifecycle.begin(operation)
+    }
+
+    fn finish_lifecycle(&self, operation: LifecycleOperation) {
+        self.context.borrow_mut().lifecycle.finish(operation);
     }
 
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
@@ -401,6 +493,44 @@ impl NoteItAppClone {
             Err(error) => eprintln!("Failed to load note {id}: {error}"),
         }
     }
+}
+
+fn commit_hidden_transition<P, C>(
+    current_state: &mut AppState,
+    persist: P,
+    close_windows: C,
+) -> Result<(), String>
+where
+    P: FnOnce(&AppState) -> Result<(), String>,
+    C: FnOnce(),
+{
+    let mut next_state = current_state.clone();
+    next_state.active_layer_mode = LayerMode::Hidden;
+    persist(&next_state)?;
+    close_windows();
+    *current_state = next_state;
+    Ok(())
+}
+
+fn commit_quit<P, Q>(persist: P, quit: Q) -> Result<(), String>
+where
+    P: FnOnce() -> Result<(), String>,
+    Q: FnOnce(),
+{
+    persist()?;
+    quit();
+    Ok(())
+}
+
+fn should_instantiate_saved_notes(is_background: bool) -> bool {
+    !is_background
+}
+
+fn note_ids_to_restore(all_ids: Vec<Uuid>, state: &AppState) -> Vec<Uuid> {
+    all_ids
+        .into_iter()
+        .filter(|id| state.notes.get(id).map(|note| note.is_open).unwrap_or(true))
+        .collect()
 }
 
 fn instantiate_note_window(
@@ -481,4 +611,105 @@ fn find_ui_dist_path() -> PathBuf {
     }
 
     local
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        commit_hidden_transition, commit_quit, should_instantiate_saved_notes, FlushBatch,
+        LifecycleCoordinator, LifecycleOperation,
+    };
+    use crate::state::{AppState, LayerMode};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[test]
+    fn multiple_windows_require_all_confirmations() {
+        let completion = Rc::new(RefCell::new(None));
+        let completion_clone = Rc::clone(&completion);
+        let mut batch = FlushBatch::new(
+            3,
+            Box::new(move |result| *completion_clone.borrow_mut() = Some(result)),
+        );
+
+        assert!(batch.record(Ok(())).is_none());
+        assert!(completion.borrow().is_none());
+        assert!(batch.record(Ok(())).is_none());
+        assert!(completion.borrow().is_none());
+
+        let (callback, result) = batch.record(Ok(())).expect("third confirmation completes");
+        callback(result);
+        assert!(completion.borrow().as_ref().expect("completion").is_ok());
+    }
+
+    #[test]
+    fn one_window_failure_aborts_global_hide() {
+        let windows_destroyed = Rc::new(Cell::new(false));
+        let destroyed_clone = Rc::clone(&windows_destroyed);
+        let mut batch = FlushBatch::new(
+            3,
+            Box::new(move |result| {
+                if result.is_ok() {
+                    destroyed_clone.set(true);
+                }
+            }),
+        );
+
+        assert!(batch.record(Ok(())).is_none());
+        assert!(batch
+            .record(Err("one note failed to save".to_string()))
+            .is_none());
+        let (callback, result) = batch.record(Ok(())).expect("all replies received");
+        assert!(result.is_err());
+        callback(result);
+        assert!(!windows_destroyed.get());
+    }
+
+    #[test]
+    fn quit_failure_keeps_application_running() {
+        let quit_called = Cell::new(false);
+        let result = commit_quit(
+            || Err("state persistence failed".to_string()),
+            || quit_called.set(true),
+        );
+
+        assert!(result.is_err());
+        assert!(!quit_called.get());
+    }
+
+    #[test]
+    fn state_persistence_failure_aborts_hide_before_window_destruction() {
+        let mut state = AppState {
+            active_layer_mode: LayerMode::Overlay,
+            ..AppState::default()
+        };
+        let windows_destroyed = Cell::new(false);
+
+        let result = commit_hidden_transition(
+            &mut state,
+            |_| Err("state persistence failed".to_string()),
+            || windows_destroyed.set(true),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(state.active_layer_mode, LayerMode::Overlay);
+        assert!(!windows_destroyed.get());
+    }
+
+    #[test]
+    fn concurrent_lifecycle_operation_is_handled_safely() {
+        let mut coordinator = LifecycleCoordinator::default();
+        assert!(coordinator.begin(LifecycleOperation::Hide).is_ok());
+        assert!(coordinator.begin(LifecycleOperation::Hide).is_err());
+        assert!(coordinator.begin(LifecycleOperation::Quit).is_err());
+        assert_eq!(coordinator.active, Some(LifecycleOperation::Hide));
+
+        coordinator.finish(LifecycleOperation::Hide);
+        assert!(coordinator.begin(LifecycleOperation::Quit).is_ok());
+    }
+
+    #[test]
+    fn background_continues_creating_zero_webviews() {
+        assert!(!should_instantiate_saved_notes(true));
+    }
 }

@@ -35,6 +35,10 @@ pub struct NoteWindowOptions<'a> {
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
+type PendingFlushes = Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>;
+
+const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content";
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -46,7 +50,7 @@ pub struct NoteWindow {
     pub state: Rc<RefCell<NoteWindowState>>,
     pub storage: StorageManager,
     allow_close: Rc<Cell<bool>>,
-    pending_flushes: Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>,
+    pending_flushes: PendingFlushes,
 }
 
 impl NoteWindow {
@@ -133,7 +137,7 @@ impl NoteWindow {
         // Ensure transparent webview background so custom post-it border radius renders cleanly
         webview.set_background_color(&gtk4::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
-        let pending_flushes: Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>> =
+        let pending_flushes: PendingFlushes =
             Rc::new(RefCell::new(std::collections::HashMap::new()));
 
         // Connect Webview Messages
@@ -277,14 +281,18 @@ impl NoteWindow {
                             request_id,
                             content,
                         } => {
-                            let save_res = if message_id != id {
-                                Err("Flush response rejected a mismatched note identifier"
-                                    .to_string())
-                            } else {
-                                save_content(&storage_clone, &doc_clone, id, content)
-                            };
-                            if let Some(callback) = flushes_clone.borrow_mut().remove(&request_id) {
-                                callback(save_res);
+                            if !complete_flush_response(
+                                &storage_clone,
+                                &doc_clone,
+                                id,
+                                message_id,
+                                request_id,
+                                content,
+                                &flushes_clone,
+                            ) {
+                                eprintln!(
+                                    "Rejected inactive or invalid flush response for note {id} and request {request_id}"
+                                );
                             }
                         }
                     }
@@ -337,8 +345,6 @@ impl NoteWindow {
         callback: F,
     ) {
         let pending = Rc::clone(&self.pending_flushes);
-        let doc_clone = Rc::clone(&self.document);
-        let storage_clone = self.storage.clone();
         self.pending_flushes
             .borrow_mut()
             .insert(request_id, Box::new(callback));
@@ -347,12 +353,8 @@ impl NoteWindow {
             &HostToWebviewMessage::RequestFlush { request_id },
         );
 
-        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
-            if let Some(cb) = pending.borrow_mut().remove(&request_id) {
-                let doc = doc_clone.borrow();
-                let save_res = storage_clone.save_note_atomic(&doc).map(|_| ());
-                cb(save_res);
-            }
+        glib::timeout_add_local_once(FLUSH_TIMEOUT, move || {
+            expire_flush_request(&pending, request_id);
         });
     }
 
@@ -360,6 +362,38 @@ impl NoteWindow {
         self.allow_close.set(true);
         self.window.close();
     }
+}
+
+fn complete_flush_response(
+    storage: &StorageManager,
+    document: &Rc<RefCell<NoteDocument>>,
+    expected_note_id: Uuid,
+    message_note_id: Uuid,
+    request_id: u64,
+    content: String,
+    pending_flushes: &PendingFlushes,
+) -> bool {
+    if message_note_id != expected_note_id {
+        return false;
+    }
+
+    let callback = pending_flushes.borrow_mut().remove(&request_id);
+    let Some(callback) = callback else {
+        return false;
+    };
+
+    callback(save_content(storage, document, expected_note_id, content));
+    true
+}
+
+fn expire_flush_request(pending_flushes: &PendingFlushes, request_id: u64) -> bool {
+    let callback = pending_flushes.borrow_mut().remove(&request_id);
+    let Some(callback) = callback else {
+        return false;
+    };
+
+    callback(Err(FLUSH_TIMEOUT_ERROR.to_string()));
+    true
 }
 
 fn save_content(
@@ -395,7 +429,10 @@ fn file_uri_for_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_uri_for_path, save_and_close, save_content};
+    use super::{
+        complete_flush_response, expire_flush_request, file_uri_for_path, save_and_close,
+        save_content, PendingFlushes, FLUSH_TIMEOUT_ERROR,
+    };
     use crate::model::NoteDocument;
     use crate::storage::StorageManager;
     use std::cell::{Cell, RefCell};
@@ -466,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_response_updates_doc_and_saves_atomically() {
+    fn successful_flush_uses_latest_webview_content() {
         let tmp = tempdir().expect("tempdir");
         let storage = StorageManager::with_custom_paths(
             tmp.path().join("notes"),
@@ -479,14 +516,26 @@ mod tests {
         let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
         let id = document.borrow().metadata.id;
 
-        let res = save_content(
+        let completion = Rc::new(RefCell::new(None));
+        let completion_clone = Rc::clone(&completion);
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        pending.borrow_mut().insert(
+            42,
+            Box::new(move |result| *completion_clone.borrow_mut() = Some(result)),
+        );
+
+        let accepted = complete_flush_response(
             &storage,
             &document,
             id,
+            id,
+            42,
             "# flushed immediately before hide".to_string(),
+            &pending,
         );
 
-        assert!(res.is_ok());
+        assert!(accepted);
+        assert!(completion.borrow().as_ref().expect("completion").is_ok());
         assert_eq!(
             document.borrow().content,
             "# flushed immediately before hide"
@@ -498,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_response_with_mismatched_id_fails_without_corrupting_doc() {
+    fn flush_timeout_returns_error() {
         let tmp = tempdir().expect("tempdir");
         let storage = StorageManager::with_custom_paths(
             tmp.path().join("notes"),
@@ -508,18 +557,145 @@ mod tests {
         )
         .expect("storage");
 
-        let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
-        let doc_id = document.borrow().metadata.id;
-        let wrong_id = Uuid::new_v4();
+        let mut confirmed = NoteDocument::new_empty();
+        confirmed.content = "last confirmed on disk".to_string();
+        storage.save_note_atomic(&confirmed).expect("initial save");
+        let id = confirmed.metadata.id;
+        let document = Rc::new(RefCell::new(confirmed));
+        document.borrow_mut().content = "potentially stale in memory".to_string();
 
-        let res = save_content(
-            &storage,
-            &document,
-            wrong_id,
-            "corrupted content".to_string(),
+        let completion = Rc::new(RefCell::new(None));
+        let completion_clone = Rc::clone(&completion);
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        pending.borrow_mut().insert(
+            7,
+            Box::new(move |result| *completion_clone.borrow_mut() = Some(result)),
         );
 
-        assert!(res.is_err());
-        assert_eq!(document.borrow().metadata.id, doc_id);
+        assert!(expire_flush_request(&pending, 7));
+        assert_eq!(
+            completion
+                .borrow()
+                .as_ref()
+                .expect("completion")
+                .as_ref()
+                .expect_err("timeout must fail"),
+            FLUSH_TIMEOUT_ERROR
+        );
+        assert!(pending.borrow().is_empty());
+        assert_eq!(
+            storage.load_note(&id).expect("disk content").content,
+            "last confirmed on disk"
+        );
+    }
+
+    #[test]
+    fn stale_flush_response_is_rejected() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut current = NoteDocument::new_empty();
+        current.content = "newest content".to_string();
+        storage.save_note_atomic(&current).expect("initial save");
+        let id = current.metadata.id;
+        let document = Rc::new(RefCell::new(current));
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        pending.borrow_mut().insert(999, Box::new(|_| {}));
+        assert!(expire_flush_request(&pending, 999));
+
+        let accepted = complete_flush_response(
+            &storage,
+            &document,
+            id,
+            id,
+            999,
+            "stale content".to_string(),
+            &pending,
+        );
+
+        assert!(!accepted);
+        assert_eq!(document.borrow().content, "newest content");
+        assert_eq!(
+            storage.load_note(&id).expect("disk content").content,
+            "newest content"
+        );
+    }
+
+    #[test]
+    fn mismatched_note_id_is_rejected() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut current = NoteDocument::new_empty();
+        current.content = "current content".to_string();
+        storage.save_note_atomic(&current).expect("initial save");
+        let id = current.metadata.id;
+        let document = Rc::new(RefCell::new(current));
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        pending.borrow_mut().insert(12, Box::new(|_| {}));
+
+        let accepted = complete_flush_response(
+            &storage,
+            &document,
+            id,
+            Uuid::new_v4(),
+            12,
+            "wrong note content".to_string(),
+            &pending,
+        );
+
+        assert!(!accepted);
+        assert!(pending.borrow().contains_key(&12));
+        assert_eq!(document.borrow().content, "current content");
+        assert_eq!(
+            storage.load_note(&id).expect("disk content").content,
+            "current content"
+        );
+    }
+
+    #[test]
+    fn ctrl_w_continues_working_normally() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+        let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
+        let id = document.borrow().metadata.id;
+        let closed = Cell::new(false);
+
+        let result = save_and_close(
+            &storage,
+            &document,
+            id,
+            "latest Ctrl+W content".to_string(),
+            &|closed_id| {
+                assert_eq!(closed_id, id);
+                closed.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(closed.get());
+        assert_eq!(
+            storage.load_note(&id).expect("saved note").content,
+            "latest Ctrl+W content"
+        );
     }
 }
