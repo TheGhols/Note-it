@@ -1,0 +1,49 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+ui/node_modules/
+ui/dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs / temporary
+*.log
+*.tmp
+*.swp
+*~
+.cache/
+tmp/
+
+# IDE / Editors
+.idea/
+.vscode/
+
+# Local tooling / AI agents
+.orca/
+.claude/
+.cursor/
+.codex/
+.agent/
+.ai/
+.gemini/
+.grok/
+
+# Local runtime/test data
+notes/
+data/
+test-data-local/
+*.local
+
+# OS & Desktop File Managers
+.DS_Store
+Thumbs.db
+.directory

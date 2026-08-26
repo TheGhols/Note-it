@@ -1,0 +1,20 @@
+[Desktop Entry]
+Name=Note-it
+Comment=Minimalist sticky notes for Linux Wayland
+Exec=note-it
+Icon=io.github.theghols.NoteIt
+Terminal=false
+Type=Application
+Categories=Utility;TextEditor;
+Keywords=notes;post-it;sticky;wayland;scratchpad;
+StartupNotify=true
+StartupWMClass=io.github.theghols.NoteIt
+Actions=NewNote;ToggleOverlay;
+
+[Desktop Action NewNote]
+Name=New Note
+Exec=note-it new
+
+[Desktop Action ToggleOverlay]
+Name=Toggle Overlay
+Exec=note-it toggle

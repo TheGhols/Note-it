@@ -1,0 +1,30 @@
+# Maintainer: Note-it contributors
+pkgname=note-it
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Minimalist sticky notes for Linux Wayland"
+arch=('x86_64' 'aarch64')
+url="https://github.com/TheGhols/Note-it"
+license=('MIT')
+depends=('gtk4' 'gtk4-layer-shell' 'webkitgtk-6.0' 'glib2')
+makedepends=('rust' 'cargo' 'nodejs' 'pnpm')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  cd ui
+  pnpm install --frozen-lockfile
+  pnpm build
+  cd ..
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 "target/release/note-it" "$pkgdir/usr/bin/note-it"
+  install -d "$pkgdir/usr/share/note-it/ui/dist"
+  cp -r ui/dist/* "$pkgdir/usr/share/note-it/ui/dist/"
+  install -Dm644 "resources/io.github.theghols.NoteIt.desktop" "$pkgdir/usr/share/applications/io.github.theghols.NoteIt.desktop"
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

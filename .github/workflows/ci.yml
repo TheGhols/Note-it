@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-check:
+    name: Rust Checks & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev libwebkitgtk-6.0-dev pkg-config
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Format Check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Rust Unit Tests
+        run: cargo test
+
+  frontend-check:
+    name: Frontend Checks & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Frontend Dependencies
+        working-directory: ./ui
+        run: npm ci
+
+      - name: TypeScript Lint
+        working-directory: ./ui
+        run: npm run lint
+
+      - name: Run Frontend Tests
+        working-directory: ./ui
+        run: npm run test
+
+      - name: Build Frontend Bundle
+        working-directory: ./ui
+        run: npm run build

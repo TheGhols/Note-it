@@ -1,0 +1,283 @@
+:root {
+  --note-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --note-font-size: 15px;
+  --note-line-height: 1.55;
+  --border-radius: 12px;
+  --transition-fast: 150ms ease;
+  
+  /* Default Paper: Soft Yellow */
+  --paper-bg: #FEF9C3;
+  --paper-text: #1E293B;
+  --paper-muted: #64748B;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --paper-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --selection-bg: rgba(0, 0, 0, 0.12);
+}
+
+/* Paper Color Palettes */
+body[data-color="yellow"] {
+  --paper-bg: #FEF9C3;
+  --paper-text: #1E293B;
+  --paper-muted: #64748B;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(234, 179, 8, 0.25);
+}
+
+body[data-color="blue"] {
+  --paper-bg: #E0F2FE;
+  --paper-text: #0F172A;
+  --paper-muted: #475569;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(56, 189, 248, 0.25);
+}
+
+body[data-color="green"] {
+  --paper-bg: #DCFCE7;
+  --paper-text: #064E3B;
+  --paper-muted: #335C4D;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(34, 197, 94, 0.25);
+}
+
+body[data-color="pink"] {
+  --paper-bg: #FCE7F3;
+  --paper-text: #831843;
+  --paper-muted: #701A75;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(244, 114, 182, 0.25);
+}
+
+body[data-color="purple"] {
+  --paper-bg: #F3E8FF;
+  --paper-text: #3B0764;
+  --paper-muted: #581C87;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(192, 132, 252, 0.25);
+}
+
+body[data-color="gray"] {
+  --paper-bg: #F1F5F9;
+  --paper-text: #0F172A;
+  --paper-muted: #64748B;
+  --paper-border: rgba(0, 0, 0, 0.08);
+  --selection-bg: rgba(148, 163, 184, 0.25);
+}
+
+body[data-color="black"] {
+  --paper-bg: #18181B;
+  --paper-text: #F4F4F5;
+  --paper-muted: #A1A1AA;
+  --paper-border: rgba(255, 255, 255, 0.12);
+  --selection-bg: rgba(255, 255, 255, 0.2);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: text;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--note-font-family);
+  font-size: var(--note-font-size);
+  line-height: var(--note-line-height);
+  background-color: transparent;
+  color: var(--paper-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--selection-bg);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--paper-bg);
+  border: 1px solid var(--paper-border);
+  border-radius: var(--border-radius);
+  box-shadow: var(--paper-shadow);
+  overflow: hidden;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 8px;
+  user-select: none;
+  opacity: 0.25;
+  transition: opacity var(--transition-fast);
+}
+
+#app:hover .note-header,
+.note-header:focus-within {
+  opacity: 1;
+}
+
+.drag-region {
+  flex: 1;
+  height: 100%;
+  cursor: grab;
+}
+
+.drag-region:active {
+  cursor: grabbing;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--paper-muted);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.icon-btn:hover {
+  color: var(--paper-text);
+  background-color: var(--selection-bg);
+}
+
+.color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: currentColor;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+.editor-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px 14px 14px;
+  outline: none;
+}
+
+/* Custom scrollbar */
+.editor-wrapper::-webkit-scrollbar {
+  width: 4px;
+}
+.editor-wrapper::-webkit-scrollbar-thumb {
+  background: var(--paper-muted);
+  border-radius: 2px;
+  opacity: 0.3;
+}
+
+.ProseMirror {
+  outline: none;
+  min-height: 100%;
+}
+
+.ProseMirror p {
+  margin-bottom: 0.5em;
+}
+
+.ProseMirror p:last-child {
+  margin-bottom: 0;
+}
+
+.ProseMirror h1 {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin-top: 0.4em;
+  margin-bottom: 0.3em;
+}
+
+.ProseMirror h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin-top: 0.4em;
+  margin-bottom: 0.3em;
+}
+
+.ProseMirror h3 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin-top: 0.3em;
+  margin-bottom: 0.2em;
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.4em;
+  margin-bottom: 0.5em;
+}
+
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 0.25em;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label {
+  user-select: none;
+  margin-top: 3px;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: currentColor;
+}
+
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid var(--paper-muted);
+  padding-left: 0.75em;
+  margin-left: 0;
+  margin-bottom: 0.5em;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.ProseMirror code {
+  background-color: var(--selection-bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.ProseMirror pre {
+  background-color: var(--selection-bg);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 0.88em;
+  overflow-x: auto;
+  margin-bottom: 0.5em;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: "Type your note here...";
+  color: var(--paper-muted);
+  float: left;
+  pointer-events: none;
+  height: 0;
+}

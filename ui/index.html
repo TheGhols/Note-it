@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+  <title>Note-it</title>
+</head>
+<body>
+  <div id="app">
+    <div id="drag-handle" class="note-header">
+      <div class="note-controls-left">
+        <button id="btn-theme" class="icon-btn" title="Change Color" aria-label="Change Color">
+          <span class="color-dot"></span>
+        </button>
+      </div>
+      <div class="drag-region"></div>
+      <div class="note-controls-right">
+        <button id="btn-close" class="icon-btn" title="Close (Ctrl+W)" aria-label="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="1" y1="1" x2="11" y2="11"></line>
+            <line x1="11" y1="1" x2="1" y2="11"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="editor-container" class="editor-wrapper"></div>
+  </div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
