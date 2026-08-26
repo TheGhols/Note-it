@@ -9,6 +9,12 @@ export function isValidHexColor(value: unknown): value is string {
   return typeof value === 'string' && HEX_COLOR_REGEX.test(value);
 }
 
+export const ALLOWED_AUTOLINK_SCHEMES: ReadonlySet<string> = new Set([
+  'https',
+  'http',
+  'mailto',
+]);
+
 type CustomTagAction =
   | { kind: 'open'; tag: 'u' | 'span' | 'mark'; canonical: string }
   | { kind: 'close'; tag: 'u' | 'span' | 'mark'; canonical: string };
@@ -199,11 +205,15 @@ export function sanitizeMarkdown(markdown: string): string {
       );
       if (uriAutolinkMatch) {
         const scheme = uriAutolinkMatch[1].toLowerCase();
-        if (scheme !== 'javascript' && scheme !== 'vbscript' && scheme !== 'data') {
+        if (ALLOWED_AUTOLINK_SCHEMES.has(scheme)) {
           output += uriAutolinkMatch[0];
           i += uriAutolinkMatch[0].length;
           continue;
         } else {
+          // Unsupported or dangerous URI scheme: escape < and > so it is rendered
+          // as literal text without creating clickable <a> links or executable elements,
+          // preserving the original text without data loss.
+          output += `&lt;${uriAutolinkMatch[1]}:${uriAutolinkMatch[2]}&gt;`;
           i += uriAutolinkMatch[0].length;
           continue;
         }

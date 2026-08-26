@@ -129,13 +129,26 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     container.remove();
   });
 
-  it('preserves autolinks in round-trip pipeline', () => {
-    const input = 'Visit <https://example.com> for info.';
+  it('preserves allowed autolinks and unsupported autolinks text in round-trip pipeline', () => {
+    const input = [
+      'Allowed: <https://example.com> and <mailto:user@example.com>',
+      'Unsupported: <ftp://example.com> and <ssh://example.com> and <obsidian://open?vault=test>',
+    ].join('\n\n');
+
     const { editor, container } = createEditor(input);
     const output = editor.getMarkdown();
 
+    // Verify allowed schemes are preserved
     expect(output).toContain('https://example.com');
-    expect(container.querySelector('script')).toBeNull();
+    expect(output).toContain('mailto:user@example.com');
+
+    // Verify unsupported schemes preserved textual content without data loss
+    expect(output).toContain('ftp://example.com');
+    expect(output).toContain('ssh://example.com');
+    expect(output).toContain('obsidian://open?vault=test');
+
+    // Verify DOM safety: no script, no dangerous elements
+    expect(container.querySelectorAll('script').length).toBe(0);
 
     editor.destroy();
     container.remove();

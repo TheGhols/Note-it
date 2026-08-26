@@ -129,6 +129,29 @@ mod tests {
     }
 
     #[test]
+    fn blocks_unapproved_or_malformed_external_urls() {
+        for url in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,test",
+            "vbscript:msgbox(1)",
+            "ftp://example.com",
+            "ssh://example.com",
+            "obsidian://open?vault=test",
+            "custom://test",
+            "custom-protocol://something",
+            "https:",
+            " https://example.com",
+            "https://example.com\nfile:///etc/passwd",
+        ] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "should block unsupported or malicious scheme {url:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_drag_and_resize_messages() {
         let drag_json = serde_json::json!({
             "type": "drag_update",

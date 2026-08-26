@@ -103,8 +103,23 @@ describe('HTML Sanitizer', () => {
     expect(sanitizeMarkdown('<!-- comment -->text')).toBe('text');
   });
 
-  it('neutralizes dangerous javascript: autolinks outside code', () => {
-    expect(sanitizeMarkdown('<javascript:alert(1)>')).toBe('');
+  it('allows canonical autolink schemes (https, http, mailto, and email autolink)', () => {
+    expect(sanitizeMarkdown('<https://example.com>')).toBe('<https://example.com>');
+    expect(sanitizeMarkdown('<http://example.com/path>')).toBe('<http://example.com/path>');
+    expect(sanitizeMarkdown('<mailto:user@example.com>')).toBe('<mailto:user@example.com>');
+    expect(sanitizeMarkdown('<user@example.com>')).toBe('<user@example.com>');
+  });
+
+  it('safely escapes unsupported and dangerous autolink schemes without data loss', () => {
+    expect(sanitizeMarkdown('<javascript:alert(1)>')).toBe('&lt;javascript:alert(1)&gt;');
+    expect(sanitizeMarkdown('<data:text/html,test>')).toBe('&lt;data:text/html,test&gt;');
+    expect(sanitizeMarkdown('<vbscript:msgbox(1)>')).toBe('&lt;vbscript:msgbox(1)&gt;');
+    expect(sanitizeMarkdown('<file:///etc/passwd>')).toBe('&lt;file:///etc/passwd&gt;');
+    expect(sanitizeMarkdown('<ftp://example.com>')).toBe('&lt;ftp://example.com&gt;');
+    expect(sanitizeMarkdown('<ssh://example.com>')).toBe('&lt;ssh://example.com&gt;');
+    expect(sanitizeMarkdown('<obsidian://open?vault=test>')).toBe('&lt;obsidian://open?vault=test&gt;');
+    expect(sanitizeMarkdown('<custom://test>')).toBe('&lt;custom://test&gt;');
+    expect(sanitizeMarkdown('<custom-protocol://something>')).toBe('&lt;custom-protocol://something&gt;');
   });
 
   it('canonicalizes custom HTML and rejects non-hex colors', () => {
