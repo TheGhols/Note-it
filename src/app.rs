@@ -9,11 +9,14 @@ use crate::settings::AppConfig;
 use crate::state::{AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use gio::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
+
+static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct AppContext {
     pub storage: StorageManager,
@@ -243,37 +246,90 @@ impl NoteItAppClone {
         }
     }
 
-    pub fn set_layer_mode(&self, mode: LayerMode) {
-        let needs_instantiation = {
-            let mut ctx = self.context.borrow_mut();
-            ctx.state.active_layer_mode = mode;
+    pub fn flush_all_windows<F: FnOnce(Result<(), String>) + 'static>(&self, on_complete: F) {
+        let windows: Vec<NoteWindow> = {
+            let ctx = self.context.borrow();
+            ctx.windows.values().cloned().collect()
+        };
 
-            match mode {
-                LayerMode::Hidden => {
-                    // Flush pending saves on all windows before closing them to free memory
-                    for (id, window) in &ctx.windows {
-                        if let Err(e) = window.save_now() {
-                            eprintln!("Failed to save note {id} on hide: {e}");
+        if windows.is_empty() {
+            on_complete(Ok(()));
+            return;
+        }
+
+        let total = windows.len();
+        let completed = Rc::new(Cell::new(0usize));
+        let error_slot = Rc::new(RefCell::new(None::<String>));
+        let on_complete_rc = Rc::new(RefCell::new(Some(on_complete)));
+        let request_id = NEXT_FLUSH_ID.fetch_add(1, Ordering::SeqCst);
+
+        for window in windows {
+            let completed_clone = Rc::clone(&completed);
+            let error_slot_clone = Rc::clone(&error_slot);
+            let on_complete_slot = Rc::clone(&on_complete_rc);
+
+            window.request_flush(request_id, move |result| {
+                if let Err(e) = result {
+                    let mut err_guard = error_slot_clone.borrow_mut();
+                    if err_guard.is_none() {
+                        *err_guard = Some(e);
+                    }
+                }
+                let next = completed_clone.get() + 1;
+                completed_clone.set(next);
+
+                if next == total {
+                    let maybe_error = error_slot_clone.borrow_mut().take();
+                    if let Some(cb) = on_complete_slot.borrow_mut().take() {
+                        if let Some(err) = maybe_error {
+                            cb(Err(err));
+                        } else {
+                            cb(Ok(()));
                         }
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn set_layer_mode(&self, mode: LayerMode) {
+        if mode == LayerMode::Hidden {
+            let self_clone = self.clone();
+            self.flush_all_windows(move |result| match result {
+                Ok(()) => {
+                    let mut ctx = self_clone.context.borrow_mut();
+                    for window in ctx.windows.values() {
                         window.close_after_save();
                     }
                     ctx.windows.clear();
-                    false
-                }
-                LayerMode::Desktop | LayerMode::Overlay => {
-                    if ctx.windows.is_empty() {
-                        true
-                    } else {
-                        for window in ctx.windows.values() {
-                            window.set_layer_mode(mode);
-                        }
-                        false
+                    ctx.state.active_layer_mode = LayerMode::Hidden;
+                    if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+                        eprintln!("Failed to persist Hidden layer mode: {error}");
                     }
                 }
+                Err(error) => {
+                    eprintln!(
+                        "Hide operation aborted because one or more notes failed to save: {error}"
+                    );
+                }
+            });
+            return;
+        }
+
+        let needs_instantiation = {
+            let mut ctx = self.context.borrow_mut();
+            ctx.state.active_layer_mode = mode;
+            if ctx.windows.is_empty() {
+                true
+            } else {
+                for window in ctx.windows.values() {
+                    window.set_layer_mode(mode);
+                }
+                false
             }
         };
 
-        if needs_instantiation && mode != LayerMode::Hidden {
+        if needs_instantiation {
             let all_ids = {
                 let ctx = self.context.borrow();
                 ctx.storage.list_notes().unwrap_or_default()
@@ -297,23 +353,22 @@ impl NoteItAppClone {
     }
 
     pub fn save_and_quit(&self) {
-        let ctx = self.context.borrow();
-        let mut save_failed = false;
-        for (id, window) in &ctx.windows {
-            if let Err(error) = window.save_now() {
-                save_failed = true;
-                eprintln!("Failed to save note {id} before quit: {error}");
+        let self_clone = self.clone();
+        self.flush_all_windows(move |result| match result {
+            Ok(()) => {
+                let ctx = self_clone.context.borrow();
+                if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+                    eprintln!(
+                        "Quit cancelled because application state could not be saved: {error}"
+                    );
+                    return;
+                }
+                self_clone.app.quit();
             }
-        }
-        if save_failed {
-            eprintln!("Quit cancelled because one or more notes could not be saved");
-            return;
-        }
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
-            eprintln!("Quit cancelled because application state could not be saved: {error}");
-            return;
-        }
-        self.app.quit();
+            Err(error) => {
+                eprintln!("Quit cancelled because one or more notes could not be saved: {error}");
+            }
+        });
     }
 
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {

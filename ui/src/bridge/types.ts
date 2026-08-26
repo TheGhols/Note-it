@@ -12,7 +12,8 @@ export type HostToWebviewMessage =
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
   | { type: 'request_content' }
-  | { type: 'request_save_and_close' };
+  | { type: 'request_save_and_close' }
+  | { type: 'request_flush'; payload: { requestId: number } };
 
 export type WebviewToHostMessage =
   | { type: 'ready' }
@@ -27,7 +28,8 @@ export type WebviewToHostMessage =
   | { type: 'drag_end' }
   | { type: 'resize_start' }
   | { type: 'resize_update'; payload: { dx: number; dy: number } }
-  | { type: 'resize_end' };
+  | { type: 'resize_end' }
+  | { type: 'flush_response'; payload: { id: string; requestId: number; content: string } };
 
 declare global {
   interface Window {

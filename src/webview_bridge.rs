@@ -23,6 +23,10 @@ pub enum HostToWebviewMessage {
     },
     RequestContent,
     RequestSaveAndClose,
+    RequestFlush {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +67,12 @@ pub enum WebviewToHostMessage {
         dy: i32,
     },
     ResizeEnd,
+    FlushResponse {
+        id: Uuid,
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        content: String,
+    },
 }
 
 pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
@@ -177,6 +187,34 @@ mod tests {
             WebviewToHostMessage::ResizeUpdate { dx, dy } => {
                 assert_eq!(dx, 50);
                 assert_eq!(dy, 40);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_flush_response_message() {
+        let id = Uuid::new_v4();
+        let flush_json = serde_json::json!({
+            "type": "flush_response",
+            "payload": {
+                "id": id,
+                "requestId": 42,
+                "content": "# flushed content immediately"
+            }
+        })
+        .to_string();
+
+        let flush_msg = parse_webview_message(&flush_json).expect("flush message");
+        match flush_msg {
+            WebviewToHostMessage::FlushResponse {
+                id: parsed_id,
+                request_id,
+                content,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(request_id, 42);
+                assert_eq!(content, "# flushed content immediately");
             }
             other => panic!("unexpected message: {other:?}"),
         }

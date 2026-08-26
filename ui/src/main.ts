@@ -255,6 +255,19 @@ function initUI(): void {
       }
     } else if (msg.type === 'request_save_and_close') {
       saveAndClose();
+    } else if (msg.type === 'request_flush') {
+      const content = noteEditor ? noteEditor.getMarkdown() : '';
+      if (noteEditor) {
+        noteEditor.cancelPendingSave();
+      }
+      bridge.sendMessage({
+        type: 'flush_response',
+        payload: {
+          id: activeNoteId,
+          requestId: msg.payload.requestId,
+          content,
+        },
+      });
     }
   });
 

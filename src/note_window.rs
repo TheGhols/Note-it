@@ -34,6 +34,9 @@ pub struct NoteWindowOptions<'a> {
     pub on_geometry_changed: Rc<dyn Fn(Uuid, NoteWindowState)>,
 }
 
+type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
+
+#[derive(Clone)]
 #[allow(dead_code)]
 pub struct NoteWindow {
     pub id: Uuid,
@@ -43,6 +46,7 @@ pub struct NoteWindow {
     pub state: Rc<RefCell<NoteWindowState>>,
     pub storage: StorageManager,
     allow_close: Rc<Cell<bool>>,
+    pending_flushes: Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>,
 }
 
 impl NoteWindow {
@@ -129,6 +133,9 @@ impl NoteWindow {
         // Ensure transparent webview background so custom post-it border radius renders cleanly
         webview.set_background_color(&gtk4::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
+        let pending_flushes: Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>> =
+            Rc::new(RefCell::new(std::collections::HashMap::new()));
+
         // Connect Webview Messages
         let doc_clone = Rc::clone(&doc_rc);
         let state_clone = Rc::clone(&state_rc);
@@ -138,6 +145,7 @@ impl NoteWindow {
         let on_new_note_clone = Rc::clone(&options.on_new_note);
         let on_close_clone = Rc::clone(&options.on_close);
         let on_geom_clone = Rc::clone(&options.on_geometry_changed);
+        let flushes_clone = Rc::clone(&pending_flushes);
 
         content_manager.connect_script_message_received(
             Some("noteItHost"),
@@ -264,6 +272,21 @@ impl NoteWindow {
                             let snapshot = state_clone.borrow().clone();
                             on_geom_clone(id, snapshot);
                         }
+                        WebviewToHostMessage::FlushResponse {
+                            id: message_id,
+                            request_id,
+                            content,
+                        } => {
+                            let save_res = if message_id != id {
+                                Err("Flush response rejected a mismatched note identifier"
+                                    .to_string())
+                            } else {
+                                save_content(&storage_clone, &doc_clone, id, content)
+                            };
+                            if let Some(callback) = flushes_clone.borrow_mut().remove(&request_id) {
+                                callback(save_res);
+                            }
+                        }
                     }
                 } else if let Err(error) = parse_webview_message(&raw_json) {
                     eprintln!("Rejected invalid webview message: {error}");
@@ -294,6 +317,7 @@ impl NoteWindow {
             state: state_rc,
             storage: options.storage,
             allow_close,
+            pending_flushes,
         }
     }
 
@@ -301,9 +325,35 @@ impl NoteWindow {
         apply_layer_mode(&self.window, mode);
     }
 
+    #[allow(dead_code)]
     pub fn save_now(&self) -> Result<(), String> {
         let doc = self.document.borrow();
         self.storage.save_note_atomic(&doc).map(|_| ())
+    }
+
+    pub fn request_flush<F: FnOnce(Result<(), String>) + 'static>(
+        &self,
+        request_id: u64,
+        callback: F,
+    ) {
+        let pending = Rc::clone(&self.pending_flushes);
+        let doc_clone = Rc::clone(&self.document);
+        let storage_clone = self.storage.clone();
+        self.pending_flushes
+            .borrow_mut()
+            .insert(request_id, Box::new(callback));
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::RequestFlush { request_id },
+        );
+
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            if let Some(cb) = pending.borrow_mut().remove(&request_id) {
+                let doc = doc_clone.borrow();
+                let save_res = storage_clone.save_note_atomic(&doc).map(|_| ());
+                cb(save_res);
+            }
+        });
     }
 
     pub fn close_after_save(&self) {
@@ -353,6 +403,7 @@ mod tests {
     use std::path::Path;
     use std::rc::Rc;
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     #[test]
     fn failed_save_keeps_latest_content_in_memory() {
@@ -412,5 +463,63 @@ mod tests {
         let uri = file_uri_for_path(Path::new("directory with spaces/index.html"));
         assert!(uri.starts_with("file:///"));
         assert!(uri.ends_with("directory%20with%20spaces/index.html"));
+    }
+
+    #[test]
+    fn flush_response_updates_doc_and_saves_atomically() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
+        let id = document.borrow().metadata.id;
+
+        let res = save_content(
+            &storage,
+            &document,
+            id,
+            "# flushed immediately before hide".to_string(),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            document.borrow().content,
+            "# flushed immediately before hide"
+        );
+
+        // Verify disk file was created and contains the content
+        let loaded = storage.load_note(&id).expect("loaded note");
+        assert_eq!(loaded.content, "# flushed immediately before hide");
+    }
+
+    #[test]
+    fn flush_response_with_mismatched_id_fails_without_corrupting_doc() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
+        let doc_id = document.borrow().metadata.id;
+        let wrong_id = Uuid::new_v4();
+
+        let res = save_content(
+            &storage,
+            &document,
+            wrong_id,
+            "corrupted content".to_string(),
+        );
+
+        assert!(res.is_err());
+        assert_eq!(document.borrow().metadata.id, doc_id);
     }
 }
