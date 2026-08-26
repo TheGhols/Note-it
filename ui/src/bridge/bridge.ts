@@ -12,7 +12,7 @@ export class NativeBridge {
           listener(message);
         }
       } catch (err) {
-        console.error('Failed to parse host message:', err, rawMessage);
+        console.error('Failed to parse host message:', err);
       }
     };
   }

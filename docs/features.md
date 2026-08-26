@@ -35,6 +35,7 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 ## Storage & Reliability
 
 - **Atomic Autosave:**
-  - Debounced write (250–500 ms) via temporary file replacement to prevent data corruption.
+  - Debounced write (300 ms) via temporary file replacement to prevent data corruption.
+  - Close and Ctrl+W send the latest editor content in one save-and-close request; the window closes only after persistence succeeds.
 - **Standard YAML Front Matter:**
   - Note ID, paper color, font size, and timestamps stored cleanly in note headers.

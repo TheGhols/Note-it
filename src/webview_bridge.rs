@@ -22,6 +22,7 @@ pub enum HostToWebviewMessage {
         font_size: u32,
     },
     RequestContent,
+    RequestSaveAndClose,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +34,9 @@ pub enum WebviewToHostMessage {
         id: Uuid,
         content: String,
     },
-    CloseRequested {
+    SaveAndClose {
         id: Uuid,
+        content: String,
     },
     NewNoteRequested,
     ColorChanged {
@@ -61,4 +63,71 @@ pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
 pub fn parse_webview_message(raw_json: &str) -> Result<WebviewToHostMessage, String> {
     serde_json::from_str::<WebviewToHostMessage>(raw_json)
         .map_err(|e| format!("Failed to parse webview message: {e}"))
+}
+
+pub fn validate_external_url(url: &str) -> Result<(), String> {
+    if url.is_empty() || url.trim() != url || url.chars().any(char::is_control) {
+        return Err("External URL contains invalid whitespace or control characters".to_string());
+    }
+
+    let parsed = glib::Uri::parse(url, glib::UriFlags::NONE)
+        .map_err(|_| "External URL is malformed".to_string())?;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+
+    match scheme.as_str() {
+        "http" | "https" if parsed.host().is_some_and(|host| !host.is_empty()) => Ok(()),
+        "mailto" if !parsed.path().is_empty() => Ok(()),
+        "http" | "https" | "mailto" => Err("External URL is missing its destination".to_string()),
+        _ => Err("External URL scheme is not allowed".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_webview_message, validate_external_url, WebviewToHostMessage};
+    use uuid::Uuid;
+
+    #[test]
+    fn parses_save_and_close_as_one_message_with_latest_content() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "save_and_close",
+            "payload": { "id": id, "content": "latest character: x" }
+        })
+        .to_string();
+
+        let message = parse_webview_message(&raw).expect("save-and-close message");
+        match message {
+            WebviewToHostMessage::SaveAndClose {
+                id: parsed_id,
+                content,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(content, "latest character: x");
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn allows_explicit_external_url_schemes() {
+        assert!(validate_external_url("https://example.com/path?q=1").is_ok());
+        assert!(validate_external_url("http://example.com").is_ok());
+        assert!(validate_external_url("mailto:person@example.com").is_ok());
+    }
+
+    #[test]
+    fn blocks_unapproved_or_malformed_external_urls() {
+        for url in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,test",
+            "ftp://example.com",
+            "https:",
+            " https://example.com",
+            "https://example.com\nfile:///etc/passwd",
+        ] {
+            assert!(validate_external_url(url).is_err(), "should block {url:?}");
+        }
+    }
 }

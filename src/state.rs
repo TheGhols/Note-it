@@ -85,7 +85,8 @@ impl AppState {
 
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create state directory: {e}"))?;
         }
 
         let serialized = serde_json::to_string_pretty(self)
@@ -103,6 +104,11 @@ impl AppState {
 
         fs::rename(&temp_path, path)
             .map_err(|e| format!("Failed to atomically rename state file: {e}"))?;
+        if let Some(parent) = path.parent() {
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|e| format!("Failed to sync state directory: {e}"))?;
+        }
 
         Ok(())
     }

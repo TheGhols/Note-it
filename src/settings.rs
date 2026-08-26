@@ -53,7 +53,9 @@ impl AppConfig {
     pub fn load_from_file(path: &Path) -> Self {
         if !path.exists() {
             let config = Self::default();
-            let _ = config.save_to_file(path);
+            if let Err(error) = config.save_to_file(path) {
+                eprintln!("Failed to persist default configuration: {error}");
+            }
             return config;
         }
 
@@ -65,7 +67,8 @@ impl AppConfig {
 
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create configuration directory: {e}"))?;
         }
 
         let toml_str = toml::to_string_pretty(self)

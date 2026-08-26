@@ -7,6 +7,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
+import { isValidHexColor } from '../markdown/sanitizer.ts';
 
 // Custom Underline serialized to <u>...</u>
 const NoteItUnderline = Underline.extend({
@@ -37,7 +38,7 @@ const NoteItUnderline = Underline.extend({
 const NoteItHighlight = Highlight.extend({
   renderMarkdown(node: any, helpers: any) {
     const color = node.attrs?.color;
-    if (color) {
+    if (isValidHexColor(color)) {
       return `<mark data-note-it-highlight="${color}" style="background-color:${color}">${helpers.renderChildren(node)}</mark>`;
     }
     return `<mark>${helpers.renderChildren(node)}</mark>`;
@@ -53,6 +54,7 @@ const NoteItHighlight = Highlight.extend({
       if (!match) return;
       const color = match[1];
       const innerContent = match[2];
+      if (color && !isValidHexColor(color)) return;
       return {
         type: 'highlight',
         raw: match[0],
@@ -62,13 +64,21 @@ const NoteItHighlight = Highlight.extend({
       };
     },
   },
+  parseMarkdown(token: any, helpers: any) {
+    return helpers.applyMark(
+      'highlight',
+      helpers.parseInline(token.tokens || []),
+      token.attrs || {},
+    );
+  },
 });
 
 // Custom Color serialized to <span data-note-it-color="..." style="...">
-const NoteItColor = Color.extend({
+const NoteItTextStyle = TextStyle.extend({
+  markdownTokenName: 'color',
   renderMarkdown(node: any, helpers: any) {
     const color = node.attrs?.color;
-    if (color) {
+    if (isValidHexColor(color)) {
       return `<span data-note-it-color="${color}" style="color:${color}">${helpers.renderChildren(node)}</span>`;
     }
     return helpers.renderChildren(node);
@@ -84,6 +94,7 @@ const NoteItColor = Color.extend({
       if (!match) return;
       const color = match[1];
       const innerContent = match[2];
+      if (!isValidHexColor(color)) return;
       return {
         type: 'color',
         raw: match[0],
@@ -92,6 +103,13 @@ const NoteItColor = Color.extend({
         tokens: lexer.inlineTokens(innerContent),
       };
     },
+  },
+  parseMarkdown(token: any, helpers: any) {
+    return helpers.applyMark(
+      'textStyle',
+      helpers.parseInline(token.tokens || []),
+      token.attrs || {},
+    );
   },
 });
 
@@ -109,8 +127,8 @@ export const editorExtensions = [
   NoteItHighlight.configure({
     multicolor: true,
   }),
-  TextStyle,
-  NoteItColor,
+  NoteItTextStyle,
+  Color,
   TaskList,
   TaskItem.configure({
     nested: true,

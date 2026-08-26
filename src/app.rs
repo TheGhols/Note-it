@@ -5,7 +5,6 @@ use crate::settings::AppConfig;
 use crate::state::{AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use gio::prelude::*;
-use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -90,7 +89,13 @@ impl NoteItApp {
     fn restore_saved_notes(&self, is_background: bool) {
         let (note_ids, target_mode) = {
             let ctx = self.context.borrow();
-            let ids = ctx.storage.list_notes().unwrap_or_default();
+            let ids = match ctx.storage.list_notes() {
+                Ok(ids) => ids,
+                Err(error) => {
+                    eprintln!("Failed to list saved notes: {error}");
+                    Vec::new()
+                }
+            };
             let mode = if is_background {
                 LayerMode::Hidden
             } else {
@@ -107,40 +112,41 @@ impl NoteItApp {
         let mut ctx = self.context.borrow_mut();
         for id in note_ids {
             if !ctx.windows.contains_key(&id) {
-                if let Ok(doc) = ctx.storage.load_note(&id) {
-                    let win_state = ctx
-                        .state
-                        .notes
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(NoteWindowState::default);
+                match ctx.storage.load_note(&id) {
+                    Ok(doc) => {
+                        let win_state = ctx
+                            .state
+                            .notes
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(NoteWindowState::default);
 
-                    let on_new_note = {
-                        let self_clone = self.clone_rc();
-                        Rc::new(move || {
-                            self_clone.create_new_note();
-                        })
-                    };
+                        let on_new_note = {
+                            let self_clone = self.clone_rc();
+                            Rc::new(move || {
+                                self_clone.create_new_note();
+                            })
+                        };
 
-                    let on_close = {
-                        let self_clone = self.clone_rc();
-                        Rc::new(move |note_id| {
-                            self_clone.close_note(&note_id);
-                        })
-                    };
+                        let on_close = {
+                            let self_clone = self.clone_rc();
+                            Rc::new(move |note_id| self_clone.close_note(&note_id))
+                        };
 
-                    let note_window = NoteWindow::new(NoteWindowOptions {
-                        app: &self.app,
-                        document: doc,
-                        state: win_state,
-                        layer_mode: target_mode,
-                        storage: ctx.storage.clone(),
-                        ui_dist_path: &ctx.ui_dist_path,
-                        on_new_note,
-                        on_close,
-                    });
+                        let note_window = NoteWindow::new(NoteWindowOptions {
+                            app: &self.app,
+                            document: doc,
+                            state: win_state,
+                            layer_mode: target_mode,
+                            storage: ctx.storage.clone(),
+                            ui_dist_path: &ctx.ui_dist_path,
+                            on_new_note,
+                            on_close,
+                        });
 
-                    ctx.windows.insert(id, note_window);
+                        ctx.windows.insert(id, note_window);
+                    }
+                    Err(error) => eprintln!("Failed to load note {id}: {error}"),
                 }
             }
         }
@@ -154,7 +160,10 @@ impl NoteItApp {
         doc.metadata.color = ctx.config.default_color.clone();
         doc.metadata.font_size = ctx.config.default_font_size;
 
-        let _ = ctx.storage.save_note_atomic(&doc);
+        if let Err(error) = ctx.storage.save_note_atomic(&doc) {
+            eprintln!("Failed to create note {}: {error}", doc.metadata.id);
+            return;
+        }
 
         let note_id = doc.metadata.id;
         let win_state = NoteWindowState {
@@ -181,9 +190,7 @@ impl NoteItApp {
 
         let on_close = {
             let self_clone = self.clone_rc();
-            Rc::new(move |id| {
-                self_clone.close_note(&id);
-            })
+            Rc::new(move |id| self_clone.close_note(&id))
         };
 
         let note_window = NoteWindow::new(NoteWindowOptions {
@@ -200,20 +207,29 @@ impl NoteItApp {
         ctx.state.notes.insert(note_id, win_state);
         ctx.windows.insert(note_id, note_window);
         ctx.state.active_layer_mode = mode;
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist application state after note creation: {error}");
+        }
     }
 
     #[allow(dead_code)]
-    pub fn close_note(&self, id: &Uuid) {
+    pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
         let mut ctx = self.context.borrow_mut();
+        if !ctx.windows.contains_key(id) {
+            return Err("note window is not instantiated".to_string());
+        }
+
+        let previous_state = ctx.state.clone();
+        ctx.state.notes.entry(*id).or_default().is_open = false;
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            ctx.state = previous_state;
+            return Err(format!("failed to persist closed note state: {error}"));
+        }
+
         if let Some(win) = ctx.windows.remove(id) {
-            win.save_now();
-            win.window.close();
+            win.close_after_save();
         }
-        if let Some(entry) = ctx.state.notes.get_mut(id) {
-            entry.is_open = false;
-        }
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        Ok(())
     }
 
     fn set_layer_mode_internal(&self, ctx: &mut AppContext, mode: LayerMode) {
@@ -221,14 +237,27 @@ impl NoteItApp {
         for window in ctx.windows.values() {
             window.set_layer_mode(mode);
         }
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist layer mode: {error}");
+        }
     }
 
     fn save_and_quit(&self, ctx: &mut AppContext) {
-        for window in ctx.windows.values() {
-            window.save_now();
+        let mut save_failed = false;
+        for (id, window) in &ctx.windows {
+            if let Err(error) = window.save_now() {
+                save_failed = true;
+                eprintln!("Failed to save note {id} before quit: {error}");
+            }
         }
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        if save_failed {
+            eprintln!("Quit cancelled because one or more notes could not be saved");
+            return;
+        }
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Quit cancelled because application state could not be saved: {error}");
+            return;
+        }
         self.app.quit();
     }
 
@@ -253,7 +282,10 @@ impl NoteItAppClone {
         doc.metadata.color = ctx.config.default_color.clone();
         doc.metadata.font_size = ctx.config.default_font_size;
 
-        let _ = ctx.storage.save_note_atomic(&doc);
+        if let Err(error) = ctx.storage.save_note_atomic(&doc) {
+            eprintln!("Failed to create note {}: {error}", doc.metadata.id);
+            return;
+        }
 
         let note_id = doc.metadata.id;
         let win_state = NoteWindowState {
@@ -277,9 +309,7 @@ impl NoteItAppClone {
         });
 
         let self_clone2 = self.clone();
-        let on_close = Rc::new(move |id| {
-            self_clone2.close_note(&id);
-        });
+        let on_close = Rc::new(move |id| self_clone2.close_note(&id));
 
         let note_window = NoteWindow::new(NoteWindowOptions {
             app: &self.app,
@@ -295,20 +325,29 @@ impl NoteItAppClone {
         ctx.state.notes.insert(note_id, win_state);
         ctx.windows.insert(note_id, note_window);
         ctx.state.active_layer_mode = mode;
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist application state after note creation: {error}");
+        }
     }
 
     #[allow(dead_code)]
-    pub fn close_note(&self, id: &Uuid) {
+    pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
         let mut ctx = self.context.borrow_mut();
+        if !ctx.windows.contains_key(id) {
+            return Err("note window is not instantiated".to_string());
+        }
+
+        let previous_state = ctx.state.clone();
+        ctx.state.notes.entry(*id).or_default().is_open = false;
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            ctx.state = previous_state;
+            return Err(format!("failed to persist closed note state: {error}"));
+        }
+
         if let Some(win) = ctx.windows.remove(id) {
-            win.save_now();
-            win.window.close();
+            win.close_after_save();
         }
-        if let Some(entry) = ctx.state.notes.get_mut(id) {
-            entry.is_open = false;
-        }
-        let _ = ctx.state.save_to_file(&ctx.storage.state_file_path());
+        Ok(())
     }
 }
 

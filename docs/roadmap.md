@@ -1,5 +1,16 @@
 # Note-it Roadmap
 
+## Mandatory window-management requirements for Phase 2
+
+Phase 1.1 intentionally does not implement the broader window/layer lifecycle. Phase 2 must:
+
+- distinguish a note existing on disk, an instantiated `NoteWindow`, a visible note, and a closed note;
+- set `is_open=false` when Ctrl+W closes a note;
+- make `restore_saved_notes` respect `is_open` correctly;
+- define `note-it toggle` semantics for closed and hidden notes;
+- avoid creating a WebView for every `.md` file when `--background` starts, especially for large note collections;
+- define Desktop, Overlay, and Hidden lifecycle behavior definitively.
+
 ## Phase 0: Public Foundation (Current)
 - [x] Repository initialization, `.gitignore`, licensing, and documentation.
 - [x] Rust and TypeScript build scaffolding.

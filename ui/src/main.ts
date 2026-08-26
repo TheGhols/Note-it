@@ -35,11 +35,22 @@ function setFontSize(size: number): void {
 function flushSave(): void {
   if (activeNoteId && noteEditor) {
     const markdown = noteEditor.getMarkdown();
+    noteEditor.cancelPendingSave();
     bridge.sendMessage({
       type: 'content_changed',
       payload: { id: activeNoteId, content: markdown },
     });
   }
+}
+
+function saveAndClose(): void {
+  if (!activeNoteId || !noteEditor) return;
+  const content = noteEditor.getMarkdown();
+  noteEditor.cancelPendingSave();
+  bridge.sendMessage({
+    type: 'save_and_close',
+    payload: { id: activeNoteId, content },
+  });
 }
 
 function initUI(): void {
@@ -78,13 +89,7 @@ function initUI(): void {
   const btnClose = document.getElementById('btn-close');
   btnClose?.addEventListener('click', (e) => {
     e.preventDefault();
-    if (activeNoteId) {
-      flushSave();
-      bridge.sendMessage({
-        type: 'close_requested',
-        payload: { id: activeNoteId },
-      });
-    }
+    saveAndClose();
   });
 
   // Keyboard Shortcuts inside Webview
@@ -96,13 +101,7 @@ function initUI(): void {
         bridge.sendMessage({ type: 'new_note_requested' });
       } else if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
-        if (activeNoteId) {
-          flushSave();
-          bridge.sendMessage({
-            type: 'close_requested',
-            payload: { id: activeNoteId },
-          });
-        }
+        saveAndClose();
       } else if (e.key === '+' || e.key === '=') {
         e.preventDefault();
         setFontSize(currentFontSize + 1);
@@ -127,7 +126,7 @@ function initUI(): void {
 
   // Flush save on blur / beforeunload
   window.addEventListener('beforeunload', () => {
-    flushSave();
+    if (noteEditor?.hasPendingSave()) flushSave();
   });
 
   // External link interceptor
@@ -162,6 +161,8 @@ function initUI(): void {
           payload: { id: activeNoteId, content: noteEditor.getMarkdown() },
         });
       }
+    } else if (msg.type === 'request_save_and_close') {
+      saveAndClose();
     }
   });
 

@@ -11,12 +11,13 @@ export type HostToWebviewMessage =
   | { type: 'load_note'; payload: NoteData }
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
-  | { type: 'request_content' };
+  | { type: 'request_content' }
+  | { type: 'request_save_and_close' };
 
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'content_changed'; payload: { id: string; content: string } }
-  | { type: 'close_requested'; payload: { id: string } }
+  | { type: 'save_and_close'; payload: { id: string; content: string } }
   | { type: 'new_note_requested' }
   | { type: 'color_changed'; payload: { id: string; color: PaperColor } }
   | { type: 'font_size_changed'; payload: { id: string; fontSize: number } }

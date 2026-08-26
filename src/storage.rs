@@ -66,7 +66,8 @@ impl StorageManager {
             .map_err(|e| format!("Failed to create config directory: {e}"))?;
         fs::create_dir_all(&self.state_dir)
             .map_err(|e| format!("Failed to create state directory: {e}"))?;
-        let _ = fs::create_dir_all(&self.runtime_dir);
+        fs::create_dir_all(&self.runtime_dir)
+            .map_err(|e| format!("Failed to create runtime directory: {e}"))?;
         Ok(())
     }
 
@@ -112,6 +113,9 @@ impl StorageManager {
 
         fs::rename(&temp_path, &target_path)
             .map_err(|e| format!("Failed to rename temp file to target: {e}"))?;
+        File::open(&self.notes_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| format!("Failed to sync notes directory: {e}"))?;
 
         Ok(target_path)
     }
