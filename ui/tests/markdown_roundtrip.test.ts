@@ -95,4 +95,49 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     editor.destroy();
     container.remove();
   });
+
+  it('preserves code blocks and inline code with HTML characters across Tiptap round-trip', () => {
+    const input = [
+      '# Code Integrity Test',
+      '',
+      'Inline: `<script>alert("inline")</script>` and `<span data-note-it-color="#ff0000">`',
+      '',
+      '```html',
+      '<script>alert("fenced")</script>',
+      '<div onclick="test()">example</div>',
+      '```',
+    ].join('\n');
+
+    const { editor, container } = createEditor(input);
+    const output = editor.getMarkdown();
+
+    // Verify markdown serialization retains exact code content
+    expect(output).toContain('`<script>alert("inline")</script>`');
+    expect(output).toContain('`<span data-note-it-color="#ff0000">`');
+    expect(output).toContain('<script>alert("fenced")</script>');
+    expect(output).toContain('<div onclick="test()">example</div>');
+
+    // Verify DOM structure does not contain executable elements
+    expect(container.querySelectorAll('script').length).toBe(0);
+    expect(container.querySelector('[onclick]')).toBeNull();
+
+    // Verify DOM renders as pre/code text
+    const codeElements = container.querySelectorAll('pre code, p code');
+    expect(codeElements.length).toBeGreaterThanOrEqual(1);
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it('preserves autolinks in round-trip pipeline', () => {
+    const input = 'Visit <https://example.com> for info.';
+    const { editor, container } = createEditor(input);
+    const output = editor.getMarkdown();
+
+    expect(output).toContain('https://example.com');
+    expect(container.querySelector('script')).toBeNull();
+
+    editor.destroy();
+    container.remove();
+  });
 });

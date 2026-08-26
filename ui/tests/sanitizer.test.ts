@@ -41,15 +41,81 @@ describe('HTML Sanitizer', () => {
     expect(sanitizeMarkdown(input)).toBe(input);
   });
 
-  it('canonicalizes custom HTML and rejects non-hex colors', () => {
+  it('preserves inline code containing script tags literally', () => {
+    const input = 'Use `<script>alert(1)</script>` as code';
+    expect(sanitizeMarkdown(input)).toBe('Use `<script>alert(1)</script>` as code');
+  });
+
+  it('preserves multi-backtick inline code with HTML chars literally', () => {
+    const input = '``<script>`alert(1)`</script>``';
+    expect(sanitizeMarkdown(input)).toBe('``<script>`alert(1)`</script>``');
+  });
+
+  it('preserves fenced code block containing script and dangerous handlers', () => {
+    const input = '```html\n<script>alert("example")</script>\n<div onclick="test()">example</div>\n```';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('preserves fenced code block with tildes containing HTML literally', () => {
+    const input = '~~~html\n<span onclick="alert(1)">code</span>\n~~~';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('preserves https autolinks in markdown', () => {
+    const input = 'Check <https://example.com> and <http://example.com/path?a=1&b=2>';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('preserves email autolinks in markdown', () => {
+    const input = 'Contact <user@example.com> or <john.doe+tag@example.org>';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('preserves custom Note-it HTML inside inline code literally', () => {
+    const input = 'Use `<span data-note-it-color="#ff0000">` and `<mark data-note-it-highlight="#ffff00">`';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('preserves custom Note-it HTML inside fenced code literally', () => {
+    const input = '```markdown\n<span data-note-it-color="#ff0000">raw</span>\n```';
+    expect(sanitizeMarkdown(input)).toBe(input);
+  });
+
+  it('canonicalizes custom HTML outside code and removes event handlers', () => {
     expect(
       sanitizeMarkdown('<span onclick="alert(1)" data-note-it-color="#ff0000">ok</span>'),
     ).toBe('<span data-note-it-color="#ff0000">ok</span>');
-    const invalid = sanitizeMarkdown(
+
+    expect(
+      sanitizeMarkdown('<mark onmouseover="bad()" data-note-it-highlight="#ffff00">ok</mark>'),
+    ).toBe('<mark data-note-it-highlight="#ffff00">ok</mark>');
+
+    expect(
+      sanitizeMarkdown('<u>underlined</u>'),
+    ).toBe('<u>underlined</u>');
+  });
+
+  it('neutralizes dangerous HTML tags and blocks outside code', () => {
+    expect(sanitizeMarkdown('<script>alert(1)</script>')).toBe('');
+    expect(sanitizeMarkdown('<iframe src="https://evil.com"></iframe>')).toBe('');
+    expect(sanitizeMarkdown('<style>body { display: none; }</style>')).toBe('');
+    expect(sanitizeMarkdown('<div onclick="alert(1)">hello</div>')).toBe('hello');
+    expect(sanitizeMarkdown('<!-- comment -->text')).toBe('text');
+  });
+
+  it('neutralizes dangerous javascript: autolinks outside code', () => {
+    expect(sanitizeMarkdown('<javascript:alert(1)>')).toBe('');
+  });
+
+  it('canonicalizes custom HTML and rejects non-hex colors', () => {
+    const invalidSpan = sanitizeMarkdown(
+      '<span data-note-it-color="red;background:url(...)">bad</span>',
+    );
+    expect(invalidSpan).toBe('bad');
+
+    const invalidMark = sanitizeMarkdown(
       '<mark data-note-it-highlight="red;background:url(...)" onmouseover="x">bad</mark>',
     );
-    expect(invalid).not.toContain('data-note-it-highlight');
-    expect(invalid).not.toContain('onmouseover');
-    expect(invalid).not.toContain('background:url');
+    expect(invalidMark).toBe('bad');
   });
 });
