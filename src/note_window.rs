@@ -1,4 +1,7 @@
-use crate::layer_shell::{apply_layer_mode, setup_layer_shell_window};
+use crate::layer_shell::{
+    apply_layer_mode, clamp_geometry, setup_layer_shell_window, update_window_position,
+    update_window_size, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
+};
 use crate::model::NoteDocument;
 use crate::state::{LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
@@ -6,6 +9,7 @@ use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
     WebviewToHostMessage,
 };
+use gtk4::gdk;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -21,8 +25,13 @@ pub struct NoteWindowOptions<'a> {
     pub layer_mode: LayerMode,
     pub storage: StorageManager,
     pub ui_dist_path: &'a Path,
+    pub monitor: Option<gdk::Monitor>,
+    pub monitor_name: Option<String>,
+    pub monitor_width: i32,
+    pub monitor_height: i32,
     pub on_new_note: Rc<dyn Fn()>,
     pub on_close: Rc<dyn Fn(Uuid) -> Result<(), String>>,
+    pub on_geometry_changed: Rc<dyn Fn(Uuid, NoteWindowState)>,
 }
 
 #[allow(dead_code)]
@@ -45,17 +54,48 @@ impl NoteWindow {
             .decorated(false)
             .build();
 
+        let mon_w = if options.monitor_width > 0 {
+            options.monitor_width
+        } else {
+            DEFAULT_MONITOR_WIDTH
+        };
+        let mon_h = if options.monitor_height > 0 {
+            options.monitor_height
+        } else {
+            DEFAULT_MONITOR_HEIGHT
+        };
+
+        // Clamp initial geometry
+        let (clamped_x, clamped_y, clamped_w, clamped_h) = clamp_geometry(
+            options.state.x,
+            options.state.y,
+            options.state.width,
+            options.state.height,
+            mon_w,
+            mon_h,
+        );
+
+        let mut initial_state = options.state;
+        initial_state.x = clamped_x;
+        initial_state.y = clamped_y;
+        initial_state.width = clamped_w;
+        initial_state.height = clamped_h;
+        if options.monitor_name.is_some() {
+            initial_state.monitor = options.monitor_name;
+        }
+
         let doc_rc = Rc::new(RefCell::new(options.document));
-        let state_rc = Rc::new(RefCell::new(options.state.clone()));
+        let state_rc = Rc::new(RefCell::new(initial_state));
 
         // Setup Layer Shell
         setup_layer_shell_window(
             window.upcast_ref(),
             options.layer_mode,
-            options.state.x,
-            options.state.y,
-            options.state.width,
-            options.state.height,
+            clamped_x,
+            clamped_y,
+            clamped_w,
+            clamped_h,
+            options.monitor.as_ref(),
         );
 
         // Configure WebKit settings
@@ -91,10 +131,13 @@ impl NoteWindow {
 
         // Connect Webview Messages
         let doc_clone = Rc::clone(&doc_rc);
+        let state_clone = Rc::clone(&state_rc);
         let storage_clone = options.storage.clone();
         let webview_weak = webview.downgrade();
+        let window_weak = window.downgrade();
         let on_new_note_clone = Rc::clone(&options.on_new_note);
         let on_close_clone = Rc::clone(&options.on_close);
+        let on_geom_clone = Rc::clone(&options.on_geometry_changed);
 
         content_manager.connect_script_message_received(
             Some("noteItHost"),
@@ -186,6 +229,40 @@ impl NoteWindow {
                             ) {
                                 eprintln!("Failed to open approved external URL: {error}");
                             }
+                        }
+                        WebviewToHostMessage::DragStart => {}
+                        WebviewToHostMessage::DragUpdate { dx, dy } => {
+                            let mut st = state_clone.borrow_mut();
+                            st.x += dx;
+                            st.y += dy;
+                            let (cx, cy, _, _) =
+                                clamp_geometry(st.x, st.y, st.width, st.height, mon_w, mon_h);
+                            st.x = cx;
+                            st.y = cy;
+                            if let Some(win) = window_weak.upgrade() {
+                                update_window_position(win.upcast_ref(), cx, cy);
+                            }
+                        }
+                        WebviewToHostMessage::DragEnd => {
+                            let snapshot = state_clone.borrow().clone();
+                            on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::ResizeStart => {}
+                        WebviewToHostMessage::ResizeUpdate { dx, dy } => {
+                            let mut st = state_clone.borrow_mut();
+                            st.width += dx;
+                            st.height += dy;
+                            let (_, _, cw, ch) =
+                                clamp_geometry(st.x, st.y, st.width, st.height, mon_w, mon_h);
+                            st.width = cw;
+                            st.height = ch;
+                            if let Some(win) = window_weak.upgrade() {
+                                update_window_size(win.upcast_ref(), cw, ch);
+                            }
+                        }
+                        WebviewToHostMessage::ResizeEnd => {
+                            let snapshot = state_clone.borrow().clone();
+                            on_geom_clone(id, snapshot);
                         }
                     }
                 } else if let Err(error) = parse_webview_message(&raw_json) {

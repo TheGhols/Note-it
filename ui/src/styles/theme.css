@@ -281,3 +281,32 @@ html, body {
   pointer-events: none;
   height: 0;
 }
+
+.resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: se-resize;
+  z-index: 10;
+  user-select: none;
+  opacity: 0.25;
+  transition: opacity var(--transition-fast);
+}
+
+#app:hover .resize-handle {
+  opacity: 0.8;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--paper-muted);
+  border-bottom: 2px solid var(--paper-muted);
+  border-radius: 1px;
+}

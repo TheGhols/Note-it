@@ -21,7 +21,13 @@ export type WebviewToHostMessage =
   | { type: 'new_note_requested' }
   | { type: 'color_changed'; payload: { id: string; color: PaperColor } }
   | { type: 'font_size_changed'; payload: { id: string; fontSize: number } }
-  | { type: 'open_external_url'; payload: { url: string } };
+  | { type: 'open_external_url'; payload: { url: string } }
+  | { type: 'drag_start' }
+  | { type: 'drag_update'; payload: { dx: number; dy: number } }
+  | { type: 'drag_end' }
+  | { type: 'resize_start' }
+  | { type: 'resize_update'; payload: { dx: number; dy: number } }
+  | { type: 'resize_end' };
 
 declare global {
   interface Window {

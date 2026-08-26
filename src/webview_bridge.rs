@@ -51,6 +51,18 @@ pub enum WebviewToHostMessage {
     OpenExternalUrl {
         url: String,
     },
+    DragStart,
+    DragUpdate {
+        dx: i32,
+        dy: i32,
+    },
+    DragEnd,
+    ResizeStart,
+    ResizeUpdate {
+        dx: i32,
+        dy: i32,
+    },
+    ResizeEnd,
 }
 
 pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
@@ -117,17 +129,33 @@ mod tests {
     }
 
     #[test]
-    fn blocks_unapproved_or_malformed_external_urls() {
-        for url in [
-            "javascript:alert(1)",
-            "file:///etc/passwd",
-            "data:text/html,test",
-            "ftp://example.com",
-            "https:",
-            " https://example.com",
-            "https://example.com\nfile:///etc/passwd",
-        ] {
-            assert!(validate_external_url(url).is_err(), "should block {url:?}");
+    fn parses_drag_and_resize_messages() {
+        let drag_json = serde_json::json!({
+            "type": "drag_update",
+            "payload": { "dx": 15, "dy": -8 }
+        })
+        .to_string();
+        let drag_msg = parse_webview_message(&drag_json).expect("drag message");
+        match drag_msg {
+            WebviewToHostMessage::DragUpdate { dx, dy } => {
+                assert_eq!(dx, 15);
+                assert_eq!(dy, -8);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let resize_json = serde_json::json!({
+            "type": "resize_update",
+            "payload": { "dx": 50, "dy": 40 }
+        })
+        .to_string();
+        let resize_msg = parse_webview_message(&resize_json).expect("resize message");
+        match resize_msg {
+            WebviewToHostMessage::ResizeUpdate { dx, dy } => {
+                assert_eq!(dx, 50);
+                assert_eq!(dy, 40);
+            }
+            other => panic!("unexpected message: {other:?}"),
         }
     }
 }

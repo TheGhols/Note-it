@@ -92,6 +92,98 @@ function initUI(): void {
     saveAndClose();
   });
 
+  // Drag region handling
+  const dragRegion = document.querySelector('.drag-region') as HTMLElement | null;
+  if (dragRegion) {
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    dragRegion.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      isDragging = true;
+      lastX = e.screenX;
+      lastY = e.screenY;
+      dragRegion.setPointerCapture(e.pointerId);
+      bridge.sendMessage({ type: 'drag_start' });
+    });
+
+    dragRegion.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!isDragging) return;
+      const dx = e.screenX - lastX;
+      const dy = e.screenY - lastY;
+      lastX = e.screenX;
+      lastY = e.screenY;
+      if (dx !== 0 || dy !== 0) {
+        bridge.sendMessage({
+          type: 'drag_update',
+          payload: { dx, dy },
+        });
+      }
+    });
+
+    const endDrag = (e: PointerEvent) => {
+      if (!isDragging) return;
+      isDragging = false;
+      try {
+        dragRegion.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      bridge.sendMessage({ type: 'drag_end' });
+    };
+
+    dragRegion.addEventListener('pointerup', endDrag);
+    dragRegion.addEventListener('pointercancel', endDrag);
+  }
+
+  // Resize handle handling
+  const resizeHandle = document.getElementById('resize-handle');
+  if (resizeHandle) {
+    let isResizing = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      isResizing = true;
+      lastX = e.screenX;
+      lastY = e.screenY;
+      resizeHandle.setPointerCapture(e.pointerId);
+      bridge.sendMessage({ type: 'resize_start' });
+    });
+
+    resizeHandle.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!isResizing) return;
+      const dx = e.screenX - lastX;
+      const dy = e.screenY - lastY;
+      lastX = e.screenX;
+      lastY = e.screenY;
+      if (dx !== 0 || dy !== 0) {
+        bridge.sendMessage({
+          type: 'resize_update',
+          payload: { dx, dy },
+        });
+      }
+    });
+
+    const endResize = (e: PointerEvent) => {
+      if (!isResizing) return;
+      isResizing = false;
+      try {
+        resizeHandle.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      bridge.sendMessage({ type: 'resize_end' });
+    };
+
+    resizeHandle.addEventListener('pointerup', endResize);
+    resizeHandle.addEventListener('pointercancel', endResize);
+  }
+
   // Keyboard Shortcuts inside Webview
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey) {
