@@ -1,43 +1,36 @@
 # Note-it Roadmap
 
-## Mandatory window-management requirements for Phase 2
-
-Phase 1.1 intentionally does not implement the broader window/layer lifecycle. Phase 2 must:
-
-- distinguish a note existing on disk, an instantiated `NoteWindow`, a visible note, and a closed note;
-- set `is_open=false` when Ctrl+W closes a note;
-- make `restore_saved_notes` respect `is_open` correctly;
-- define `note-it toggle` semantics for closed and hidden notes;
-- avoid creating a WebView for every `.md` file when `--background` starts, especially for large note collections;
-- define Desktop, Overlay, and Hidden lifecycle behavior definitively.
-
-## Phase 0: Public Foundation (Current)
+## Phase 0: Public Foundation (Completed)
 - [x] Repository initialization, `.gitignore`, licensing, and documentation.
 - [x] Rust and TypeScript build scaffolding.
 - [x] Project architecture and storage specification.
 
-## Phase 1: Vertical Slice
-- [ ] Working GTK4 + `gtk4-layer-shell` + WebKitGTK 6.0 single note window.
-- [ ] Bidirectional IPC bridge between native host and webview editor.
-- [ ] End-to-end load and atomic autosave of `.md` file.
+## Phase 1: Vertical Slice & Markdown Integrity (Completed)
+- [x] Working GTK4 + `gtk4-layer-shell` + WebKitGTK 6.0 note window.
+- [x] Bidirectional IPC bridge between native host and webview editor.
+- [x] Load and atomic autosave of `.md` files with YAML front matter.
+- [x] ProseMirror / Tiptap 3 Markdown round-trip serializer and sanitizer.
+- [x] Native Markdown code preservation (fenced blocks, inline spans, and literal syntax).
+- [x] GitHub Actions CI pipeline running natively in Arch Linux container environment.
 
-## Phase 2: Rich WYSIWYG Editor
-- [ ] Full formatting support (bold, italic, underline, colors, highlight, lists, checklist).
-- [ ] Contextual floating bubble toolbar.
-- [ ] Markdown round-trip serializer tests.
+## Phase 2: Shell, Lifecycle, Layers & Geometry (Completed with Phase 2R)
+- [x] Strict distinction between on-disk `.md`, `is_open` state, instantiated WebViews, and visible surfaces.
+- [x] Lazy daemon lifecycle: `--background` starts with 0 WebViews created (idle ~0% CPU).
+- [x] Wayland Layer Shell modes: Desktop (`bottom`), Overlay (`overlay`), and Hidden.
+- [x] Dynamic single-instance CLI dispatcher (`new`, `toggle`, `show`, `hide`, `quit`).
+- [x] Window drag handle (header `.drag-region`) and discrete resize handle (`.resize-handle`).
+- [x] Window geometry persistence in `$XDG_STATE_HOME/note-it/state.json` (persisted only on drag/resize end).
+- [x] Safe geometry clamping, cascade positioning, and multi-monitor connector fallback.
+- [x] Canonical autolink policy (`https`, `http`, `mailto`) with safe non-destructive escaping.
+- [x] Transactional flush protocol before `hide` and `quit` to prevent data loss from debounced edits.
+- [x] End-to-end testing and validation on Niri compositor.
 
-## Phase 3: Multi-Note & Geometry Management
-- [ ] Multiple concurrent post-it windows.
-- [ ] 7 paper color themes.
-- [ ] Window drag, resize, and geometry state persistence.
-- [ ] Note deletion and safe archiving.
+## Phase 3: Editor Enhancements & User Experience (Next - Not Started)
+- [ ] Contextual floating bubble toolbar for formatting.
+- [ ] Extended styling controls and keyboard workflows.
+- [ ] Visual polish, paper textures, and typography adjustments.
 
-## Phase 4: Niri & Layer Shell Workflow
-- [ ] Single-instance daemon and CLI command dispatch (`toggle`, `new`, `show`, `hide`, `quit`).
-- [ ] Seamless transitions between Desktop (`bottom`) and Overlay (`overlay`) layers.
-- [ ] Tested and verified on Niri compositor.
-
-## Phase 5: Packaging & Distribution
-- [ ] Arch Linux PKGBUILD.
-- [ ] GitHub Actions CI pipeline.
-- [ ] v0.1.0 release preparation.
+## Phase 4: Packaging & Distribution (Planned)
+- [ ] Arch Linux PKGBUILD for AUR.
+- [ ] Release automation and binary artifacts.
+- [ ] v0.1.0 release.
