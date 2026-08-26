@@ -10,18 +10,16 @@ jobs:
   rust-check:
     name: Rust Checks & Tests
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install System Dependencies
+      - name: Install System Dependencies & Rust Toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev libwebkitgtk-6.0-dev pkg-config
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git pkgconf gtk4 gtk4-layer-shell webkitgtk-6.0 rust
 
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - uses: actions/checkout@v4
 
       - name: Rust Format Check
         run: cargo fmt --all -- --check
