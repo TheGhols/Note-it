@@ -7,9 +7,32 @@
   --note-header-height: 28px;
   /* View scale of the note content; never applied to the header bar. */
   --note-zoom: 1;
-  --popover-bg: #FFFFFF;
-  --popover-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  
+
+  /* Application chrome, dressed by the interface theme rather than by the
+     note. Menus and popovers float above a note of any colour, so they cannot
+     borrow the paper's own foreground: a dark popover over a yellow note would
+     otherwise inherit that paper's dark text and become unreadable.
+     `:root` carries the light theme, so a document with no theme attribute at
+     all is still fully painted. */
+  --ui-surface: #FFFFFF;
+  --ui-surface-hover: rgba(15, 23, 42, 0.07);
+  --ui-text: #1E293B;
+  --ui-text-muted: #64748B;
+  --ui-border: rgba(15, 23, 42, 0.10);
+  --ui-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  --ui-focus-ring: #1E293B;
+
+  /* Paper pattern. One parameterised system rather than five: the type picks a
+     pattern and its spacing, the intensity picks the opacity, and the paper
+     colour picks the ink. Spacing is in pixels on purpose — the pattern is a
+     background, so it stays put while the view zoom scales the text. */
+  --paper-pattern-ink: 15, 23, 42;
+  --paper-pattern-gain: 1;
+  --paper-pattern-alpha: 0.11;
+  --paper-pattern-spacing: 24px;
+  --paper-pattern-line: 1px;
+  --paper-pattern-dot: 1.1px;
+
   /* Default Paper: Soft Yellow */
   --paper-bg: #FEF9C3;
   --paper-text: #1E293B;
@@ -74,9 +97,38 @@ body[data-color="black"] {
   --paper-muted: #A1A1AA;
   --paper-border: rgba(255, 255, 255, 0.12);
   --selection-bg: rgba(255, 255, 255, 0.2);
-  --popover-bg: #27272A;
-  --popover-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  /* Light ink, drawn softer. A near-black paper sits on the steep part of the
+     lightness curve, so the same alpha lifts it noticeably further than it
+     darkens a pale paper; the gain pulls the three intensities back onto the
+     perceived strength they have everywhere else. */
+  --paper-pattern-ink: 244, 244, 245;
+  --paper-pattern-gain: 0.72;
 }
+
+/* Interface theme. Only the chrome tokens are redefined, so a note's paper
+   colour, its pattern and its text are left exactly as the note asked for. */
+:root[data-theme="dark"] {
+  --ui-surface: #27272A;
+  --ui-surface-hover: rgba(255, 255, 255, 0.10);
+  --ui-text: #F4F4F5;
+  --ui-text-muted: #A1A1AA;
+  --ui-border: rgba(255, 255, 255, 0.14);
+  --ui-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  --ui-focus-ring: #F4F4F5;
+}
+
+/* Pattern intensity. The three steps exist once, here. */
+body[data-paper-intensity="subtle"] { --paper-pattern-alpha: 0.06; }
+body[data-paper-intensity="normal"] { --paper-pattern-alpha: 0.11; }
+body[data-paper-intensity="strong"] { --paper-pattern-alpha: 0.20; }
+
+/* Pattern spacing, chosen per paper type. The ruled spacing matches the
+   note's default line box (15px at a 1.55 line height) so the lines read as
+   notebook rules next to unzoomed text. */
+body[data-paper="lined"] { --paper-pattern-spacing: 24px; }
+body[data-paper="dotted"] { --paper-pattern-spacing: 16px; }
+body[data-paper="grid-small"] { --paper-pattern-spacing: 16px; }
+body[data-paper="grid-large"] { --paper-pattern-spacing: 32px; }
 
 * {
   box-sizing: border-box;
@@ -178,11 +230,11 @@ body[data-collapsed="true"] .note-header {
   z-index: 30;
   min-width: 168px;
   padding: 4px;
-  border: 1px solid var(--paper-border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background-color: var(--popover-bg);
-  box-shadow: var(--popover-shadow);
-  color: var(--paper-text);
+  background-color: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+  color: var(--ui-text);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -218,29 +270,29 @@ body[data-collapsed="true"] .note-header {
 
 .note-menu-item:hover,
 .note-menu-item:focus-visible {
-  background-color: var(--selection-bg);
+  background-color: var(--ui-surface-hover);
   outline: none;
 }
 
 .note-menu-item:focus-visible,
 .note-menu-swatch:focus-visible {
-  outline: 2px solid var(--paper-text);
+  outline: 2px solid var(--ui-focus-ring);
   outline-offset: 1px;
 }
 
 .note-menu-chevron {
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
 }
 
 .note-menu-value {
   margin-left: auto;
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
   font-size: 12px;
 }
 
 .note-menu-shortcut {
   margin-left: auto;
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -253,7 +305,7 @@ body[data-collapsed="true"] .note-header {
 
 .note-menu-hint {
   padding: 2px 8px;
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
   font-size: 11px;
   font-style: italic;
 }
@@ -288,7 +340,7 @@ body[data-collapsed="true"] .note-header {
 .note-menu-step {
   width: 26px;
   height: 26px;
-  border: 1px solid var(--paper-border);
+  border: 1px solid var(--ui-border);
   border-radius: 5px;
   background: transparent;
   color: inherit;
@@ -299,11 +351,11 @@ body[data-collapsed="true"] .note-header {
 }
 
 .note-menu-step:hover {
-  background-color: var(--selection-bg);
+  background-color: var(--ui-surface-hover);
 }
 
 .note-menu-step:focus-visible {
-  outline: 2px solid var(--paper-text);
+  outline: 2px solid var(--ui-focus-ring);
   outline-offset: 1px;
 }
 
@@ -317,7 +369,7 @@ body[data-collapsed="true"] .note-header {
   content: '';
   position: absolute;
   inset: 3px;
-  border-top: 1.5px solid var(--paper-muted);
+  border-top: 1.5px solid var(--ui-text-muted);
   transform: rotate(-45deg);
   transform-origin: center;
 }
@@ -330,7 +382,7 @@ body[data-collapsed="true"] .note-header {
 
 .note-menu-heading {
   margin: 2px 8px 6px 8px;
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 600;
 }
@@ -347,7 +399,7 @@ body[data-collapsed="true"] .note-header {
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--paper-border);
+  border: 1px solid var(--ui-border);
   border-radius: 50%;
   cursor: pointer;
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
@@ -358,7 +410,7 @@ body[data-collapsed="true"] .note-header {
 }
 
 .note-menu-swatch[aria-checked="true"] {
-  box-shadow: 0 0 0 2px var(--paper-text);
+  box-shadow: 0 0 0 2px var(--ui-focus-ring);
 }
 
 .note-menu-swatch[data-color="yellow"] { background-color: #FEF9C3; }
@@ -379,11 +431,11 @@ body[data-collapsed="true"] .note-header {
   flex-direction: column;
   gap: 1px;
   padding: 6px 9px;
-  border: 1px solid var(--paper-border);
+  border: 1px solid var(--ui-border);
   border-radius: 6px;
-  background-color: var(--popover-bg);
-  box-shadow: var(--popover-shadow);
-  color: var(--paper-text);
+  background-color: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+  color: var(--ui-text);
   font-size: 11.5px;
   line-height: 1.45;
   white-space: nowrap;
@@ -392,7 +444,7 @@ body[data-collapsed="true"] .note-header {
 }
 
 .note-tooltip-row {
-  color: var(--paper-muted);
+  color: var(--ui-text-muted);
 }
 
 .editor-wrapper {
@@ -406,10 +458,70 @@ body[data-collapsed="true"] .note-header {
      transform would scale the painted pixels while leaving the caret and the
      pointer coordinates on the unscaled geometry. */
   font-size: calc(var(--note-font-size) * var(--note-zoom));
+  /* The paper pattern is painted here; see the rules further down. `local`
+     makes it travel with the text as the note scrolls. */
+  background-repeat: repeat;
+  background-attachment: local;
+  /* Composed on the element that paints it, deliberately.
+     `var()` is substituted where the declaration sits, using that element's
+     own values — so composing this on `:root` would freeze the root's ink and
+     opacity into it and the per-paper and per-intensity overrides on `body`
+     would never reach the paint. Here the three inputs have already inherited
+     down with the note's real choices. */
+  --paper-pattern-color: rgba(
+    var(--paper-pattern-ink),
+    calc(var(--paper-pattern-alpha) * var(--paper-pattern-gain))
+  );
+}
+
+/* Paper pattern.
+   Painted on the scrolling surface rather than on `#app`, for two reasons.
+   `background-attachment: local` makes it travel with the text, so the rules
+   sit under the lines the user is writing instead of drifting away from them;
+   and `#app` keeps its plain colour fill underneath, so a fast resize exposes
+   paper rather than an unpainted strip. Plain paper declares nothing at all,
+   which is exactly the behaviour notes had before. */
+body[data-paper="lined"] .editor-wrapper {
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--paper-pattern-spacing) - var(--paper-pattern-line)),
+    var(--paper-pattern-color) calc(var(--paper-pattern-spacing) - var(--paper-pattern-line))
+  );
+  background-size: 100% var(--paper-pattern-spacing);
+}
+
+/* The half-pixel ramp is antialiasing, not blur: without it the dot edge
+   aliases into a square at fractional device pixel ratios. */
+body[data-paper="dotted"] .editor-wrapper {
+  background-image: radial-gradient(
+    circle at center,
+    var(--paper-pattern-color) var(--paper-pattern-dot),
+    transparent calc(var(--paper-pattern-dot) + 0.5px)
+  );
+  background-size: var(--paper-pattern-spacing) var(--paper-pattern-spacing);
+}
+
+/* Both grids are the same pattern at two spacings, set above. */
+body[data-paper="grid-small"] .editor-wrapper,
+body[data-paper="grid-large"] .editor-wrapper {
+  background-image:
+    linear-gradient(
+      to right,
+      var(--paper-pattern-color) var(--paper-pattern-line),
+      transparent var(--paper-pattern-line)
+    ),
+    linear-gradient(
+      to bottom,
+      var(--paper-pattern-color) var(--paper-pattern-line),
+      transparent var(--paper-pattern-line)
+    );
+  background-size: var(--paper-pattern-spacing) var(--paper-pattern-spacing);
 }
 
 /* Collapsing hides the editor without unmounting it, so the content, the
-   formatting and the Tiptap instance are all preserved. */
+   formatting and the Tiptap instance are all preserved. Hiding the surface
+   takes the pattern with it, leaving the collapsed bar as a clean band of the
+   note's own colour; expanding brings both back. */
 body[data-collapsed="true"] .editor-wrapper {
   display: none;
 }

@@ -2,9 +2,23 @@ import './styles/theme.css';
 import { bridge } from './bridge/bridge.ts';
 import { NoteEditor } from './editor/editor.ts';
 import { NoteKeyboardController } from './editor/keyboard.ts';
-import { NoteLayerMode, PaperColor } from './bridge/types.ts';
+import {
+  NoteLayerMode,
+  PaperColor,
+  PaperIntensity,
+  PaperType,
+  ThemePreference,
+} from './bridge/types.ts';
 import { PointerGestureController } from './geometry/gesture.ts';
 import { NoteMenu } from './ui/menu.ts';
+import {
+  applyPaper,
+  DEFAULT_PAPER_INTENSITY,
+  DEFAULT_PAPER_TYPE,
+  normalizePaperIntensity,
+  normalizePaperType,
+} from './ui/paper.ts';
+import { DEFAULT_THEME, normalizeTheme, ThemeController } from './ui/theme.ts';
 import { NoteInfoTooltip } from './ui/tooltip.ts';
 import { TextSize } from './editor/textSize.ts';
 import { clampZoom, DEFAULT_ZOOM_PERCENT, zoomIn, zoomOut } from './editor/zoom.ts';
@@ -22,6 +36,10 @@ const PAPER_COLORS: PaperColor[] = [
 let activeNoteId = '';
 let currentZoom = DEFAULT_ZOOM_PERCENT;
 let currentLayerMode: NoteLayerMode = 'overlay';
+let currentPaperType: PaperType = DEFAULT_PAPER_TYPE;
+let currentPaperIntensity: PaperIntensity = DEFAULT_PAPER_INTENSITY;
+let currentTheme: ThemePreference = DEFAULT_THEME;
+let themeController: ThemeController | null = null;
 /** Whether the gesture in progress actually moved the note. */
 let dragMoved = false;
 let isCollapsed = false;
@@ -32,6 +50,47 @@ let infoTooltip: NoteInfoTooltip | null = null;
 function setPaperColor(color: PaperColor): void {
   document.body.setAttribute('data-color', color);
   noteMenu?.setSelectedColor(color);
+}
+
+/**
+ * Applies the note's own paper: its pattern and how strongly it is drawn.
+ *
+ * A property of the note, saved beside its colour in the front matter, so it
+ * travels with the note and never touches the document's text or its
+ * modification date. Both halves are applied together because the stylesheet
+ * reads them as one surface.
+ */
+function setPaper(type: PaperType, intensity: PaperIntensity, persist: boolean): void {
+  const changed = type !== currentPaperType || intensity !== currentPaperIntensity;
+  currentPaperType = type;
+  currentPaperIntensity = intensity;
+  applyPaper(document.body, type, intensity);
+  noteMenu?.setPaper(type, intensity);
+
+  if (persist && changed && activeNoteId) {
+    bridge.sendMessage({
+      type: 'paper_changed',
+      payload: { id: activeNoteId, paperType: type, paperIntensity: intensity },
+    });
+  }
+}
+
+/**
+ * Applies the shared interface theme.
+ *
+ * Unlike the paper, this belongs to the application rather than to the note:
+ * the host owns it, stores it once and broadcasts it, so every open note
+ * agrees. Nothing about the note's own colour changes here.
+ */
+function setTheme(theme: ThemePreference, persist: boolean): void {
+  const changed = theme !== currentTheme;
+  currentTheme = theme;
+  themeController?.setPreference(theme);
+  noteMenu?.setTheme(theme);
+
+  if (persist && changed) {
+    bridge.sendMessage({ type: 'theme_changed', payload: { theme } });
+  }
 }
 
 /**
@@ -196,6 +255,11 @@ function initUI(): void {
   const editorContainer = document.getElementById('editor-container');
   if (!editorContainer) return;
 
+  // Created before anything can ask for a theme, and kept for the lifetime of
+  // the page: under "Sistema" it watches the environment, so a desktop
+  // switching to dark reaches an open note without a restart.
+  themeController = new ThemeController(document.documentElement);
+
   noteEditor = new NoteEditor({
     element: editorContainer,
     initialContent: '',
@@ -234,6 +298,9 @@ function initUI(): void {
             });
           }
         },
+        onSelectPaperType: (type) => setPaper(type, currentPaperIntensity, true),
+        onSelectPaperIntensity: (intensity) => setPaper(currentPaperType, intensity, true),
+        onSelectTheme: (theme) => setTheme(theme, true),
         onToggleCollapsed: (collapsed) => requestCollapsed(collapsed),
         onSelectTextSize: (size) => applyTextSize(size),
         onSelectTextColor: (color) => {
@@ -374,6 +441,12 @@ function initUI(): void {
     if (msg.type === 'load_note') {
       activeNoteId = msg.payload.id;
       setPaperColor(msg.payload.color);
+      setPaper(
+        normalizePaperType(msg.payload.paperType),
+        normalizePaperIntensity(msg.payload.paperIntensity),
+        false,
+      );
+      setTheme(normalizeTheme(msg.payload.theme), false);
       setFontSize(msg.payload.fontSize || 15);
       setCollapsed(Boolean(msg.payload.collapsed));
       applyZoom(msg.payload.zoomPercent ?? DEFAULT_ZOOM_PERCENT, false);
@@ -397,6 +470,9 @@ function initUI(): void {
       setLayerMode(msg.payload.layerMode);
     } else if (msg.type === 'set_color') {
       setPaperColor(msg.payload.color);
+    } else if (msg.type === 'set_theme') {
+      // A theme chosen from another note's menu.
+      setTheme(normalizeTheme(msg.payload.theme), false);
     } else if (msg.type === 'set_font_size') {
       setFontSize(msg.payload.fontSize);
     } else if (msg.type === 'request_content') {

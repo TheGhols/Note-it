@@ -9,12 +9,51 @@ Note-it adheres to the XDG Base Directory Specification:
 | `$XDG_STATE_HOME/note-it/state.json` | Window geometry, active mode, and transient UI state | `~/.local/state/note-it/state.json` |
 | `$XDG_RUNTIME_DIR/note-it/` | Unix domain sockets / IPC runtime files | `/run/user/<uid>/note-it/` |
 
+## Note Appearance Fields
+
+| Field | Meaning | Default when absent |
+| --- | --- | --- |
+| `color` | Paper colour: `yellow`, `blue`, `green`, `pink`, `purple`, `gray`, `black` | `yellow` |
+| `paper_type` | Background pattern: `blank`, `lined`, `dotted`, `grid-small`, `grid-large` | `blank` |
+| `paper_intensity` | How strongly that pattern is drawn: `subtle`, `normal`, `strong` | `normal` |
+| `font_size` | Base text size of the note | `15` |
+
+These describe how the note is displayed, so they live in the front matter beside the note rather
+than in `state.json`, and they travel with the file. Changing any of them saves the note without
+touching its content or its `updated_at`.
+
+Each is stored as a plain string and resolved against the supported set on read, so a value written
+by a newer version — or by hand — degrades to the default instead of failing the parse and taking
+the note down with it. A note written before these fields existed opens as plain paper at normal
+intensity, and gains the fields the next time it is saved.
+
+`paper_intensity` is kept even for `blank`, where it has no pattern to act on, so switching paper
+back and forth never loses the choice.
+
+## Application Configuration
+
+`config.toml` holds preferences shared by every note:
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `default_color` | Paper colour given to a new note | `yellow` |
+| `default_font_size` | Base text size given to a new note | `15` |
+| `default_width`, `default_height` | Size given to a new note | `360`, `300` |
+| `autosave_interval_ms` | Debounce before an edit is written | `300` |
+| `theme` | Interface theme: `system`, `light`, `dark` | `system` |
+
+The theme is the appearance of the application's chrome — menus, popovers, borders, focus states —
+and is deliberately **not** per note: a note keeps the colour and paper it was given whatever the
+theme is. `system` follows the desktop's colour scheme, and keeps following it while the
+application runs.
+
 ## Note Front Matter Timestamps
 
 `created_at` records when the note was created and never changes afterwards.
 `updated_at` records the last change to the note's **content**. Appearance and
-window state — paper colour, font size, drag, resize, collapse/expand, opening
-the menu, hovering the header — deliberately leave `updated_at` alone.
+window state — paper colour, paper type, pattern intensity, font size, drag,
+resize, collapse/expand, opening the menu, hovering the header — deliberately
+leave `updated_at` alone.
 
 Both fields are optional on read. A note whose front matter omits them still
 opens; the missing value is reported as unknown (`—`) rather than replaced by a

@@ -65,9 +65,23 @@
 - [x] `->` produces the heavier `➜`, readable at every text size.
 - [x] Highlighted text is readable on every paper colour, including the dark one.
 
-### Phase 3.4: Editor Enhancements (Planned)
+### Phase 3.4: Paper & Themes (Completed)
+- [x] Five paper types per note — Liso, Pautado, Pontilhado, Quadriculado pequeno, Quadriculado
+      grande — as one parameterised CSS system rather than five implementations.
+- [x] Pattern intensity per note (Suave / Normal / Forte), affecting the pattern's opacity only.
+- [x] Pattern ink chosen from the paper colour, so it stays visible on all seven, including the
+      dark one, without ever competing with the text.
+- [x] Paper type and intensity persisted in the note's front matter, without touching the content
+      or the note's modification date; notes predating the fields open as plain paper.
+- [x] Pattern spacing fixed in pixels, so the view zoom scales the text and leaves it alone.
+- [x] Interface theme (Sistema / Claro / Escuro) stored once in `config.toml` and broadcast to
+      every open note, dressing the chrome and never a note's own colour.
+- [x] `--ui-*` token set separating the application's chrome from the note's paper, so a menu is
+      legible over a black note and a yellow one in either theme.
+
+### Phase 3.5: Editor Enhancements (Planned)
 - [ ] Contextual floating bubble toolbar for formatting.
-- [ ] Visual polish, paper textures, and typography adjustments.
+- [ ] Code blocks, syntax highlighting, and callouts.
 
 ## Phase 4: Packaging & Distribution (Planned)
 - [ ] Arch Linux PKGBUILD for AUR.

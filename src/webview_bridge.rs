@@ -14,6 +14,10 @@ pub enum HostToWebviewMessage {
         id: Uuid,
         content: String,
         color: String,
+        #[serde(rename = "paperType")]
+        paper_type: String,
+        #[serde(rename = "paperIntensity")]
+        paper_intensity: String,
         #[serde(rename = "fontSize")]
         font_size: u32,
         collapsed: bool,
@@ -25,6 +29,9 @@ pub enum HostToWebviewMessage {
         zoom_percent: u16,
         #[serde(rename = "layerMode")]
         layer_mode: String,
+        /// Shared interface theme, so a note dresses its chrome correctly from
+        /// the first paint instead of restyling once the first broadcast lands.
+        theme: String,
     },
     /// Sent when the host changes a note's collapse state, so the page and its
     /// menu follow a request that did not start in the WebView.
@@ -45,6 +52,11 @@ pub enum HostToWebviewMessage {
     },
     SetColor {
         color: String,
+    },
+    /// Broadcast whenever the shared interface theme changes, so every note
+    /// dresses its chrome the same way without being reloaded.
+    SetTheme {
+        theme: String,
     },
     SetFontSize {
         #[serde(rename = "fontSize")]
@@ -80,6 +92,20 @@ pub enum WebviewToHostMessage {
         id: Uuid,
         #[serde(rename = "fontSize")]
         font_size: u32,
+    },
+    /// The note's own paper: its pattern and how strongly it is drawn. Both
+    /// travel together because they describe one surface.
+    PaperChanged {
+        id: Uuid,
+        #[serde(rename = "paperType")]
+        paper_type: String,
+        #[serde(rename = "paperIntensity")]
+        paper_intensity: String,
+    },
+    /// Requests the shared interface theme. The host owns it, exactly as it
+    /// owns the layer mode, so the WebView only asks.
+    ThemeChanged {
+        theme: String,
     },
     CollapseChanged {
         id: Uuid,
@@ -331,12 +357,15 @@ mod tests {
             id,
             content: "conteúdo".to_string(),
             color: "yellow".to_string(),
+            paper_type: "grid-small".to_string(),
+            paper_intensity: "subtle".to_string(),
             font_size: 15,
             collapsed: true,
             created_at: Some(created_at),
             updated_at: None,
             zoom_percent: 130,
             layer_mode: "desktop".to_string(),
+            theme: "dark".to_string(),
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -346,6 +375,9 @@ mod tests {
         assert_eq!(payload["createdAt"], "2026-08-27T07:14:00Z");
         assert_eq!(payload["zoomPercent"], 130);
         assert_eq!(payload["layerMode"], "desktop");
+        assert_eq!(payload["paperType"], "grid-small");
+        assert_eq!(payload["paperIntensity"], "subtle");
+        assert_eq!(payload["theme"], "dark");
         // An unknown timestamp travels as null instead of a fabricated date.
         assert!(payload["updatedAt"].is_null());
     }
@@ -391,6 +423,55 @@ mod tests {
         ] {
             let raw = serde_json::json!({ "type": "zoom_changed", "payload": payload }).to_string();
             assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn parses_paper_change_requests_from_the_note_menu() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "paper_changed",
+            "payload": { "id": id, "paperType": "lined", "paperIntensity": "strong" }
+        })
+        .to_string();
+
+        match parse_webview_message(&raw).expect("paper message") {
+            WebviewToHostMessage::PaperChanged {
+                id: parsed_id,
+                paper_type,
+                paper_intensity,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(paper_type, "lined");
+                assert_eq!(paper_intensity, "strong");
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_theme_change_requests() {
+        for theme in ["system", "light", "dark"] {
+            let raw = serde_json::json!({ "type": "theme_changed", "payload": { "theme": theme } })
+                .to_string();
+            match parse_webview_message(&raw).expect("theme message") {
+                WebviewToHostMessage::ThemeChanged { theme: parsed } => {
+                    assert_eq!(parsed, theme);
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_theme_is_pushed_back_to_every_webview() {
+        for theme in ["system", "light", "dark"] {
+            let encoded = serde_json::to_value(super::HostToWebviewMessage::SetTheme {
+                theme: theme.to_string(),
+            })
+            .expect("serialize set_theme");
+            assert_eq!(encoded["type"], "set_theme");
+            assert_eq!(encoded["payload"]["theme"], theme);
         }
     }
 

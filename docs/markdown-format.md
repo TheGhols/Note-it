@@ -10,6 +10,8 @@ note_it:
   version: 1
   id: "550e8400-e29b-41d4-a716-446655440000"
   color: "yellow"
+  paper_type: "lined"
+  paper_intensity: "subtle"
   font_size: 16
   created_at: "2026-08-26T14:00:00Z"
   updated_at: "2026-08-26T14:05:00Z"

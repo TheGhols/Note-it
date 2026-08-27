@@ -5,7 +5,7 @@ use crate::layer_shell::{
 };
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
-use crate::settings::AppConfig;
+use crate::settings::{theme_name, AppConfig};
 use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use gio::prelude::*;
@@ -468,6 +468,32 @@ impl NoteItAppClone {
         }
     }
 
+    /// The shared interface theme, chosen from any note's menu.
+    ///
+    /// It dresses the application's chrome and nothing else: every note keeps
+    /// the paper colour, pattern and intensity it was given. The preference is
+    /// global, so it is stored once in `config.toml` and broadcast to every
+    /// open note rather than written into any of them.
+    pub fn set_theme(&self, theme: &str) {
+        let resolved = theme_name(theme);
+        let windows: Vec<NoteWindow> = {
+            let mut ctx = self.context.borrow_mut();
+            if ctx.config.theme == resolved {
+                return;
+            }
+            ctx.config.theme = resolved.to_string();
+            let config_path = ctx.storage.config_file_path();
+            if let Err(error) = ctx.config.save_to_file(&config_path) {
+                eprintln!("Failed to persist the interface theme: {error}");
+            }
+            ctx.windows.values().cloned().collect()
+        };
+
+        for window in windows {
+            window.set_theme(resolved);
+        }
+    }
+
     /// The shared Desktop/Overlay switch, reached from the note menu, the
     /// keyboard shortcut and `note-it toggle` alike.
     pub fn toggle_layer_mode(&self) {
@@ -791,6 +817,11 @@ fn instantiate_note_window(
         app_clone4.toggle_layer_mode();
     });
 
+    let app_clone5 = app_controller.clone();
+    let on_theme_changed = Rc::new(move |theme: String| {
+        app_clone5.set_theme(&theme);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -814,6 +845,8 @@ fn instantiate_note_window(
         on_close,
         on_geometry_changed,
         on_toggle_layer_mode,
+        theme: ctx.config.theme.clone(),
+        on_theme_changed,
     })
 }
 

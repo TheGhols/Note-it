@@ -2,6 +2,38 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Paper patterns a note can carry, in the order the menu offers them.
+///
+/// Stored as a plain string like `color` rather than as a serde enum: a value
+/// written by a newer version, or by hand, then degrades to the default
+/// instead of failing the parse and taking the whole note down with it.
+pub const PAPER_TYPES: &[&str] = &["blank", "lined", "dotted", "grid-small", "grid-large"];
+pub const DEFAULT_PAPER_TYPE: &str = "blank";
+
+/// How strongly the pattern is drawn. Kept even for `blank`, where it simply
+/// has nothing to act on, so switching paper back and forth never loses it.
+pub const PAPER_INTENSITIES: &[&str] = &["subtle", "normal", "strong"];
+pub const DEFAULT_PAPER_INTENSITY: &str = "normal";
+
+/// Resolves a stored paper pattern to the supported set, falling back to the
+/// default so an unknown value can never leave a note unrenderable.
+pub fn paper_type_name(value: &str) -> &'static str {
+    PAPER_TYPES
+        .iter()
+        .find(|name| **name == value)
+        .copied()
+        .unwrap_or(DEFAULT_PAPER_TYPE)
+}
+
+/// Same contract as [`paper_type_name`], for the pattern intensity.
+pub fn paper_intensity_name(value: &str) -> &'static str {
+    PAPER_INTENSITIES
+        .iter()
+        .find(|name| **name == value)
+        .copied()
+        .unwrap_or(DEFAULT_PAPER_INTENSITY)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteFrontMatter {
     #[serde(default = "default_version")]
@@ -9,6 +41,13 @@ pub struct NoteFrontMatter {
     pub id: Uuid,
     #[serde(default = "default_color")]
     pub color: String,
+    /// Background pattern of the paper: `blank`, `lined`, `dotted`,
+    /// `grid-small` or `grid-large`.
+    #[serde(default = "default_paper_type")]
+    pub paper_type: String,
+    /// How strongly that pattern is drawn: `subtle`, `normal` or `strong`.
+    #[serde(default = "default_paper_intensity")]
+    pub paper_intensity: String,
     #[serde(default = "default_font_size")]
     pub font_size: u32,
     /// Absent only for notes whose front matter predates or omits the field.
@@ -25,6 +64,14 @@ fn default_version() -> u32 {
 
 fn default_color() -> String {
     "yellow".to_string()
+}
+
+fn default_paper_type() -> String {
+    DEFAULT_PAPER_TYPE.to_string()
+}
+
+fn default_paper_intensity() -> String {
+    DEFAULT_PAPER_INTENSITY.to_string()
 }
 
 fn default_font_size() -> u32 {
@@ -51,6 +98,8 @@ impl NoteDocument {
                 version: 1,
                 id,
                 color: "yellow".to_string(),
+                paper_type: default_paper_type(),
+                paper_intensity: default_paper_intensity(),
                 font_size: 15,
                 created_at: Some(now),
                 updated_at: Some(now),
@@ -67,6 +116,8 @@ impl NoteDocument {
                 version: 1,
                 id,
                 color: "yellow".to_string(),
+                paper_type: default_paper_type(),
+                paper_intensity: default_paper_intensity(),
                 font_size: 15,
                 created_at: Some(now),
                 updated_at: Some(now),
@@ -75,9 +126,10 @@ impl NoteDocument {
         }
     }
 
-    /// Records a content edit. Appearance-only metadata (paper color, font
-    /// size) deliberately does not go through here: `updated_at` tracks the
-    /// last change to the note's text, not to how it is displayed.
+    /// Records a content edit. Appearance-only metadata (paper colour, paper
+    /// pattern, pattern intensity, font size) deliberately does not go through
+    /// here: `updated_at` tracks the last change to the note's text, not to
+    /// how it is displayed.
     pub fn touch_content_modified(&mut self) {
         self.metadata.updated_at = Some(Utc::now());
     }
@@ -164,6 +216,9 @@ mod tests {
             Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap()
         );
         assert_eq!(parsed.metadata.color, "blue");
+        // A note written before the paper existed opens as plain paper.
+        assert_eq!(parsed.metadata.paper_type, DEFAULT_PAPER_TYPE);
+        assert_eq!(parsed.metadata.paper_intensity, DEFAULT_PAPER_INTENSITY);
         // No invented dates: unknown stays unknown.
         assert_eq!(parsed.metadata.created_at, None);
         assert_eq!(parsed.metadata.updated_at, None);
@@ -186,6 +241,89 @@ mod tests {
         assert_eq!(doc.metadata.created_at, created_at);
         assert!(doc.metadata.updated_at >= original_updated_at);
         assert!(doc.metadata.updated_at.is_some());
+    }
+
+    #[test]
+    fn every_paper_type_and_intensity_survives_a_round_trip() {
+        for paper_type in PAPER_TYPES {
+            for intensity in PAPER_INTENSITIES {
+                let mut doc = NoteDocument::new_empty();
+                doc.content = "# Conteúdo\n\n- [ ] Tarefa\n".to_string();
+                doc.metadata.paper_type = (*paper_type).to_string();
+                doc.metadata.paper_intensity = (*intensity).to_string();
+
+                let serialized = doc.serialize().expect("serialize");
+                let parsed = NoteDocument::parse(&serialized).expect("parse");
+
+                assert_eq!(parsed.metadata.paper_type, *paper_type);
+                assert_eq!(parsed.metadata.paper_intensity, *intensity);
+                // The pattern is note metadata, never document decoration.
+                assert_eq!(parsed.content, doc.content);
+                assert!(!parsed.content.contains("paper"));
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_paper_value_degrades_to_the_default() {
+        for unknown in ["", "quadriculado", "GRID-SMALL", "lined ", "canvas"] {
+            assert_eq!(paper_type_name(unknown), DEFAULT_PAPER_TYPE);
+            assert_eq!(paper_intensity_name(unknown), DEFAULT_PAPER_INTENSITY);
+        }
+        for name in PAPER_TYPES {
+            assert_eq!(paper_type_name(name), *name);
+        }
+        for name in PAPER_INTENSITIES {
+            assert_eq!(paper_intensity_name(name), *name);
+        }
+    }
+
+    #[test]
+    fn a_note_carrying_an_unknown_paper_still_opens() {
+        // Hand-edited front matter must not cost the user the note.
+        let raw = concat!(
+            "---\n",
+            "note_it:\n",
+            "  version: 1\n",
+            "  id: 00000000-0000-0000-0000-000000000077\n",
+            "  color: black\n",
+            "  paper_type: hexagonal\n",
+            "  paper_intensity: violento\n",
+            "  font_size: 15\n",
+            "---\n\n",
+            "texto\n",
+        );
+
+        let parsed = NoteDocument::parse(raw).expect("unknown paper must not lose the note");
+        assert_eq!(
+            paper_type_name(&parsed.metadata.paper_type),
+            DEFAULT_PAPER_TYPE
+        );
+        assert_eq!(
+            paper_intensity_name(&parsed.metadata.paper_intensity),
+            DEFAULT_PAPER_INTENSITY
+        );
+        assert_eq!(parsed.content, "texto\n");
+    }
+
+    #[test]
+    fn a_new_note_starts_on_plain_paper_at_normal_intensity() {
+        let doc = NoteDocument::new_empty();
+        assert_eq!(doc.metadata.paper_type, "blank");
+        assert_eq!(doc.metadata.paper_intensity, "normal");
+    }
+
+    #[test]
+    fn changing_the_paper_never_moves_the_modification_date() {
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "conteúdo".to_string();
+        let updated_at = doc.metadata.updated_at;
+
+        doc.metadata.paper_type = "grid-large".to_string();
+        doc.metadata.paper_intensity = "strong".to_string();
+
+        // Nothing here goes through `touch_content_modified`.
+        assert_eq!(doc.metadata.updated_at, updated_at);
     }
 
     #[test]

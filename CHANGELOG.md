@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Paper types per note: **Liso**, **Pautado**, **Pontilhado**, **Quadriculado pequeno** and
+  **Quadriculado grande**, chosen from the settings menu and applied at once. Plain paper is the
+  original look and draws nothing.
+- Pattern intensity per note — **Suave**, **Normal**, **Forte** — which changes the pattern's
+  opacity and nothing else: not the paper colour, the text, the content, or the geometry.
+- The pattern's ink follows the paper colour, so it stays visible on all seven papers, including
+  the dark one, without competing with the note's text. Its spacing is fixed in pixels, so zoom
+  scales the text and leaves the background alone.
+- Interface theme: **Sistema**, **Claro** and **Escuro**, chosen from any note's menu and shared by
+  every note. **Sistema** follows the desktop's colour scheme while the application runs. The theme
+  dresses the application's menus, popovers, borders and focus states; a note keeps the colour and
+  paper it was given, so a yellow note stays yellow under the dark theme.
 - `note-it toggle-collapse-all` collapses every note still expanded, and expands them all once they
   are all collapsed. `Ctrl+Shift+M` continues to apply to the focused note alone.
 - Clicking a collapsed note expands it back to its previous size, and the `☰` button expands the
@@ -38,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- The settings menu gained **Tipo de papel**, **Intensidade** and **Tema**, each showing its
+  current value on the root row, next to the entries that already did.
+- Menus, popovers and focus states are now dressed by the interface theme through a `--ui-*` token
+  set, instead of borrowing the note's paper colours. A popover coloured from the paper could not
+  survive a theme: over a yellow note a dark popover would have inherited that paper's dark text.
+  Everything drawn on the paper — the note's text, its checkboxes, its highlights and the header
+  buttons — still follows the paper.
+- Notes gain `paper_type` and `paper_intensity` in their front matter. A note written before this
+  release carries neither, opens as plain paper at normal intensity, and gains them when it is next
+  saved. Changing either saves the note without touching its content or its modification date.
+- `config.toml` gained `theme`. A configuration written before this release loads unchanged and
+  follows the system.
 - Running `note-it` now summons: it restores the notes and brings them to the front through the
   instance already running. When it is on the desktop layer it is raised so it is genuinely visible,
   without rewriting the stored layer preference.

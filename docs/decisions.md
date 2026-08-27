@@ -160,3 +160,63 @@
   colour is still recorded in the Markdown, reappearing as soon as the highlight is removed.
   Nothing about the paper colour is ever written to the document.
 
+## ADR-015: Paper Is a Note Property, the Theme Is an Application Property
+- **Decision:** `paper_type` and `paper_intensity` live in the note's YAML front matter beside
+  `color`; the interface `theme` lives in `config.toml`.
+- **Rationale:** the paper is what a note *is* — it belongs to the note and travels with the file,
+  exactly as its colour already did, and it goes through the same save path, which never touches
+  `updated_at`. The theme is what the *application* looks like: one preference, shared by every
+  note, so it belongs with the other global preferences rather than being copied into every file.
+- **Not in the Markdown body:** nothing about the paper is written into the document. No wrapper
+  element, no class, no decoration — the body round-trips byte for byte through every paper type
+  and intensity.
+- **Strings, not serde enums:** both fields are stored as plain strings and resolved against the
+  supported set on read. A serde enum would fail the whole parse on a value written by a newer
+  version or by hand, costing the user the note; resolving to the default costs them a pattern.
+- **Retro-compatibility:** a note written before this phase carries neither field and opens as
+  plain paper at normal intensity. `paper_intensity` is kept even for `blank`, so switching paper
+  back and forth never silently discards the choice.
+
+## ADR-016: One Parameterised Paper Pattern, Composed Where It Is Painted
+- **Decision:** the five papers are one CSS system, not five implementations. The type selects a
+  pattern and `--paper-pattern-spacing`, the intensity selects `--paper-pattern-alpha`, and the
+  paper colour selects `--paper-pattern-ink` and `--paper-pattern-gain`. Both grids are the same
+  rule at two spacings.
+- **Where the colour is composed:** `--paper-pattern-color` is declared on `.editor-wrapper`, the
+  element that paints it — deliberately, and not on `:root`.
+- **The defect that forced it:** `var()` is substituted where the declaration sits, using that
+  element's own values. Composing the colour on `:root` froze the root's ink and opacity into it,
+  so the per-paper and per-intensity overrides on `body` never reached the paint: every intensity
+  rendered at "normal", and the dark paper was drawn with the *pale* papers' dark ink, which is
+  invisible on `#18181B`. Measuring the real WebView caught it — the black paper's rules came out
+  at `#17181D` against `#18181B` paper. Declaring it on the consumer lets the three inputs inherit
+  down with the note's real choices first.
+- **Contrast:** the dark paper carries a gain of `0.72` rather than a boost. Measuring perceptual
+  lightness rather than assuming showed the opposite of the intuition: a near-black paper sits on
+  the steep part of the lightness curve, so the same alpha lifts it *further* than it darkens a
+  pale paper. The gain pulls all three intensities onto the strength they have everywhere else.
+- **Zoom:** spacing is in pixels and never references `--note-zoom` or `--note-font-size`, so the
+  content scales and the background stays put. Verified in the WebView: ruled paper measured
+  exactly 24px between lines at both 75% and 200%.
+- **Where it is painted:** on the scrolling surface with `background-attachment: local`, so it
+  travels with the text, while `#app` keeps its flat colour fill underneath — a fast resize can
+  expose paper but never an unpainted strip. Hiding that surface on collapse takes the pattern
+  with it, leaving the bar as a clean band of the note's colour, with no extra code.
+
+## ADR-017: The Theme Dresses the Chrome, Never the Paper
+- **Decision:** a `--ui-*` token set (`surface`, `surface-hover`, `text`, `text-muted`, `border`,
+  `shadow`, `focus-ring`) dresses menus, popovers and focus states. The `--paper-*` tokens keep
+  dressing everything drawn on the paper. The light palette is defined on bare `:root`, and only
+  the same tokens are redefined under `:root[data-theme="dark"]`.
+- **Rationale:** the popover used to take `--popover-bg` from the *paper*, and its foreground from
+  `--paper-text`. That could not survive a theme: a dark popover over a yellow note would inherit
+  that paper's dark text and be unreadable. Splitting the two means the menu is legible over a
+  black note and a yellow one alike, in either theme, and a note still keeps its own colour.
+- **What is deliberately left on the paper:** the header buttons, the resize handle, the editor's
+  scrollbar and everything inside `.ProseMirror`. They sit on the paper, so they follow it.
+- **Phase 3.3R is untouched:** highlighted text still carries its own dark foreground inline, which
+  beats both token sets, so it stays readable on every paper under either theme.
+- **System preference:** resolved in the page with `matchMedia('(prefers-color-scheme: dark)')`,
+  watched live so the desktop switching scheme reaches an open note. `matchMedia` is treated as
+  optional throughout — a WebView that reports no colour scheme resolves `Sistema` to the light
+  theme rather than ending up with no theme at all.

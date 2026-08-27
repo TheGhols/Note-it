@@ -1,11 +1,23 @@
-import { PaperColor } from '../bridge/types.ts';
+import { PaperColor, PaperIntensity, PaperType, ThemePreference } from '../bridge/types.ts';
 import { TEXT_SIZES, TextSize } from '../editor/textSize.ts';
 import { HIGHLIGHT_COLORS, PaletteEntry, TEXT_COLORS } from './palettes.ts';
+import {
+  DEFAULT_PAPER_INTENSITY,
+  DEFAULT_PAPER_TYPE,
+  PAPER_INTENSITIES,
+  PAPER_TYPES,
+  paperIntensityLabel,
+  paperTypeLabel,
+} from './paper.ts';
+import { DEFAULT_THEME, THEMES, themeLabel } from './theme.ts';
 
 export type LayerMode = 'overlay' | 'desktop' | 'hidden';
 
 export interface NoteMenuHandlers {
   onSelectColor(color: PaperColor): void;
+  onSelectPaperType(type: PaperType): void;
+  onSelectPaperIntensity(intensity: PaperIntensity): void;
+  onSelectTheme(theme: ThemePreference): void;
   onToggleCollapsed(collapsed: boolean): void;
   onSelectTextSize(size: TextSize | null): void;
   onSelectTextColor(color: string | null): void;
@@ -28,7 +40,17 @@ const PAPER_COLOR_NAMES: Record<PaperColor, string> = {
   black: 'Preto',
 };
 
-type MenuPanel = 'root' | 'paper' | 'textSize' | 'textColor' | 'highlight' | 'zoom' | 'layer';
+type MenuPanel =
+  | 'root'
+  | 'paper'
+  | 'paperType'
+  | 'paperIntensity'
+  | 'textSize'
+  | 'textColor'
+  | 'highlight'
+  | 'zoom'
+  | 'theme'
+  | 'layer';
 
 export interface NoteMenuOptions {
   /** Button that toggles the menu; it stays outside the drag region. */
@@ -58,7 +80,10 @@ export class NoteMenu {
   private readonly root: HTMLElement;
   private readonly panels = new Map<MenuPanel, PanelEntry>();
   private readonly collapseItem: HTMLButtonElement;
+  private readonly paperTypeValue: HTMLElement;
+  private readonly paperIntensityValue: HTMLElement;
   private readonly zoomValue: HTMLElement;
+  private readonly themeValue: HTMLElement;
   private readonly layerValue: HTMLElement;
   private panel: MenuPanel = 'root';
   private open = false;
@@ -66,6 +91,9 @@ export class NoteMenu {
   private zoomPercent = 100;
   private layerMode: LayerMode = 'overlay';
   private selectedColor: PaperColor | null = null;
+  private paperType: PaperType = DEFAULT_PAPER_TYPE;
+  private paperIntensity: PaperIntensity = DEFAULT_PAPER_INTENSITY;
+  private theme: ThemePreference = DEFAULT_THEME;
   private currentTextSize: TextSize | null = null;
   private textSizeMixed = false;
   private currentTextColor: string | null = null;
@@ -84,6 +112,20 @@ export class NoteMenu {
     rootPanel.className = 'note-menu-panel';
 
     const paperItem = this.createSubmenuItem('Cor da nota', 'paper');
+
+    const paperTypeItem = this.createSubmenuItem('Tipo de papel', 'paperType');
+    this.paperTypeValue = this.doc.createElement('span');
+    this.paperTypeValue.className = 'note-menu-value';
+    paperTypeItem.insertBefore(this.paperTypeValue, paperTypeItem.lastElementChild);
+
+    const paperIntensityItem = this.createSubmenuItem('Intensidade', 'paperIntensity');
+    this.paperIntensityValue = this.doc.createElement('span');
+    this.paperIntensityValue.className = 'note-menu-value';
+    paperIntensityItem.insertBefore(
+      this.paperIntensityValue,
+      paperIntensityItem.lastElementChild,
+    );
+
     const textSizeItem = this.createSubmenuItem('Tamanho do texto', 'textSize');
     const textColorItem = this.createSubmenuItem('Cor do texto', 'textColor');
     const highlightItem = this.createSubmenuItem('Marca-texto', 'highlight');
@@ -92,6 +134,11 @@ export class NoteMenu {
     this.zoomValue = this.doc.createElement('span');
     this.zoomValue.className = 'note-menu-value';
     zoomItem.insertBefore(this.zoomValue, zoomItem.lastElementChild);
+
+    const themeItem = this.createSubmenuItem('Tema', 'theme');
+    this.themeValue = this.doc.createElement('span');
+    this.themeValue.className = 'note-menu-value';
+    themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
     this.layerValue = this.doc.createElement('span');
@@ -108,16 +155,39 @@ export class NoteMenu {
 
     rootPanel.append(
       paperItem,
+      paperTypeItem,
+      paperIntensityItem,
       textSizeItem,
       textColorItem,
       highlightItem,
       zoomItem,
+      themeItem,
       layerItem,
       this.collapseItem,
     );
     this.panels.set('root', { element: rootPanel });
 
     this.panels.set('paper', this.buildPaperPanel(options.colors));
+    this.panels.set(
+      'paperType',
+      this.buildChoicePanel(
+        'Tipo de papel',
+        'note-menu-paper-type',
+        PAPER_TYPES,
+        () => this.paperType,
+        (type) => this.options.handlers.onSelectPaperType(type),
+      ),
+    );
+    this.panels.set(
+      'paperIntensity',
+      this.buildChoicePanel(
+        'Intensidade',
+        'note-menu-paper-intensity',
+        PAPER_INTENSITIES,
+        () => this.paperIntensity,
+        (intensity) => this.options.handlers.onSelectPaperIntensity(intensity),
+      ),
+    );
     this.panels.set('textSize', this.buildTextSizePanel());
     this.panels.set('textColor', this.buildSwatchPanel(
       'Cor do texto',
@@ -134,6 +204,16 @@ export class NoteMenu {
       'highlight',
     ));
     this.panels.set('zoom', this.buildZoomPanel());
+    this.panels.set(
+      'theme',
+      this.buildChoicePanel(
+        'Tema',
+        'note-menu-theme',
+        THEMES,
+        () => this.theme,
+        (theme) => this.options.handlers.onSelectTheme(theme),
+      ),
+    );
     this.panels.set('layer', this.buildLayerPanel());
 
     for (const entry of this.panels.values()) {
@@ -161,6 +241,8 @@ export class NoteMenu {
 
     this.setZoomPercent(100);
     this.setLayerMode('overlay');
+    this.setPaper(DEFAULT_PAPER_TYPE, DEFAULT_PAPER_INTENSITY);
+    this.setTheme(DEFAULT_THEME);
     this.setCollapsed(false);
   }
 
@@ -190,6 +272,27 @@ export class NoteMenu {
   public setSelectedColor(color: PaperColor): void {
     this.selectedColor = color;
     this.panels.get('paper')?.refresh?.();
+  }
+
+  /**
+   * Reflects the note's own paper. Both halves arrive together because they
+   * describe one surface, and the root rows show the current choice so it is
+   * readable without opening either submenu.
+   */
+  public setPaper(type: PaperType, intensity: PaperIntensity): void {
+    this.paperType = type;
+    this.paperIntensity = intensity;
+    this.paperTypeValue.textContent = paperTypeLabel(type);
+    this.paperIntensityValue.textContent = paperIntensityLabel(intensity);
+    this.panels.get('paperType')?.refresh?.();
+    this.panels.get('paperIntensity')?.refresh?.();
+  }
+
+  /** Reflects the shared interface theme, which every note's menu agrees on. */
+  public setTheme(theme: ThemePreference): void {
+    this.theme = theme;
+    this.themeValue.textContent = themeLabel(theme);
+    this.panels.get('theme')?.refresh?.();
   }
 
   public setZoomPercent(percent: number): void {
@@ -283,6 +386,46 @@ export class NoteMenu {
             'aria-checked',
             String(swatch.dataset.color === this.selectedColor),
           );
+        }
+      },
+    };
+  }
+
+  /**
+   * A list of mutually exclusive choices, marked with the active one.
+   *
+   * Paper type, pattern intensity and theme are all the same shape, so they
+   * share one builder rather than three near-identical panels.
+   */
+  private buildChoicePanel<T extends string>(
+    heading: string,
+    className: string,
+    choices: readonly { id: T; label: string }[],
+    currentValue: () => T,
+    onSelect: (value: T) => void,
+  ): PanelEntry {
+    const { panel, body } = this.createPanel(heading, className);
+    const options: Array<{ button: HTMLButtonElement; id: T }> = [];
+
+    for (const choice of choices) {
+      const button = this.createItem(choice.label, 'note-menu-item note-menu-option');
+      button.dataset.value = choice.id;
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-checked', 'false');
+      button.addEventListener('click', () => {
+        this.close();
+        onSelect(choice.id);
+      });
+      body.append(button);
+      options.push({ button, id: choice.id });
+    }
+
+    return {
+      element: panel,
+      refresh: () => {
+        const active = currentValue();
+        for (const { button, id } of options) {
+          button.setAttribute('aria-checked', String(id === active));
         }
       },
     };

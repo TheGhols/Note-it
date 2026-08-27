@@ -37,6 +37,9 @@ function buildNote() {
 
   const handlers = {
     onSelectColor: vi.fn(),
+    onSelectPaperType: vi.fn(),
+    onSelectPaperIntensity: vi.fn(),
+    onSelectTheme: vi.fn(),
     onToggleCollapsed: vi.fn((collapsed: boolean) => collapseRequests.push(collapsed)),
     onSelectTextSize: vi.fn(),
     onSelectTextColor: vi.fn(),

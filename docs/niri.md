@@ -89,3 +89,18 @@ command that does not resolve fails silently.
 Because a spawned invocation is handed to the running instance through the
 single-instance dispatcher, the environment it is spawned with does not matter:
 the instance that already owns the notes is the one that acts on them.
+
+## The System Theme and the Desktop
+
+**Tema → Sistema** follows the desktop's colour scheme, read inside the WebView through
+`prefers-color-scheme`. WebKitGTK derives that from the GTK settings of the session the
+application was launched in, so a Wayland session that reports no preference simply resolves to
+the light theme — the notes are always fully styled either way.
+
+The preference is watched while the application runs, so switching the desktop between light and
+dark reaches open notes without a restart. **Claro** and **Escuro** are explicit choices and
+ignore the desktop entirely.
+
+The theme is global and lives in `config.toml`. It dresses the application's menus and popovers;
+each note keeps the paper colour and pattern it was given, so a yellow note stays yellow on a dark
+desktop.

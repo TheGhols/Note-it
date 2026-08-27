@@ -26,6 +26,9 @@ function mountMenu() {
   const { left, trigger, dragRegion } = buildHeader();
   const handlers = {
     onSelectColor: vi.fn(),
+    onSelectPaperType: vi.fn(),
+    onSelectPaperIntensity: vi.fn(),
+    onSelectTheme: vi.fn(),
     onToggleCollapsed: vi.fn(),
     onSelectTextSize: vi.fn(),
     onSelectTextColor: vi.fn(),
@@ -39,6 +42,12 @@ function mountMenu() {
   };
   const menu = new NoteMenu({ trigger, mount: left, colors: COLORS, handlers });
   return { menu, trigger, dragRegion, handlers };
+}
+
+/** The value chip shown on a root row, addressed by that row's label. */
+function rowValue(menu: NoteMenu, panel: string): string {
+  const row = menu.element.querySelector<HTMLElement>(`[data-panel="${panel}"]`);
+  return row?.querySelector('.note-menu-value')?.textContent ?? '';
 }
 
 function click(element: Element): void {
@@ -242,7 +251,7 @@ describe('NoteMenu', () => {
     }
   });
 
-  it('offers zoom, layer, text size, text colour and highlight panels', () => {
+  it('offers paper, zoom, theme, layer, text size, text colour and highlight panels', () => {
     const { menu, trigger } = mountMenu();
     active = menu;
     click(trigger);
@@ -250,7 +259,19 @@ describe('NoteMenu', () => {
     const panels = Array.from(
       menu.element.querySelectorAll<HTMLElement>('.note-menu-submenu'),
     ).map((item) => item.dataset.panel);
-    expect(panels).toEqual(['paper', 'textSize', 'textColor', 'highlight', 'zoom', 'layer']);
+    // The paper entries sit together, and the theme sits with the other
+    // application-wide switch rather than among the note's own settings.
+    expect(panels).toEqual([
+      'paper',
+      'paperType',
+      'paperIntensity',
+      'textSize',
+      'textColor',
+      'highlight',
+      'zoom',
+      'theme',
+      'layer',
+    ]);
   });
 
   it('shows the current zoom and steps it from the submenu', () => {
@@ -259,7 +280,7 @@ describe('NoteMenu', () => {
 
     menu.setZoomPercent(130);
     click(trigger);
-    expect(menu.element.querySelector('.note-menu-value')!.textContent).toBe('130%');
+    expect(rowValue(menu, 'zoom')).toBe('130%');
 
     click(menu.element.querySelector('[data-panel="zoom"]')!);
     expect(menu.activePanel()).toBe('zoom');
@@ -284,9 +305,7 @@ describe('NoteMenu', () => {
 
     menu.setLayerMode('overlay');
     click(trigger);
-    expect(menu.element.querySelectorAll('.note-menu-value')[1].textContent).toBe(
-      'Sempre no topo',
-    );
+    expect(rowValue(menu, 'layer')).toBe('Sempre no topo');
 
     click(menu.element.querySelector('[data-panel="layer"]')!);
     const options = menu.element.querySelectorAll<HTMLElement>(
@@ -303,9 +322,106 @@ describe('NoteMenu', () => {
 
     menu.setLayerMode('desktop');
     click(trigger);
-    expect(menu.element.querySelectorAll('.note-menu-value')[1].textContent).toBe(
-      'Área de trabalho',
+    expect(rowValue(menu, 'layer')).toBe('Área de trabalho');
+  });
+
+  it('offers the five papers and marks the note’s own', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setPaper('dotted', 'normal');
+    click(trigger);
+    expect(rowValue(menu, 'paperType')).toBe('Pontilhado');
+
+    click(menu.element.querySelector('[data-panel="paperType"]')!);
+    const options = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-paper-type .note-menu-option',
     );
+    expect(Array.from(options).map((option) => option.textContent?.trim())).toEqual([
+      'Liso',
+      'Pautado',
+      'Pontilhado',
+      'Quadriculado pequeno',
+      'Quadriculado grande',
+    ]);
+    expect(
+      Array.from(options).map((option) => option.getAttribute('aria-checked')),
+    ).toEqual(['false', 'false', 'true', 'false', 'false']);
+
+    click(options[1]);
+    expect(handlers.onSelectPaperType).toHaveBeenCalledWith('lined');
+    // Choosing a paper closes the menu, like every other choice in it.
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it('offers the three intensities and marks the current one', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setPaper('lined', 'strong');
+    click(trigger);
+    expect(rowValue(menu, 'paperIntensity')).toBe('Forte');
+
+    click(menu.element.querySelector('[data-panel="paperIntensity"]')!);
+    const options = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-paper-intensity .note-menu-option',
+    );
+    expect(Array.from(options).map((option) => option.textContent?.trim())).toEqual([
+      'Suave',
+      'Normal',
+      'Forte',
+    ]);
+    expect(options[2].getAttribute('aria-checked')).toBe('true');
+
+    click(options[0]);
+    expect(handlers.onSelectPaperIntensity).toHaveBeenCalledWith('subtle');
+  });
+
+  it('keeps the intensity readable on the root row for plain paper', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+
+    menu.setPaper('blank', 'subtle');
+    click(trigger);
+    // Plain paper has no pattern for it to act on, but the choice is still
+    // the note's and is still shown.
+    expect(rowValue(menu, 'paperType')).toBe('Liso');
+    expect(rowValue(menu, 'paperIntensity')).toBe('Suave');
+  });
+
+  it('offers the three themes and marks the active one', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setTheme('dark');
+    click(trigger);
+    expect(rowValue(menu, 'theme')).toBe('Escuro');
+
+    click(menu.element.querySelector('[data-panel="theme"]')!);
+    const options = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-theme .note-menu-option',
+    );
+    expect(Array.from(options).map((option) => option.textContent?.trim())).toEqual([
+      'Sistema',
+      'Claro',
+      'Escuro',
+    ]);
+    expect(
+      Array.from(options).map((option) => option.getAttribute('aria-checked')),
+    ).toEqual(['false', 'false', 'true']);
+
+    click(options[0]);
+    expect(handlers.onSelectTheme).toHaveBeenCalledWith('system');
+  });
+
+  it('starts on plain paper following the system, before a note loads', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+    click(trigger);
+
+    expect(rowValue(menu, 'paperType')).toBe('Liso');
+    expect(rowValue(menu, 'paperIntensity')).toBe('Normal');
+    expect(rowValue(menu, 'theme')).toBe('Sistema');
   });
 
   it('marks the current text size and reports a mixed selection', () => {

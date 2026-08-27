@@ -19,9 +19,11 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
-  - Entries: **Cor da nota**, **Tamanho do texto**, **Cor do texto**, **Marca-texto**, **Zoom**,
-    **Camada**, and **Recolher nota** / **Expandir nota**.
-  - The menu shows the current zoom and the active layer, so neither depends on knowing a shortcut.
+  - Entries: **Cor da nota**, **Tipo de papel**, **Intensidade**, **Tamanho do texto**,
+    **Cor do texto**, **Marca-texto**, **Zoom**, **Tema**, **Camada**, and **Recolher nota** /
+    **Expandir nota**.
+  - The menu shows the current paper, intensity, zoom, theme and layer on their own rows, so none
+    of them depends on opening a submenu or knowing a shortcut.
   - Closes on outside click, `Escape`, or selecting an entry; only one popover exists per note.
   - The button and the popover sit outside the drag region, so using them never moves the note.
 - **Note Information Tooltip:**
@@ -36,6 +38,42 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
     whatever position the collapsed bar was left.
   - A collapsed note can still be dragged; resizing is unavailable until it is expanded again.
   - The collapsed state is persisted, so a note left collapsed reopens collapsed.
+
+## Paper
+
+Each note carries its own paper, independently of every other note.
+
+- **Cor da nota:** the seven colours — Amarelo, Azul, Verde, Rosa, Roxo, Cinza, Preto.
+- **Tipo de papel:** **Liso**, **Pautado**, **Pontilhado**, **Quadriculado pequeno**,
+  **Quadriculado grande**. Plain paper is the original look and draws no pattern at all.
+- **Intensidade:** **Suave**, **Normal**, **Forte** — the opacity the pattern is drawn with, and
+  nothing else. It never changes the paper colour, the text, or the note's geometry. Plain paper
+  keeps whatever intensity it was given; it simply has no pattern to act on.
+- The pattern is pure CSS: one parameterised system where the type picks a pattern and its
+  spacing, the intensity picks the opacity, and the paper colour picks the ink — dark ink on the
+  pale papers, light ink on the dark one, so it stays visible on all seven.
+- Spacing is in pixels, so zoom scales the text while the pattern stays put. Ruled paper is spaced
+  to the note's default line box, but it is a background, not a layout grid: lines are not pinned
+  to individual lines of text.
+- The pattern is painted on the scrolling surface, so it travels with the text, and the note's own
+  colour still fills the window underneath — a fast resize exposes paper, never an unpainted strip.
+- A collapsed note's bar shows its colour without the pattern; expanding brings the pattern back.
+- Paper type and intensity are properties of the note, stored in its front matter beside the
+  colour. Changing either saves the note without touching its content or its modification date.
+
+## Theme
+
+The theme is the appearance of the **application**, not of a note.
+
+- **Sistema**, **Claro**, **Escuro**, chosen from any note's menu and shared by every note. The
+  preference is global and lives in `config.toml`.
+- **Sistema** follows the desktop's colour scheme and keeps following it, so switching the desktop
+  to dark reaches open notes without a restart.
+- It dresses only the chrome: menus, popovers, borders, shadows, hover and focus states, and
+  auxiliary text. Everything drawn on the paper — the note's text, checkboxes, highlights, the
+  header buttons — keeps taking its colour from the paper.
+- A note keeps the colour it was given: a yellow note stays yellow under the dark theme, and a
+  black one stays black under the light theme.
 
 ## Window Positioning & Interactions
 
@@ -80,6 +118,8 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - Scales the note's content between 75% and 200% in 10% steps, without changing the window size,
     the Markdown, or the note's modification date. The header bar keeps its size.
   - Persisted per note in `state.json`; notes without a stored zoom open at 100%.
+- **Tema (menu):**
+  - Sistema / Claro / Escuro, applied at once to every open note and persisted globally.
 - **Layer (`Ctrl+Shift+Space`):**
   - Switches between **Sempre no topo** (above other windows) and **Área de trabalho** (behind
     them, still open). This is the same application-wide switch as `note-it toggle`.

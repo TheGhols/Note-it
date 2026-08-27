@@ -3,7 +3,8 @@ use crate::layer_shell::{
     setup_layer_shell_window, update_window_position, update_window_size, WindowGeometry,
     COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
-use crate::model::NoteDocument;
+use crate::model::{paper_intensity_name, paper_type_name, NoteDocument};
+use crate::settings::theme_name;
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use crate::webview_bridge::{
@@ -34,6 +35,10 @@ pub struct NoteWindowOptions<'a> {
     pub on_close: Rc<dyn Fn(Uuid) -> Result<(), String>>,
     pub on_geometry_changed: Rc<dyn Fn(Uuid, NoteWindowState)>,
     pub on_toggle_layer_mode: Rc<dyn Fn()>,
+    /// Interface theme in force when the note opens. Shared by every note, so
+    /// the window is told about it rather than reading it back from the store.
+    pub theme: String,
+    pub on_theme_changed: Rc<dyn Fn(String)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -76,6 +81,7 @@ pub struct NoteWindow {
     pub storage: StorageManager,
     monitor_size: (i32, i32),
     layer_mode: Rc<Cell<LayerMode>>,
+    theme: Rc<RefCell<String>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
 }
@@ -125,6 +131,7 @@ impl NoteWindow {
         let doc_rc = Rc::new(RefCell::new(options.document));
         let state_rc = Rc::new(RefCell::new(initial_state));
         let layer_mode_cell = Rc::new(Cell::new(options.layer_mode));
+        let theme_cell = Rc::new(RefCell::new(theme_name(&options.theme).to_string()));
 
         // Back the surface with the note's paper colour so a fast resize never
         // exposes the default dark window background before the page repaints.
@@ -190,6 +197,8 @@ impl NoteWindow {
         let flushes_clone = Rc::clone(&pending_flushes);
         let on_toggle_layer_clone = Rc::clone(&options.on_toggle_layer_mode);
         let layer_mode_clone = Rc::clone(&layer_mode_cell);
+        let theme_clone = Rc::clone(&theme_cell);
+        let on_theme_changed_clone = Rc::clone(&options.on_theme_changed);
         let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
         let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
@@ -208,12 +217,19 @@ impl NoteWindow {
                                         id: doc.metadata.id,
                                         content: doc.content.clone(),
                                         color: doc.metadata.color.clone(),
+                                        paper_type: paper_type_name(&doc.metadata.paper_type)
+                                            .to_string(),
+                                        paper_intensity: paper_intensity_name(
+                                            &doc.metadata.paper_intensity,
+                                        )
+                                        .to_string(),
                                         font_size: doc.metadata.font_size,
                                         collapsed: state_clone.borrow().collapsed,
                                         created_at: doc.metadata.created_at,
                                         updated_at: doc.metadata.updated_at,
                                         zoom_percent: state_clone.borrow().zoom_percent,
                                         layer_mode: layer_mode_clone.get().as_str().to_string(),
+                                        theme: theme_clone.borrow().clone(),
                                     },
                                 );
                             }
@@ -271,6 +287,30 @@ impl NoteWindow {
                             if let Err(error) = storage_clone.save_note_atomic(&doc) {
                                 eprintln!("Font size save failed for note {id}: {error}");
                             }
+                        }
+                        WebviewToHostMessage::PaperChanged {
+                            id: message_id,
+                            paper_type,
+                            paper_intensity,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Paper save rejected a mismatched note identifier");
+                                return;
+                            }
+                            let mut doc = doc_clone.borrow_mut();
+                            // Whatever the page sends is resolved against the
+                            // supported set before it reaches the note file.
+                            doc.metadata.paper_type = paper_type_name(&paper_type).to_string();
+                            doc.metadata.paper_intensity =
+                                paper_intensity_name(&paper_intensity).to_string();
+                            // Appearance only: the note is saved without its
+                            // modification date moving.
+                            if let Err(error) = storage_clone.save_note_atomic(&doc) {
+                                eprintln!("Paper save failed for note {id}: {error}");
+                            }
+                        }
+                        WebviewToHostMessage::ThemeChanged { theme } => {
+                            on_theme_changed_clone(theme_name(&theme).to_string());
                         }
                         WebviewToHostMessage::SaveAndClose {
                             id: message_id,
@@ -468,6 +508,7 @@ impl NoteWindow {
             storage: options.storage,
             monitor_size: (mon_w, mon_h),
             layer_mode: layer_mode_cell,
+            theme: theme_cell,
             allow_close,
             pending_flushes,
         }
@@ -507,6 +548,19 @@ impl NoteWindow {
 
     pub fn is_collapsed(&self) -> bool {
         self.state.borrow().collapsed
+    }
+
+    /// Dresses this note's chrome with the shared interface theme. The paper
+    /// is untouched: a yellow note stays yellow under the dark theme.
+    pub fn set_theme(&self, theme: &str) {
+        let resolved = theme_name(theme);
+        *self.theme.borrow_mut() = resolved.to_string();
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SetTheme {
+                theme: resolved.to_string(),
+            },
+        );
     }
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
@@ -1037,6 +1091,85 @@ mod tests {
         assert_eq!(reloaded.metadata.color, "blue");
         assert_eq!(reloaded.metadata.updated_at, updated_at);
         assert_eq!(reloaded.metadata.created_at, created_at);
+    }
+
+    #[test]
+    fn changing_the_paper_pattern_does_not_count_as_a_content_edit() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "texto original".to_string();
+        storage.save_note_atomic(&doc).expect("initial save");
+        let id = doc.metadata.id;
+        let created_at = doc.metadata.created_at;
+        let updated_at = doc.metadata.updated_at;
+
+        // Same path the PaperChanged handler takes: metadata changes, no touch.
+        doc.metadata.paper_type = "lined".to_string();
+        doc.metadata.paper_intensity = "subtle".to_string();
+        storage.save_note_atomic(&doc).expect("paper save");
+
+        let reloaded = storage.load_note(&id).expect("reload note");
+        assert_eq!(reloaded.metadata.paper_type, "lined");
+        assert_eq!(reloaded.metadata.paper_intensity, "subtle");
+        assert_eq!(reloaded.metadata.updated_at, updated_at);
+        assert_eq!(reloaded.metadata.created_at, created_at);
+        assert_eq!(reloaded.content, "texto original");
+    }
+
+    #[test]
+    fn each_note_keeps_its_own_paper_across_a_restart() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let papers = [
+            ("yellow", "lined", "subtle"),
+            ("blue", "dotted", "normal"),
+            ("black", "grid-large", "strong"),
+        ];
+        let ids: Vec<_> = papers
+            .iter()
+            .map(|(color, paper_type, intensity)| {
+                let mut doc = NoteDocument::new_empty();
+                doc.metadata.color = (*color).to_string();
+                doc.metadata.paper_type = (*paper_type).to_string();
+                doc.metadata.paper_intensity = (*intensity).to_string();
+                storage.save_note_atomic(&doc).expect("save note");
+                doc.metadata.id
+            })
+            .collect();
+
+        // Changing the first note must not reach the other two.
+        let mut first = storage.load_note(&ids[0]).expect("load first");
+        first.metadata.paper_type = "grid-small".to_string();
+        storage.save_note_atomic(&first).expect("save first");
+
+        // Reopening from disk is the restart: nothing is held in memory.
+        let reloaded: Vec<_> = ids
+            .iter()
+            .map(|id| storage.load_note(id).expect("reload note"))
+            .collect();
+
+        assert_eq!(reloaded[0].metadata.paper_type, "grid-small");
+        assert_eq!(reloaded[0].metadata.paper_intensity, "subtle");
+        assert_eq!(reloaded[1].metadata.paper_type, "dotted");
+        assert_eq!(reloaded[1].metadata.paper_intensity, "normal");
+        assert_eq!(reloaded[2].metadata.paper_type, "grid-large");
+        assert_eq!(reloaded[2].metadata.paper_intensity, "strong");
+        assert_eq!(reloaded[2].metadata.color, "black");
     }
 
     #[test]
