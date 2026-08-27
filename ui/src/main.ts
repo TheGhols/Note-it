@@ -3,7 +3,9 @@ import { bridge } from './bridge/bridge.ts';
 import { NoteEditor } from './editor/editor.ts';
 import { NoteKeyboardController } from './editor/keyboard.ts';
 import { PaperColor } from './bridge/types.ts';
-import { PointerDeltaCoalescer } from './geometry/pointerDelta.ts';
+import { PointerGestureController } from './geometry/gesture.ts';
+import { NoteMenu } from './ui/menu.ts';
+import { NoteInfoTooltip } from './ui/tooltip.ts';
 
 const PAPER_COLORS: PaperColor[] = [
   'yellow',
@@ -17,21 +19,43 @@ const PAPER_COLORS: PaperColor[] = [
 
 let activeNoteId = '';
 let currentFontSize = 15;
-let currentColorIndex = 0;
+let isCollapsed = false;
 let noteEditor: NoteEditor | null = null;
+let noteMenu: NoteMenu | null = null;
+let infoTooltip: NoteInfoTooltip | null = null;
 
 function setPaperColor(color: PaperColor): void {
   document.body.setAttribute('data-color', color);
-  const index = PAPER_COLORS.indexOf(color);
-  if (index !== -1) {
-    currentColorIndex = index;
-  }
+  noteMenu?.setSelectedColor(color);
 }
 
 function setFontSize(size: number): void {
   const clamped = Math.max(11, Math.min(32, size));
   currentFontSize = clamped;
   document.documentElement.style.setProperty('--note-font-size', `${clamped}px`);
+}
+
+/**
+ * Applies the collapsed look. The editor is only hidden, never destroyed, so
+ * the content and the Tiptap instance survive untouched.
+ */
+function setCollapsed(collapsed: boolean): void {
+  isCollapsed = collapsed;
+  document.body.setAttribute('data-collapsed', String(collapsed));
+  noteMenu?.setCollapsed(collapsed);
+}
+
+/**
+ * Tells the host whether the settings popover is on screen. A collapsed note
+ * is barely taller than its header bar, so the host lends it enough room to
+ * show the menu; the persisted geometry is untouched either way.
+ */
+function setMenuOverlay(open: boolean): void {
+  if (!activeNoteId) return;
+  bridge.sendMessage({
+    type: 'menu_overlay',
+    payload: { id: activeNoteId, open },
+  });
 }
 
 function flushSave(): void {
@@ -72,132 +96,103 @@ function initUI(): void {
     },
   });
 
-  // Color cycle button
-  const btnTheme = document.getElementById('btn-theme');
-  btnTheme?.addEventListener('click', (e) => {
-    e.preventDefault();
-    currentColorIndex = (currentColorIndex + 1) % PAPER_COLORS.length;
-    const newColor = PAPER_COLORS[currentColorIndex];
-    setPaperColor(newColor);
-    if (activeNoteId) {
-      bridge.sendMessage({
-        type: 'color_changed',
-        payload: { id: activeNoteId, color: newColor },
-      });
-    }
-  });
+  const dragRegion = document.querySelector('.drag-region') as HTMLElement | null;
+
+  // Note settings menu. The trigger and the popover both sit outside the drag
+  // region, so interacting with them can never move the window.
+  const btnMenu = document.getElementById('btn-menu');
+  const menuMount = document.getElementById('note-controls-left');
+  if (btnMenu && menuMount) {
+    noteMenu = new NoteMenu({
+      trigger: btnMenu,
+      mount: menuMount,
+      colors: PAPER_COLORS,
+      handlers: {
+        onOpen: () => {
+          infoTooltip?.hide();
+          setMenuOverlay(true);
+        },
+        onClose: () => setMenuOverlay(false),
+        onSelectColor: (color) => {
+          setPaperColor(color);
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'color_changed',
+              payload: { id: activeNoteId, color },
+            });
+          }
+        },
+        onToggleCollapsed: (collapsed) => {
+          setCollapsed(collapsed);
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'collapse_changed',
+              payload: { id: activeNoteId, collapsed },
+            });
+          }
+        },
+      },
+    });
+    noteMenu.setCollapsed(false);
+  }
+
+  // Contextual note information on the free area of the header bar.
+  if (dragRegion && menuMount) {
+    infoTooltip = new NoteInfoTooltip({
+      hoverTarget: dragRegion,
+      mount: menuMount,
+    });
+  }
 
   // Close button
   const btnClose = document.getElementById('btn-close');
   btnClose?.addEventListener('click', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     saveAndClose();
   });
 
   // Drag region handling
-  const dragRegion = document.querySelector('.drag-region') as HTMLElement | null;
   if (dragRegion) {
-    let isDragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const deltas = new PointerDeltaCoalescer((dx, dy) => {
-      bridge.sendMessage({
-        type: 'drag_update',
-        payload: { dx, dy },
-      });
+    new PointerGestureController(dragRegion, {
+      onStart: () => {
+        infoTooltip?.hide();
+        noteMenu?.close();
+        bridge.sendMessage({ type: 'drag_start' });
+      },
+      onDelta: (dx, dy) => {
+        bridge.sendMessage({ type: 'drag_update', payload: { dx, dy } });
+      },
+      onEnd: () => {
+        bridge.sendMessage({ type: 'drag_end' });
+      },
     });
-
-    dragRegion.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0 || !Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
-      isDragging = true;
-      lastX = e.screenX;
-      lastY = e.screenY;
-      deltas.reset();
-      dragRegion.setPointerCapture(e.pointerId);
-      bridge.sendMessage({ type: 'drag_start' });
-    });
-
-    dragRegion.addEventListener('pointermove', (e: PointerEvent) => {
-      if (!isDragging) return;
-      const dx = e.screenX - lastX;
-      const dy = e.screenY - lastY;
-      lastX = e.screenX;
-      lastY = e.screenY;
-      deltas.add(dx, dy);
-    });
-
-    const endDrag = (e: PointerEvent) => {
-      if (!isDragging) return;
-      isDragging = false;
-      if (e.type === 'pointerup') {
-        deltas.finish(e.screenX - lastX, e.screenY - lastY);
-      } else {
-        deltas.flush();
-      }
-      try {
-        dragRegion.releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-      bridge.sendMessage({ type: 'drag_end' });
-    };
-
-    dragRegion.addEventListener('pointerup', endDrag);
-    dragRegion.addEventListener('pointercancel', endDrag);
   }
 
   // Resize handle handling
   const resizeHandle = document.getElementById('resize-handle');
   if (resizeHandle) {
-    let isResizing = false;
-    let lastX = 0;
-    let lastY = 0;
-    const deltas = new PointerDeltaCoalescer((dx, dy) => {
-      bridge.sendMessage({
-        type: 'resize_update',
-        payload: { dx, dy },
-      });
-    });
-
-    resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0 || !Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      isResizing = true;
-      lastX = e.screenX;
-      lastY = e.screenY;
-      deltas.reset();
-      resizeHandle.setPointerCapture(e.pointerId);
-      bridge.sendMessage({ type: 'resize_start' });
-    });
-
-    resizeHandle.addEventListener('pointermove', (e: PointerEvent) => {
-      if (!isResizing) return;
-      const dx = e.screenX - lastX;
-      const dy = e.screenY - lastY;
-      lastX = e.screenX;
-      lastY = e.screenY;
-      deltas.add(dx, dy);
-    });
-
-    const endResize = (e: PointerEvent) => {
-      if (!isResizing) return;
-      isResizing = false;
-      if (e.type === 'pointerup') {
-        deltas.finish(e.screenX - lastX, e.screenY - lastY);
-      } else {
-        deltas.flush();
-      }
-      try {
-        resizeHandle.releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-      bridge.sendMessage({ type: 'resize_end' });
-    };
-
-    resizeHandle.addEventListener('pointerup', endResize);
-    resizeHandle.addEventListener('pointercancel', endResize);
+    new PointerGestureController(
+      resizeHandle,
+      {
+        onStart: () => {
+          infoTooltip?.hide();
+          bridge.sendMessage({ type: 'resize_start' });
+        },
+        onDelta: (dx, dy) => {
+          bridge.sendMessage({ type: 'resize_update', payload: { dx, dy } });
+        },
+        onEnd: () => {
+          bridge.sendMessage({ type: 'resize_end' });
+        },
+      },
+      {
+        // A collapsed note is only a header bar; resizing it is unavailable
+        // until it is expanded again.
+        canStart: () => !isCollapsed,
+        claimPointerDown: true,
+      },
+    );
   }
 
   // Keyboard shortcuts inside WebView. Composition and AltGr events remain native.
@@ -234,6 +229,7 @@ function initUI(): void {
 
   // Flush save on blur / beforeunload
   window.addEventListener('beforeunload', () => {
+    infoTooltip?.hide();
     if (noteEditor?.hasPendingSave()) flushSave();
   });
 
@@ -256,8 +252,18 @@ function initUI(): void {
       activeNoteId = msg.payload.id;
       setPaperColor(msg.payload.color);
       setFontSize(msg.payload.fontSize || 15);
+      setCollapsed(Boolean(msg.payload.collapsed));
+      infoTooltip?.setTimestamps({
+        createdAt: msg.payload.createdAt ?? null,
+        updatedAt: msg.payload.updatedAt ?? null,
+      });
       noteEditor?.setMarkdown(msg.payload.content || '');
       noteEditor?.focus();
+    } else if (msg.type === 'set_timestamps') {
+      infoTooltip?.setTimestamps({
+        createdAt: msg.payload.createdAt ?? null,
+        updatedAt: msg.payload.updatedAt ?? null,
+      });
     } else if (msg.type === 'set_color') {
       setPaperColor(msg.payload.color);
     } else if (msg.type === 'set_font_size') {

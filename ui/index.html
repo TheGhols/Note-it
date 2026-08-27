@@ -9,15 +9,19 @@
 <body>
   <div id="app">
     <div id="drag-handle" class="note-header">
-      <div class="note-controls-left">
-        <button id="btn-theme" class="icon-btn" title="Change Color" aria-label="Change Color">
-          <span class="color-dot"></span>
+      <div id="note-controls-left" class="note-controls-left">
+        <button id="btn-menu" class="icon-btn" title="Configurações da nota" aria-label="Configurações da nota">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <line x1="1.5" y1="3" x2="10.5" y2="3"></line>
+            <line x1="1.5" y1="6" x2="10.5" y2="6"></line>
+            <line x1="1.5" y1="9" x2="10.5" y2="9"></line>
+          </svg>
         </button>
       </div>
       <div class="drag-region"></div>
       <div class="note-controls-right">
-        <button id="btn-close" class="icon-btn" title="Close (Ctrl+W)" aria-label="Close">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
+        <button id="btn-close" class="icon-btn" title="Fechar (Ctrl+W)" aria-label="Fechar nota">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <line x1="1" y1="1" x2="11" y2="11"></line>
             <line x1="11" y1="1" x2="1" y2="11"></line>
           </svg>
@@ -25,7 +29,7 @@
       </div>
     </div>
     <div id="editor-container" class="editor-wrapper"></div>
-    <div id="resize-handle" class="resize-handle" title="Resize" aria-label="Resize"></div>
+    <div id="resize-handle" class="resize-handle" title="Redimensionar" aria-label="Redimensionar"></div>
   </div>
   <script type="module" src="./src/main.ts"></script>
 </body>

@@ -25,7 +25,24 @@
 - [x] Transactional flush protocol before `hide` and `quit` to prevent data loss from debounced edits.
 - [x] End-to-end testing and validation on Niri compositor.
 
-## Phase 3: Editor Enhancements & User Experience (Next - Not Started)
+## Phase 3: Editor Enhancements & User Experience (In Progress)
+
+### Phase 3.0R.1: Editor & Geometry Stabilisation (Completed)
+- [x] Physical pt-BR keyboard, dead keys, and IME composition preserved inside the WebView.
+- [x] Markdown formatting shortcuts including `Ctrl+R` strikethrough.
+- [x] Sub-pixel accurate drag and resize with the final `pointerup` delta applied.
+- [x] Window geometry persisted on gesture end and restored on reopen.
+
+### Phase 3.1: Note Chrome, Settings Menu, Collapse & Information (Completed)
+- [x] Header `☰` settings popover replacing the direct colour dot.
+- [x] Paper colour palette moved inside the menu, with persistence preserved.
+- [x] Collapse / expand reducing the note to its header bar, with the expanded geometry restored.
+- [x] Collapsed state persisted across restarts, with backward-compatible state migration.
+- [x] Note creation and modification dates on header hover, formatted in pt-BR.
+- [x] Pointer gesture lifecycle hardened: one captured pointer per gesture, no geometry change
+      without an active gesture.
+
+### Phase 3.2: Editor Enhancements (Planned)
 - [ ] Contextual floating bubble toolbar for formatting.
 - [ ] Extended styling controls and keyboard workflows.
 - [ ] Visual polish, paper textures, and typography adjustments.

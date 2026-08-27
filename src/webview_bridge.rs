@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webkit6::prelude::*;
@@ -15,6 +16,17 @@ pub enum HostToWebviewMessage {
         color: String,
         #[serde(rename = "fontSize")]
         font_size: u32,
+        collapsed: bool,
+        #[serde(rename = "createdAt")]
+        created_at: Option<DateTime<Utc>>,
+        #[serde(rename = "updatedAt")]
+        updated_at: Option<DateTime<Utc>>,
+    },
+    SetTimestamps {
+        #[serde(rename = "createdAt")]
+        created_at: Option<DateTime<Utc>>,
+        #[serde(rename = "updatedAt")]
+        updated_at: Option<DateTime<Utc>>,
     },
     SetColor {
         color: String,
@@ -53,6 +65,16 @@ pub enum WebviewToHostMessage {
         id: Uuid,
         #[serde(rename = "fontSize")]
         font_size: u32,
+    },
+    CollapseChanged {
+        id: Uuid,
+        collapsed: bool,
+    },
+    /// The settings popover opened or closed. A collapsed note is barely taller
+    /// than its header bar, so the host lends it enough room to show the menu.
+    MenuOverlay {
+        id: Uuid,
+        open: bool,
     },
     OpenExternalUrl {
         url: String,
@@ -253,6 +275,76 @@ mod tests {
                 assert_eq!(parsed_id, id);
                 assert_eq!(request_id, 42);
                 assert_eq!(content, "# flushed content immediately");
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_collapse_change_requests_from_the_note_menu() {
+        let id = Uuid::new_v4();
+        for collapsed in [true, false] {
+            let raw = serde_json::json!({
+                "type": "collapse_changed",
+                "payload": { "id": id, "collapsed": collapsed }
+            })
+            .to_string();
+
+            match parse_webview_message(&raw).expect("collapse message") {
+                WebviewToHostMessage::CollapseChanged {
+                    id: parsed_id,
+                    collapsed: parsed_collapsed,
+                } => {
+                    assert_eq!(parsed_id, id);
+                    assert_eq!(parsed_collapsed, collapsed);
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn load_note_carries_collapse_state_and_timestamps_to_the_webview() {
+        let id = Uuid::new_v4();
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T07:14:00Z")
+            .expect("fixed timestamp")
+            .with_timezone(&chrono::Utc);
+
+        let message = super::HostToWebviewMessage::LoadNote {
+            id,
+            content: "conteúdo".to_string(),
+            color: "yellow".to_string(),
+            font_size: 15,
+            collapsed: true,
+            created_at: Some(created_at),
+            updated_at: None,
+        };
+
+        let encoded = serde_json::to_value(&message).expect("serialize load_note");
+        let payload = &encoded["payload"];
+        assert_eq!(encoded["type"], "load_note");
+        assert_eq!(payload["collapsed"], true);
+        assert_eq!(payload["createdAt"], "2026-08-27T07:14:00Z");
+        // An unknown timestamp travels as null instead of a fabricated date.
+        assert!(payload["updatedAt"].is_null());
+    }
+
+    #[test]
+    fn parses_menu_overlay_requests() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "menu_overlay",
+            "payload": { "id": id, "open": true }
+        })
+        .to_string();
+
+        match parse_webview_message(&raw).expect("menu overlay message") {
+            WebviewToHostMessage::MenuOverlay {
+                id: parsed_id,
+                open,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert!(open);
             }
             other => panic!("unexpected message: {other:?}"),
         }

@@ -1,6 +1,7 @@
 use crate::layer_shell::{
-    apply_layer_mode, clamp_geometry, setup_layer_shell_window, update_window_position,
-    update_window_size, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
+    apply_layer_mode, clamp_geometry_with_min_height, min_note_height, setup_layer_shell_window,
+    update_window_position, update_window_size, WindowGeometry, COLLAPSED_NOTE_HEIGHT,
+    DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH, MENU_OVERLAY_EXTRA_HEIGHT,
 };
 use crate::model::NoteDocument;
 use crate::state::{LayerMode, NoteWindowState};
@@ -96,14 +97,17 @@ impl NoteWindow {
             DEFAULT_MONITOR_HEIGHT
         };
 
-        // Clamp initial geometry
-        let (clamped_x, clamped_y, clamped_w, clamped_h) = clamp_geometry(
+        // Clamp initial geometry. A note restored collapsed keeps the header
+        // bar height instead of being forced back to the expanded minimum.
+        let restored_collapsed = options.state.collapsed;
+        let (clamped_x, clamped_y, clamped_w, clamped_h) = clamp_geometry_with_min_height(
             options.state.x,
             options.state.y,
             options.state.width,
             options.state.height,
             mon_w,
             mon_h,
+            min_note_height(restored_collapsed),
         );
 
         let mut initial_state = options.state;
@@ -122,10 +126,13 @@ impl NoteWindow {
         setup_layer_shell_window(
             window.upcast_ref(),
             options.layer_mode,
-            clamped_x,
-            clamped_y,
-            clamped_w,
-            clamped_h,
+            WindowGeometry {
+                x: clamped_x,
+                y: clamped_y,
+                width: clamped_w,
+                height: clamped_h,
+                collapsed: restored_collapsed,
+            },
             options.monitor.as_ref(),
         );
 
@@ -192,6 +199,9 @@ impl NoteWindow {
                                         content: doc.content.clone(),
                                         color: doc.metadata.color.clone(),
                                         font_size: doc.metadata.font_size,
+                                        collapsed: state_clone.borrow().collapsed,
+                                        created_at: doc.metadata.created_at,
+                                        updated_at: doc.metadata.updated_at,
                                     },
                                 );
                             }
@@ -206,6 +216,15 @@ impl NoteWindow {
                                 save_content(&storage_clone, &doc_clone, id, content)
                             {
                                 eprintln!("Autosave failed for note {id}: {error}");
+                            } else if let Some(wv) = webview_weak.upgrade() {
+                                let doc = doc_clone.borrow();
+                                send_to_webview(
+                                    &wv,
+                                    &HostToWebviewMessage::SetTimestamps {
+                                        created_at: doc.metadata.created_at,
+                                        updated_at: doc.metadata.updated_at,
+                                    },
+                                );
                             }
                         }
                         WebviewToHostMessage::ColorChanged {
@@ -218,7 +237,6 @@ impl NoteWindow {
                             }
                             let mut doc = doc_clone.borrow_mut();
                             doc.metadata.color = color;
-                            doc.metadata.updated_at = chrono::Utc::now();
                             if let Err(error) = storage_clone.save_note_atomic(&doc) {
                                 eprintln!("Color save failed for note {id}: {error}");
                             }
@@ -233,7 +251,6 @@ impl NoteWindow {
                             }
                             let mut doc = doc_clone.borrow_mut();
                             doc.metadata.font_size = font_size;
-                            doc.metadata.updated_at = chrono::Utc::now();
                             if let Err(error) = storage_clone.save_note_atomic(&doc) {
                                 eprintln!("Font size save failed for note {id}: {error}");
                             }
@@ -252,6 +269,50 @@ impl NoteWindow {
                                 on_close_clone.as_ref(),
                             ) {
                                 eprintln!("Save-and-close failed for note {id}: {error}");
+                            }
+                        }
+                        WebviewToHostMessage::CollapseChanged {
+                            id: message_id,
+                            collapsed,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Collapse request rejected a mismatched note identifier");
+                                return;
+                            }
+                            let snapshot = {
+                                let mut st = state_clone.borrow_mut();
+                                if !apply_collapse_to_state(&mut st, collapsed, mon_w, mon_h) {
+                                    return;
+                                }
+                                st.clone()
+                            };
+                            if let Some(win) = window_weak.upgrade() {
+                                update_window_size(
+                                    win.upcast_ref(),
+                                    snapshot.width,
+                                    snapshot.height,
+                                    snapshot.collapsed,
+                                );
+                            }
+                            on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::MenuOverlay {
+                            id: message_id,
+                            open,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Menu overlay rejected a mismatched note identifier");
+                                return;
+                            }
+                            let st = state_clone.borrow();
+                            // An expanded note already has room for the popover,
+                            // and the persisted geometry is never touched here.
+                            if !st.collapsed {
+                                return;
+                            }
+                            let height = menu_overlay_height(st.height, open);
+                            if let Some(win) = window_weak.upgrade() {
+                                update_window_size(win.upcast_ref(), st.width, height, true);
                             }
                         }
                         WebviewToHostMessage::NewNoteRequested => {
@@ -278,8 +339,15 @@ impl NoteWindow {
                             let mut st = state_clone.borrow_mut();
                             st.x += dx;
                             st.y += dy;
-                            let (cx, cy, _, _) =
-                                clamp_geometry(st.x, st.y, st.width, st.height, mon_w, mon_h);
+                            let (cx, cy, _, _) = clamp_geometry_with_min_height(
+                                st.x,
+                                st.y,
+                                st.width,
+                                st.height,
+                                mon_w,
+                                mon_h,
+                                min_note_height(st.collapsed),
+                            );
                             st.x = cx;
                             st.y = cy;
                             if let Some(win) = window_weak.upgrade() {
@@ -299,18 +367,33 @@ impl NoteWindow {
                                 return;
                             }
                             let mut st = state_clone.borrow_mut();
+                            // A collapsed note is only a header bar; resizing it
+                            // would produce an incoherent expanded geometry.
+                            if st.collapsed {
+                                return;
+                            }
                             st.width += dx;
                             st.height += dy;
-                            let (_, _, cw, ch) =
-                                clamp_geometry(st.x, st.y, st.width, st.height, mon_w, mon_h);
+                            let (_, _, cw, ch) = clamp_geometry_with_min_height(
+                                st.x,
+                                st.y,
+                                st.width,
+                                st.height,
+                                mon_w,
+                                mon_h,
+                                min_note_height(false),
+                            );
                             st.width = cw;
                             st.height = ch;
                             if let Some(win) = window_weak.upgrade() {
-                                update_window_size(win.upcast_ref(), cw, ch);
+                                update_window_size(win.upcast_ref(), cw, ch, false);
                             }
                         }
                         WebviewToHostMessage::ResizeEnd => {
                             let snapshot = state_clone.borrow().clone();
+                            if snapshot.collapsed {
+                                return;
+                            }
                             on_geom_clone(id, snapshot);
                         }
                         WebviewToHostMessage::FlushResponse {
@@ -401,6 +484,47 @@ impl NoteWindow {
     }
 }
 
+/// Presentation height of a collapsed note while its settings popover is
+/// open. The persisted `collapsed_height` is returned unchanged once the menu
+/// closes, so this never becomes part of the stored geometry.
+fn menu_overlay_height(collapsed_height: i32, menu_open: bool) -> i32 {
+    if menu_open {
+        collapsed_height + MENU_OVERLAY_EXTRA_HEIGHT
+    } else {
+        collapsed_height
+    }
+}
+
+/// Applies a collapse/expand request to the window state and re-clamps the
+/// resulting geometry. Returns `false` when the note is already in the
+/// requested state, so a duplicate request cannot overwrite the stored
+/// expanded geometry.
+fn apply_collapse_to_state(
+    state: &mut NoteWindowState,
+    collapsed: bool,
+    monitor_width: i32,
+    monitor_height: i32,
+) -> bool {
+    if !state.apply_collapsed(collapsed, COLLAPSED_NOTE_HEIGHT) {
+        return false;
+    }
+
+    let (x, y, width, height) = clamp_geometry_with_min_height(
+        state.x,
+        state.y,
+        state.width,
+        state.height,
+        monitor_width,
+        monitor_height,
+        min_note_height(collapsed),
+    );
+    state.x = x;
+    state.y = y;
+    state.width = width;
+    state.height = height;
+    true
+}
+
 fn complete_flush_response(
     storage: &StorageManager,
     document: &Rc<RefCell<NoteDocument>>,
@@ -444,7 +568,7 @@ fn save_content(
         return Err("note identifier mismatch".to_string());
     }
     doc.content = content;
-    doc.metadata.updated_at = chrono::Utc::now();
+    doc.touch_content_modified();
     storage.save_note_atomic(&doc).map(|_| ())
 }
 
@@ -467,10 +591,13 @@ fn file_uri_for_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_flush_response, expire_flush_request, file_uri_for_path, save_and_close,
-        save_content, PendingFlushes, SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
+        apply_collapse_to_state, complete_flush_response, expire_flush_request, file_uri_for_path,
+        menu_overlay_height, save_and_close, save_content, PendingFlushes,
+        SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
     };
+    use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
     use crate::model::NoteDocument;
+    use crate::state::NoteWindowState;
     use crate::storage::StorageManager;
     use std::cell::{Cell, RefCell};
     use std::fs;
@@ -766,6 +893,126 @@ mod tests {
         assert_eq!(
             storage.load_note(&id).expect("saved note").content,
             "latest Ctrl+W content"
+        );
+    }
+
+    #[test]
+    fn collapsing_and_expanding_reuses_the_existing_geometry_pipeline() {
+        let mut state = NoteWindowState {
+            x: 700,
+            y: 300,
+            width: 508,
+            height: 552,
+            ..NoteWindowState::default()
+        };
+
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert!(state.collapsed);
+        assert_eq!(state.height, COLLAPSED_NOTE_HEIGHT);
+        assert_eq!(state.width, 508);
+
+        // Moving the collapsed bar and expanding restores the previous size in place.
+        state.x = 40;
+        state.y = 900;
+        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080));
+        assert!(!state.collapsed);
+        assert_eq!((state.width, state.height), (508, 552));
+        assert_eq!((state.x, state.y), (40, 900));
+    }
+
+    #[test]
+    fn a_repeated_collapse_request_is_ignored() {
+        let mut state = NoteWindowState {
+            width: 400,
+            height: 500,
+            ..NoteWindowState::default()
+        };
+
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert!(!apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert_eq!(state.expanded_height, Some(500));
+
+        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080));
+        assert_eq!(state.height, 500);
+    }
+
+    #[test]
+    fn expanding_re_clamps_against_a_smaller_monitor() {
+        let mut state = NoteWindowState {
+            x: 100,
+            y: 100,
+            width: 1600,
+            height: 900,
+            ..NoteWindowState::default()
+        };
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
+
+        // The note is expanded again after the display shrank.
+        assert!(apply_collapse_to_state(&mut state, false, 1280, 720));
+        assert!(state.width <= 1280);
+        assert!(state.height <= 720);
+        assert!(state.height >= MIN_NOTE_HEIGHT);
+    }
+
+    #[test]
+    fn changing_the_paper_colour_does_not_count_as_a_content_edit() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "texto original".to_string();
+        storage.save_note_atomic(&doc).expect("initial save");
+        let id = doc.metadata.id;
+        let created_at = doc.metadata.created_at;
+        let updated_at = doc.metadata.updated_at;
+
+        // Same path the ColorChanged handler takes: metadata changes, no touch.
+        doc.metadata.color = "blue".to_string();
+        storage.save_note_atomic(&doc).expect("colour save");
+
+        let reloaded = storage.load_note(&id).expect("reload note");
+        assert_eq!(reloaded.metadata.color, "blue");
+        assert_eq!(reloaded.metadata.updated_at, updated_at);
+        assert_eq!(reloaded.metadata.created_at, created_at);
+    }
+
+    #[test]
+    fn saving_content_moves_updated_at_and_keeps_created_at() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let document = Rc::new(RefCell::new(NoteDocument::new_empty()));
+        let id = document.borrow().metadata.id;
+        let created_at = document.borrow().metadata.created_at;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        save_content(&storage, &document, id, "texto editado".to_string()).expect("save");
+
+        let reloaded = storage.load_note(&id).expect("reload note");
+        assert_eq!(reloaded.metadata.created_at, created_at);
+        assert!(reloaded.metadata.updated_at >= updated_at);
+        assert!(reloaded.metadata.updated_at.is_some());
+    }
+
+    #[test]
+    fn the_menu_overlay_height_is_transient() {
+        let opened = menu_overlay_height(COLLAPSED_NOTE_HEIGHT, true);
+        assert!(opened > COLLAPSED_NOTE_HEIGHT);
+        assert_eq!(
+            menu_overlay_height(COLLAPSED_NOTE_HEIGHT, false),
+            COLLAPSED_NOTE_HEIGHT
         );
     }
 }

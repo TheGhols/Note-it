@@ -573,6 +573,7 @@ fn prepare_new_note(
         height: config.default_height,
         is_open: true,
         monitor: monitor_name,
+        ..NoteWindowState::default()
     };
     let mode = if active_mode == LayerMode::Hidden {
         LayerMode::Overlay

@@ -11,8 +11,12 @@ pub struct NoteFrontMatter {
     pub color: String,
     #[serde(default = "default_font_size")]
     pub font_size: u32,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    /// Absent only for notes whose front matter predates or omits the field.
+    /// A missing timestamp is reported as unknown, never replaced by a guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 fn default_version() -> u32 {
@@ -48,8 +52,8 @@ impl NoteDocument {
                 id,
                 color: "yellow".to_string(),
                 font_size: 15,
-                created_at: now,
-                updated_at: now,
+                created_at: Some(now),
+                updated_at: Some(now),
             },
             content: String::new(),
         }
@@ -64,11 +68,18 @@ impl NoteDocument {
                 id,
                 color: "yellow".to_string(),
                 font_size: 15,
-                created_at: now,
-                updated_at: now,
+                created_at: Some(now),
+                updated_at: Some(now),
             },
             content: String::new(),
         }
+    }
+
+    /// Records a content edit. Appearance-only metadata (paper color, font
+    /// size) deliberately does not go through here: `updated_at` tracks the
+    /// last change to the note's text, not to how it is displayed.
+    pub fn touch_content_modified(&mut self) {
+        self.metadata.updated_at = Some(Utc::now());
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
@@ -130,6 +141,51 @@ mod tests {
         assert_eq!(parsed.metadata.color, "yellow");
         assert_eq!(parsed.metadata.font_size, 15);
         assert_eq!(parsed.content, doc.content);
+        assert_eq!(parsed.metadata.created_at, doc.metadata.created_at);
+        assert_eq!(parsed.metadata.updated_at, doc.metadata.updated_at);
+    }
+
+    #[test]
+    fn legacy_note_without_timestamps_still_loads() {
+        let legacy = concat!(
+            "---\n",
+            "note_it:\n",
+            "  version: 1\n",
+            "  id: 00000000-0000-0000-0000-000000000042\n",
+            "  color: blue\n",
+            "  font_size: 15\n",
+            "---\n\n",
+            "# Nota antiga\n",
+        );
+
+        let parsed = NoteDocument::parse(legacy).expect("legacy note must keep opening");
+        assert_eq!(
+            parsed.metadata.id,
+            Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap()
+        );
+        assert_eq!(parsed.metadata.color, "blue");
+        // No invented dates: unknown stays unknown.
+        assert_eq!(parsed.metadata.created_at, None);
+        assert_eq!(parsed.metadata.updated_at, None);
+
+        // Re-serializing must not fabricate a creation date either.
+        let serialized = parsed.serialize().expect("serialize legacy note");
+        assert!(!serialized.contains("created_at"));
+        assert!(!serialized.contains("updated_at"));
+    }
+
+    #[test]
+    fn content_edits_move_updated_at_but_never_created_at() {
+        let mut doc = NoteDocument::new_empty();
+        let created_at = doc.metadata.created_at;
+        let original_updated_at = doc.metadata.updated_at;
+
+        doc.content = "conteúdo novo".to_string();
+        doc.touch_content_modified();
+
+        assert_eq!(doc.metadata.created_at, created_at);
+        assert!(doc.metadata.updated_at >= original_updated_at);
+        assert!(doc.metadata.updated_at.is_some());
     }
 
     #[test]

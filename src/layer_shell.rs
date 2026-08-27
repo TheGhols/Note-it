@@ -5,8 +5,34 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 pub const MIN_NOTE_WIDTH: i32 = 220;
 pub const MIN_NOTE_HEIGHT: i32 = 160;
+/// Height of a collapsed note: the header bar plus the surrounding border.
+pub const COLLAPSED_NOTE_HEIGHT: i32 = 30;
+/// Extra room lent to a collapsed note while its settings popover is open, so
+/// the menu is not clipped by a surface that is only a header bar tall. This
+/// height is presentation only and is never written to the persisted geometry.
+pub const MENU_OVERLAY_EXTRA_HEIGHT: i32 = 120;
 pub const DEFAULT_MONITOR_WIDTH: i32 = 1920;
 pub const DEFAULT_MONITOR_HEIGHT: i32 = 1080;
+
+/// Position, size and collapse state of a note surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub collapsed: bool,
+}
+
+/// Minimum window height allowed for a note in the given collapse state.
+/// A collapsed note only needs to fit its header bar.
+pub fn min_note_height(collapsed: bool) -> i32 {
+    if collapsed {
+        COLLAPSED_NOTE_HEIGHT
+    } else {
+        MIN_NOTE_HEIGHT
+    }
+}
 
 /// Clamps note geometry against a monitor rectangle to ensure the note is
 /// accessible, visible on-screen, and within valid size bounds.
@@ -18,11 +44,33 @@ pub fn clamp_geometry(
     monitor_width: i32,
     monitor_height: i32,
 ) -> (i32, i32, i32, i32) {
+    clamp_geometry_with_min_height(
+        x,
+        y,
+        width,
+        height,
+        monitor_width,
+        monitor_height,
+        MIN_NOTE_HEIGHT,
+    )
+}
+
+/// Same clamping rules as [`clamp_geometry`], but with an explicit minimum
+/// height so a collapsed note can shrink down to its header bar.
+pub fn clamp_geometry_with_min_height(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    monitor_width: i32,
+    monitor_height: i32,
+    min_height: i32,
+) -> (i32, i32, i32, i32) {
     let mon_w = monitor_width.max(MIN_NOTE_WIDTH);
-    let mon_h = monitor_height.max(MIN_NOTE_HEIGHT);
+    let mon_h = monitor_height.max(min_height);
 
     let clamped_w = width.clamp(MIN_NOTE_WIDTH, mon_w);
-    let clamped_h = height.clamp(MIN_NOTE_HEIGHT, mon_h);
+    let clamped_h = height.clamp(min_height, mon_h);
 
     // Keep at least 50px horizontally and 30px vertically visible on screen
     let max_x = (mon_w - 50).max(0);
@@ -120,10 +168,7 @@ pub fn find_monitor_by_connector(
 pub fn setup_layer_shell_window(
     window: &gtk4::Window,
     mode: LayerMode,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    geometry: WindowGeometry,
     monitor: Option<&gdk::Monitor>,
 ) {
     if !window.is_layer_window() {
@@ -143,14 +188,15 @@ pub fn setup_layer_shell_window(
     window.set_anchor(Edge::Bottom, false);
     window.set_anchor(Edge::Right, false);
 
-    let w = width.max(MIN_NOTE_WIDTH);
-    let h = height.max(MIN_NOTE_HEIGHT);
+    let min_h = min_note_height(geometry.collapsed);
+    let w = geometry.width.max(MIN_NOTE_WIDTH);
+    let h = geometry.height.max(min_h);
 
-    window.set_margin(Edge::Left, x.max(0));
-    window.set_margin(Edge::Top, y.max(0));
+    window.set_margin(Edge::Left, geometry.x.max(0));
+    window.set_margin(Edge::Top, geometry.y.max(0));
 
     window.set_default_size(w, h);
-    window.set_size_request(MIN_NOTE_WIDTH, MIN_NOTE_HEIGHT);
+    window.set_size_request(MIN_NOTE_WIDTH, min_h);
 
     apply_layer_mode(window, mode);
 }
@@ -187,9 +233,11 @@ pub fn update_window_position(window: &gtk4::Window, x: i32, y: i32) {
     }
 }
 
-pub fn update_window_size(window: &gtk4::Window, width: i32, height: i32) {
+pub fn update_window_size(window: &gtk4::Window, width: i32, height: i32, collapsed: bool) {
+    let min_h = min_note_height(collapsed);
     let w = width.max(MIN_NOTE_WIDTH);
-    let h = height.max(MIN_NOTE_HEIGHT);
+    let h = height.max(min_h);
+    window.set_size_request(MIN_NOTE_WIDTH, min_h);
     window.set_default_size(w, h);
     window.queue_resize();
 }
@@ -233,6 +281,33 @@ mod tests {
         let (x_large, y_large) = calculate_cascade_position(1000, 1920, 1080, 360, 300);
         assert!((100..1920).contains(&x_large));
         assert!((100..1080).contains(&y_large));
+    }
+
+    #[test]
+    fn collapsed_geometry_may_shrink_to_the_header_bar() {
+        let (x, y, w, h) = clamp_geometry_with_min_height(
+            300,
+            200,
+            400,
+            COLLAPSED_NOTE_HEIGHT,
+            1920,
+            1080,
+            min_note_height(true),
+        );
+        assert_eq!((x, y, w), (300, 200, 400));
+        assert_eq!(h, COLLAPSED_NOTE_HEIGHT);
+
+        // The same geometry is rejected while the note is expanded.
+        let (_, _, _, expanded_h) = clamp_geometry_with_min_height(
+            300,
+            200,
+            400,
+            COLLAPSED_NOTE_HEIGHT,
+            1920,
+            1080,
+            min_note_height(false),
+        );
+        assert_eq!(expanded_h, MIN_NOTE_HEIGHT);
     }
 
     #[test]

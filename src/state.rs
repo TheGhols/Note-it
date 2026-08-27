@@ -28,6 +28,15 @@ pub struct NoteWindowState {
     pub is_open: bool,
     #[serde(default)]
     pub monitor: Option<String>,
+    /// Whether the note is currently reduced to its header bar.
+    #[serde(default)]
+    pub collapsed: bool,
+    /// Geometry to restore when the note is expanded again. Only meaningful
+    /// while `collapsed` is true; `None` means no custom size was recorded.
+    #[serde(default)]
+    pub expanded_width: Option<i32>,
+    #[serde(default)]
+    pub expanded_height: Option<i32>,
 }
 
 fn default_x() -> i32 {
@@ -59,7 +68,39 @@ impl Default for NoteWindowState {
             height: 300,
             is_open: true,
             monitor: None,
+            collapsed: false,
+            expanded_width: None,
+            expanded_height: None,
         }
+    }
+}
+
+impl NoteWindowState {
+    /// Collapses the note down to `collapsed_height`, or expands it back to the
+    /// geometry recorded when it was collapsed.
+    ///
+    /// Position is never touched, so a note dragged while collapsed expands
+    /// exactly where the user left it. Returns `true` when the state changed.
+    pub fn apply_collapsed(&mut self, collapsed: bool, collapsed_height: i32) -> bool {
+        if collapsed == self.collapsed {
+            return false;
+        }
+
+        if collapsed {
+            self.expanded_width = Some(self.width);
+            self.expanded_height = Some(self.height);
+            self.height = collapsed_height;
+        } else {
+            if let Some(width) = self.expanded_width.take() {
+                self.width = width;
+            }
+            // A collapsed note carries the header height, never a usable
+            // expanded height, so fall back to the default instead of it.
+            self.height = self.expanded_height.take().unwrap_or_else(default_height);
+        }
+
+        self.collapsed = collapsed;
+        true
     }
 }
 
@@ -136,6 +177,7 @@ mod tests {
                 height: 300,
                 is_open: true,
                 monitor: Some("DP-1".to_string()),
+                ..NoteWindowState::default()
             },
         );
 
@@ -167,6 +209,9 @@ mod tests {
         assert_eq!(win.height, 300);
         assert!(win.is_open);
         assert_eq!(win.monitor, None);
+        assert!(!win.collapsed);
+        assert_eq!(win.expanded_width, None);
+        assert_eq!(win.expanded_height, None);
     }
 
     #[test]
@@ -184,6 +229,7 @@ mod tests {
                 height: 300,
                 is_open: true,
                 monitor: None,
+                ..NoteWindowState::default()
             },
         );
         state.notes.insert(
@@ -195,6 +241,7 @@ mod tests {
                 height: 350,
                 is_open: false,
                 monitor: None,
+                ..NoteWindowState::default()
             },
         );
 
@@ -220,6 +267,7 @@ mod tests {
                 height: 320,
                 is_open: true,
                 monitor: Some("HDMI-A-1".to_string()),
+                ..NoteWindowState::default()
             },
         );
 
@@ -235,5 +283,97 @@ mod tests {
             state.notes.get(&id).unwrap().monitor.as_deref(),
             Some("HDMI-A-1")
         );
+    }
+
+    #[test]
+    fn collapsing_preserves_the_expanded_geometry_and_position() {
+        let mut note = NoteWindowState {
+            x: 640,
+            y: 210,
+            width: 508,
+            height: 552,
+            ..NoteWindowState::default()
+        };
+
+        assert!(note.apply_collapsed(true, 30));
+        assert!(note.collapsed);
+        assert_eq!(note.height, 30);
+        assert_eq!(note.width, 508);
+        assert_eq!(note.expanded_width, Some(508));
+        assert_eq!(note.expanded_height, Some(552));
+
+        // Dragging the collapsed bar only moves it.
+        note.x = 120;
+        note.y = 880;
+
+        assert!(note.apply_collapsed(false, 30));
+        assert!(!note.collapsed);
+        assert_eq!((note.width, note.height), (508, 552));
+        assert_eq!((note.x, note.y), (120, 880));
+        assert_eq!(note.expanded_width, None);
+        assert_eq!(note.expanded_height, None);
+    }
+
+    #[test]
+    fn repeated_collapse_requests_do_not_overwrite_the_expanded_geometry() {
+        let mut note = NoteWindowState {
+            width: 420,
+            height: 480,
+            ..NoteWindowState::default()
+        };
+
+        assert!(note.apply_collapsed(true, 30));
+        assert!(!note.apply_collapsed(true, 30));
+        assert_eq!(note.expanded_height, Some(480));
+        assert_eq!(note.height, 30);
+
+        assert!(note.apply_collapsed(false, 30));
+        assert_eq!(note.height, 480);
+        assert!(!note.apply_collapsed(false, 30));
+        assert_eq!(note.height, 480);
+    }
+
+    #[test]
+    fn expanding_without_a_recorded_height_falls_back_to_the_default() {
+        // A hand-edited state file can claim `collapsed` without the companion
+        // geometry; expanding must never restore the header-bar height.
+        let mut note = NoteWindowState {
+            height: 30,
+            collapsed: true,
+            expanded_width: None,
+            expanded_height: None,
+            ..NoteWindowState::default()
+        };
+
+        assert!(note.apply_collapsed(false, 30));
+        assert_eq!(note.height, default_height());
+        assert_eq!(note.width, 360);
+    }
+
+    #[test]
+    fn collapsed_state_survives_a_save_and_load_round_trip() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp.path().join("state.json");
+        let note_id = Uuid::new_v4();
+
+        let mut state = AppState::default();
+        let mut note = NoteWindowState {
+            x: 300,
+            y: 400,
+            width: 480,
+            height: 620,
+            ..NoteWindowState::default()
+        };
+        note.apply_collapsed(true, 30);
+        state.notes.insert(note_id, note);
+        state.save_to_file(&state_path).expect("save state");
+
+        let reloaded = AppState::load_from_file(&state_path);
+        let restored = reloaded.notes.get(&note_id).expect("note survives restart");
+        assert!(restored.collapsed);
+        assert_eq!(restored.height, 30);
+        assert_eq!(restored.expanded_height, Some(620));
+        assert_eq!(restored.expanded_width, Some(480));
+        assert_eq!((restored.x, restored.y), (300, 400));
     }
 }
