@@ -37,6 +37,11 @@ function mountMenu() {
     onZoomOut: vi.fn(),
     onResetZoom: vi.fn(),
     onSelectLayerMode: vi.fn(),
+    onToggleCodeBlock: vi.fn(),
+    onSelectCodeLanguage: vi.fn(),
+    onToggleBlockquote: vi.fn(),
+    onSelectCallout: vi.fn(),
+    onInsertComment: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };
@@ -256,10 +261,14 @@ describe('NoteMenu', () => {
     active = menu;
     click(trigger);
 
+    const rootPanel = menu.element.querySelector<HTMLElement>(
+      '.note-menu-panel:not([class*=" "])',
+    );
     const panels = Array.from(
-      menu.element.querySelectorAll<HTMLElement>('.note-menu-submenu'),
+      rootPanel!.querySelectorAll<HTMLElement>('.note-menu-submenu'),
     ).map((item) => item.dataset.panel);
-    // The paper entries sit together, and the theme sits with the other
+    // The paper entries sit together, the note's own blocks sit after the
+    // inline formatting they belong beside, and the theme sits with the other
     // application-wide switch rather than among the note's own settings.
     expect(panels).toEqual([
       'paper',
@@ -268,6 +277,7 @@ describe('NoteMenu', () => {
       'textSize',
       'textColor',
       'highlight',
+      'blocks',
       'zoom',
       'theme',
       'layer',

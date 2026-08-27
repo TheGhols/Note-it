@@ -258,13 +258,23 @@ describe('task completion timestamps', () => {
     }
   });
 
-  it('keeps only the Note-it task comment through sanitization', () => {
+  it('carries the task comment through sanitization untouched', () => {
     const kept = '- [x] ok <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->';
     expect(sanitizeMarkdown(kept)).toBe(kept);
 
-    // Every other comment is still dropped.
-    expect(sanitizeMarkdown('texto <!-- rastreador -->')).toBe('texto ');
-    expect(sanitizeMarkdown('a <!-- note-it:completed_at=hoje --> b')).toBe('a  b');
+    // Since Phase 3.5 every comment survives sanitization, not only this one.
+    // The task metadata is still the only comment the task itself absorbs:
+    // any other stays in the note as the comment it is.
+    expect(sanitizeMarkdown('texto <!-- rastreador -->')).toBe('texto <!-- rastreador -->');
+    const malformed = 'a <!-- note-it:completed_at=hoje --> b';
+    expect(sanitizeMarkdown(malformed)).toBe(malformed);
+  });
+
+  it('never lets a malformed completion date reach a task', () => {
+    const { note } = track(mount());
+    note.setMarkdown('- [x] ok <!-- note-it:completed_at=hoje -->');
+    // The date is rejected, and the comment is not silently adopted as one.
+    expect(note.getRawEditor().getHTML()).not.toContain('data-completed-at');
   });
 
   it('shows a completed task struck through with its date', () => {

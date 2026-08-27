@@ -100,7 +100,12 @@ describe('HTML Sanitizer', () => {
     expect(sanitizeMarkdown('<iframe src="https://evil.com"></iframe>')).toBe('');
     expect(sanitizeMarkdown('<style>body { display: none; }</style>')).toBe('');
     expect(sanitizeMarkdown('<div onclick="alert(1)">hello</div>')).toBe('hello');
-    expect(sanitizeMarkdown('<!-- comment -->text')).toBe('text');
+    // A comment is inert data, and since Phase 3.5 it is content the note
+    // keeps: the editor shows it as a labelled block and writes it back.
+    expect(sanitizeMarkdown('<!-- comment -->text')).toBe('<!-- comment -->text');
+    // An opening that never closes is not a comment. It is escaped rather
+    // than dropped, so nothing after it is lost.
+    expect(sanitizeMarkdown('<!-- sem fim\ntexto')).toBe('&lt;!-- sem fim\ntexto');
   });
 
   it('allows canonical autolink schemes (https, http, mailto, and email autolink)', () => {

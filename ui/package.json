@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "@tiptap/core": "3.30.5",
+    "@tiptap/extension-blockquote": "3.30.5",
+    "@tiptap/extension-code-block": "3.30.5",
+    "@tiptap/extension-code-block-lowlight": "3.30.5",
     "@tiptap/extension-color": "3.30.5",
     "@tiptap/extension-highlight": "3.30.5",
     "@tiptap/extension-placeholder": "3.30.5",
@@ -21,7 +24,9 @@
     "@tiptap/extension-underline": "3.30.5",
     "@tiptap/markdown": "3.30.5",
     "@tiptap/pm": "3.30.5",
-    "@tiptap/starter-kit": "3.30.5"
+    "@tiptap/starter-kit": "3.30.5",
+    "highlight.js": "11.12.0",
+    "lowlight": "3.3.0"
   },
   "devDependencies": {
     "happy-dom": "17.6.3",

@@ -3,7 +3,6 @@
  * Normal Markdown is kept as Markdown; only HTML fragments are inspected.
  */
 
-import { isCompletedAtComment } from './taskMeta.ts';
 import { normalizeTextSize } from '../editor/textSize.ts';
 
 export const HEX_COLOR_REGEX = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
@@ -173,18 +172,21 @@ export function sanitizeMarkdown(markdown: string): string {
 
     // 3. HTML comments, dangerous tags, autolinks, and custom tags outside code
     if (char === '<') {
-      // 3a. HTML Comment. Note-it's own task metadata is the single form kept;
-      // every other comment is still dropped.
+      // 3a. HTML comment. A comment is inert data, never executable markup,
+      // and since Phase 3.5 it is content the note keeps: the editor shows it
+      // as a labelled block and writes it back unchanged. Dropping it here
+      // would delete part of the file on every save.
       if (markdown.startsWith('<!--', i)) {
         const commentEnd = markdown.indexOf('-->', i + 4);
         if (commentEnd !== -1) {
-          const rawComment = markdown.slice(i, commentEnd + 3);
-          if (isCompletedAtComment(rawComment)) {
-            output += rawComment;
-          }
+          output += markdown.slice(i, commentEnd + 3);
           i = commentEnd + 3;
         } else {
-          i = len;
+          // Unterminated: there is no comment here, only an opening that never
+          // closes. It is escaped rather than dropped, so the rest of the note
+          // survives as the text it always was.
+          output += '&lt;!--';
+          i += 4;
         }
         continue;
       }

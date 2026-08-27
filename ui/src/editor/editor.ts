@@ -1,5 +1,6 @@
 import { Editor } from '@tiptap/core';
 import { editorExtensions } from './extensions.ts';
+import { CalloutType, calloutType } from './callout.ts';
 import { sanitizeHtml, sanitizeMarkdown } from '../markdown/sanitizer.ts';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
 import {
@@ -154,6 +155,76 @@ export class NoteEditor {
   public currentHighlight(): string | null {
     const color = this.editor.getAttributes('highlight').color;
     return isValidHexColor(color) ? color : null;
+  }
+
+  /**
+   * The block the cursor is in, as far as the menu needs to know it.
+   *
+   * Read on every selection change, so the menu can show what the cursor sits
+   * in rather than offering the same rows whatever is under it.
+   */
+  public currentBlock(): {
+    codeBlock: boolean;
+    codeLanguage: string | null;
+    blockquote: boolean;
+    callout: CalloutType | null;
+    comment: boolean;
+  } {
+    const language = this.editor.getAttributes('codeBlock').language;
+    return {
+      codeBlock: this.editor.isActive('codeBlock'),
+      codeLanguage: typeof language === 'string' && language !== '' ? language : null,
+      blockquote: this.editor.isActive('blockquote'),
+      callout: calloutType(this.editor.getAttributes('blockquote').callout),
+      comment: this.editor.isActive('noteItComment'),
+    };
+  }
+
+  /** Turns the block under the cursor into a code block, or back out of one. */
+  public toggleCodeBlock(): void {
+    this.editor.chain().focus().toggleCodeBlock().run();
+  }
+
+  /**
+   * Sets the fence's language, or clears it.
+   *
+   * Only ever called with an identifier from the menu's own list. A language
+   * a note already carries is never rewritten by this — it is changed only
+   * when the reader picks a different one.
+   */
+  public setCodeLanguage(language: string | null): void {
+    if (!this.editor.isActive('codeBlock')) return;
+    this.editor
+      .chain()
+      .focus()
+      .updateAttributes('codeBlock', { language: language ?? null })
+      .run();
+  }
+
+  /** Quotes the block under the cursor, or lifts it back out. */
+  public toggleBlockquote(): void {
+    this.editor.chain().focus().toggleBlockquote().run();
+  }
+
+  /**
+   * Gives the quote a kind, or takes it away.
+   *
+   * A callout is a blockquote carrying an attribute, so choosing a kind for
+   * ordinary text quotes it first, and clearing the kind leaves the quote
+   * behind rather than deleting what it holds.
+   */
+  public setCallout(type: CalloutType | null): void {
+    const chain = this.editor.chain().focus();
+    if (!this.editor.isActive('blockquote')) {
+      if (type === null) return;
+      chain.setBlockquote();
+    }
+    chain.updateAttributes('blockquote', { callout: type }).run();
+  }
+
+  /** Inserts an empty comment block and puts the cursor in it. */
+  public insertComment(): void {
+    this.editor.chain().focus().insertContent({ type: 'noteItComment' }).run();
   }
 
   public destroy(): void {

@@ -48,6 +48,11 @@ function buildNote() {
     onZoomOut: vi.fn(),
     onResetZoom: vi.fn(),
     onSelectLayerMode: vi.fn(),
+    onToggleCodeBlock: vi.fn(),
+    onSelectCodeLanguage: vi.fn(),
+    onToggleBlockquote: vi.fn(),
+    onSelectCallout: vi.fn(),
+    onInsertComment: vi.fn(),
   };
   const menu = new NoteMenu({ trigger: btnMenu, mount: left, colors: COLORS, handlers });
 

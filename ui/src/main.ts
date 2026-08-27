@@ -130,7 +130,7 @@ function setLayerMode(mode: NoteLayerMode): void {
   noteMenu?.setLayerMode(mode);
 }
 
-/** Mirrors the formatting under the cursor into the menu. */
+/** Mirrors the formatting and the block under the cursor into the menu. */
 function syncInlineFormatting(): void {
   if (!noteEditor || !noteMenu) return;
   noteMenu.setInlineFormatting({
@@ -139,6 +139,7 @@ function syncInlineFormatting(): void {
     textColor: noteEditor.currentTextColor(),
     highlight: noteEditor.currentHighlight(),
   });
+  noteMenu.setBlockState(noteEditor.currentBlock());
 }
 
 function applyTextSize(size: TextSize | null): void {
@@ -319,6 +320,26 @@ function initUI(): void {
           if (mode !== currentLayerMode) {
             bridge.sendMessage({ type: 'toggle_layer_mode' });
           }
+        },
+        onToggleCodeBlock: () => {
+          noteEditor?.toggleCodeBlock();
+          syncInlineFormatting();
+        },
+        onSelectCodeLanguage: (language) => {
+          noteEditor?.setCodeLanguage(language);
+          syncInlineFormatting();
+        },
+        onToggleBlockquote: () => {
+          noteEditor?.toggleBlockquote();
+          syncInlineFormatting();
+        },
+        onSelectCallout: (type) => {
+          noteEditor?.setCallout(type);
+          syncInlineFormatting();
+        },
+        onInsertComment: () => {
+          noteEditor?.insertComment();
+          syncInlineFormatting();
         },
       },
     });

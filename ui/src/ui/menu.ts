@@ -1,4 +1,6 @@
 import { PaperColor, PaperIntensity, PaperType, ThemePreference } from '../bridge/types.ts';
+import { CALLOUT_TYPES, CalloutType } from '../editor/callout.ts';
+import { CODE_LANGUAGES, codeLanguageLabel } from '../editor/codeBlock.ts';
 import { TEXT_SIZES, TextSize } from '../editor/textSize.ts';
 import { HIGHLIGHT_COLORS, PaletteEntry, TEXT_COLORS } from './palettes.ts';
 import {
@@ -26,6 +28,11 @@ export interface NoteMenuHandlers {
   onZoomOut(): void;
   onResetZoom(): void;
   onSelectLayerMode(mode: LayerMode): void;
+  onToggleCodeBlock(): void;
+  onSelectCodeLanguage(language: string | null): void;
+  onToggleBlockquote(): void;
+  onSelectCallout(type: CalloutType | null): void;
+  onInsertComment(): void;
   onOpen?(): void;
   onClose?(): void;
 }
@@ -50,7 +57,10 @@ type MenuPanel =
   | 'highlight'
   | 'zoom'
   | 'theme'
-  | 'layer';
+  | 'layer'
+  | 'blocks'
+  | 'codeLanguage'
+  | 'callout';
 
 export interface NoteMenuOptions {
   /** Button that toggles the menu; it stays outside the drag region. */
@@ -66,6 +76,15 @@ export interface NoteMenuOptions {
 interface PanelEntry {
   element: HTMLElement;
   refresh?: () => void;
+}
+
+/** What the cursor is sitting in, as far as the Blocos section needs it. */
+export interface BlockState {
+  codeBlock: boolean;
+  codeLanguage: string | null;
+  blockquote: boolean;
+  callout: CalloutType | null;
+  comment: boolean;
 }
 
 /**
@@ -85,6 +104,11 @@ export class NoteMenu {
   private readonly zoomValue: HTMLElement;
   private readonly themeValue: HTMLElement;
   private readonly layerValue: HTMLElement;
+  private codeBlockItem!: HTMLButtonElement;
+  private codeLanguageItem!: HTMLButtonElement;
+  private codeLanguageValue!: HTMLElement;
+  private calloutValue!: HTMLElement;
+  private blockquoteItem!: HTMLButtonElement;
   private panel: MenuPanel = 'root';
   private open = false;
   private collapsed = false;
@@ -98,6 +122,13 @@ export class NoteMenu {
   private textSizeMixed = false;
   private currentTextColor: string | null = null;
   private currentHighlight: string | null = null;
+  private block: BlockState = {
+    codeBlock: false,
+    codeLanguage: null,
+    blockquote: false,
+    callout: null,
+    comment: false,
+  };
 
   public constructor(private readonly options: NoteMenuOptions) {
     this.doc = options.document ?? options.trigger.ownerDocument;
@@ -140,6 +171,8 @@ export class NoteMenu {
     this.themeValue.className = 'note-menu-value';
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
+    const blocksItem = this.createSubmenuItem('Blocos', 'blocks');
+
     const layerItem = this.createSubmenuItem('Camada', 'layer');
     this.layerValue = this.doc.createElement('span');
     this.layerValue.className = 'note-menu-value';
@@ -153,6 +186,11 @@ export class NoteMenu {
       this.options.handlers.onToggleCollapsed(next);
     });
 
+    // Built before the root panel is assembled: the Blocos rows are fields on
+    // the menu, because the section reflects the cursor and has to be able to
+    // update them without rebuilding anything.
+    const blocksPanel = this.buildBlocksPanel();
+
     rootPanel.append(
       paperItem,
       paperTypeItem,
@@ -160,6 +198,7 @@ export class NoteMenu {
       textSizeItem,
       textColorItem,
       highlightItem,
+      blocksItem,
       zoomItem,
       themeItem,
       layerItem,
@@ -215,6 +254,28 @@ export class NoteMenu {
       ),
     );
     this.panels.set('layer', this.buildLayerPanel());
+    this.panels.set('blocks', blocksPanel);
+    this.panels.set(
+      'codeLanguage',
+      this.buildChoicePanel(
+        'Linguagem',
+        'note-menu-code-language',
+        [{ id: '', label: 'Sem linguagem' }, ...CODE_LANGUAGES],
+        () => this.block.codeLanguage ?? '',
+        (language) => this.options.handlers.onSelectCodeLanguage(language === '' ? null : language),
+      ),
+    );
+    this.panels.set(
+      'callout',
+      this.buildChoicePanel(
+        'Callout',
+        'note-menu-callout',
+        [{ id: '', label: 'Nenhum (citação)' }, ...CALLOUT_TYPES],
+        () => this.block.callout ?? '',
+        (type) =>
+          this.options.handlers.onSelectCallout(type === '' ? null : (type as CalloutType)),
+      ),
+    );
 
     for (const entry of this.panels.values()) {
       entry.element.hidden = true;
@@ -244,6 +305,7 @@ export class NoteMenu {
     this.setPaper(DEFAULT_PAPER_TYPE, DEFAULT_PAPER_INTENSITY);
     this.setTheme(DEFAULT_THEME);
     this.setCollapsed(false);
+    this.setBlockState(this.block);
   }
 
   public destroy(): void {
@@ -322,6 +384,76 @@ export class NoteMenu {
     this.panels.get('textSize')?.refresh?.();
     this.panels.get('textColor')?.refresh?.();
     this.panels.get('highlight')?.refresh?.();
+  }
+
+  /**
+   * Reflects the block under the cursor.
+   *
+   * The Blocos rows show what is there rather than a fixed list: the language
+   * row only means something inside a code block, and the callout row marks
+   * the kind the quote already has.
+   */
+  public setBlockState(state: BlockState): void {
+    this.block = state;
+    this.codeBlockItem.setAttribute('aria-checked', String(state.codeBlock));
+    this.blockquoteItem.setAttribute('aria-checked', String(state.blockquote));
+    this.codeLanguageItem.disabled = !state.codeBlock;
+    this.codeLanguageValue.textContent = state.codeBlock
+      ? codeLanguageLabel(state.codeLanguage)
+      : '—';
+    this.calloutValue.textContent = state.callout
+      ? CALLOUT_TYPES.find((entry) => entry.id === state.callout)!.label
+      : 'Nenhum';
+    this.panels.get('codeLanguage')?.refresh?.();
+    this.panels.get('callout')?.refresh?.();
+  }
+
+  private buildBlocksPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Blocos', 'note-menu-blocks');
+
+    this.codeBlockItem = this.createItem('Bloco de código', 'note-menu-item note-menu-option');
+    this.codeBlockItem.setAttribute('role', 'menuitemcheckbox');
+    this.codeBlockItem.setAttribute('aria-checked', 'false');
+    this.codeBlockItem.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onToggleCodeBlock();
+    });
+
+    this.codeLanguageItem = this.createSubmenuItem('Linguagem', 'codeLanguage');
+    this.codeLanguageValue = this.doc.createElement('span');
+    this.codeLanguageValue.className = 'note-menu-value';
+    this.codeLanguageItem.insertBefore(
+      this.codeLanguageValue,
+      this.codeLanguageItem.lastElementChild,
+    );
+
+    const calloutItem = this.createSubmenuItem('Callout', 'callout');
+    this.calloutValue = this.doc.createElement('span');
+    this.calloutValue.className = 'note-menu-value';
+    calloutItem.insertBefore(this.calloutValue, calloutItem.lastElementChild);
+
+    this.blockquoteItem = this.createItem('Citação', 'note-menu-item note-menu-option');
+    this.blockquoteItem.setAttribute('role', 'menuitemcheckbox');
+    this.blockquoteItem.setAttribute('aria-checked', 'false');
+    this.blockquoteItem.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onToggleBlockquote();
+    });
+
+    const commentItem = this.createItem('Comentário', 'note-menu-item');
+    commentItem.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onInsertComment();
+    });
+
+    body.append(
+      this.codeBlockItem,
+      this.codeLanguageItem,
+      calloutItem,
+      this.blockquoteItem,
+      commentItem,
+    );
+    return { element: panel };
   }
 
   public toggle(): void {

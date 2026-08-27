@@ -73,6 +73,21 @@ export function numberIn(selector: string, property: string): number {
   return Number.parseFloat(tokenIn(selector, property));
 }
 
+/**
+ * An ordinary declaration of the rule for `selector`.
+ *
+ * [`tokenIn`] reads custom properties; this reads the properties they are
+ * spent on, so a test can check what a rule actually paints and not only what
+ * the palette holds.
+ */
+export function declarationIn(selector: string, property: string): string {
+  const { body } = ruleFor(selector);
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'i');
+  const match = pattern.exec(body);
+  if (!match) throw new Error(`${selector} does not set ${property}`);
+  return match[1].trim();
+}
+
 /** Every declaration of a custom property whose name starts with `prefix`. */
 export function declarationsOf(prefix: string): Array<{ name: string; value: string }> {
   const declarations: Array<{ name: string; value: string }> = [];

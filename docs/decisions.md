@@ -329,3 +329,54 @@
   every real build, and it drives the real `save_note_atomic` and the real `save_content`, so what
   the tests check is the production path and not a reimplementation of it. The pre-commit failures
   keep their real `ENOTDIR` injection, which reaches the syscalls themselves.
+
+## ADR-021: Four Blocks, Three Shapes, No Block Framework
+- **Decision:** the code block, the callout, the blockquote and the comment were each built as the
+  smallest thing that could carry them, and no shared block architecture was extracted.
+  - a **code block** is upstream's `CodeBlock` with `lowlight` on top and one method overridden;
+  - a **callout** is the existing `Blockquote` with one attribute;
+  - a **comment** is a new node, because nothing already in the schema is a block of literal text
+    that is not part of the document's prose.
+- **Rationale:** the roadmap allowed a reusable block architecture "where the shape of these
+  features justifies one", and it does not. They share a menu section and nothing else: different
+  content models (`text*` versus `block+`), different Markdown syntax (a fence, a quote prefix, an
+  HTML comment), different parse rules, different escaping. A common base would have been an empty
+  interface with four unrelated implementations behind it, which is a layer to read through rather
+  than a layer that carries weight.
+- **The callout is an attribute, not a node.** That one decision pays for most of the phase. A
+  callout inherits the blockquote's content model, so several paragraphs, lists and nested blocks
+  work without being designed for; it inherits the `>` prefixing, so serialization is the parent's
+  output with one line in front; it inherits the commands and input rules. And the failure mode is
+  free: an unrecognised `[!KIND]` produces no attribute, which *is* a plain blockquote with the
+  marker still in its text. A separate `callout` node would have needed all of that written twice
+  and a rule for what to do when the kind is unknown.
+- **Highlighting is decoration and only decoration.** `lowlight` paints ProseMirror decorations over
+  the same characters, so the file stays a plain fence. Sixteen grammars are imported by name rather
+  than the `highlight.js` bundle, which carries nearly two hundred: the whole phase costs about
+  30 kB gzipped.
+- **Never guess a language.** Upstream falls back to `highlightAuto` for a block with no language or
+  one it cannot resolve; both are replaced with a `highlightAuto` that returns nothing. A fence
+  written without a language is plain on purpose, and colouring an unknown one as whatever it most
+  resembles tells the reader something the note does not say.
+- **The language identifier is never rewritten.** Not normalised, not defaulted, not dropped. An
+  alias stays an alias and an unknown language keeps its spelling, because the note is the file and
+  the file said what it said. Aliases are resolved for highlighting and for the menu label only, and
+  the alias table is read from the grammars themselves rather than written by hand.
+- **Comments became content.** The sanitizer used to drop every comment except Note-it's own task
+  metadata, so a note holding one lost it on the first save. A comment is inert data, never
+  executable markup, and it is now kept. Two tests asserted the old behaviour and were replaced.
+  An unterminated `<!--` is escaped rather than swallowing the rest of the file, which is the same
+  rule the rest of the sanitizer follows: degrade to text, never delete.
+- **A comment is visible-but-not-content.** In a WYSIWYG editor a hidden comment is a comment nobody
+  can edit or remove, and a file holding something the window never shows loses things quietly. It
+  is drawn as a small labelled block instead, set apart from the prose, and serialized as
+  `<!-- ... -->`. A `-->` inside is written escaped, because the literal sequence would close the
+  comment early and spill the note out of it.
+- **No new surface for arbitrary HTML.** Every label is a constant on the element and every kind
+  comes from a five-value whitelist, so no note content reaches an attribute, a class or a style.
+  Code block content is text in a node declaring itself as code; comment content is text in a node
+  that takes no marks.
+- **One menu, one section.** The four live under **Blocos** in the popover that already exists,
+  built from the same panel and row helpers as every other section, and the rows reflect what the
+  cursor is in rather than offering a fixed list. No shortcuts were added: the useful chords are
+  taken, and typing the Markdown still works.

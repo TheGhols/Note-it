@@ -33,6 +33,34 @@
   --paper-pattern-line: 1px;
   --paper-pattern-dot: 1.1px;
 
+  /* Smart blocks. A code block, a callout and a comment all sit on the paper,
+     so they are tinted from it rather than given a surface of their own: one
+     low-alpha ink over whatever colour the note is. The syntax palette is
+     defined once here for the six pale papers and redefined once for the dark
+     one, the same way `--paper-*` is. Every colour clears 4.5:1 against the
+     tinted paper on every note, which `tests/smart_blocks_contrast.test.ts`
+     measures rather than assumes. */
+  --block-ink: 15, 23, 42;
+  --block-bg: rgba(var(--block-ink), 0.055);
+  --block-border: rgba(var(--block-ink), 0.14);
+
+  --code-comment: #4E5765;
+  --code-keyword: #7C22A8;
+  --code-string: #0B6B45;
+  --code-number: #9A3412;
+  --code-function: #1D4ED8;
+  --code-attribute: #155E75;
+  --code-punctuation: #334155;
+
+  /* Callout accents. Each is the note's own text colour shifted towards its
+     meaning rather than a saturated alert colour, so a callout reads as part
+     of the note on yellow paper and on black. */
+  --callout-note: #1D4ED8;
+  --callout-tip: #0B6B45;
+  --callout-important: #7C22A8;
+  --callout-warning: #9A3412;
+  --callout-caution: #A21D3B;
+
   /* Default Paper: Soft Yellow */
   --paper-bg: #FEF9C3;
   --paper-text: #1E293B;
@@ -103,6 +131,26 @@ body[data-color="black"] {
      perceived strength they have everywhere else. */
   --paper-pattern-ink: 244, 244, 245;
   --paper-pattern-gain: 0.72;
+
+  /* The block tint inverts with the paper, and the syntax palette with it:
+     the dark colours above would disappear into a near-black surface. */
+  --block-ink: 255, 255, 255;
+  --block-bg: rgba(var(--block-ink), 0.06);
+  --block-border: rgba(var(--block-ink), 0.16);
+
+  --code-comment: #9CA3AF;
+  --code-keyword: #D8B4FE;
+  --code-string: #86EFAC;
+  --code-number: #FDBA74;
+  --code-function: #93C5FD;
+  --code-attribute: #67E8F9;
+  --code-punctuation: #CBD5E1;
+
+  --callout-note: #93C5FD;
+  --callout-tip: #86EFAC;
+  --callout-important: #D8B4FE;
+  --callout-warning: #FDBA74;
+  --callout-caution: #FDA4AF;
 }
 
 /* Interface theme. Only the chrome tokens are redefined, so a note's paper
@@ -722,13 +770,83 @@ body[data-collapsed="true"] .resize-handle {
   opacity: 0.65;
 }
 
+/* A quotation: indented, marked down the side, and left otherwise as the
+   note's own text. The italic and the flat opacity of the earlier rule made
+   several lines of quoted prose harder to read than the paragraph around it,
+   which is the opposite of what a quote is for. */
 .ProseMirror blockquote {
-  border-left: 3px solid var(--paper-muted);
-  padding-left: 0.75em;
-  margin-left: 0;
-  margin-bottom: 0.5em;
-  font-style: italic;
-  opacity: 0.85;
+  border-left: 3px solid var(--block-border);
+  padding: 0.1em 0 0.1em 0.9em;
+  margin: 0.6em 0;
+  color: var(--paper-text);
+}
+
+.ProseMirror blockquote > * + * {
+  margin-top: 0.5em;
+}
+
+/* A callout is the same quotation carrying a kind. It takes the kind's accent
+   on its rule and its label, and a whisper of it on the ground, so the five
+   are told apart without any of them shouting. */
+.ProseMirror blockquote[data-callout] {
+  --callout-accent: var(--paper-text);
+  border-left-width: 3px;
+  border-left-color: var(--callout-accent);
+  background-color: var(--block-bg);
+  border-radius: 0 6px 6px 0;
+  padding: 0.55em 0.75em 0.6em 0.9em;
+}
+
+.ProseMirror blockquote[data-callout="NOTE"] { --callout-accent: var(--callout-note); }
+.ProseMirror blockquote[data-callout="TIP"] { --callout-accent: var(--callout-tip); }
+.ProseMirror blockquote[data-callout="IMPORTANT"] { --callout-accent: var(--callout-important); }
+.ProseMirror blockquote[data-callout="WARNING"] { --callout-accent: var(--callout-warning); }
+.ProseMirror blockquote[data-callout="CAUTION"] { --callout-accent: var(--callout-caution); }
+
+/* The kind is drawn from the node attribute, so it never becomes editable
+   text inside the callout, and the value can only be one of the five. */
+.ProseMirror blockquote[data-callout-label]::before {
+  content: attr(data-callout-label);
+  display: block;
+  margin-bottom: 0.3em;
+  color: var(--callout-accent);
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* A comment is stored in the note but is not part of what the note says, so
+   it is set apart: dashed rather than solid, muted, and labelled. It stays
+   editable — a comment the window never showed would be a comment nobody
+   could remove. */
+.ProseMirror .note-comment {
+  position: relative;
+  margin: 0.6em 0;
+  padding: 1.5em 0.7em 0.5em;
+  border: 1px dashed var(--block-border);
+  border-radius: 6px;
+  background-color: var(--block-bg);
+  color: var(--paper-muted);
+  font-family: monospace;
+  font-size: 0.86em;
+  white-space: pre-wrap;
+}
+
+.ProseMirror .note-comment::before {
+  content: attr(data-note-it-comment-label);
+  position: absolute;
+  top: 0.35em;
+  left: 0.7em;
+  color: var(--paper-muted);
+  font-family: var(--note-font-family);
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  user-select: none;
 }
 
 /* The highlight mark paints its own foreground inline, because the extension
@@ -740,7 +858,7 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .ProseMirror code {
-  background-color: var(--selection-bg);
+  background-color: var(--block-bg);
   border-radius: 4px;
   padding: 1px 4px;
   font-family: monospace;
@@ -748,14 +866,93 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .ProseMirror pre {
-  background-color: var(--selection-bg);
+  background-color: var(--block-bg);
+  border: 1px solid var(--block-border);
   border-radius: 6px;
-  padding: 8px;
+  padding: 0.6em 0.75em;
   font-family: monospace;
   font-size: 0.88em;
+  line-height: 1.5;
   overflow-x: auto;
-  margin-bottom: 0.5em;
+  margin: 0.6em 0;
+  /* Code is written in lines and read in lines: indentation and blank lines
+     are preserved, and a long line scrolls rather than reflowing. */
+  white-space: pre;
+  tab-size: 4;
 }
+
+.ProseMirror pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  color: var(--paper-text);
+}
+
+/* Syntax highlighting is presentation and only presentation: these are
+   ProseMirror decorations over the same characters, and the note on disk is a
+   plain fence. `highlight.js` emits many classes; they are grouped onto the
+   seven tokens above rather than coloured one by one, which keeps the palette
+   small enough to be checked against every paper. */
+.ProseMirror pre .hljs-comment,
+.ProseMirror pre .hljs-quote {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.ProseMirror pre .hljs-keyword,
+.ProseMirror pre .hljs-selector-tag,
+.ProseMirror pre .hljs-literal,
+.ProseMirror pre .hljs-type,
+.ProseMirror pre .hljs-doctag,
+.ProseMirror pre .hljs-name {
+  color: var(--code-keyword);
+}
+
+.ProseMirror pre .hljs-string,
+.ProseMirror pre .hljs-regexp,
+.ProseMirror pre .hljs-addition,
+.ProseMirror pre .hljs-template-variable,
+.ProseMirror pre .hljs-selector-attr,
+.ProseMirror pre .hljs-selector-pseudo {
+  color: var(--code-string);
+}
+
+.ProseMirror pre .hljs-number,
+.ProseMirror pre .hljs-symbol,
+.ProseMirror pre .hljs-bullet,
+.ProseMirror pre .hljs-link,
+.ProseMirror pre .hljs-meta,
+.ProseMirror pre .hljs-deletion {
+  color: var(--code-number);
+}
+
+.ProseMirror pre .hljs-title,
+.ProseMirror pre .hljs-section,
+.ProseMirror pre .hljs-built_in,
+.ProseMirror pre .hljs-selector-id,
+.ProseMirror pre .hljs-selector-class,
+.ProseMirror pre .hljs-class {
+  color: var(--code-function);
+}
+
+.ProseMirror pre .hljs-attr,
+.ProseMirror pre .hljs-attribute,
+.ProseMirror pre .hljs-property,
+.ProseMirror pre .hljs-variable,
+.ProseMirror pre .hljs-params {
+  color: var(--code-attribute);
+}
+
+.ProseMirror pre .hljs-tag,
+.ProseMirror pre .hljs-punctuation,
+.ProseMirror pre .hljs-operator,
+.ProseMirror pre .hljs-subst {
+  color: var(--code-punctuation);
+}
+
+.ProseMirror pre .hljs-emphasis { font-style: italic; }
+.ProseMirror pre .hljs-strong { font-weight: 700; }
 
 .ProseMirror p.is-editor-empty:first-child::before {
   content: "Type your note here...";

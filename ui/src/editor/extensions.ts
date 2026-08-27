@@ -8,6 +8,9 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
 import { HIGHLIGHT_TEXT_COLOR } from '../ui/palettes.ts';
+import { NoteItBlockquote } from './callout.ts';
+import { NoteItCodeBlock } from './codeBlock.ts';
+import { NoteItComment } from './comment.ts';
 import { NoteItTaskItem } from './taskItem.ts';
 import { NoteItTypography } from './typography.ts';
 import { normalizeTextSize } from './textSize.ts';
@@ -249,7 +252,14 @@ export const editorExtensions = [
       depth: 100,
     },
     underline: false,
+    // Both are replaced below rather than configured: the code block gains
+    // highlighting, and the blockquote gains the callout marker.
+    blockquote: false,
+    codeBlock: false,
   }),
+  NoteItBlockquote,
+  NoteItCodeBlock,
+  NoteItComment,
   NoteItUnderline,
   NoteItHighlight.configure({
     multicolor: true,

@@ -116,13 +116,19 @@
       save whose sync failed is not guaranteed durable.
 - [x] Everything Phases 3.4R and 3.4R.1 established is unchanged.
 
-### Phase 3.5: Smart Blocks (Planned)
-- [ ] Code blocks with a language, preserved through the Markdown round trip.
-- [ ] Syntax highlighting inside those blocks.
-- [ ] Callouts / admonitions.
-- [ ] Blockquote handling worth the name, beyond the current plain rendering.
-- [ ] Comments that stay out of the rendered note.
-- [ ] A reusable block architecture, where the shape of these features justifies one.
+### Phase 3.5: Smart Blocks (Completed)
+- [x] Code blocks whose language survives the Markdown round trip exactly as written, including a
+      fence with no language and one nothing here can highlight.
+- [x] Syntax highlighting for sixteen grammars and their aliases, as editor decorations only, with
+      no guessing and nothing written into the file.
+- [x] Callouts in GitHub's alert syntax — NOTE, TIP, IMPORTANT, WARNING, CAUTION — holding several
+      paragraphs, lists and nested blocks, and degrading to a plain blockquote when the kind is not
+      recognised.
+- [x] Blockquotes as their own structure, presented properly and never promoted into callouts.
+- [x] Comments stored as `<!-- ... -->`, editable in the editor, and never part of the note's text.
+- [x] All four reachable from the existing note menu, under one **Blocos** section rather than a
+      second toolbar.
+- [x] No block architecture was extracted. The four have almost nothing in common — see ADR-021.
 
 ### Phase 3.6: Math Engine (Planned)
 - [ ] Contextual inline calculation, evaluated as the note is written.

@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Smart blocks, all four reachable from a **Blocos** section of the note's existing menu:
+  - **Code blocks** whose language survives the Markdown round trip exactly as written. A fence
+    with no language stays without one, an unknown language keeps its spelling and simply goes
+    unhighlighted, and an alias stays an alias. Syntax highlighting covers sixteen grammars —
+    plaintext, bash, javascript, typescript, json, html/xml, css, markdown, python, rust, c, cpp,
+    java, sql, yaml, toml — and the aliases each already answers to. It is drawn as editor
+    decorations, so the stored note is a plain fence with no markup in it, and it is never guessed
+    for a block whose language is missing or unrecognised.
+  - **Callouts** in GitHub's alert syntax, which Obsidian reads too: `NOTE`, `TIP`, `IMPORTANT`,
+    `WARNING` and `CAUTION`. A callout holds several paragraphs, lists and nested blocks, and a kind
+    that is not one of the five is left as the blockquote it already is, with its text intact.
+  - **Comments** stored as `<!-- ... -->`, shown as a small labelled block that can be read, edited
+    and removed, and never part of what the note says.
+- Fenced code blocks now close with a fence longer than the longest run of backticks inside them,
+  so a note containing a Markdown example is written back whole instead of being cut at the example.
 - Paper types per note: **Liso**, **Pautado**, **Pontilhado**, **Quadriculado pequeno** and
   **Quadriculado grande**, chosen from the settings menu and applied at once. Plain paper is the
   original look and draws nothing.
@@ -50,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- Blockquotes are presented as quotations rather than dimmed italics: indented, ruled down the side,
+  and set in the note's own text colour. Several lines of quoted prose used to be harder to read
+  than the paragraph around them.
+- HTML comments are no longer deleted by sanitization. A comment is inert data and is now content
+  the note keeps, so one written by hand — or by another editor — survives a save instead of
+  disappearing on the first one. An unterminated `<!--` is escaped rather than swallowing everything
+  after it.
 - Because an unchanged note is no longer rewritten, the note a summon brings back when everything
   is closed is the one last written in, rather than the one whose window was closed last.
 - The settings menu gained **Tipo de papel**, **Intensidade** and **Tema**, each showing its

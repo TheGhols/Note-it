@@ -112,6 +112,46 @@ The theme is the appearance of the **application**, not of a note.
   - Reopening a task clears the date; completing it again records a new one.
   - A task written elsewhere as `- [x]` loads as completed with no date invented for it.
 
+## Smart Blocks
+
+Four block kinds, all stored as ordinary Markdown and all reachable from the
+**Blocos** section of the note's own menu — no second toolbar was introduced.
+
+- **Bloco de código:** a fenced block whose language survives every round trip
+  untouched, including one nothing here can highlight. Sixteen grammars are
+  loaded: `plaintext`, `bash`, `javascript`, `typescript`, `json`, `html`/`xml`,
+  `css`, `markdown`, `python`, `rust`, `c`, `cpp`, `java`, `sql`, `yaml` and
+  `toml`, plus the aliases each already answers to (`js`, `ts`, `py`, `sh`,
+  `cpp`…). The language is chosen from **Blocos → Linguagem**, which shows the
+  current one and is offered only where it means something.
+- **Callout:** `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` and
+  `> [!CAUTION]` — GitHub's alert syntax, which Obsidian reads too. A callout is
+  a blockquote carrying a kind, so it holds several paragraphs, lists and nested
+  blocks without a content model of its own. An unrecognised kind is left as the
+  blockquote it already is, with its text untouched.
+- **Citação:** the plain blockquote, which stays independent of callouts and is
+  never promoted into one. Indented, ruled down the side, set in the note's own
+  text colour rather than dimmed and italicised.
+- **Comentário:** an `<!-- ... -->` kept in the file and shown as a small
+  labelled block. It is editable — a comment the window never showed would be one
+  nobody could remove — but it is not part of the note's text.
+
+Markdown typed by hand still works: `` ``` `` opens a code block and `> ` opens a
+quote, exactly as before.
+
+Highlighting is **presentation only**: editor decorations over the same
+characters, never markup in the file. It is not applied to a block with no
+language, and never guessed for one whose language is unknown — an unhighlighted
+block is the honest answer, not a colour scheme picked by resemblance. Typing
+outside a code block does not re-run it, so a note full of code stays as light
+to edit as any other.
+
+Every colour a smart block paints — seven syntax tokens and five callout accents
+— is defined once for the pale papers and once for the dark one, and each clears
+4.5:1 against the paper it is actually drawn on. The grounds are tinted from the
+paper rather than being surfaces of their own, so a note keeps its colour under
+every block.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
