@@ -11,13 +11,19 @@ export interface PaletteEntry {
   value: string | null;
 }
 
+/**
+ * Text colours, each dark enough to stay readable on every paper colour and on
+ * every highlight in the palette below. Orange, yellow and green were darkened
+ * for that reason: the lighter shades dropped under a readable contrast on the
+ * pale highlights, and on the yellow paper.
+ */
 export const TEXT_COLORS: readonly PaletteEntry[] = [
   { label: 'Padrão', value: null },
   { label: 'Cinza', value: '#64748B' },
   { label: 'Vermelho', value: '#DC2626' },
-  { label: 'Laranja', value: '#EA580C' },
-  { label: 'Amarelo', value: '#CA8A04' },
-  { label: 'Verde', value: '#16A34A' },
+  { label: 'Laranja', value: '#C2410C' },
+  { label: 'Amarelo', value: '#A16207' },
+  { label: 'Verde', value: '#15803D' },
   { label: 'Azul', value: '#2563EB' },
   { label: 'Roxo', value: '#7C3AED' },
   { label: 'Rosa', value: '#DB2777' },

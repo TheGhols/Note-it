@@ -2,7 +2,6 @@ use crate::layer_shell::{
     apply_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
     setup_layer_shell_window, update_window_position, update_window_size, WindowGeometry,
     COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
-    MENU_OVERLAY_EXTRA_HEIGHT,
 };
 use crate::model::NoteDocument;
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
@@ -75,6 +74,7 @@ pub struct NoteWindow {
     pub document: Rc<RefCell<NoteDocument>>,
     pub state: Rc<RefCell<NoteWindowState>>,
     pub storage: StorageManager,
+    monitor_size: (i32, i32),
     layer_mode: Rc<Cell<LayerMode>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
@@ -337,25 +337,6 @@ impl NoteWindow {
                         WebviewToHostMessage::ToggleLayerMode => {
                             on_toggle_layer_clone();
                         }
-                        WebviewToHostMessage::MenuOverlay {
-                            id: message_id,
-                            open,
-                        } => {
-                            if message_id != id {
-                                eprintln!("Menu overlay rejected a mismatched note identifier");
-                                return;
-                            }
-                            let st = state_clone.borrow();
-                            // An expanded note already has room for the popover,
-                            // and the persisted geometry is never touched here.
-                            if !st.collapsed {
-                                return;
-                            }
-                            let height = menu_overlay_height(st.height, open);
-                            if let Some(win) = window_weak.upgrade() {
-                                update_window_size(win.upcast_ref(), st.width, height, true);
-                            }
-                        }
                         WebviewToHostMessage::NewNoteRequested => {
                             on_new_note_clone();
                         }
@@ -485,10 +466,47 @@ impl NoteWindow {
             document: doc_rc,
             state: state_rc,
             storage: options.storage,
+            monitor_size: (mon_w, mon_h),
             layer_mode: layer_mode_cell,
             allow_close,
             pending_flushes,
         }
+    }
+
+    /// Collapses or expands the note from the host side.
+    ///
+    /// Goes through the same state transition, resize and persistence as a
+    /// request from the note's own menu; only the trigger differs. Returns the
+    /// new geometry when something actually changed.
+    pub fn set_collapsed(&self, collapsed: bool) -> Option<NoteWindowState> {
+        let snapshot = {
+            let mut state = self.state.borrow_mut();
+            let (monitor_width, monitor_height) = self.monitor_size;
+            if !apply_collapse_to_state(&mut state, collapsed, monitor_width, monitor_height) {
+                return None;
+            }
+            state.clone()
+        };
+
+        update_window_size(
+            self.window.upcast_ref(),
+            snapshot.width,
+            snapshot.height,
+            snapshot.collapsed,
+        );
+        // The page owns the collapsed presentation, so it has to hear about a
+        // change it did not start itself.
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SetCollapsed {
+                collapsed: snapshot.collapsed,
+            },
+        );
+        Some(snapshot)
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.state.borrow().collapsed
     }
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
@@ -531,17 +549,6 @@ impl NoteWindow {
     pub fn close_after_save(&self) {
         self.allow_close.set(true);
         self.window.close();
-    }
-}
-
-/// Presentation height of a collapsed note while its settings popover is
-/// open. The persisted `collapsed_height` is returned unchanged once the menu
-/// closes, so this never becomes part of the stored geometry.
-fn menu_overlay_height(collapsed_height: i32, menu_open: bool) -> i32 {
-    if menu_open {
-        collapsed_height + MENU_OVERLAY_EXTRA_HEIGHT
-    } else {
-        collapsed_height
     }
 }
 
@@ -642,8 +649,8 @@ fn file_uri_for_path(path: &Path) -> String {
 mod tests {
     use super::{
         apply_collapse_to_state, complete_flush_response, expire_flush_request, file_uri_for_path,
-        menu_overlay_height, save_and_close, save_content, PendingFlushes,
-        SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
+        save_and_close, save_content, PendingFlushes, SubpixelDeltaAccumulator,
+        FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
     use crate::model::NoteDocument;
@@ -1054,15 +1061,5 @@ mod tests {
         assert_eq!(reloaded.metadata.created_at, created_at);
         assert!(reloaded.metadata.updated_at >= updated_at);
         assert!(reloaded.metadata.updated_at.is_some());
-    }
-
-    #[test]
-    fn the_menu_overlay_height_is_transient() {
-        let opened = menu_overlay_height(COLLAPSED_NOTE_HEIGHT, true);
-        assert!(opened > COLLAPSED_NOTE_HEIGHT);
-        assert_eq!(
-            menu_overlay_height(COLLAPSED_NOTE_HEIGHT, false),
-            COLLAPSED_NOTE_HEIGHT
-        );
     }
 }

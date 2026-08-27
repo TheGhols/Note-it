@@ -5,7 +5,17 @@ import type { EditorState } from '@tiptap/pm/state';
 /** Fires as soon as the `>` completes a `->` sequence. */
 export const ARROW_INPUT_REGEX = /->$/;
 
-export const ARROW_CHARACTER = '→';
+/**
+ * U+279C HEAVY ROUND-TIPPED RIGHTWARDS ARROW.
+ *
+ * Chosen over U+2192 and U+27F6 after comparing all three rendered in the
+ * note: the plain arrows are noticeably lighter than the surrounding text and
+ * all but vanish in a heading or at a large text size. This one carries the
+ * weight of the text at every size, stays monochrome in the note's font stack
+ * so it never reads as an emoji, and is still an ordinary character saved in
+ * the Markdown.
+ */
+export const ARROW_CHARACTER = '\u279C';
 
 /**
  * Whether the arrow substitution may run at `from`.

@@ -113,3 +113,32 @@
 - **Consequence:** restoring also records the notes as open again, so a reopened note is not left
   contradicting its own state file.
 
+## ADR-012: A Collapsed Note Expands Before Its Menu Opens
+- **Decision:** Clicking a collapsed note expands it. The `☰` button expands the note and then opens
+  the menu, in one click. The temporary surface-growing mechanism added for the collapsed menu was
+  removed.
+- **Rationale:** The settings popover was being clipped on a collapsed note. It is not a CSS
+  problem: a collapsed note's Wayland surface is only the header bar tall, and nothing can paint
+  outside a surface, so `overflow` and `z-index` are irrelevant. Phase 3.1 worked around it by
+  lending the surface 120px while the menu was open, which was enough for a menu of two entries.
+  Phase 3.2 grew the menu to seven entries — about 234px — and the workaround silently stopped
+  covering it.
+- **Why not simply lend more height:** the number would have to be re-tuned every time the menu
+  changes, and a bar that balloons into a tall rectangle to show a menu is a strange thing to look
+  at. Expanding the note is what the user wants anyway, needs no magic number, and reuses the
+  collapse path that already exists.
+- **Consequence:** the `menu_overlay` message and its height constant are gone, leaving one way for
+  a note to change size.
+
+## ADR-013: Highlighted Text Carries Its Own Foreground
+- **Decision:** `.ProseMirror mark` sets a dark foreground for highlighted text, on every paper
+  colour. An explicit text colour is an inline style and still wins.
+- **Rationale:** On the dark paper the default text is light, and every highlight in the palette is
+  pale, so highlighted text was light-on-pale and barely readable. Fixing it in the stylesheet keeps
+  it a rendering concern: nothing is written into the Markdown, so a note does not gain a colour
+  mark it never had just because of the paper it sits on, and it round-trips unchanged.
+- **Palette:** rather than deciding at runtime whether a user's colour is "still legible" and
+  overriding it, the palette itself was made safe — orange, yellow and green were darkened so every
+  text colour clears a readable contrast on every highlight and on every paper colour. The user's
+  intent is then always preserved, because no combination in the palette is unreadable.
+

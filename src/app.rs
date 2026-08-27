@@ -6,7 +6,7 @@ use crate::layer_shell::{
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
 use crate::settings::AppConfig;
-use crate::state::{AppState, LayerMode, NoteWindowState};
+use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use gio::prelude::*;
 use std::cell::RefCell;
@@ -212,6 +212,9 @@ impl NoteItApp {
             Some(CliCommand::Hide) => {
                 controller.set_layer_mode(LayerMode::Hidden);
             }
+            Some(CliCommand::ToggleCollapseAll) => {
+                controller.toggle_collapse_all();
+            }
             Some(CliCommand::Quit) => {
                 controller.save_and_quit();
             }
@@ -261,6 +264,46 @@ impl NoteItAppClone {
                     eprintln!("Failed to persist note state after summon: {error}");
                 }
             }
+        }
+    }
+
+    /// Collapses every open note, or expands them all when they are already
+    /// collapsed.
+    ///
+    /// Reached from the compositor through the same single-instance dispatcher
+    /// as every other command, and applied through each window's own collapse
+    /// path, so nothing here duplicates the per-note behaviour.
+    pub fn toggle_collapse_all(&self) {
+        if let Err(error) = self.ensure_structural_action_allowed("collapsing every note") {
+            eprintln!("Collapse-all rejected: {error}");
+            return;
+        }
+
+        let windows: Vec<NoteWindow> = {
+            let ctx = self.context.borrow();
+            ctx.windows.values().cloned().collect()
+        };
+        let flags: Vec<bool> = windows.iter().map(|window| window.is_collapsed()).collect();
+        let Some(collapsed) = next_collapse_all(&flags) else {
+            return;
+        };
+
+        let mut changed: Vec<(Uuid, NoteWindowState)> = Vec::new();
+        for window in &windows {
+            if let Some(snapshot) = window.set_collapsed(collapsed) {
+                changed.push((window.id, snapshot));
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+
+        let mut ctx = self.context.borrow_mut();
+        for (id, snapshot) in changed {
+            ctx.state.notes.insert(id, snapshot);
+        }
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist collapse state for every note: {error}");
         }
     }
 

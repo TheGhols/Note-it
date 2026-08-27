@@ -142,6 +142,18 @@ impl NoteWindowState {
     }
 }
 
+/// Whether a "collapse everything" request should collapse or expand.
+///
+/// Anything still expanded means the user wants them all out of the way;
+/// only once every note is already collapsed does the same action bring them
+/// all back. With no notes at all there is nothing to do.
+pub fn next_collapse_all(collapsed_flags: &[bool]) -> Option<bool> {
+    if collapsed_flags.is_empty() {
+        return None;
+    }
+    Some(collapsed_flags.iter().any(|collapsed| !collapsed))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AppState {
     #[serde(default)]
@@ -533,5 +545,24 @@ mod tests {
                 mode
             );
         }
+    }
+
+    #[test]
+    fn collapsing_everything_starts_from_whatever_is_still_expanded() {
+        // A, B expanded and C collapsed: the request collapses all three.
+        assert_eq!(next_collapse_all(&[false, false, true]), Some(true));
+        assert_eq!(next_collapse_all(&[false]), Some(true));
+        assert_eq!(next_collapse_all(&[true, true, false]), Some(true));
+    }
+
+    #[test]
+    fn collapsing_everything_again_expands_them_all() {
+        assert_eq!(next_collapse_all(&[true, true, true]), Some(false));
+        assert_eq!(next_collapse_all(&[true]), Some(false));
+    }
+
+    #[test]
+    fn collapsing_everything_does_nothing_without_notes() {
+        assert_eq!(next_collapse_all(&[]), None);
     }
 }

@@ -27,6 +27,9 @@ pub enum CliCommand {
     Show,
     /// Hide all notes
     Hide,
+    /// Collapse every note to its header bar, or expand them all when they
+    /// are already collapsed
+    ToggleCollapseAll,
     /// Save all notes and terminate the Note-it daemon
     Quit,
 }

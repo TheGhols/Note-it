@@ -8,7 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Typing `->` in prose becomes a real `→`. The note stores the character itself, so it does not
+- `note-it toggle-collapse-all` collapses every note still expanded, and expands them all once they
+  are all collapsed. `Ctrl+Shift+M` continues to apply to the focused note alone.
+- Clicking a collapsed note expands it back to its previous size, and the `☰` button expands the
+  note and opens its menu in a single click.
+- Typing `->` in prose becomes a real `➜`. The note stores the character itself, so it does not
   depend on a font with ligatures, and code spans and code blocks are left exactly as typed.
 - Markdown task lists: typing `- [ ] ` or `- [x] ` creates a real task with a square checkbox,
   nested to any depth, with completed tasks struck through automatically.
@@ -45,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- Highlighted text is readable on a dark note. The light default text used to stay light on the
+  pale highlights; highlighted text now always uses a dark foreground, and an explicitly chosen
+  text colour still wins.
+- The settings menu is no longer clipped on a collapsed note. The note expands first, so the menu
+  opens on a surface tall enough to hold it.
+- Three text colours were darkened so every one of them stays readable on every highlight and on
+  every paper colour.
 - Closing the last note no longer makes it unreachable. Running Note-it again reopens the note that
   was used last instead of creating a blank one; the closed note's content was never lost, but there
   had been no way back to it.

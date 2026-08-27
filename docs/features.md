@@ -84,7 +84,15 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - Switches between **Sempre no topo** (above other windows) and **Área de trabalho** (behind
     them, still open). This is the same application-wide switch as `note-it toggle`.
 - **Collapse (`Ctrl+Shift+M`):**
-  - The same action as the menu entry, reducing the note to its header bar and back.
+  - The same action as the menu entry, reducing the note to its header bar and back. It applies to
+    the focused note alone.
+- **Collapse everything (`note-it toggle-collapse-all`):**
+  - Collapses every note still expanded, and expands them all once they are all collapsed. Each
+    note keeps its own collapsed flag and expanded size.
+- **A collapsed note expands when clicked:**
+  - Clicking anywhere on the bar restores the previous size in place. The close button still
+    closes, dragging the bar still moves it, and the `☰` button expands the note and opens its menu
+    in a single click.
 
 ## Editing Experience
 
@@ -92,11 +100,12 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - Paragraphs and Headings (H1, H2, H3)
   - Bold, Italic, Underline (`<u>`)
   - Semantic text color (`<span data-note-it-color="...">`) from a compact palette
-  - Highlight marker (`<mark data-note-it-highlight="...">`) from a compact palette
+  - Highlight marker (`<mark data-note-it-highlight="...">`) from a compact palette, always drawn
+    with a dark foreground so highlighted text stays readable on every paper colour
   - Discrete text sizes (12–32 px) applied to a selection, independent of headings and of the zoom
   - Bullet lists and numbered lists
   - Interactive checklists (`- [ ]` / `- [x]`)
-  - Typing `->` becomes a real `→`, stored as the character itself rather than relying on a font
+  - Typing `->` becomes a real `➜`, stored as the character itself rather than relying on a font
     with ligatures, and left untouched inside inline code and code blocks
   - Blockquotes and inline code / code blocks
 - **Font Scaling:**

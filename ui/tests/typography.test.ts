@@ -66,7 +66,7 @@ describe('arrow substitution', () => {
     expect(markdown).toContain(ARROW_CHARACTER);
     expect(markdown).not.toContain('->');
     // The note does not depend on a font with ligatures to show an arrow.
-    expect(markdown.codePointAt(markdown.indexOf(ARROW_CHARACTER))).toBe(0x2192);
+    expect(markdown.codePointAt(markdown.indexOf(ARROW_CHARACTER))).toBe(0x279c);
   });
 
   it('works in a heading', () => {
@@ -181,5 +181,34 @@ describe('arrow substitution', () => {
     reopened.note.setMarkdown(saved);
     expect(reopened.note.getMarkdown()).toBe(saved);
     expect(reopened.editor.state.doc.textContent).toContain(ARROW_CHARACTER);
+  });
+
+  it('uses the heavy arrow, which carries the weight of the surrounding text', () => {
+    // U+279C rather than the light U+2192 or U+27F6, which all but disappear
+    // next to a heading or large text.
+    expect(ARROW_CHARACTER).toBe('\u279C');
+    expect(ARROW_CHARACTER.codePointAt(0)).toBe(0x279c);
+    expect(ARROW_CHARACTER).not.toBe('\u2192');
+    expect(ARROW_CHARACTER).not.toBe('\u27F6');
+  });
+
+  it('is a single ordinary character, not an emoji sequence', () => {
+    // One code point, no variation selector and no zero-width joiner, so it
+    // renders monochrome and inherits the note's text colour.
+    expect([...ARROW_CHARACTER]).toHaveLength(1);
+    expect(ARROW_CHARACTER).not.toMatch(/[\uFE0E\uFE0F\u200D]/);
+    expect(ARROW_CHARACTER.length).toBe(1);
+  });
+
+  it('keeps the heavy arrow through a heading and a sized run', () => {
+    const { note, editor } = track(mount());
+    typeText(editor, '# Fluxo -> final');
+    expect(note.getMarkdown()).toContain(`# Fluxo ${ARROW_CHARACTER} final`);
+
+    const sized = track(mount());
+    sized.note.setMarkdown(`<span data-note-it-font-size="32">a ${ARROW_CHARACTER} b</span>`);
+    // Survives the inline-size round trip unchanged.
+    expect(sized.note.getMarkdown()).toContain(ARROW_CHARACTER);
+    expect(sized.note.getMarkdown()).toContain('data-note-it-font-size="32"');
   });
 });

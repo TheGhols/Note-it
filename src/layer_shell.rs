@@ -7,10 +7,6 @@ pub const MIN_NOTE_WIDTH: i32 = 220;
 pub const MIN_NOTE_HEIGHT: i32 = 160;
 /// Height of a collapsed note: the header bar plus the surrounding border.
 pub const COLLAPSED_NOTE_HEIGHT: i32 = 30;
-/// Extra room lent to a collapsed note while its settings popover is open, so
-/// the menu is not clipped by a surface that is only a header bar tall. This
-/// height is presentation only and is never written to the persisted geometry.
-pub const MENU_OVERLAY_EXTRA_HEIGHT: i32 = 120;
 pub const DEFAULT_MONITOR_WIDTH: i32 = 1920;
 pub const DEFAULT_MONITOR_HEIGHT: i32 = 1080;
 

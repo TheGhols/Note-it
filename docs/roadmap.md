@@ -58,7 +58,14 @@
 - [x] Closing the last note no longer strands it: the note used last is reopened on the next summon.
 - [x] Typing `->` produces a real `→`, outside code.
 
-### Phase 3.3: Editor Enhancements (Planned)
+### Phase 3.3: Multi-note Collapse & UX Refinements (Completed)
+- [x] `note-it toggle-collapse-all` for every note, with `Ctrl+Shift+M` still per-note.
+- [x] A collapsed note expands when clicked, and `☰` expands and opens the menu in one click.
+- [x] The settings menu is no longer clipped on a collapsed note.
+- [x] `->` produces the heavier `➜`, readable at every text size.
+- [x] Highlighted text is readable on every paper colour, including the dark one.
+
+### Phase 3.4: Editor Enhancements (Planned)
 - [ ] Contextual floating bubble toolbar for formatting.
 - [ ] Visual polish, paper textures, and typography adjustments.
 

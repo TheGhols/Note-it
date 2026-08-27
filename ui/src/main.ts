@@ -22,6 +22,8 @@ const PAPER_COLORS: PaperColor[] = [
 let activeNoteId = '';
 let currentZoom = DEFAULT_ZOOM_PERCENT;
 let currentLayerMode: NoteLayerMode = 'overlay';
+/** Whether the gesture in progress actually moved the note. */
+let dragMoved = false;
 let isCollapsed = false;
 let noteEditor: NoteEditor | null = null;
 let noteMenu: NoteMenu | null = null;
@@ -96,8 +98,8 @@ function setCollapsed(collapsed: boolean): void {
 }
 
 /**
- * The one collapse path, shared by the menu entry and Ctrl+Shift+M, so both
- * go through the same persistence.
+ * The one collapse path, shared by the menu entry, Ctrl+Shift+M and a click on
+ * a collapsed note, so they all go through the same persistence.
  */
 function requestCollapsed(collapsed: boolean): void {
   setCollapsed(collapsed);
@@ -110,16 +112,63 @@ function requestCollapsed(collapsed: boolean): void {
 }
 
 /**
- * Tells the host whether the settings popover is on screen. A collapsed note
- * is barely taller than its header bar, so the host lends it enough room to
- * show the menu; the persisted geometry is untouched either way.
+ * Runs `whenReady` once the WebView viewport has caught up with a surface that
+ * is being resized by the host.
+ *
+ * Expanding is asynchronous: the page switches to the expanded layout at once,
+ * but the Wayland surface only grows when the host resizes the window. Opening
+ * the menu before that would have it clipped by a surface that is still a
+ * header bar tall.
  */
-function setMenuOverlay(open: boolean): void {
-  if (!activeNoteId) return;
-  bridge.sendMessage({
-    type: 'menu_overlay',
-    payload: { id: activeNoteId, open },
-  });
+function afterViewportGrows(whenReady: () => void): void {
+  const startingHeight = window.innerHeight;
+  let settled = false;
+
+  const finish = (): void => {
+    if (settled) return;
+    settled = true;
+    window.removeEventListener('resize', onResize);
+    window.clearTimeout(fallback);
+    whenReady();
+  };
+
+  const onResize = (): void => {
+    if (window.innerHeight > startingHeight) finish();
+  };
+
+  window.addEventListener('resize', onResize);
+  // The surface may already be large enough, or the resize may never arrive;
+  // either way the menu still opens.
+  const fallback = window.setTimeout(finish, 250);
+}
+
+/**
+ * Expands a collapsed note when it is clicked.
+ *
+ * The whole bar is a target, so the note is not a dead strip the user has to
+ * hunt a control on. Closing keeps working, and the settings button expands
+ * and opens its menu in the same single click.
+ */
+function handleCollapsedClick(event: MouseEvent): void {
+  if (!isCollapsed) return;
+
+  const target = event.target as HTMLElement | null;
+  // Closing a collapsed note must still close it.
+  if (target?.closest('#btn-close')) return;
+
+  // A drag that happens to end on the bar is a move, not a click.
+  if (dragMoved) {
+    dragMoved = false;
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  requestCollapsed(false);
+
+  if (target?.closest('#btn-menu')) {
+    afterViewportGrows(() => noteMenu?.openMenu());
+  }
 }
 
 function flushSave(): void {
@@ -175,9 +224,7 @@ function initUI(): void {
         onOpen: () => {
           infoTooltip?.hide();
           syncInlineFormatting();
-          setMenuOverlay(true);
         },
-        onClose: () => setMenuOverlay(false),
         onSelectColor: (color) => {
           setPaperColor(color);
           if (activeNoteId) {
@@ -218,6 +265,11 @@ function initUI(): void {
     });
   }
 
+  // A collapsed note expands wherever it is clicked. Registered in the capture
+  // phase so it runs before the menu's own click handler, which would
+  // otherwise open a popover taller than the collapsed surface.
+  document.getElementById('app')?.addEventListener('click', handleCollapsedClick, true);
+
   // Close button
   const btnClose = document.getElementById('btn-close');
   btnClose?.addEventListener('click', (e) => {
@@ -232,9 +284,11 @@ function initUI(): void {
       onStart: () => {
         infoTooltip?.hide();
         noteMenu?.close();
+        dragMoved = false;
         bridge.sendMessage({ type: 'drag_start' });
       },
       onDelta: (dx, dy) => {
+        dragMoved = true;
         bridge.sendMessage({ type: 'drag_update', payload: { dx, dy } });
       },
       onEnd: () => {
@@ -336,6 +390,9 @@ function initUI(): void {
         createdAt: msg.payload.createdAt ?? null,
         updatedAt: msg.payload.updatedAt ?? null,
       });
+    } else if (msg.type === 'set_collapsed') {
+      // A collapse the host decided on, such as collapsing every note at once.
+      setCollapsed(Boolean(msg.payload.collapsed));
     } else if (msg.type === 'set_layer_mode') {
       setLayerMode(msg.payload.layerMode);
     } else if (msg.type === 'set_color') {

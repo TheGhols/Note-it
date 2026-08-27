@@ -47,6 +47,9 @@ binds {
     // Switch between "always on top" and "on the desktop"
     Mod+Shift+D { spawn "note-it" "toggle"; }
 
+    // Collapse every note to its bar, or expand them all again
+    Mod+Shift+M { spawn "note-it" "toggle-collapse-all"; }
+
     // Quick create new note
     Mod+Alt+N { spawn "note-it" "new"; }
 }
@@ -66,3 +69,14 @@ chose. The elevation lasts until the next explicit layer change or restart.
 
 `note-it show` is different on purpose: it is an explicit request to put the
 notes in overlay mode, and it does store that as the preference.
+
+## Collapsing One Note or All of Them
+
+`Ctrl+Shift+M` inside a note collapses that note alone; it is a key event in
+the note's own WebView and only reaches the note holding keyboard focus.
+
+Collapsing every note is a compositor keybinding for the same reason a summon
+is: no note may be focused when the user wants them all out of the way. It runs
+`note-it toggle-collapse-all`, which collapses everything still expanded, and
+expands everything once they are all collapsed. Each note keeps its own
+`collapsed` flag and its own expanded size in `state.json`.

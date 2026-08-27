@@ -26,6 +26,11 @@ pub enum HostToWebviewMessage {
         #[serde(rename = "layerMode")]
         layer_mode: String,
     },
+    /// Sent when the host changes a note's collapse state, so the page and its
+    /// menu follow a request that did not start in the WebView.
+    SetCollapsed {
+        collapsed: bool,
+    },
     /// Broadcast whenever the shared layer mode changes, so every note's menu
     /// shows the same state.
     SetLayerMode {
@@ -88,12 +93,6 @@ pub enum WebviewToHostMessage {
     /// Requests the shared Desktop/Overlay switch. The host owns the mode, so
     /// the WebView only asks for the toggle.
     ToggleLayerMode,
-    /// The settings popover opened or closed. A collapsed note is barely taller
-    /// than its header bar, so the host lends it enough room to show the menu.
-    MenuOverlay {
-        id: Uuid,
-        open: bool,
-    },
     OpenExternalUrl {
         url: String,
     },
@@ -352,23 +351,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_menu_overlay_requests() {
-        let id = Uuid::new_v4();
-        let raw = serde_json::json!({
-            "type": "menu_overlay",
-            "payload": { "id": id, "open": true }
-        })
-        .to_string();
-
-        match parse_webview_message(&raw).expect("menu overlay message") {
-            WebviewToHostMessage::MenuOverlay {
-                id: parsed_id,
-                open,
-            } => {
-                assert_eq!(parsed_id, id);
-                assert!(open);
-            }
-            other => panic!("unexpected message: {other:?}"),
+    fn collapse_state_is_pushed_back_to_the_webview() {
+        for collapsed in [true, false] {
+            let encoded =
+                serde_json::to_value(super::HostToWebviewMessage::SetCollapsed { collapsed })
+                    .expect("serialize set_collapsed");
+            assert_eq!(encoded["type"], "set_collapsed");
+            assert_eq!(encoded["payload"]["collapsed"], collapsed);
         }
     }
 
