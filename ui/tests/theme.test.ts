@@ -8,6 +8,7 @@ import {
   themeLabel,
   THEMES,
 } from '../src/ui/theme.ts';
+import { TEXT_COLORS } from '../src/ui/palettes.ts';
 import { contrastRatio } from './support/color.ts';
 import { ruleFor, tokensIn } from './support/stylesheet.ts';
 
@@ -204,6 +205,22 @@ describe('the chrome the theme dresses', () => {
       expect(body, selector).toContain('var(--ui-surface)');
       expect(body, selector).toContain('var(--ui-text)');
       expect(body, selector).not.toContain('var(--paper-');
+    }
+  });
+
+  it('previews a text colour on a pale ground in either theme', () => {
+    // The palette was darkened so every colour is readable on paper. On the
+    // dark popover those same colours fall to about 3:1, and the swatch would
+    // also misrepresent how the colour reads in the note, so the ground it is
+    // sampled on stays pale whatever the theme is.
+    const ground = /background-color:\s*(#[0-9A-Fa-f]{6})/.exec(
+      ruleFor('.note-menu-colors .note-menu-swatch:not(.note-menu-swatch-none)').body,
+    );
+    expect(ground).not.toBeNull();
+
+    for (const entry of TEXT_COLORS) {
+      if (entry.value === null) continue;
+      expect(contrastRatio(entry.value, ground![1]), entry.label).toBeGreaterThanOrEqual(4.5);
     }
   });
 

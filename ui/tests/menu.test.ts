@@ -424,6 +424,24 @@ describe('NoteMenu', () => {
     expect(rowValue(menu, 'theme')).toBe('Sistema');
   });
 
+  it('leaves the text colour swatch ground to the stylesheet', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="textColor"]')!);
+
+    const swatches = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-colors .note-menu-swatch:not(.note-menu-swatch-none)',
+    );
+    expect(swatches.length).toBeGreaterThan(0);
+    for (const swatch of swatches) {
+      // Only the letter is coloured inline. An inline background would beat
+      // the rule that keeps the sample on a pale ground in the dark theme.
+      expect(swatch.style.color).not.toBe('');
+      expect(swatch.style.backgroundColor).toBe('');
+    }
+  });
+
   it('marks the current text size and reports a mixed selection', () => {
     const { menu, trigger, handlers } = mountMenu();
     active = menu;

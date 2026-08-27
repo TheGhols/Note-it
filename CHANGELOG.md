@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The settings menu gained **Tipo de papel**, **Intensidade** and **Tema**, each showing its
   current value on the root row, next to the entries that already did.
 - Menus, popovers and focus states are now dressed by the interface theme through a `--ui-*` token
-  set, instead of borrowing the note's paper colours. A popover coloured from the paper could not
+  set, instead of borrowing the note's paper colours. A text colour is previewed on a pale ground
+  rather than on the popover's own surface, because the palette is tuned to be read on paper. A popover coloured from the paper could not
   survive a theme: over a yellow note a dark popover would have inherited that paper's dark text.
   Everything drawn on the paper — the note's text, its checkboxes, its highlights and the header
   buttons — still follows the paper.

@@ -112,7 +112,7 @@ body[data-color="black"] {
   --ui-surface-hover: rgba(255, 255, 255, 0.10);
   --ui-text: #F4F4F5;
   --ui-text-muted: #A1A1AA;
-  --ui-border: rgba(255, 255, 255, 0.14);
+  --ui-border: rgba(255, 255, 255, 0.20);
   --ui-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
   --ui-focus-ring: #F4F4F5;
 }
@@ -378,6 +378,15 @@ body[data-collapsed="true"] .note-header {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+}
+
+/* A text colour is previewed on a pale ground in both themes, never on the
+   popover's own surface. The palette was darkened so every colour is readable
+   on paper, and paper is always pale except the dark one; on a dark popover
+   those same colours would drop to about 3:1 and the sample would misrepresent
+   how the colour actually reads in the note. */
+.note-menu-colors .note-menu-swatch:not(.note-menu-swatch-none) {
+  background-color: #FFFFFF;
 }
 
 .note-menu-heading {

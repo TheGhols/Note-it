@@ -493,10 +493,14 @@ export class NoteMenu {
       swatch.setAttribute('aria-label', entry.label);
       swatch.title = entry.label;
       if (entry.value !== null) {
-        swatch.style.backgroundColor = kind === 'color' ? 'transparent' : entry.value;
         if (kind === 'color') {
+          // Only the letter is coloured. The ground it sits on is a stylesheet
+          // concern, because it has to stay pale in both themes: the palette is
+          // tuned to be read on paper, and paper is never the popover's colour.
           swatch.style.color = entry.value;
           swatch.textContent = 'A';
+        } else {
+          swatch.style.backgroundColor = entry.value;
         }
       }
       swatch.addEventListener('click', () => {
