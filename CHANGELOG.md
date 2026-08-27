@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Markdown task lists: typing `- [ ] ` or `- [x] ` creates a real task with a square checkbox,
+  nested to any depth, with completed tasks struck through automatically.
+- Per-task completion timestamps, shown as `Concluído dd/MM/aaaa HH:mm` and stored alongside the
+  task in Markdown. Reopening a task clears its date; a task completed outside Note-it keeps none.
+- View zoom between 75% and 200% (`Ctrl+=`, `Ctrl+-`, `Ctrl+0`, or the menu), persisted per note
+  without touching the document.
+- Inline text size, text colour and highlight, applied to a selection or as a stored mark, from
+  compact palettes in the settings menu.
+- `Ctrl+Shift+M` to collapse or expand a note, and `Ctrl+Shift+Space` to switch between
+  **Sempre no topo** and **Área de trabalho** — both reusing the existing actions.
+- `scripts/note-it-isolated`, which runs Note-it against a throwaway XDG tree and refuses to start
+  if any directory resolves into the real store.
 - Note settings popover opened from a `☰` button in the header, holding the paper colour palette
   and the collapse/expand entry.
 - Collapse and expand: a note can be reduced to its header bar and restored to its previous size at
@@ -20,12 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- `Ctrl+=` and `Ctrl+-` now drive the view zoom rather than the note's base font size. The base size
+  is still read from the note's front matter when it loads.
 - The paper colour is now chosen from the settings menu instead of a colour dot that cycled through
   the palette on click.
 - `updated_at` now tracks content edits only. Changing the paper colour, the font size, the window
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- A fast resize no longer exposes a dark strip before the note repaints: the window is backed with
+  the note's own paper colour, which is kept in step when the colour changes.
+- Typing `- [ ] ` produces a task item instead of a bullet containing the literal `[ ]`.
+- Nested inline spans no longer lose the inner mark when a note is reloaded.
 - Pointer gestures emit geometry deltas only while exactly one pointer is captured. A lost pointer
   capture or a move reporting no button held now ends the gesture, and an animation frame left over
   from a finished gesture can no longer move the window.

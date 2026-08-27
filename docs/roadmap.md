@@ -42,9 +42,18 @@
 - [x] Pointer gesture lifecycle hardened: one captured pointer per gesture, no geometry change
       without an active gesture.
 
-### Phase 3.2: Editor Enhancements (Planned)
+### Phase 3.2: Tasks, View Controls & Inline Formatting (Completed)
+- [x] Host surface backed with the note's paper colour, so a fast resize no longer exposes a dark
+      strip before the WebView repaints.
+- [x] Markdown task lists with square checkboxes, nesting, and automatic strikethrough.
+- [x] Per-task completion timestamps that travel with their task and are never invented.
+- [x] View zoom (75–200%) persisted per note, independent of the document.
+- [x] Inline text size, text colour and highlight, applied from the settings menu.
+- [x] `Ctrl+Shift+M` collapse, `Ctrl+Shift+Space` layer switch, `Ctrl+Shift+>` / `Ctrl+Shift+<`
+      text size, all routed through the single keyboard controller.
+
+### Phase 3.3: Editor Enhancements (Planned)
 - [ ] Contextual floating bubble toolbar for formatting.
-- [ ] Extended styling controls and keyboard workflows.
 - [ ] Visual polish, paper textures, and typography adjustments.
 
 ## Phase 4: Packaging & Distribution (Planned)

@@ -27,6 +27,13 @@ function mountMenu() {
   const handlers = {
     onSelectColor: vi.fn(),
     onToggleCollapsed: vi.fn(),
+    onSelectTextSize: vi.fn(),
+    onSelectTextColor: vi.fn(),
+    onSelectHighlight: vi.fn(),
+    onZoomIn: vi.fn(),
+    onZoomOut: vi.fn(),
+    onResetZoom: vi.fn(),
+    onSelectLayerMode: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };
@@ -138,10 +145,12 @@ describe('NoteMenu', () => {
     click(trigger);
     expect(menu.activePanel()).toBe('root');
 
-    click(menu.element.querySelector('.note-menu-submenu')!);
-    expect(menu.activePanel()).toBe('colors');
+    click(menu.element.querySelector('[data-panel="paper"]')!);
+    expect(menu.activePanel()).toBe('paper');
 
-    const swatches = menu.element.querySelectorAll<HTMLElement>('.note-menu-swatch');
+    const swatches = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-paper .note-menu-swatch',
+    );
     expect(swatches).toHaveLength(COLORS.length);
     expect(Array.from(swatches).map((s) => s.dataset.color)).toEqual(COLORS);
 
@@ -158,9 +167,11 @@ describe('NoteMenu', () => {
 
     menu.setSelectedColor('green');
     click(trigger);
-    click(menu.element.querySelector('.note-menu-submenu')!);
+    click(menu.element.querySelector('[data-panel="paper"]')!);
 
-    const checked = menu.element.querySelectorAll('.note-menu-swatch[aria-checked="true"]');
+    const checked = menu.element.querySelectorAll(
+      '.note-menu-paper .note-menu-swatch[aria-checked="true"]',
+    );
     expect(checked).toHaveLength(1);
     expect((checked[0] as HTMLElement).dataset.color).toBe('green');
   });
@@ -169,7 +180,10 @@ describe('NoteMenu', () => {
     const { menu, trigger, handlers } = mountMenu();
     active = menu;
 
-    const item = () => menu.element.querySelectorAll('.note-menu-item')[1] as HTMLElement;
+    const item = () =>
+      Array.from(menu.element.querySelectorAll<HTMLElement>('.note-menu-item')).find((node) =>
+        /Recolher nota|Expandir nota/.test(node.textContent ?? ''),
+      )!;
 
     click(trigger);
     expect(item().textContent).toContain('Recolher nota');
@@ -201,7 +215,7 @@ describe('NoteMenu', () => {
     expect(document.activeElement).toBe(items[0]);
 
     items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
-    expect(menu.activePanel()).toBe('colors');
+    expect(menu.activePanel()).toBe('paper');
 
     key('ArrowLeft');
     expect(menu.activePanel()).toBe('root');
@@ -223,5 +237,151 @@ describe('NoteMenu', () => {
     for (const swatch of menu.element.querySelectorAll('.note-menu-swatch')) {
       expect(swatch.getAttribute('aria-label')).toBeTruthy();
     }
+    for (const step of menu.element.querySelectorAll('.note-menu-step')) {
+      expect(step.getAttribute('aria-label')).toBeTruthy();
+    }
+  });
+
+  it('offers zoom, layer, text size, text colour and highlight panels', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+    click(trigger);
+
+    const panels = Array.from(
+      menu.element.querySelectorAll<HTMLElement>('.note-menu-submenu'),
+    ).map((item) => item.dataset.panel);
+    expect(panels).toEqual(['paper', 'textSize', 'textColor', 'highlight', 'zoom', 'layer']);
+  });
+
+  it('shows the current zoom and steps it from the submenu', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setZoomPercent(130);
+    click(trigger);
+    expect(menu.element.querySelector('.note-menu-value')!.textContent).toBe('130%');
+
+    click(menu.element.querySelector('[data-panel="zoom"]')!);
+    expect(menu.activePanel()).toBe('zoom');
+    expect(menu.element.querySelector('.note-menu-zoom-value')!.textContent).toBe('130%');
+
+    const steps = menu.element.querySelectorAll<HTMLElement>('.note-menu-step');
+    click(steps[0]);
+    click(steps[1]);
+    expect(handlers.onZoomOut).toHaveBeenCalledTimes(1);
+    expect(handlers.onZoomIn).toHaveBeenCalledTimes(1);
+
+    const reset = Array.from(menu.element.querySelectorAll<HTMLElement>('.note-menu-item')).find(
+      (node) => node.textContent?.includes('Restaurar 100%'),
+    )!;
+    click(reset);
+    expect(handlers.onResetZoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the active layer and offers the other one', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setLayerMode('overlay');
+    click(trigger);
+    expect(menu.element.querySelectorAll('.note-menu-value')[1].textContent).toBe(
+      'Sempre no topo',
+    );
+
+    click(menu.element.querySelector('[data-panel="layer"]')!);
+    const options = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-layer .note-menu-option',
+    );
+    expect(options).toHaveLength(2);
+    expect(options[0].getAttribute('aria-checked')).toBe('true');
+    expect(options[1].getAttribute('aria-checked')).toBe('false');
+    // The shortcut is shown, so the feature is not shortcut-only knowledge.
+    expect(options[0].textContent).toContain('Ctrl+Shift+Space');
+
+    click(options[1]);
+    expect(handlers.onSelectLayerMode).toHaveBeenCalledWith('desktop');
+
+    menu.setLayerMode('desktop');
+    click(trigger);
+    expect(menu.element.querySelectorAll('.note-menu-value')[1].textContent).toBe(
+      'Área de trabalho',
+    );
+  });
+
+  it('marks the current text size and reports a mixed selection', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setInlineFormatting({
+      textSize: 22,
+      textSizeMixed: false,
+      textColor: null,
+      highlight: null,
+    });
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="textSize"]')!);
+
+    const options = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-sizes .note-menu-option',
+    );
+    const checked = Array.from(options).filter(
+      (node) => node.getAttribute('aria-checked') === 'true',
+    );
+    expect(checked).toHaveLength(1);
+    expect(checked[0].textContent).toContain('22');
+
+    click(options[0]);
+    expect(handlers.onSelectTextSize).toHaveBeenCalledWith(null);
+
+    menu.setInlineFormatting({
+      textSize: null,
+      textSizeMixed: true,
+      textColor: null,
+      highlight: null,
+    });
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="textSize"]')!);
+    expect(menu.element.querySelector<HTMLElement>('.note-menu-hint')!.hidden).toBe(false);
+    expect(
+      menu.element.querySelectorAll('.note-menu-sizes .note-menu-option[aria-checked="true"]'),
+    ).toHaveLength(0);
+  });
+
+  it('applies a text colour and a highlight from their palettes', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="textColor"]')!);
+    const colors = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-colors .note-menu-swatch',
+    );
+    click(colors[2]);
+    expect(handlers.onSelectTextColor).toHaveBeenCalledWith('#DC2626');
+
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="highlight"]')!);
+    const highlights = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-highlights .note-menu-swatch',
+    );
+    click(highlights[1]);
+    expect(handlers.onSelectHighlight).toHaveBeenCalledWith('#FDE68A');
+
+    // The first entry of each palette clears the mark.
+    click(trigger);
+    click(menu.element.querySelector('[data-panel="textColor"]')!);
+    click(menu.element.querySelectorAll<HTMLElement>('.note-menu-colors .note-menu-swatch')[0]);
+    expect(handlers.onSelectTextColor).toHaveBeenLastCalledWith(null);
+  });
+
+  it('shows the collapse shortcut alongside the entry', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+    click(trigger);
+
+    const collapse = Array.from(
+      menu.element.querySelectorAll<HTMLElement>('.note-menu-item'),
+    ).find((node) => /Recolher nota/.test(node.textContent ?? ''))!;
+    expect(collapse.textContent).toContain('Ctrl+Shift+M');
   });
 });

@@ -3,6 +3,9 @@
  * Normal Markdown is kept as Markdown; only HTML fragments are inspected.
  */
 
+import { isCompletedAtComment } from './taskMeta.ts';
+import { normalizeTextSize } from '../editor/textSize.ts';
+
 export const HEX_COLOR_REGEX = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 
 export function isValidHexColor(value: unknown): value is string {
@@ -32,11 +35,19 @@ function parseCustomTag(rawTag: string): CustomTagAction | null {
 
   const tagName = element.tagName.toLowerCase();
   if (tagName === 'span') {
+    // A span is kept only for the controlled Note-it attributes, and only with
+    // values from the corresponding whitelist.
+    const attributes: string[] = [];
     const color = element.getAttribute('data-note-it-color');
     if (isValidHexColor(color)) {
-      return { kind: 'open', tag: 'span', canonical: `<span data-note-it-color="${color}">` };
+      attributes.push(`data-note-it-color="${color}"`);
     }
-    return null;
+    const fontSize = normalizeTextSize(element.getAttribute('data-note-it-font-size'));
+    if (fontSize !== null) {
+      attributes.push(`data-note-it-font-size="${fontSize}"`);
+    }
+    if (attributes.length === 0) return null;
+    return { kind: 'open', tag: 'span', canonical: `<span ${attributes.join(' ')}>` };
   }
   if (tagName === 'mark') {
     const color = element.getAttribute('data-note-it-highlight');
@@ -162,10 +173,15 @@ export function sanitizeMarkdown(markdown: string): string {
 
     // 3. HTML comments, dangerous tags, autolinks, and custom tags outside code
     if (char === '<') {
-      // 3a. HTML Comment
+      // 3a. HTML Comment. Note-it's own task metadata is the single form kept;
+      // every other comment is still dropped.
       if (markdown.startsWith('<!--', i)) {
         const commentEnd = markdown.indexOf('-->', i + 4);
         if (commentEnd !== -1) {
+          const rawComment = markdown.slice(i, commentEnd + 3);
+          if (isCompletedAtComment(rawComment)) {
+            output += rawComment;
+          }
           i = commentEnd + 3;
         } else {
           i = len;
@@ -283,10 +299,17 @@ export function sanitizeHtml(rawHtml: string): string {
       parent.appendChild(destination);
     } else if (tagName === 'span') {
       const color = source.getAttribute('data-note-it-color');
-      if (isValidHexColor(color)) {
+      const fontSize = normalizeTextSize(source.getAttribute('data-note-it-font-size'));
+      if (isValidHexColor(color) || fontSize !== null) {
         const span = document.createElement('span');
-        span.setAttribute('data-note-it-color', color);
-        span.style.color = color;
+        if (isValidHexColor(color)) {
+          span.setAttribute('data-note-it-color', color);
+          span.style.color = color;
+        }
+        if (fontSize !== null) {
+          span.setAttribute('data-note-it-font-size', String(fontSize));
+          span.style.fontSize = `${fontSize}px`;
+        }
         destination = span;
         parent.appendChild(destination);
       }

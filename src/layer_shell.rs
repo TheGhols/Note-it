@@ -14,6 +14,70 @@ pub const MENU_OVERLAY_EXTRA_HEIGHT: i32 = 120;
 pub const DEFAULT_MONITOR_WIDTH: i32 = 1920;
 pub const DEFAULT_MONITOR_HEIGHT: i32 = 1080;
 
+/// Paper colours, mirroring the palette in `ui/src/styles/theme.css`.
+///
+/// The host needs these because a WebView repaints asynchronously: when a fast
+/// resize grows the surface, the newly exposed strip is presented before the
+/// page has painted it. Backing the window with the note's own colour means
+/// that strip shows paper instead of the default dark window background.
+pub const PAPER_COLORS: &[(&str, &str)] = &[
+    ("yellow", "#FEF9C3"),
+    ("blue", "#E0F2FE"),
+    ("green", "#DCFCE7"),
+    ("pink", "#FCE7F3"),
+    ("purple", "#F3E8FF"),
+    ("gray", "#F1F5F9"),
+    ("black", "#18181B"),
+];
+
+pub const DEFAULT_PAPER_COLOR: &str = "yellow";
+const SURFACE_CSS_CLASS: &str = "note-it-surface";
+const NOTE_BORDER_RADIUS_PX: i32 = 12;
+
+/// Resolves a stored colour name to the palette, falling back to the default
+/// so an unknown name can never leave the surface unpainted.
+pub fn paper_color_name(color: &str) -> &'static str {
+    PAPER_COLORS
+        .iter()
+        .find(|(name, _)| *name == color)
+        .map(|(name, _)| *name)
+        .unwrap_or(DEFAULT_PAPER_COLOR)
+}
+
+/// Stylesheet backing every note surface with its paper colour. Rounded
+/// corners are kept on the window itself, so filling the resize gap does not
+/// turn the note into a plain rectangle.
+pub fn paper_color_stylesheet() -> String {
+    let mut css = String::new();
+    for (name, hex) in PAPER_COLORS {
+        css.push_str(&format!(
+            ".{SURFACE_CSS_CLASS}.note-it-paper-{name} {{ background-color: {hex}; border-radius: {NOTE_BORDER_RADIUS_PX}px; }}\n"
+        ));
+    }
+    css
+}
+
+/// Installs the paper stylesheet once per display.
+pub fn install_paper_color_styles(display: &gdk::Display) {
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_string(&paper_color_stylesheet());
+    gtk4::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+/// Points the window at one palette entry. Swapping a class keeps a single
+/// shared stylesheet instead of one provider per note.
+pub fn apply_paper_color(window: &gtk4::Window, color: &str) {
+    window.add_css_class(SURFACE_CSS_CLASS);
+    for (name, _) in PAPER_COLORS {
+        window.remove_css_class(&format!("note-it-paper-{name}"));
+    }
+    window.add_css_class(&format!("note-it-paper-{}", paper_color_name(color)));
+}
+
 /// Position, size and collapse state of a note surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowGeometry {
@@ -317,5 +381,53 @@ mod tests {
         assert!(conn.is_none());
         assert_eq!(w, DEFAULT_MONITOR_WIDTH);
         assert_eq!(h, DEFAULT_MONITOR_HEIGHT);
+    }
+
+    #[test]
+    fn the_surface_palette_matches_the_stylesheet() {
+        // The host repaints the resize gap with the paper colour, so its copy
+        // of the palette must not drift from the one the page renders.
+        let theme = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/ui/src/styles/theme.css"
+        ))
+        .expect("read theme.css");
+
+        for (name, hex) in PAPER_COLORS {
+            let selector = format!("body[data-color=\"{name}\"]");
+            let block_start = theme
+                .find(&selector)
+                .unwrap_or_else(|| panic!("theme.css has no palette entry for {name}"));
+            let block = &theme[block_start..];
+            let block_end = block.find('}').expect("palette block is closed");
+            let declarations = &block[..block_end];
+
+            let paper_bg = declarations
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("--paper-bg:"))
+                .map(|value| value.trim().trim_end_matches(';').to_string())
+                .unwrap_or_else(|| panic!("no --paper-bg declared for {name}"));
+
+            assert_eq!(
+                paper_bg.to_ascii_uppercase(),
+                hex.to_ascii_uppercase(),
+                "surface colour for {name} drifted from the stylesheet"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_paper_colour_falls_back_instead_of_going_unpainted() {
+        assert_eq!(paper_color_name("blue"), "blue");
+        assert_eq!(paper_color_name("chartreuse"), DEFAULT_PAPER_COLOR);
+        assert_eq!(paper_color_name(""), DEFAULT_PAPER_COLOR);
+
+        let css = paper_color_stylesheet();
+        for (name, hex) in PAPER_COLORS {
+            assert!(css.contains(&format!("note-it-paper-{name}")));
+            assert!(css.contains(hex));
+        }
+        // Rounded corners survive the opaque backing.
+        assert!(css.contains("border-radius"));
     }
 }

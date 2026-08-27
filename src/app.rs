@@ -1,7 +1,7 @@
 use crate::cli::CliCommand;
 use crate::layer_shell::{
-    calculate_cascade_position, find_monitor_by_connector, DEFAULT_MONITOR_HEIGHT,
-    DEFAULT_MONITOR_WIDTH,
+    calculate_cascade_position, find_monitor_by_connector, install_paper_color_styles,
+    DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
@@ -128,6 +128,10 @@ impl NoteItApp {
     pub fn new(app: &gtk4::Application) -> Self {
         let hold_guard = app.hold();
 
+        if let Some(display) = gtk4::gdk::Display::default() {
+            install_paper_color_styles(&display);
+        }
+
         let storage = StorageManager::new().expect("Failed to initialize XDG storage");
         let config = AppConfig::load_from_file(&storage.config_file_path());
         let state = AppState::load_from_file(&storage.state_file_path());
@@ -163,13 +167,7 @@ impl NoteItApp {
                 controller.create_new_note();
             }
             Some(CliCommand::Toggle) => {
-                let current_mode = controller.context.borrow().state.active_layer_mode;
-                let next_mode = match current_mode {
-                    LayerMode::Desktop => LayerMode::Overlay,
-                    LayerMode::Overlay => LayerMode::Desktop,
-                    LayerMode::Hidden => LayerMode::Overlay,
-                };
-                controller.set_layer_mode(next_mode);
+                controller.toggle_layer_mode();
             }
             Some(CliCommand::Show) => {
                 controller.set_layer_mode(LayerMode::Overlay);
@@ -334,6 +332,13 @@ impl NoteItAppClone {
                 }
             });
         }
+    }
+
+    /// The shared Desktop/Overlay switch, reached from the note menu, the
+    /// keyboard shortcut and `note-it toggle` alike.
+    pub fn toggle_layer_mode(&self) {
+        let next = self.context.borrow().state.active_layer_mode.toggled();
+        self.set_layer_mode(next);
     }
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
@@ -609,6 +614,11 @@ fn instantiate_note_window(
         app_clone3.update_geometry(id, geom);
     });
 
+    let app_clone4 = app_controller.clone();
+    let on_toggle_layer_mode = Rc::new(move || {
+        app_clone4.toggle_layer_mode();
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -631,6 +641,7 @@ fn instantiate_note_window(
         on_new_note,
         on_close,
         on_geometry_changed,
+        on_toggle_layer_mode,
     })
 }
 

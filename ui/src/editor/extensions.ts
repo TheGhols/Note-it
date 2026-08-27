@@ -4,10 +4,11 @@ import Highlight from '@tiptap/extension-highlight';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import TaskList from '@tiptap/extension-task-list';
-import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
+import { NoteItTaskItem } from './taskItem.ts';
+import { normalizeTextSize } from './textSize.ts';
 
 // Custom Underline serialized to <u>...</u>
 const NoteItUnderline = Underline.extend({
@@ -73,6 +74,51 @@ const NoteItHighlight = Highlight.extend({
   },
 });
 
+/**
+ * Finds a `<span>` carrying `attribute`, returning its inner content and the
+ * exact source it spans.
+ *
+ * Colour and text size are both serialized as spans and can nest, so a lazy
+ * regex would stop at the inner `</span>` and swallow the nested mark. This
+ * walks the source tracking depth to find the matching close tag.
+ */
+function matchSpanWithAttribute(
+  src: string,
+  attribute: string,
+): { raw: string; value: string; inner: string } | null {
+  const openMatch = /^<span[^>]*>/i.exec(src);
+  if (!openMatch) return null;
+
+  const openTag = openMatch[0];
+  const valueMatch = new RegExp(`${attribute}=["']([^"']+)["']`, 'i').exec(openTag);
+  if (!valueMatch) return null;
+
+  let depth = 1;
+  let index = openTag.length;
+  while (index < src.length) {
+    const nextOpen = src.toLowerCase().indexOf('<span', index);
+    const nextClose = src.toLowerCase().indexOf('</span>', index);
+    if (nextClose === -1) return null;
+
+    if (nextOpen !== -1 && nextOpen < nextClose) {
+      depth += 1;
+      index = nextOpen + '<span'.length;
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0) {
+      return {
+        raw: src.slice(0, nextClose + '</span>'.length),
+        value: valueMatch[1],
+        inner: src.slice(openTag.length, nextClose),
+      };
+    }
+    index = nextClose + '</span>'.length;
+  }
+  return null;
+}
+
 // Custom Color serialized to <span data-note-it-color="..." style="...">
 const NoteItTextStyle = TextStyle.extend({
   markdownTokenName: 'color',
@@ -90,23 +136,76 @@ const NoteItTextStyle = TextStyle.extend({
       return src.indexOf('<span');
     },
     tokenize(src: string, _tokens: any, lexer: any) {
-      const match = /^<span[^>]*?data-note-it-color=["']([^"']+)["'][^>]*>([\s\S]+?)<\/span>/i.exec(src);
-      if (!match) return;
-      const color = match[1];
-      const innerContent = match[2];
-      if (!isValidHexColor(color)) return;
+      const match = matchSpanWithAttribute(src, 'data-note-it-color');
+      if (!match || !isValidHexColor(match.value)) return;
       return {
         type: 'color',
-        raw: match[0],
-        text: innerContent,
-        attrs: { color },
-        tokens: lexer.inlineTokens(innerContent),
+        raw: match.raw,
+        text: match.inner,
+        attrs: { color: match.value },
+        tokens: lexer.inlineTokens(match.inner),
       };
     },
   },
   parseMarkdown(token: any, helpers: any) {
     return helpers.applyMark(
       'textStyle',
+      helpers.parseInline(token.tokens || []),
+      token.attrs || {},
+    );
+  },
+});
+
+// Discrete text size serialized to <span data-note-it-font-size="..." style="...">
+const NoteItFontSize = TextStyle.extend({
+  name: 'noteItFontSize',
+  markdownTokenName: 'fontSize',
+  addAttributes() {
+    return {
+      fontSize: {
+        default: null,
+        parseHTML: (element: HTMLElement) =>
+          normalizeTextSize(element.getAttribute('data-note-it-font-size')),
+        renderHTML: (attributes: Record<string, unknown>) => {
+          const size = normalizeTextSize(attributes.fontSize);
+          if (size === null) return {};
+          // Only the data attribute is emitted; the stylesheet turns it into a
+          // zoom-scaled size, so a sized run keeps its proportion to the
+          // surrounding text at every zoom level. The stored Markdown still
+          // carries a plain pixel value for other tools.
+          return { 'data-note-it-font-size': String(size) };
+        },
+      },
+    };
+  },
+  renderMarkdown(node: any, helpers: any) {
+    const size = normalizeTextSize(node.attrs?.fontSize);
+    if (size === null) return helpers.renderChildren(node);
+    return `<span data-note-it-font-size="${size}" style="font-size:${size}px">${helpers.renderChildren(node)}</span>`;
+  },
+  markdownTokenizer: {
+    name: 'fontSize',
+    level: 'inline',
+    start(src: string) {
+      return src.indexOf('<span');
+    },
+    tokenize(src: string, _tokens: any, lexer: any) {
+      const match = matchSpanWithAttribute(src, 'data-note-it-font-size');
+      if (!match) return;
+      const size = normalizeTextSize(match.value);
+      if (size === null) return;
+      return {
+        type: 'fontSize',
+        raw: match.raw,
+        text: match.inner,
+        attrs: { fontSize: size },
+        tokens: lexer.inlineTokens(match.inner),
+      };
+    },
+  },
+  parseMarkdown(token: any, helpers: any) {
+    return helpers.applyMark(
+      'noteItFontSize',
       helpers.parseInline(token.tokens || []),
       token.attrs || {},
     );
@@ -129,8 +228,9 @@ export const editorExtensions = [
   }),
   NoteItTextStyle,
   Color,
+  NoteItFontSize,
   TaskList,
-  TaskItem.configure({
+  NoteItTaskItem.configure({
     nested: true,
   }),
   Placeholder.configure({

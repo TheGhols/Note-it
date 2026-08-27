@@ -1,11 +1,25 @@
 export interface NoteKeyboardActions {
   newNote(): void;
   closeNote(): void;
-  increaseFontSize(): void;
-  decreaseFontSize(): void;
   toggleStrike(): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  resetZoom(): void;
+  toggleCollapsed(): void;
+  toggleLayerMode(): void;
+  increaseTextSize(): void;
+  decreaseTextSize(): void;
 }
 
+/**
+ * The single keyboard entry point for the note WebView.
+ *
+ * Every shortcut is registered here rather than in scattered listeners, so
+ * conflicts are visible in one place. Composition is always allowed through
+ * untouched: pt-BR dead keys and AltGr must reach the editor intact, so a
+ * shortcut never runs while a composition is active and `Ctrl+Alt` — how AltGr
+ * is reported — is never treated as a plain `Ctrl` chord.
+ */
 export class NoteKeyboardController {
   private compositionInProgress = false;
 
@@ -42,7 +56,15 @@ export class NoteKeyboardController {
       return;
     }
 
-    switch (event.key.toLowerCase()) {
+    const key = event.key;
+
+    if (event.shiftKey) {
+      const handled = this.handleShiftChord(key, event.code);
+      if (handled) event.preventDefault();
+      return;
+    }
+
+    switch (key.toLowerCase()) {
       case 'n':
         event.preventDefault();
         this.actions.newNote();
@@ -58,13 +80,42 @@ export class NoteKeyboardController {
       case '+':
       case '=':
         event.preventDefault();
-        this.actions.increaseFontSize();
+        this.actions.zoomIn();
         break;
       case '-':
       case '_':
         event.preventDefault();
-        this.actions.decreaseFontSize();
+        this.actions.zoomOut();
+        break;
+      case '0':
+        event.preventDefault();
+        this.actions.resetZoom();
         break;
     }
   };
+
+  /**
+   * `Ctrl+Shift` chords. The physical keys for `<` and `>` are `,` and `.`, and
+   * which of the two a layout reports depends on the layout itself, so both the
+   * produced character and the physical `code` are accepted.
+   */
+  private handleShiftChord(key: string, code: string): boolean {
+    if (key === 'M' || key === 'm' || code === 'KeyM') {
+      this.actions.toggleCollapsed();
+      return true;
+    }
+    if (key === ' ' || code === 'Space') {
+      this.actions.toggleLayerMode();
+      return true;
+    }
+    if (key === '>' || key === '.' || code === 'Period') {
+      this.actions.increaseTextSize();
+      return true;
+    }
+    if (key === '<' || key === ',' || code === 'Comma') {
+      this.actions.decreaseTextSize();
+      return true;
+    }
+    return false;
+  }
 }

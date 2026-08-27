@@ -5,6 +5,8 @@
   --border-radius: 12px;
   --transition-fast: 150ms ease;
   --note-header-height: 28px;
+  /* View scale of the note content; never applied to the header bar. */
+  --note-zoom: 1;
   --popover-bg: #FFFFFF;
   --popover-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   
@@ -230,6 +232,102 @@ body[data-collapsed="true"] .note-header {
   color: var(--paper-muted);
 }
 
+.note-menu-value {
+  margin-left: auto;
+  color: var(--paper-muted);
+  font-size: 12px;
+}
+
+.note-menu-shortcut {
+  margin-left: auto;
+  color: var(--paper-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.note-menu-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.note-menu-hint {
+  padding: 2px 8px;
+  color: var(--paper-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.note-menu-option[aria-checked="true"]::before {
+  content: '●';
+  margin-right: 6px;
+  font-size: 9px;
+}
+
+.note-menu-option[aria-checked="false"]::before {
+  content: '';
+  margin-right: 6px;
+  display: inline-block;
+  width: 9px;
+}
+
+.note-menu-zoom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 6px 8px;
+}
+
+.note-menu-zoom-value {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-menu-step {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--paper-border);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.note-menu-step:hover {
+  background-color: var(--selection-bg);
+}
+
+.note-menu-step:focus-visible {
+  outline: 2px solid var(--paper-text);
+  outline-offset: 1px;
+}
+
+.note-menu-swatch-none {
+  position: relative;
+  background-color: transparent;
+}
+
+/* Diagonal stroke marking the "no colour" choice. */
+.note-menu-swatch-none::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-top: 1.5px solid var(--paper-muted);
+  transform: rotate(-45deg);
+  transform-origin: center;
+}
+
+.note-menu-swatches .note-menu-swatch {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .note-menu-heading {
   margin: 2px 8px 6px 8px;
   color: var(--paper-muted);
@@ -239,8 +337,10 @@ body[data-collapsed="true"] .note-header {
 
 .note-menu-swatches {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 0 8px 4px 8px;
+  max-width: 190px;
 }
 
 .note-menu-swatch {
@@ -301,6 +401,11 @@ body[data-collapsed="true"] .note-header {
   overflow-y: auto;
   padding: 8px 14px 14px 14px;
   outline: none;
+  /* Zoom scales the rendered text through the font size the editor inherits,
+     so layout, caret position and hit testing all stay in agreement. A CSS
+     transform would scale the painted pixels while leaving the caret and the
+     pointer coordinates on the unscaled geometry. */
+  font-size: calc(var(--note-font-size) * var(--note-zoom));
 }
 
 /* Collapsing hides the editor without unmounting it, so the content, the
@@ -327,6 +432,17 @@ body[data-collapsed="true"] .resize-handle {
   outline: none;
   min-height: 100%;
 }
+
+/* Inline text size. Driven by the data attribute so the editor never carries
+   an inline style, and scaled by the view zoom so a sized run keeps its
+   proportion to the surrounding text. */
+.ProseMirror [data-note-it-font-size="12"] { font-size: calc(12px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="14"] { font-size: calc(14px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="16"] { font-size: calc(16px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="18"] { font-size: calc(18px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="22"] { font-size: calc(22px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="26"] { font-size: calc(26px * var(--note-zoom)); }
+.ProseMirror [data-note-it-font-size="32"] { font-size: calc(32px * var(--note-zoom)); }
 
 .ProseMirror p {
   margin-bottom: 0.5em;
@@ -411,12 +527,69 @@ body[data-collapsed="true"] .resize-handle {
 
 .ProseMirror ul[data-type="taskList"] li > label {
   user-select: none;
-  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  /* Keeps the box on the first line of a wrapping task. */
+  height: calc(var(--note-line-height) * 1em);
+  flex: 0 0 auto;
 }
 
 .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.15em;
+  height: 1.15em;
+  min-width: 1.15em;
+  margin: 0;
+  padding: 0;
+  border: 2px solid var(--paper-muted);
+  /* Square by design: a task box must not read as a radio button. */
+  border-radius: 3px;
+  background-color: transparent;
   cursor: pointer;
-  accent-color: currentColor;
+  display: inline-block;
+  position: relative;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:hover {
+  border-color: var(--paper-text);
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--paper-text);
+  outline-offset: 2px;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
+  background-color: var(--paper-text);
+  border-color: var(--paper-text);
+}
+
+/* Tick drawn from borders so it inherits the paper colour on every theme. */
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 0.28em;
+  height: 0.55em;
+  border: solid var(--paper-bg);
+  border-width: 0 2px 2px 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+/* Completion date, rendered from the node attribute so it never becomes
+   editable text inside the task. */
+.ProseMirror ul[data-type="taskList"] li[data-completed-label]::after {
+  content: attr(data-completed-label);
+  margin-left: 0.6em;
+  color: var(--paper-muted);
+  font-size: 0.78em;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  align-self: center;
 }
 
 .ProseMirror ul[data-type="taskList"] li > div {

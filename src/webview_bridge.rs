@@ -21,6 +21,16 @@ pub enum HostToWebviewMessage {
         created_at: Option<DateTime<Utc>>,
         #[serde(rename = "updatedAt")]
         updated_at: Option<DateTime<Utc>>,
+        #[serde(rename = "zoomPercent")]
+        zoom_percent: u16,
+        #[serde(rename = "layerMode")]
+        layer_mode: String,
+    },
+    /// Broadcast whenever the shared layer mode changes, so every note's menu
+    /// shows the same state.
+    SetLayerMode {
+        #[serde(rename = "layerMode")]
+        layer_mode: String,
     },
     SetTimestamps {
         #[serde(rename = "createdAt")]
@@ -70,6 +80,14 @@ pub enum WebviewToHostMessage {
         id: Uuid,
         collapsed: bool,
     },
+    ZoomChanged {
+        id: Uuid,
+        #[serde(rename = "zoomPercent")]
+        zoom_percent: u16,
+    },
+    /// Requests the shared Desktop/Overlay switch. The host owns the mode, so
+    /// the WebView only asks for the toggle.
+    ToggleLayerMode,
     /// The settings popover opened or closed. A collapsed note is barely taller
     /// than its header bar, so the host lends it enough room to show the menu.
     MenuOverlay {
@@ -318,6 +336,8 @@ mod tests {
             collapsed: true,
             created_at: Some(created_at),
             updated_at: None,
+            zoom_percent: 130,
+            layer_mode: "desktop".to_string(),
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -325,6 +345,8 @@ mod tests {
         assert_eq!(encoded["type"], "load_note");
         assert_eq!(payload["collapsed"], true);
         assert_eq!(payload["createdAt"], "2026-08-27T07:14:00Z");
+        assert_eq!(payload["zoomPercent"], 130);
+        assert_eq!(payload["layerMode"], "desktop");
         // An unknown timestamp travels as null instead of a fabricated date.
         assert!(payload["updatedAt"].is_null());
     }
@@ -348,5 +370,47 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_zoom_change_requests() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "zoom_changed",
+            "payload": { "id": id, "zoomPercent": 130 }
+        })
+        .to_string();
+
+        match parse_webview_message(&raw).expect("zoom message") {
+            WebviewToHostMessage::ZoomChanged {
+                id: parsed_id,
+                zoom_percent,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(zoom_percent, 130);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_a_zoom_value_that_is_not_a_plain_percentage() {
+        for payload in [
+            serde_json::json!({ "id": Uuid::new_v4(), "zoomPercent": -10 }),
+            serde_json::json!({ "id": Uuid::new_v4(), "zoomPercent": "NaN" }),
+            serde_json::json!({ "id": Uuid::new_v4(), "zoomPercent": 99999999 }),
+        ] {
+            let raw = serde_json::json!({ "type": "zoom_changed", "payload": payload }).to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn parses_layer_mode_toggle_requests() {
+        let raw = serde_json::json!({ "type": "toggle_layer_mode" }).to_string();
+        assert!(matches!(
+            parse_webview_message(&raw).expect("layer toggle"),
+            WebviewToHostMessage::ToggleLayerMode
+        ));
     }
 }

@@ -32,10 +32,27 @@ fabricated date, and re-saving the note does not invent one either.
 | `monitor` | Connector name the note belongs to |
 | `collapsed` | Whether the note is reduced to its header bar |
 | `expanded_width`, `expanded_height` | Size to restore on expand; only meaningful while `collapsed` |
+| `zoom_percent` | View scale of the note content, 75–200, default 100 |
 
 Every field has a default, so a `state.json` written by an earlier version
 loads unchanged: absent `collapsed` means expanded, and absent expanded
 geometry falls back to the default note size.
+
+## Inline Formatting in Markdown
+
+Markdown has no syntax for colour, highlight or font size, so these are stored as a small set of
+controlled HTML elements. Only Note-it's own attributes are accepted, and only with values from the
+corresponding whitelist — anything else is dropped when the note is loaded.
+
+| Formatting | Representation | Accepted values |
+| --- | --- | --- |
+| Text colour | `<span data-note-it-color="#2563EB">` | `#rgb` / `#rrggbb` |
+| Highlight | `<mark data-note-it-highlight="#FDE68A">` | `#rgb` / `#rrggbb` |
+| Text size | `<span data-note-it-font-size="22">` | 12, 14, 16, 18, 22, 26, 32 |
+| Task completion | `- [x] texto <!-- note-it:completed_at=… -->` | ISO 8601 with an offset or `Z` |
+
+None of these are ever visible as markup in the editor. The task metadata comment is the only HTML
+comment the sanitizer preserves; every other comment is still removed.
 
 ## Atomic File Writing
 

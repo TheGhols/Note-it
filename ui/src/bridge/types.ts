@@ -1,5 +1,7 @@
 export type PaperColor = 'yellow' | 'blue' | 'green' | 'pink' | 'purple' | 'gray' | 'black';
 
+export type NoteLayerMode = 'overlay' | 'desktop' | 'hidden';
+
 export interface NoteData {
   id: string;
   content: string;
@@ -8,11 +10,14 @@ export interface NoteData {
   collapsed: boolean;
   createdAt: string | null;
   updatedAt: string | null;
+  zoomPercent: number;
+  layerMode: NoteLayerMode;
 }
 
 export type HostToWebviewMessage =
   | { type: 'load_note'; payload: NoteData }
   | { type: 'set_timestamps'; payload: { createdAt: string | null; updatedAt: string | null } }
+  | { type: 'set_layer_mode'; payload: { layerMode: NoteLayerMode } }
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
   | { type: 'request_content' }
@@ -28,6 +33,8 @@ export type WebviewToHostMessage =
   | { type: 'font_size_changed'; payload: { id: string; fontSize: number } }
   | { type: 'collapse_changed'; payload: { id: string; collapsed: boolean } }
   | { type: 'menu_overlay'; payload: { id: string; open: boolean } }
+  | { type: 'zoom_changed'; payload: { id: string; zoomPercent: number } }
+  | { type: 'toggle_layer_mode' }
   | { type: 'open_external_url'; payload: { url: string } }
   | { type: 'drag_start' }
   | { type: 'drag_update'; payload: { dx: number; dy: number } }

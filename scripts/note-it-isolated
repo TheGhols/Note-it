@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# Runs Note-it against a throwaway XDG tree.
+#
+# Every experimental or integration run must go through this script. It sets
+# all four XDG variables together, because overriding only some of them leaves
+# the rest resolving to the real store — which is exactly how a stray note once
+# ended up in it. Before launching anything it verifies that no configured
+# directory resolves inside the real store, and aborts if one does.
+#
+# Usage:
+#   scripts/note-it-isolated [--keep] [--root DIR] [-- <note-it args>]
+#
+#   --keep       leave the temporary tree in place after exiting
+#   --root DIR   use DIR instead of a fresh mktemp directory
+#
+set -euo pipefail
+
+KEEP=0
+ROOT=""
+BINARY="${NOTE_IT_BINARY:-}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --root) ROOT="${2:?--root needs a directory}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+# The real base directories, resolved with the same XDG rules the application
+# uses, so nothing personal is hard-coded here.
+real_dir() {
+  local var="$1" fallback="$2"
+  local value="${!var:-}"
+  printf '%s' "${value:-$HOME/$fallback}"
+}
+
+REAL_BASES=(
+  "$(real_dir XDG_CONFIG_HOME .config)"
+  "$(real_dir XDG_DATA_HOME .local/share)"
+  "$(real_dir XDG_STATE_HOME .local/state)"
+  "$(real_dir XDG_CACHE_HOME .cache)"
+)
+
+if [[ -n "$ROOT" ]]; then
+  # A caller-supplied root is checked before anything is created under it.
+  ROOT_CHECK="$(readlink -f "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
+  for base in "${REAL_BASES[@]}"; do
+    base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
+    if [[ "$ROOT_CHECK" == "$base_resolved" || "$ROOT_CHECK" == "$base_resolved"/* ]]; then
+      echo "ABORT: --root $ROOT is inside the real XDG tree ($base_resolved)" >&2
+      exit 90
+    fi
+  done
+  if [[ "$ROOT_CHECK" == "$(readlink -f "$HOME")" ]]; then
+    echo "ABORT: --root must not be the home directory" >&2
+    exit 90
+  fi
+  mkdir -p "$ROOT"
+else
+  ROOT="$(mktemp -d "${TMPDIR:-/tmp}/note-it-test-XXXXXX")"
+fi
+
+export XDG_CONFIG_HOME="$ROOT/config"
+export XDG_DATA_HOME="$ROOT/data"
+export XDG_STATE_HOME="$ROOT/state"
+export XDG_CACHE_HOME="$ROOT/cache"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+# Abort rather than risk the real store: no configured directory may be, or sit
+# inside, any real XDG base directory.
+abort_if_real() {
+  local name="$1" candidate="$2" resolved
+  resolved="$(readlink -f "$candidate")"
+  for base in "${REAL_BASES[@]}"; do
+    local base_resolved
+    base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
+    if [[ "$resolved" == "$base_resolved" || "$resolved" == "$base_resolved"/* ]]; then
+      echo "ABORT: $name resolves into the real XDG tree ($resolved)" >&2
+      exit 90
+    fi
+  done
+  if [[ "$resolved" == "$(readlink -f "$HOME")" ]]; then
+    echo "ABORT: $name resolves to the home directory" >&2
+    exit 90
+  fi
+}
+
+abort_if_real XDG_CONFIG_HOME "$XDG_CONFIG_HOME"
+abort_if_real XDG_DATA_HOME "$XDG_DATA_HOME"
+abort_if_real XDG_STATE_HOME "$XDG_STATE_HOME"
+abort_if_real XDG_CACHE_HOME "$XDG_CACHE_HOME"
+
+cleanup() {
+  if [[ "$KEEP" -eq 1 ]]; then
+    echo "note-it-isolated: kept $ROOT" >&2
+    return
+  fi
+  # Only ever removes the tree this script created.
+  if [[ "$ROOT" == "${TMPDIR:-/tmp}"/note-it-test-* ]]; then
+    rm -rf "$ROOT"
+  fi
+}
+trap cleanup EXIT
+
+echo "note-it-isolated: isolated XDG environment"
+echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
+echo "XDG_DATA_HOME=$XDG_DATA_HOME"
+echo "XDG_STATE_HOME=$XDG_STATE_HOME"
+echo "XDG_CACHE_HOME=$XDG_CACHE_HOME"
+
+if [[ -z "$BINARY" ]]; then
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -x "$REPO_ROOT/target/debug/note-it" ]]; then
+    BINARY="$REPO_ROOT/target/debug/note-it"
+  elif [[ -x "$REPO_ROOT/target/release/note-it" ]]; then
+    BINARY="$REPO_ROOT/target/release/note-it"
+  else
+    echo "ABORT: no note-it binary found; run 'cargo build' first" >&2
+    exit 91
+  fi
+fi
+
+echo "binary=$BINARY"
+"$BINARY" "$@"

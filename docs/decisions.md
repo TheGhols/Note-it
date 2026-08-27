@@ -46,3 +46,43 @@
   the warnings but regress dead-key composition on Niri, and a global log handler would hide real
   GTK warnings too.
 
+## ADR-007: The Host Surface Carries the Note's Paper Colour
+- **Decision:** Back every note window with a GTK stylesheet rule painting the paper colour and the
+  same corner radius the page uses, keeping the WebView itself transparent. The class is swapped
+  when the note's colour changes.
+- **Rationale:** A WebView repaints asynchronously. When a fast resize grows the surface, the
+  compositor presents the larger surface a frame before the page has painted it, and the strip that
+  is not yet painted showed the default dark window background — the black band reported after
+  Phase 3.1. Filling it from the host means the gap is already the right colour. Painting the
+  background on the window rather than on the WebView keeps the rounded corners: an opaque WebView
+  background would have squared them off.
+- **Consequence:** The host needs its own copy of the palette. A test compares it against
+  `ui/src/styles/theme.css` so the two cannot drift apart.
+
+## ADR-008: Task Completion Timestamps Travel With Their Task
+- **Decision:** Store a completed task's timestamp in an HTML comment appended to that task's own
+  Markdown line: `- [x] Comprar material <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->`.
+- **Rationale:** Standard Markdown has no syntax for this. Keeping the main line as plain `- [x] …`
+  leaves the note readable in any other tool, while the comment is invisible in rendered Markdown.
+  Because the metadata sits on the task's own line it moves with the task when tasks are reordered,
+  which a front-matter table keyed by task position could not do.
+- **Audit:** The sanitizer stripped every HTML comment, and the Markdown lexer dropped them before
+  Tiptap saw them. Both were extended narrowly: the sanitizer keeps this one comment form after
+  validating the timestamp, and the task item's own Markdown hooks read it into a node attribute
+  and strip it from the visible content.
+- **Unknown dates stay unknown:** a task arriving already checked — loaded from Markdown, pasted, or
+  restored by undo — is never given a timestamp, so `- [x]` written outside Note-it shows no date.
+
+## ADR-009: Zoom Is a View Scale, Text Size Is Content
+- **Decision:** Zoom scales the editor through the font size the content inherits, is stored as
+  `zoom_percent` in `state.json`, and never touches the document. Text size is a separate inline
+  mark that is part of the note's content.
+- **Rationale:** They answer different questions — "make this note easier to read right now" versus
+  "make this word big". Implementing either through the other would either write view preferences
+  into the Markdown or make a formatting choice vanish when the window is reopened. A CSS transform
+  was rejected for the zoom: it scales painted pixels while leaving the caret and pointer
+  coordinates on the unscaled geometry, so the text cursor would drift away from the characters.
+- **Consequence:** `Ctrl+=` / `Ctrl+-` now drive the zoom instead of the note's base font size. The
+  base `font_size` in the front matter is still honoured when a note is loaded; it simply no longer
+  has a keyboard binding.
+

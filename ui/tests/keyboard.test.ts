@@ -17,9 +17,14 @@ function mockActions(): NoteKeyboardActions {
   return {
     newNote: vi.fn(),
     closeNote: vi.fn(),
-    increaseFontSize: vi.fn(),
-    decreaseFontSize: vi.fn(),
     toggleStrike: vi.fn(),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
+    resetZoom: vi.fn(),
+    toggleCollapsed: vi.fn(),
+    toggleLayerMode: vi.fn(),
+    increaseTextSize: vi.fn(),
+    decreaseTextSize: vi.fn(),
   };
 }
 

@@ -19,7 +19,9 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
-  - Entries: **Cor da nota** (opens the paper palette) and **Recolher nota** / **Expandir nota**.
+  - Entries: **Cor da nota**, **Tamanho do texto**, **Cor do texto**, **Marca-texto**, **Zoom**,
+    **Camada**, and **Recolher nota** / **Expandir nota**.
+  - The menu shows the current zoom and the active layer, so neither depends on knowing a shortcut.
   - Closes on outside click, `Escape`, or selecting an entry; only one popover exists per note.
   - The button and the popover sit outside the drag region, so using them never moves the note.
 - **Note Information Tooltip:**
@@ -50,18 +52,44 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 - **Smart Cascade Placement:**
   - New notes cascade incrementally across the screen grid.
 
+## Tasks
+
+- **Markdown Task Lists:**
+  - Typing `- [ ] ` creates a task; `- [x] ` or `- [X] ` creates a completed one.
+  - Real editor nodes with square checkboxes, not text characters, nested up to any depth with
+    `Tab` / `Shift+Tab`.
+- **Completion:**
+  - Completing a task ticks the box, strikes the text through, and records the moment, shown
+    discreetly as `Concluído dd/MM/aaaa HH:mm`.
+  - Reopening a task clears the date; completing it again records a new one.
+  - A task written elsewhere as `- [x]` loads as completed with no date invented for it.
+
+## View Controls
+
+- **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
+  - Scales the note's content between 75% and 200% in 10% steps, without changing the window size,
+    the Markdown, or the note's modification date. The header bar keeps its size.
+  - Persisted per note in `state.json`; notes without a stored zoom open at 100%.
+- **Layer (`Ctrl+Shift+Space`):**
+  - Switches between **Sempre no topo** (above other windows) and **Área de trabalho** (behind
+    them, still open). This is the same application-wide switch as `note-it toggle`.
+- **Collapse (`Ctrl+Shift+M`):**
+  - The same action as the menu entry, reducing the note to its header bar and back.
+
 ## Editing Experience
 
 - **Rich WYSIWYG Formatting:**
   - Paragraphs and Headings (H1, H2, H3)
   - Bold, Italic, Underline (`<u>`)
-  - Semantic text color (`<span data-note-it-color="...">`)
-  - Highlight marker (`<mark data-note-it-highlight="...">`)
+  - Semantic text color (`<span data-note-it-color="...">`) from a compact palette
+  - Highlight marker (`<mark data-note-it-highlight="...">`) from a compact palette
+  - Discrete text sizes (12–32 px) applied to a selection, independent of headings and of the zoom
   - Bullet lists and numbered lists
   - Interactive checklists (`- [ ]` / `- [x]`)
   - Blockquotes and inline code / code blocks
 - **Font Scaling:**
-  - `Ctrl++` and `Ctrl+-` scale the active note's base font size (persisted in front matter).
+  - The note's base font size is stored in its front matter and applied when the note loads.
+    `Ctrl+=` / `Ctrl+-` drive the view zoom rather than this base size.
 - **Paper Themes:**
   - 7 curated soft pastel paper colors: Yellow, Blue, Green, Pink, Purple, Gray, Black (with high-contrast light text).
 - **Keyboard Shortcuts:**

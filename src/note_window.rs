@@ -1,10 +1,11 @@
 use crate::layer_shell::{
-    apply_layer_mode, clamp_geometry_with_min_height, min_note_height, setup_layer_shell_window,
-    update_window_position, update_window_size, WindowGeometry, COLLAPSED_NOTE_HEIGHT,
-    DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH, MENU_OVERLAY_EXTRA_HEIGHT,
+    apply_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
+    setup_layer_shell_window, update_window_position, update_window_size, WindowGeometry,
+    COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
+    MENU_OVERLAY_EXTRA_HEIGHT,
 };
 use crate::model::NoteDocument;
-use crate::state::{LayerMode, NoteWindowState};
+use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
@@ -33,6 +34,7 @@ pub struct NoteWindowOptions<'a> {
     pub on_new_note: Rc<dyn Fn()>,
     pub on_close: Rc<dyn Fn(Uuid) -> Result<(), String>>,
     pub on_geometry_changed: Rc<dyn Fn(Uuid, NoteWindowState)>,
+    pub on_toggle_layer_mode: Rc<dyn Fn()>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -73,6 +75,7 @@ pub struct NoteWindow {
     pub document: Rc<RefCell<NoteDocument>>,
     pub state: Rc<RefCell<NoteWindowState>>,
     pub storage: StorageManager,
+    layer_mode: Rc<Cell<LayerMode>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
 }
@@ -121,6 +124,11 @@ impl NoteWindow {
 
         let doc_rc = Rc::new(RefCell::new(options.document));
         let state_rc = Rc::new(RefCell::new(initial_state));
+        let layer_mode_cell = Rc::new(Cell::new(options.layer_mode));
+
+        // Back the surface with the note's paper colour so a fast resize never
+        // exposes the default dark window background before the page repaints.
+        apply_paper_color(window.upcast_ref(), &doc_rc.borrow().metadata.color);
 
         // Setup Layer Shell
         setup_layer_shell_window(
@@ -180,6 +188,8 @@ impl NoteWindow {
         let on_close_clone = Rc::clone(&options.on_close);
         let on_geom_clone = Rc::clone(&options.on_geometry_changed);
         let flushes_clone = Rc::clone(&pending_flushes);
+        let on_toggle_layer_clone = Rc::clone(&options.on_toggle_layer_mode);
+        let layer_mode_clone = Rc::clone(&layer_mode_cell);
         let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
         let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
@@ -202,6 +212,8 @@ impl NoteWindow {
                                         collapsed: state_clone.borrow().collapsed,
                                         created_at: doc.metadata.created_at,
                                         updated_at: doc.metadata.updated_at,
+                                        zoom_percent: state_clone.borrow().zoom_percent,
+                                        layer_mode: layer_mode_clone.get().as_str().to_string(),
                                     },
                                 );
                             }
@@ -237,6 +249,11 @@ impl NoteWindow {
                             }
                             let mut doc = doc_clone.borrow_mut();
                             doc.metadata.color = color;
+                            // Keep the surface backing in step, so the next
+                            // resize cannot flash the previous paper colour.
+                            if let Some(win) = window_weak.upgrade() {
+                                apply_paper_color(win.upcast_ref(), &doc.metadata.color);
+                            }
                             if let Err(error) = storage_clone.save_note_atomic(&doc) {
                                 eprintln!("Color save failed for note {id}: {error}");
                             }
@@ -295,6 +312,30 @@ impl NoteWindow {
                                 );
                             }
                             on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::ZoomChanged {
+                            id: message_id,
+                            zoom_percent,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Zoom change rejected a mismatched note identifier");
+                                return;
+                            }
+                            let snapshot = {
+                                let mut st = state_clone.borrow_mut();
+                                let clamped = clamp_zoom_percent(zoom_percent);
+                                if st.zoom_percent == clamped {
+                                    return;
+                                }
+                                st.zoom_percent = clamped;
+                                st.clone()
+                            };
+                            // A view preference: persisted with the window
+                            // state, never written to the note document.
+                            on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::ToggleLayerMode => {
+                            on_toggle_layer_clone();
                         }
                         WebviewToHostMessage::MenuOverlay {
                             id: message_id,
@@ -444,13 +485,22 @@ impl NoteWindow {
             document: doc_rc,
             state: state_rc,
             storage: options.storage,
+            layer_mode: layer_mode_cell,
             allow_close,
             pending_flushes,
         }
     }
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
+        self.layer_mode.set(mode);
         apply_layer_mode(&self.window, mode);
+        // Keep the note's own menu showing the shared mode.
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SetLayerMode {
+                layer_mode: mode.as_str().to_string(),
+            },
+        );
     }
 
     #[allow(dead_code)]
