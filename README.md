@@ -1,100 +1,185 @@
-# Note-it
+<p align="center">
+  <img src="assets/note-it-logo.png" alt="Logo do Note-it" width="180">
+</p>
 
-A minimalist sticky note (post-it) application for Linux Wayland.
+<h1 align="center">Note-it</h1>
 
-> **Status:** Experimental. Under active development.
-> Niri is the primary supported compositor in the initial development phase.
+<p align="center">
+  Notas adesivas minimalistas para Linux Wayland.
+</p>
+
+> **Status:** experimental, em desenvolvimento ativo.
+> Niri é o compositor primário apoiado nesta fase.
 
 ---
 
-## Overview
+## Visão geral
 
-Note-it is a lightweight, local-first, distraction-free desktop note application built natively for Wayland using the `wlr-layer-shell` protocol. It allows you to quickly capture thoughts and keep them pinned to your desktop workspace or bring them into an overlay above all active windows with a single shortcut.
+O Note-it é um aplicativo de notas leve, local-first e sem distrações, feito nativamente para
+Wayland com o protocolo `wlr-layer-shell`. Ele serve para capturar uma ideia rapidamente e deixá-la
+fixada na área de trabalho — ou trazê-la para cima de todas as janelas com um atalho.
 
-Each note is persisted as a standard Markdown (`.md`) file on disk, combining clean human-readable files with a true WYSIWYG editing experience.
+Cada nota é um arquivo Markdown (`.md`) comum no disco, com front matter YAML. O arquivo continua
+legível e editável em qualquer outro programa, enquanto a edição no Note-it é WYSIWYG de verdade:
+sem marcadores de sintaxe atrapalhando o cursor.
 
-## Key Features
+## Principais recursos
 
-- **Wayland Native:** Built with GTK4, `gtk4-layer-shell`, and WebKitGTK 6.0.
-- **Desktop & Overlay Modes:** Notes live on the desktop layer (`bottom`) without obstructing applications, and can toggle instantly into an `overlay` layer.
-- **Local-First & Portable:** Every post-it is an individual `.md` file with YAML front matter stored in `$XDG_DATA_HOME/note-it/notes/`.
-- **True WYSIWYG:** Edit formatted text without Markdown syntax markers cluttering the cursor.
-- **Atomic Autosave:** Changes save safely with debounced atomic disk writes.
-- **Keyboard-Centric:** Instant note creation (`Ctrl+N`), quick dismiss (`Ctrl+W`), and text formatting shortcuts.
-- **Single-Instance IPC:** Seamless command-line integration for window management and global shortcuts.
-- **Privacy by Design:** Zero telemetry, zero analytics, zero external network requests, zero accounts.
+Tudo listado aqui já está implementado.
 
-## System Requirements
+**Janela e área de trabalho**
 
-- **Operating System:** Linux with Wayland compositor supporting `wlr-layer-shell` (tested and optimized on Arch Linux with Niri).
-- **System Dependencies:**
-  - `gtk4`
-  - `gtk4-layer-shell`
-  - `webkitgtk-6.0`
-  - `glib2`
-  - `pkgconf`
-- **Build Toolchain:**
-  - Rust (stable) & Cargo
-  - Node.js (>= 20) & npm / pnpm
+- Nativo em Wayland, com GTK4, `gtk4-layer-shell` e WebKitGTK 6.0.
+- Modo **Área de trabalho** (camada `bottom`), acima do papel de parede e atrás das janelas, e modo
+  **Sempre no topo** (camada `overlay`), acima de tudo — alternáveis a qualquer momento.
+- Arrastar, redimensionar e posicionar por monitor, com a geometria preservada entre sessões.
+- Recolher a nota à sua barra de título e expandir de volta ao tamanho anterior, individualmente ou
+  em todas as notas de uma vez.
+- Instância única com IPC, para integrar com atalhos globais do compositor.
 
-## Executando o Note-it localmente
+**Aparência**
 
-No Arch Linux com Niri, instale os pré-requisitos uma vez:
+- Sete cores de papel: amarelo, azul, verde, rosa, roxo, cinza e preto.
+- Cinco tipos de papel — liso, pautado, pontilhado, quadriculado pequeno e quadriculado grande — em
+  três intensidades.
+- Tema da interface **Sistema**, **Claro** ou **Escuro**, compartilhado por todas as notas. O tema
+  veste os menus e as bordas do aplicativo; a nota mantém a cor e o papel que recebeu.
+- Zoom de 75% a 200% por nota, que escala o texto sem alterar o documento.
+
+**Edição**
+
+- Títulos H1–H6, listas, sublistas, negrito, itálico, tachado e sublinhado.
+- Listas de tarefas com caixas reais, aninhadas, e data de conclusão registrada por tarefa.
+- Cor do texto, marca-texto e tamanho do texto por trecho, a partir de paletas compactas no menu.
+- Blocos de código com linguagem preservada e realce de sintaxe para 16 linguagens.
+- Callouts no formato dos alertas do GitHub — `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`.
+- Citações e comentários. O comentário fica guardado no arquivo como `<!-- ... -->` e continua
+  editável, sem fazer parte do texto visível da nota.
+- `->` vira uma seta de verdade enquanto se digita, exceto dentro de código.
+
+**Confiabilidade e privacidade**
+
+- Salvamento automático com escrita atômica em disco: ou a nota nova está gravada, ou a anterior
+  continua intacta, nunca um arquivo pela metade.
+- A data de modificação muda apenas quando o conteúdo realmente muda — abrir e fechar uma nota não
+  conta como editá-la.
+- Sanitização de HTML e de URLs em tudo que entra na nota, inclusive ao colar.
+- Zero telemetria, zero analytics, zero requisições de rede, zero contas.
+
+## Requisitos
+
+**Sistema**
+
+- Linux com compositor Wayland que ofereça `wlr-layer-shell` (testado no Arch Linux com Niri).
+
+**Dependências**
+
+- `gtk4`
+- `gtk4-layer-shell`
+- `webkitgtk-6.0`
+- `glib2`
+- `pkgconf`
+
+**Para compilar**
+
+- Rust (stable) e Cargo
+- Node.js (>= 20) e pnpm
+
+## Executando localmente
+
+No Arch Linux, instale os pré-requisitos uma vez:
 
 ```bash
 sudo pacman -S --needed gtk4 gtk4-layer-shell webkitgtk-6.0 rust nodejs pnpm pkgconf base-devel
 ```
 
-Depois, a partir da raiz do repositório, inicie normalmente com um único comando:
+Depois, a partir da raiz do repositório:
 
 ```bash
 ./scripts/run-note-it
 ```
 
-O runner prepara o frontend quando necessário, executa o build incremental do host e inicia a instância única do aplicativo. Para iniciar apenas o daemon, sem criar WebViews ou superfícies:
+O script prepara o frontend quando necessário, compila o host de forma incremental e inicia a
+instância única do aplicativo. Para subir apenas o daemon, sem criar janelas:
 
 ```bash
 ./scripts/run-note-it --background
 ```
 
-Use o mesmo comando para controlar a instância em execução:
+Para experimentar sem tocar nas suas notas reais, use o ambiente isolado:
 
 ```bash
-./scripts/run-note-it new      # cria uma nota (Ctrl+N também funciona no editor)
-./scripts/run-note-it show     # mostra as notas em modo Overlay
-./scripts/run-note-it hide     # esconde todas as notas após salvar
-./scripts/run-note-it toggle   # alterna entre Desktop e Overlay
-./scripts/run-note-it quit     # salva e encerra o aplicativo
+scripts/note-it-isolated          # árvore XDG temporária, removida ao sair
+scripts/note-it-isolated --keep   # mantém a árvore para inspeção
 ```
 
-## Niri Compositor Integration
+## Comandos disponíveis
 
-Add the following to your Niri configuration (`~/.config/niri/config.kdl`):
+```bash
+note-it                       # traz as notas de volta e reaproveita a instância em execução
+note-it new                   # cria uma nota
+note-it show                  # mostra todas as notas em Sempre no topo
+note-it hide                  # salva e esconde todas as notas
+note-it toggle                # alterna entre Área de trabalho e Sempre no topo
+note-it toggle-collapse-all   # recolhe todas as notas, ou expande todas
+note-it quit                  # salva tudo e encerra o aplicativo
+```
+
+Os mesmos comandos funcionam com `./scripts/run-note-it <comando>` durante o desenvolvimento.
+
+Atalhos dentro de uma nota: `Ctrl+N` cria outra nota, `Ctrl+W` fecha a atual, `Ctrl+=` / `Ctrl+-` /
+`Ctrl+0` controlam o zoom, `Ctrl+Shift+M` recolhe ou expande, e `Ctrl+Shift+Espaço` alterna a
+camada.
+
+## Integração com o Niri
+
+Adicione ao seu `~/.config/niri/config.kdl`:
 
 ```kdl
-// Spawn Note-it daemon on startup
+// Sobe o daemon do Note-it junto com a sessão
 spawn-at-startup "note-it" "--background"
 
-// Global shortcut to toggle overlay mode
+// Atalho global para alternar a camada
 binds {
     Mod+Shift+N { spawn "note-it" "toggle"; }
 }
 ```
 
-## Documentation
+## Armazenamento e privacidade
 
-Detailed technical documentation is available in the [`docs/`](docs/) directory:
+As notas ficam em arquivos Markdown individuais, seguindo a especificação XDG Base Directory:
 
-- [Vision & Principles](docs/vision.md)
-- [Architecture](docs/architecture.md)
-- [Markdown Storage Format](docs/markdown-format.md)
-- [Storage & XDG Paths](docs/storage.md)
-- [Niri Integration](docs/niri.md)
-- [Security & HTML Sanitization](docs/security.md)
-- [Development Guide](docs/development.md)
-- [Architectural Decisions](docs/decisions.md)
+| Caminho | Conteúdo |
+| --- | --- |
+| `$XDG_DATA_HOME/note-it/notes/` | as notas, uma por arquivo `<uuid>.md` |
+| `$XDG_CONFIG_HOME/note-it/config.toml` | preferências compartilhadas |
+| `$XDG_STATE_HOME/note-it/state.json` | geometria das janelas e estado da interface |
+| `$XDG_RUNTIME_DIR/note-it/` | arquivos de IPC da instância única |
+
+Nada sai da máquina. O aplicativo não faz requisições de rede, não coleta métricas e não tem conta,
+login ou sincronização. Como cada nota é um `.md` comum, os arquivos podem ser versionados,
+copiados ou lidos por qualquer outro editor sem passar pelo Note-it.
+
+## Documentação
+
+A documentação técnica está em [`docs/`](docs/), em inglês:
+
+- [Visão e princípios](docs/vision.md)
+- [Arquitetura](docs/architecture.md)
+- [Formato Markdown das notas](docs/markdown-format.md)
+- [Armazenamento e caminhos XDG](docs/storage.md)
+- [Integração com o Niri](docs/niri.md)
+- [Segurança e sanitização de HTML](docs/security.md)
+- [Guia de desenvolvimento](docs/development.md)
+- [Decisões arquiteturais](docs/decisions.md)
 - [Roadmap](docs/roadmap.md)
 
-## License
+## Estado atual
 
-This project is licensed under the [MIT License](LICENSE).
+O editor e o ciclo de vida das notas estão completos até a Fase 3.5 (Smart Blocks). O que vem
+depois — motor de cálculo, conversões, busca global, lixeira e backup, além do núcleo compartilhado
+com uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
+
+## Licença
+
+Distribuído sob a [Licença MIT](LICENSE).
