@@ -88,6 +88,16 @@ impl StorageManager {
         self.notes_dir.join(format!("{id}.md"))
     }
 
+    /// Writes a note, or leaves the one already on disk exactly as it was.
+    ///
+    /// Either the rename lands and the note is the new one, or it does not and
+    /// the note is still the old one; there is no state in between. A failure
+    /// also takes the half-written temp file with it, because nothing else
+    /// ever collects one and it would sit in the notes directory forever.
+    ///
+    /// The result is what tells the caller which of the two happened, so a
+    /// caller must not treat a document as stored until this has returned
+    /// `Ok`.
     pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
         let serialized = doc.serialize()?;
         let target_path = self.note_path(&doc.metadata.id);
@@ -102,8 +112,25 @@ impl StorageManager {
         );
         let temp_path = self.notes_dir.join(temp_filename);
 
+        match self.write_then_rename(&serialized, &temp_path, &target_path) {
+            Ok(()) => Ok(target_path),
+            Err(error) => {
+                // Best effort: if this cannot be removed either, the save has
+                // already failed and the error worth reporting is that one.
+                let _ = fs::remove_file(&temp_path);
+                Err(error)
+            }
+        }
+    }
+
+    fn write_then_rename(
+        &self,
+        serialized: &str,
+        temp_path: &Path,
+        target_path: &Path,
+    ) -> Result<(), String> {
         {
-            let mut file = File::create(&temp_path)
+            let mut file = File::create(temp_path)
                 .map_err(|e| format!("Failed to create temp file {}: {e}", temp_path.display()))?;
             file.write_all(serialized.as_bytes())
                 .map_err(|e| format!("Failed to write to temp file: {e}"))?;
@@ -111,13 +138,11 @@ impl StorageManager {
                 .map_err(|e| format!("Failed to sync temp file: {e}"))?;
         }
 
-        fs::rename(&temp_path, &target_path)
+        fs::rename(temp_path, target_path)
             .map_err(|e| format!("Failed to rename temp file to target: {e}"))?;
         File::open(&self.notes_dir)
             .and_then(|directory| directory.sync_all())
-            .map_err(|e| format!("Failed to sync notes directory: {e}"))?;
-
-        Ok(target_path)
+            .map_err(|e| format!("Failed to sync notes directory: {e}"))
     }
 
     pub fn load_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
@@ -289,6 +314,41 @@ mod tests {
 
         let after = manager.list_notes_by_recency().expect("list again");
         assert_eq!(after[0], ids[0]);
+    }
+
+    #[test]
+    fn a_save_that_cannot_be_completed_leaves_no_temp_file_behind() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "conteúdo que não chega ao disco".to_string();
+
+        // A directory sitting where the note file belongs: the temp file is
+        // written and the rename onto it fails. That is path resolution rather
+        // than a permission bit, so it fails for every user, root included.
+        fs::create_dir(manager.note_path(&doc.metadata.id)).expect("occupy the note path");
+
+        manager
+            .save_note_atomic(&doc)
+            .expect_err("renaming a file over a directory must fail");
+
+        let debris: Vec<String> = fs::read_dir(manager.notes_dir())
+            .expect("read the notes directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tmp."))
+            .collect();
+        assert!(
+            debris.is_empty(),
+            "a failed save left temp files behind: {debris:?}"
+        );
     }
 
     #[test]

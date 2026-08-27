@@ -20,7 +20,9 @@ Note-it adheres to the XDG Base Directory Specification:
 
 These describe how the note is displayed, so they live in the front matter beside the note rather
 than in `state.json`, and they travel with the file. Changing any of them saves the note without
-touching its content or its `updated_at`.
+touching its content or its `updated_at`, and — like a content save — the change is adopted in
+memory only once it has been written, so one that fails is not left behind as though it had been
+stored.
 
 Each is stored as a plain string and resolved against the supported set on read, so a value written
 by a newer version — or by hand — degrades to the default instead of failing the parse and taking
@@ -71,6 +73,15 @@ whatever the editor holds, edited or not, so the single path all content saves
 funnel through compares the incoming text with what is already stored and does
 nothing when they match. An unchanged note is not rewritten at all: no temp
 file, no rename, no fsync, and the file keeps its own modification time.
+
+That comparison is only sound while the note held in memory is the note that
+is on disk, so it is kept that way: a change is prepared on a copy, written,
+and adopted in memory only once the write has succeeded. A save that fails
+therefore leaves the note describing exactly what is stored, and the same text
+arriving again — which is what every one of those paths resends — is still a
+difference and is written for real. A payload is never treated as stored
+because it matches a state that came from a write that never landed, and
+save-and-close never finalises a close over a save that failed.
 
 Both fields are optional on read. A note whose front matter omits them still
 opens; the missing value is reported as unknown (`—`) rather than replaced by a
@@ -129,3 +140,13 @@ To prevent data corruption during unexpected power loss or process crashes:
 1. Write note contents to a temporary file (`.tmp.<uuid>.<nanos>`) in the same directory.
 2. Flush and sync data to disk.
 3. Atomically rename/replace the destination file using `std::fs::rename`.
+4. Sync the notes directory, so the rename itself is durable.
+
+Either the rename lands and the note is the new one, or it does not and the note is still the
+previous one; there is no state in between. If anything after the temporary file is created fails,
+that file is removed rather than left in the notes directory, since nothing else would ever collect
+it.
+
+The result of a save is what says which of the two happened, so no caller may treat a note as
+stored before it has returned successfully. That is the rule the in-memory document depends on:
+it is only replaced by a version that has actually been written.

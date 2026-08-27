@@ -3,7 +3,7 @@ use crate::layer_shell::{
     setup_layer_shell_window, update_window_position, update_window_size, WindowGeometry,
     COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
-use crate::model::{paper_intensity_name, paper_type_name, NoteDocument};
+use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
 use crate::settings::theme_name;
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
@@ -263,14 +263,19 @@ impl NoteWindow {
                                 eprintln!("Color save rejected a mismatched note identifier");
                                 return;
                             }
-                            let mut doc = doc_clone.borrow_mut();
-                            doc.metadata.color = color;
-                            // Keep the surface backing in step, so the next
-                            // resize cannot flash the previous paper colour.
+                            // Keep the surface backing in step with the page,
+                            // so the next resize cannot flash the previous
+                            // paper colour. This mirrors what the note already
+                            // shows, not what is stored, so it stands whether
+                            // or not the save below goes through.
                             if let Some(win) = window_weak.upgrade() {
-                                apply_paper_color(win.upcast_ref(), &doc.metadata.color);
+                                apply_paper_color(win.upcast_ref(), &color);
                             }
-                            if let Err(error) = storage_clone.save_note_atomic(&doc) {
+                            if let Err(error) =
+                                save_metadata(&storage_clone, &doc_clone, id, |metadata| {
+                                    metadata.color = color;
+                                })
+                            {
                                 eprintln!("Color save failed for note {id}: {error}");
                             }
                         }
@@ -282,9 +287,11 @@ impl NoteWindow {
                                 eprintln!("Font size save rejected a mismatched note identifier");
                                 return;
                             }
-                            let mut doc = doc_clone.borrow_mut();
-                            doc.metadata.font_size = font_size;
-                            if let Err(error) = storage_clone.save_note_atomic(&doc) {
+                            if let Err(error) =
+                                save_metadata(&storage_clone, &doc_clone, id, |metadata| {
+                                    metadata.font_size = font_size;
+                                })
+                            {
                                 eprintln!("Font size save failed for note {id}: {error}");
                             }
                         }
@@ -297,15 +304,17 @@ impl NoteWindow {
                                 eprintln!("Paper save rejected a mismatched note identifier");
                                 return;
                             }
-                            let mut doc = doc_clone.borrow_mut();
-                            // Whatever the page sends is resolved against the
-                            // supported set before it reaches the note file.
-                            doc.metadata.paper_type = paper_type_name(&paper_type).to_string();
-                            doc.metadata.paper_intensity =
-                                paper_intensity_name(&paper_intensity).to_string();
                             // Appearance only: the note is saved without its
-                            // modification date moving.
-                            if let Err(error) = storage_clone.save_note_atomic(&doc) {
+                            // modification date moving, and whatever the page
+                            // sends is resolved against the supported set
+                            // before it reaches the note file.
+                            if let Err(error) =
+                                save_metadata(&storage_clone, &doc_clone, id, |metadata| {
+                                    metadata.paper_type = paper_type_name(&paper_type).to_string();
+                                    metadata.paper_intensity =
+                                        paper_intensity_name(&paper_intensity).to_string();
+                                })
+                            {
                                 eprintln!("Paper save failed for note {id}: {error}");
                             }
                         }
@@ -575,6 +584,10 @@ impl NoteWindow {
         );
     }
 
+    /// Rewrites the note exactly as it is held. Since a document is only
+    /// adopted in memory once it has been written, that is the note already on
+    /// disk — this re-persists it, it does not collect unsaved text. The
+    /// editor's latest text is reached with [`Self::request_flush`].
     #[allow(dead_code)]
     pub fn save_now(&self) -> Result<(), String> {
         let doc = self.document.borrow();
@@ -681,22 +694,81 @@ fn expire_flush_request(pending_flushes: &PendingFlushes, request_id: u64) -> bo
 /// An identical save still reports success. Close and both flushes wait on
 /// this result before the window may go, so "nothing changed" must never turn
 /// into "nothing answered".
+///
+/// That comparison is only sound while the document in memory holds what is
+/// actually on disk, so the edit is prepared on a copy and adopted only once
+/// the file has been written. A save that fails leaves the document exactly as
+/// it was, and the same payload arriving again is therefore still a difference
+/// and is written for real, instead of being answered with a success the disk
+/// never earned.
 fn save_content(
     storage: &StorageManager,
     document: &Rc<RefCell<NoteDocument>>,
     expected_id: Uuid,
     content: String,
 ) -> Result<(), String> {
-    let mut doc = document.borrow_mut();
-    if doc.metadata.id != expected_id {
-        return Err("note identifier mismatch".to_string());
-    }
-    if doc.content == content {
-        return Ok(());
-    }
-    doc.content = content;
-    doc.touch_content_modified();
-    storage.save_note_atomic(&doc).map(|_| ())
+    let candidate = {
+        let doc = document.borrow();
+        if doc.metadata.id != expected_id {
+            return Err("note identifier mismatch".to_string());
+        }
+        if doc.content == content {
+            return Ok(());
+        }
+        let mut candidate = doc.clone();
+        candidate.content = content;
+        candidate.touch_content_modified();
+        candidate
+    };
+
+    commit_once_written(storage, document, candidate)
+}
+
+/// Persists an appearance change — paper colour, paper type, pattern intensity
+/// or font size — the same way [`save_content`] persists text.
+///
+/// These change the very document the content comparison is made against, so
+/// they are prepared on a copy too. A colour that could not be written is not
+/// left sitting in memory as though it had been: the note keeps describing
+/// what is stored, and choosing that colour again writes it.
+///
+/// `updated_at` is deliberately not touched here. Appearance is not content.
+fn save_metadata(
+    storage: &StorageManager,
+    document: &Rc<RefCell<NoteDocument>>,
+    expected_id: Uuid,
+    change: impl FnOnce(&mut NoteFrontMatter),
+) -> Result<(), String> {
+    let candidate = {
+        let doc = document.borrow();
+        if doc.metadata.id != expected_id {
+            return Err("note identifier mismatch".to_string());
+        }
+        let mut candidate = doc.clone();
+        change(&mut candidate.metadata);
+        candidate
+    };
+
+    commit_once_written(storage, document, candidate)
+}
+
+/// Writes a prepared note and, only if that succeeded, makes it the document
+/// held in memory.
+///
+/// The order is the whole point: `save_note_atomic` either replaced the file
+/// or left the previous one untouched, and until it has said which, the
+/// in-memory document must keep describing the note that is on disk. Nothing
+/// runs between the write and the adoption — the save is synchronous and the
+/// main loop is not re-entered — so there is no change to lose by replacing
+/// the document wholesale.
+fn commit_once_written(
+    storage: &StorageManager,
+    document: &Rc<RefCell<NoteDocument>>,
+    candidate: NoteDocument,
+) -> Result<(), String> {
+    storage.save_note_atomic(&candidate)?;
+    *document.borrow_mut() = candidate;
+    Ok(())
 }
 
 fn save_and_close(
@@ -719,7 +791,7 @@ fn file_uri_for_path(path: &Path) -> String {
 mod tests {
     use super::{
         apply_collapse_to_state, complete_flush_response, expire_flush_request, file_uri_for_path,
-        save_and_close, save_content, PendingFlushes, SubpixelDeltaAccumulator,
+        save_and_close, save_content, save_metadata, PendingFlushes, SubpixelDeltaAccumulator,
         FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
@@ -728,7 +800,7 @@ mod tests {
     use crate::storage::StorageManager;
     use std::cell::{Cell, RefCell};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -767,7 +839,16 @@ mod tests {
     }
 
     #[test]
-    fn failed_save_keeps_latest_content_in_memory() {
+    fn a_failed_first_save_leaves_the_note_holding_nothing() {
+        // The same rule as `a_content_save_that_fails_is_not_recorded_as_persisted`
+        // at the other boundary: a note whose very first write fails. The
+        // document must not come away holding text the file never received,
+        // because the next attempt resends exactly that text and would then be
+        // answered by the identical-content shortcut instead of writing.
+        //
+        // The editor's own copy is not at stake here: the page holds the live
+        // text and resends it on every autosave, flush and close. This
+        // document is the record of what is on disk.
         let tmp = tempdir().expect("tempdir");
         let notes_dir = tmp.path().join("notes");
         let storage = StorageManager::with_custom_paths(
@@ -784,7 +865,10 @@ mod tests {
         let result = save_content(&storage, &document, id, "latest text".to_string());
 
         assert!(result.is_err());
-        assert_eq!(document.borrow().content, "latest text");
+        assert_eq!(document.borrow().content, "");
+        // Sending it again is still a difference, so it is still attempted
+        // rather than reported as already stored.
+        assert!(save_content(&storage, &document, id, "latest text".to_string()).is_err());
     }
 
     #[test]
@@ -816,7 +900,8 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!close_called.get());
-        assert_eq!(document.borrow().content, "unsaved latest text");
+        // The note does not come away claiming the text reached the file.
+        assert_eq!(document.borrow().content, "");
     }
 
     #[test]
@@ -1196,6 +1281,38 @@ mod tests {
         Rc::new(RefCell::new(doc))
     }
 
+    /// Makes every write into a notes directory fail, reversibly.
+    ///
+    /// The directory is moved aside and a plain file put in its place, so the
+    /// kernel refuses every create and rename underneath it with `ENOTDIR`.
+    /// That is path resolution rather than a permission bit, so it holds for
+    /// every user, including the root the Rust CI job runs as. The notes
+    /// themselves wait untouched in the directory that was moved aside and
+    /// come back exactly as they were, which is what lets these tests check
+    /// that a failed save left the stored note alone.
+    struct FailingWrites {
+        notes_dir: PathBuf,
+        moved_aside: PathBuf,
+    }
+
+    impl FailingWrites {
+        fn engage(storage: &StorageManager) -> Self {
+            let notes_dir = storage.notes_dir().to_path_buf();
+            let moved_aside = notes_dir.with_extension("moved-aside");
+            fs::rename(&notes_dir, &moved_aside).expect("move the notes directory aside");
+            fs::write(&notes_dir, b"not a directory").expect("block the notes directory");
+            Self {
+                notes_dir,
+                moved_aside,
+            }
+        }
+
+        fn lift(self) {
+            fs::remove_file(&self.notes_dir).expect("unblock the notes directory");
+            fs::rename(&self.moved_aside, &self.notes_dir).expect("restore the notes directory");
+        }
+    }
+
     fn storage_in(tmp: &tempfile::TempDir) -> StorageManager {
         StorageManager::with_custom_paths(
             tmp.path().join("notes"),
@@ -1483,6 +1600,225 @@ mod tests {
         let ordering = storage.list_notes_by_recency().expect("listing");
         assert_eq!(ordering[0], first_id);
         assert_eq!(ordering.len(), 2);
+    }
+
+    #[test]
+    fn a_content_save_that_fails_is_not_recorded_as_persisted() {
+        // 3.4R.1, case 1. The document in memory is the record of what is on
+        // disk — it is what the identical-content check is compared against —
+        // so a write that never landed must leave it exactly as it was.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        let fault = FailingWrites::engage(&storage);
+        let failure = save_content(&storage, &document, id, "conteúdo B".to_string())
+            .expect_err("a save that cannot be written must report the failure");
+        fault.lift();
+
+        assert!(
+            failure.contains("temp file"),
+            "unexpected failure: {failure}"
+        );
+        assert_eq!(document.borrow().content, "conteúdo A");
+        assert_eq!(document.borrow().metadata.updated_at, updated_at);
+
+        let on_disk = storage.load_note(&id).expect("reload");
+        assert_eq!(on_disk.content, "conteúdo A");
+        assert_eq!(on_disk.metadata.updated_at, updated_at);
+    }
+
+    #[test]
+    fn resending_the_same_content_after_a_failed_save_writes_it_for_real() {
+        // 3.4R.1, case 2. Autosave, the flushes and save-and-close all resend
+        // whatever the editor holds, so the payload that failed arrives again
+        // unchanged. The identical-content shortcut must not answer for it.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+
+        let fault = FailingWrites::engage(&storage);
+        save_content(&storage, &document, id, "conteúdo B".to_string())
+            .expect_err("the first attempt must fail");
+        fault.lift();
+
+        save_content(&storage, &document, id, "conteúdo B".to_string())
+            .expect("the retry must write rather than report a phantom success");
+
+        let on_disk = storage.load_note(&id).expect("reload");
+        assert_eq!(on_disk.content, "conteúdo B");
+        assert!(on_disk.metadata.updated_at > updated_at);
+        assert_eq!(on_disk.metadata.created_at, created_at);
+        assert_eq!(document.borrow().content, "conteúdo B");
+    }
+
+    #[test]
+    fn save_and_close_does_not_finalize_a_close_over_a_failed_save() {
+        // 3.4R.1, case 3. The window may only go once the text it holds is on
+        // disk; otherwise closing is how the edit is lost.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+
+        let closed = Cell::new(false);
+        let fault = FailingWrites::engage(&storage);
+        let failure = save_and_close(&storage, &document, id, "conteúdo B".to_string(), &|_| {
+            closed.set(true);
+            Ok(())
+        })
+        .expect_err("the close must not be finalized over a failed save");
+        fault.lift();
+
+        assert!(
+            failure.starts_with("note save failed"),
+            "unexpected failure: {failure}"
+        );
+        assert!(!closed.get(), "the note was closed over an unsaved edit");
+        assert_eq!(
+            storage.load_note(&id).expect("reload").content,
+            "conteúdo A"
+        );
+    }
+
+    #[test]
+    fn the_close_goes_through_once_the_write_finally_succeeds() {
+        // 3.4R.1, case 4. The retry after the fault is lifted has to persist
+        // and only then close — a failed save must not turn into a note that
+        // can never be closed either.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        let closed = Cell::new(false);
+        let fault = FailingWrites::engage(&storage);
+        save_and_close(&storage, &document, id, "conteúdo B".to_string(), &|_| {
+            closed.set(true);
+            Ok(())
+        })
+        .expect_err("the first attempt must fail");
+        fault.lift();
+
+        save_and_close(&storage, &document, id, "conteúdo B".to_string(), &|_| {
+            closed.set(true);
+            Ok(())
+        })
+        .expect("the retry must save and close");
+
+        assert!(closed.get(), "the note could no longer be closed");
+        let on_disk = storage.load_note(&id).expect("reload");
+        assert_eq!(on_disk.content, "conteúdo B");
+        assert!(on_disk.metadata.updated_at > updated_at);
+    }
+
+    #[test]
+    fn a_flush_whose_save_fails_reports_the_failure_to_the_lifecycle() {
+        // The flush before hide and before quit both wait on this result
+        // before destroying surfaces or exiting, so a failed write has to
+        // reach them as a failure rather than as a success.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        let outcome = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&outcome);
+        pending.borrow_mut().insert(
+            21,
+            Box::new(move |result| *sink.borrow_mut() = Some(result)),
+        );
+
+        let fault = FailingWrites::engage(&storage);
+        let accepted = complete_flush_response(
+            &storage,
+            &document,
+            id,
+            id,
+            21,
+            "conteúdo B".to_string(),
+            &pending,
+        );
+        fault.lift();
+
+        assert!(accepted);
+        assert!(matches!(outcome.borrow().as_ref(), Some(Err(_))));
+        assert_eq!(document.borrow().content, "conteúdo A");
+        assert_eq!(
+            storage.load_note(&id).expect("reload").content,
+            "conteúdo A"
+        );
+    }
+
+    #[test]
+    fn an_appearance_save_that_fails_leaves_the_note_describing_what_is_stored() {
+        // 3.4R.1, case 5. Paper colour, paper type, intensity and font size all
+        // change the same document the content check is compared against, so a
+        // failed appearance save must not be adopted in memory either — and the
+        // content no-op that follows a close must not stand in for it.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo intacto");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        let fault = FailingWrites::engage(&storage);
+        save_metadata(&storage, &document, id, |metadata| {
+            metadata.color = "black".to_string();
+            metadata.paper_type = "grid-large".to_string();
+            metadata.paper_intensity = "strong".to_string();
+            metadata.font_size = 22;
+        })
+        .expect_err("an appearance save that cannot be written must report the failure");
+        fault.lift();
+
+        for note in [
+            document.borrow().clone(),
+            storage.load_note(&id).expect("reload"),
+        ] {
+            assert_eq!(note.metadata.color, "yellow");
+            assert_eq!(note.metadata.paper_type, "blank");
+            assert_eq!(note.metadata.paper_intensity, "normal");
+            assert_eq!(note.metadata.font_size, 15);
+        }
+
+        // Closing the note now succeeds, because its *text* really is stored —
+        // and that success must not be mistaken for the appearance having
+        // landed. The note on disk still says exactly what memory says.
+        save_and_close(
+            &storage,
+            &document,
+            id,
+            "conteúdo intacto".to_string(),
+            &|_| Ok(()),
+        )
+        .expect("an untouched note still closes");
+        assert_eq!(
+            storage.load_note(&id).expect("reload").metadata.color,
+            "yellow"
+        );
+
+        // Choosing the same appearance again writes it, and appearance still
+        // never moves the modification date.
+        save_metadata(&storage, &document, id, |metadata| {
+            metadata.color = "black".to_string();
+            metadata.font_size = 22;
+        })
+        .expect("the retry must write");
+
+        let on_disk = storage.load_note(&id).expect("reload");
+        assert_eq!(on_disk.metadata.color, "black");
+        assert_eq!(on_disk.metadata.font_size, 22);
+        assert_eq!(on_disk.metadata.updated_at, updated_at);
+        assert_eq!(document.borrow().metadata.color, "black");
+        assert_eq!(on_disk.content, "conteúdo intacto");
     }
 
     #[test]

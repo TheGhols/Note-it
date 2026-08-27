@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- A note whose save failed is no longer treated as saved. The document held in memory was updated
+  before the write was confirmed, so a failed write left memory holding text the file never
+  received — and the identical-content check added just before it then compared the next attempt
+  against that phantom state and reported success without writing, which could lose the edit
+  silently at close. Content and appearance changes are now prepared on a copy and adopted only
+  once the file has actually been written, so a failed save leaves the note describing exactly what
+  is stored and the next attempt writes for real. A failed save no longer leaves its temporary file
+  behind in the notes directory either.
 - Opening a note and closing it no longer counts as editing it. Closing and the flushes before hide
   and quit all send whatever the editor holds, edited or not, and every one of them moved
   `updated_at`. The single path they funnel through now compares the incoming text with what is

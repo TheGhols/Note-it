@@ -247,3 +247,48 @@
   Introducing a `last_active_note` in `state.json` was deliberately not done here: nothing approved
   depends on the old meaning, and inventing state for it would have been a larger change than the
   defect warranted.
+
+## ADR-019: A Document Is Adopted Only After It Is Written
+- **Decision:** every change to a note — the content arriving from the page, and the paper colour,
+  paper type, pattern intensity and font size arriving from its menu — is prepared on a *copy* of
+  the `NoteDocument`. `save_note_atomic` runs against that copy, and only a successful write makes
+  it the document held in memory. A failure leaves the in-memory note exactly as it was.
+- **The defect this closes:** ADR-018 rests on one premise — "the document's own `content` field
+  already *is* the last-persisted text" — and `save_content` broke that premise itself. It assigned
+  the content and stamped `updated_at` *before* calling `save_note_atomic`, so a failed write left
+  memory holding B while the file still held A. The identical-content shortcut then compared the
+  next payload against B: autosave, both flushes and save-and-close all resend whatever the editor
+  holds, so the same B arrived again, matched, and returned `Ok` without writing anything.
+  Save-and-close waits on exactly that result, so the note could close over an edit that never
+  reached the disk. The optimisation did not cause the divergence, but it turned it from a
+  transient inconsistency into silent content loss.
+- **Why transactional rather than a dirty flag:** a second piece of state tracking "what was last
+  persisted" would have to be kept in step with the document by hand, at every one of the four
+  write paths, and getting *that* wrong reproduces the same class of defect one level up. Preparing
+  a candidate and swapping it in on success needs no new state at all: the document *is* the record
+  of what is on disk, which is what ADR-018 already assumed and now actually holds.
+- **Appearance saves too:** paper colour, paper type, intensity and font size mutate the very
+  document the content comparison is made against, so they take the same route through
+  `save_metadata`. A colour that could not be written is not left in memory as though it had been,
+  and choosing it again writes it. They still do not touch `updated_at`; appearance is not content.
+- **What ADR-018 keeps:** identical, already-persisted content still writes nothing and still
+  returns `Ok`, `updated_at` still moves only on a real edit, `created_at` is still immutable, and
+  close and flush still succeed when there is genuinely nothing pending. Only a payload that
+  coincides with a *failed* write is now treated as pending, because it is.
+- **The editor's copy is not at stake.** The page owns the live text and resends it on every
+  autosave, flush and close; the `NoteDocument` is the record of the file. Two earlier tests
+  asserted the opposite — that a failed save leaves the latest text in memory — and nothing ever
+  read it back: no path recovers content from that field, `save_now` only re-persists, and the
+  `LoadNote` sent on a page reload should describe the stored note anyway. That expectation was the
+  hazard, so it was replaced rather than preserved.
+- **New-note creation is already safe:** `create_new_note` writes the document before any window
+  exists and returns on failure, so there is no in-memory note left claiming to be stored.
+- **A failed save cleans up after itself:** the temp file is removed when anything after its
+  creation fails. Nothing else ever collected one, so a run of failures used to leave `.tmp.*`
+  debris in the notes directory permanently.
+- **Testing I/O failure without touching the store:** the notes directory is moved aside and a
+  plain file put in its place, so the kernel refuses every create and rename underneath it with
+  `ENOTDIR`. That is path resolution rather than a permission bit, so it also fails for root, which
+  is how the Rust CI job runs — a `chmod` would have silently passed there. The notes wait
+  untouched in the directory that was moved aside, which is what lets the tests assert that the
+  stored note survived the failed save unchanged.

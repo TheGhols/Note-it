@@ -89,6 +89,22 @@
 - [x] Recency, which decides the note a summon brings back, now follows the last edit rather than
       the last close. See the note under Phase 4 below.
 
+### Phase 3.4R.1: Persistence Transactional Integrity (Completed)
+- [x] A content or appearance change is prepared on a copy and adopted in memory only once
+      `save_note_atomic` has confirmed the write, so the document always describes the note on disk.
+- [x] A save that fails leaves the stored note and the in-memory note untouched, and the same
+      payload arriving again is written for real rather than answered by the identical-content
+      shortcut.
+- [x] Save-and-close never finalises a close over a failed save, and closes normally once the
+      retry succeeds.
+- [x] The flushes before hide and quit report a failed write as a failure rather than as success.
+- [x] Appearance saves — paper colour, type, intensity, font size — take the same route, so a
+      failed one is not masked by the content no-op that follows a close.
+- [x] A failed save removes its own temporary file instead of leaving `.tmp.*` debris behind.
+- [x] Everything Phase 3.4R established is unchanged: identical persisted content writes nothing,
+      `updated_at` moves only on a real edit, `created_at` never moves, and an untouched note keeps
+      its file's modification time.
+
 ### Phase 3.5: Smart Blocks (Planned)
 - [ ] Code blocks with a language, preserved through the Markdown round trip.
 - [ ] Syntax highlighting inside those blocks.
