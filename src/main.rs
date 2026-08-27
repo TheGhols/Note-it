@@ -19,6 +19,13 @@ use std::rc::Rc;
 const APPLICATION_ID: &str = "io.github.theghols.NoteIt";
 
 fn main() -> glib::ExitCode {
+    // WebKitGTK's automatically selected Wayland input context can drop dead-key
+    // composition on Niri. Respect explicit IME choices, but use GTK's built-in
+    // compose context when the environment has not selected one.
+    if std::env::var_os("GTK_IM_MODULE").is_none() {
+        std::env::set_var("GTK_IM_MODULE", "simple");
+    }
+
     if let Err(error) = CliArgs::try_parse() {
         let exit_code = match error.kind() {
             ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => glib::ExitCode::SUCCESS,

@@ -42,6 +42,34 @@ describe('PointerDeltaCoalescer', () => {
     expect(emitted).toEqual([[9.9140625, 0.87109375]]);
   });
 
+  it('includes the final pointerup delta before ending a fast drag', () => {
+    const emitted: Array<[number, number]> = [];
+    const coalescer = new PointerDeltaCoalescer(
+      (dx, dy) => emitted.push([dx, dy]),
+      () => 42,
+      () => {},
+    );
+
+    coalescer.add(17.25, -8.5);
+    expect(coalescer.finish(5.75, -2.5)).toBe(true);
+
+    expect(emitted).toEqual([[23, -11]]);
+  });
+
+  it('does not replace a valid pending delta with invalid pointerup coordinates', () => {
+    const emitted: Array<[number, number]> = [];
+    const coalescer = new PointerDeltaCoalescer(
+      (dx, dy) => emitted.push([dx, dy]),
+      () => 42,
+      () => {},
+    );
+
+    coalescer.add(4.5, -3.25);
+    expect(coalescer.finish(Number.NaN, 0)).toBe(false);
+
+    expect(emitted).toEqual([[4.5, -3.25]]);
+  });
+
   it('rejects non-finite and absurd deltas without scheduling IPC', () => {
     let scheduled = 0;
     const coalescer = new PointerDeltaCoalescer(

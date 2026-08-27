@@ -70,6 +70,10 @@ export class NoteEditor {
     this.editor.commands.focus();
   }
 
+  public toggleStrike(): void {
+    this.editor.chain().focus().toggleStrike().run();
+  }
+
   public destroy(): void {
     this.cancelPendingSave();
     this.editor.destroy();

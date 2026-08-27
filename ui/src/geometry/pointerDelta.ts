@@ -39,6 +39,12 @@ export class PointerDeltaCoalescer {
     this.emitPending();
   }
 
+  public finish(dx: number, dy: number): boolean {
+    const accepted = dx === 0 && dy === 0 ? true : this.add(dx, dy);
+    this.flush();
+    return accepted;
+  }
+
   public reset(): void {
     if (this.frameHandle !== null) {
       this.cancelFrame(this.frameHandle);

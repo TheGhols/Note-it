@@ -1,6 +1,7 @@
 import './styles/theme.css';
 import { bridge } from './bridge/bridge.ts';
 import { NoteEditor } from './editor/editor.ts';
+import { NoteKeyboardController } from './editor/keyboard.ts';
 import { PaperColor } from './bridge/types.ts';
 import { PointerDeltaCoalescer } from './geometry/pointerDelta.ts';
 
@@ -128,7 +129,11 @@ function initUI(): void {
     const endDrag = (e: PointerEvent) => {
       if (!isDragging) return;
       isDragging = false;
-      deltas.flush();
+      if (e.type === 'pointerup') {
+        deltas.finish(e.screenX - lastX, e.screenY - lastY);
+      } else {
+        deltas.flush();
+      }
       try {
         dragRegion.releasePointerCapture(e.pointerId);
       } catch {
@@ -178,7 +183,11 @@ function initUI(): void {
     const endResize = (e: PointerEvent) => {
       if (!isResizing) return;
       isResizing = false;
-      deltas.flush();
+      if (e.type === 'pointerup') {
+        deltas.finish(e.screenX - lastX, e.screenY - lastY);
+      } else {
+        deltas.flush();
+      }
       try {
         resizeHandle.releasePointerCapture(e.pointerId);
       } catch {
@@ -191,36 +200,36 @@ function initUI(): void {
     resizeHandle.addEventListener('pointercancel', endResize);
   }
 
-  // Keyboard Shortcuts inside Webview
-  window.addEventListener('keydown', (e) => {
-    if (e.ctrlKey || e.metaKey) {
-      if (e.key === 'n' || e.key === 'N') {
-        e.preventDefault();
-        flushSave();
-        bridge.sendMessage({ type: 'new_note_requested' });
-      } else if (e.key === 'w' || e.key === 'W') {
-        e.preventDefault();
-        saveAndClose();
-      } else if (e.key === '+' || e.key === '=') {
-        e.preventDefault();
-        setFontSize(currentFontSize + 1);
-        if (activeNoteId) {
-          bridge.sendMessage({
-            type: 'font_size_changed',
-            payload: { id: activeNoteId, fontSize: currentFontSize },
-          });
-        }
-      } else if (e.key === '-' || e.key === '_') {
-        e.preventDefault();
-        setFontSize(currentFontSize - 1);
-        if (activeNoteId) {
-          bridge.sendMessage({
-            type: 'font_size_changed',
-            payload: { id: activeNoteId, fontSize: currentFontSize },
-          });
-        }
+  // Keyboard shortcuts inside WebView. Composition and AltGr events remain native.
+  new NoteKeyboardController(window, {
+    newNote: () => {
+      flushSave();
+      bridge.sendMessage({ type: 'new_note_requested' });
+    },
+    closeNote: () => {
+      saveAndClose();
+    },
+    increaseFontSize: () => {
+      setFontSize(currentFontSize + 1);
+      if (activeNoteId) {
+        bridge.sendMessage({
+          type: 'font_size_changed',
+          payload: { id: activeNoteId, fontSize: currentFontSize },
+        });
       }
-    }
+    },
+    decreaseFontSize: () => {
+      setFontSize(currentFontSize - 1);
+      if (activeNoteId) {
+        bridge.sendMessage({
+          type: 'font_size_changed',
+          payload: { id: activeNoteId, fontSize: currentFontSize },
+        });
+      }
+    },
+    toggleStrike: () => {
+      noteEditor?.toggleStrike();
+    },
   });
 
   // Flush save on blur / beforeunload

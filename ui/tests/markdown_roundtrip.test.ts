@@ -122,6 +122,26 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     container.remove();
   });
 
+  it('preserves Portuguese Unicode before and after inline Markdown', () => {
+    const { editor, container } = createEditor('Ação, coração e órgão. ');
+    editor.getRawEditor().commands.focus('end');
+    typeText(editor, '**Ênfase após acentuação** e ~~remoção~~. São, avó, país, útil, à, ç.');
+
+    expect(container.textContent).toContain('Ação, coração e órgão.');
+    expect(container.querySelector('strong')?.textContent).toBe('Ênfase após acentuação');
+    expect(container.querySelector('s')?.textContent).toBe('remoção');
+    const markdown = editor.getMarkdown();
+    expect(markdown).toContain('Ação, coração e órgão.');
+    expect(markdown).toContain('**Ênfase após acentuação**');
+    expect(markdown).toContain('São, avó, país, útil, à, ç.');
+
+    editor.setMarkdown(markdown);
+    expect(container.textContent).toContain('São, avó, país, útil, à, ç.');
+
+    editor.destroy();
+    container.remove();
+  });
+
   it('keeps a hash literal in the middle of a paragraph', () => {
     const { editor, container } = createEditor('Text before ');
     editor.getRawEditor().commands.focus('end');
