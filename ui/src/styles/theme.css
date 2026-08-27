@@ -9,10 +9,6 @@
   --note-zoom: 1;
   --popover-bg: #FFFFFF;
   --popover-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  /* Every highlight in the palette is pale, so highlighted text needs a dark
-     foreground whatever the paper colour is. Deliberately not per-paper: on
-     dark paper the light default text would be unreadable on the highlight. */
-  --highlight-text: #1E293B;
   
   /* Default Paper: Soft Yellow */
   --paper-bg: #FEF9C3;
@@ -614,11 +610,10 @@ body[data-collapsed="true"] .resize-handle {
   opacity: 0.85;
 }
 
-/* Highlighted text always reads against the pale highlight colours. An
-   explicit colour chosen by the user is an inline style and still wins, so the
-   user's intent is preserved and nothing is written into the Markdown. */
+/* The highlight mark paints its own foreground inline, because the extension
+   renders an inline style that would beat a rule here. Only the shape is
+   styled from the stylesheet. */
 .ProseMirror mark {
-  color: var(--highlight-text);
   border-radius: 2px;
   padding: 0 1px;
 }

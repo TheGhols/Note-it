@@ -142,3 +142,21 @@
   text colour clears a readable contrast on every highlight and on every paper colour. The user's
   intent is then always preserved, because no combination in the palette is unreadable.
 
+## ADR-014: The Highlight Mark Paints Its Own Foreground
+- **Decision:** `NoteItHighlight` overrides the `color` attribute's `renderHTML` to emit
+  `background-color: <highlight>; color: #1E293B`, and the stylesheet no longer tries to colour
+  highlighted text.
+- **Root cause it fixes:** the upstream Highlight extension renders
+  `style="background-color: X; color: inherit"`. That `color: inherit` is an **inline style**, so it
+  beats any stylesheet rule — including the `.ProseMirror mark { color: … }` added in Phase 3.3.
+  Highlighted text therefore kept inheriting the paper's colour, which on the dark paper is white
+  on a pale highlight. The Phase 3.3 fix never applied; only its contrast arithmetic was tested, and
+  arithmetic about a palette proves nothing about what the DOM actually paints.
+- **Testing:** the tests now assert the colour the element really resolves to via
+  `getComputedStyle`, and that no `inherit` is left on the mark, rather than computing contrast
+  ratios in isolation.
+- **Explicit text colour:** ProseMirror nests the highlight inside the colour span, so the mark's
+  inline foreground wins while the highlight is present — legibility is preserved — and the user's
+  colour is still recorded in the Markdown, reappearing as soon as the highlight is removed.
+  Nothing about the paper colour is ever written to the document.
+

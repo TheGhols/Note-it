@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { NoteEditor } from '../src/editor/editor.ts';
-import { HIGHLIGHT_COLORS, TEXT_COLORS } from '../src/ui/palettes.ts';
+import { HIGHLIGHT_COLORS, HIGHLIGHT_TEXT_COLOR, TEXT_COLORS } from '../src/ui/palettes.ts';
 
 const PAPER_COLORS = ['yellow', 'blue', 'green', 'pink', 'purple', 'gray', 'black'] as const;
 
@@ -20,8 +20,8 @@ function contrastRatio(foreground: string, background: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-/** Foreground the stylesheet gives highlighted text, on every paper colour. */
-const HIGHLIGHT_TEXT = '#1E293B';
+/** Foreground highlighted text is actually rendered with. */
+const HIGHLIGHT_TEXT = HIGHLIGHT_TEXT_COLOR;
 /** Default text colour of the dark paper, which used to stay on the highlight. */
 const DARK_PAPER_TEXT = '#F4F4F5';
 
@@ -180,4 +180,186 @@ describe('text palette readability', () => {
       }
     }
   });
+});
+
+/**
+ * The defect these cover is a cascade problem, not an arithmetic one: the
+ * palette contrast was already correct while the DOM was still painting white
+ * text, because the highlight extension emitted an inline `color: inherit`
+ * that beat the stylesheet. These assert the colour the element really ends up
+ * with.
+ */
+describe('highlighted text is really rendered dark', () => {
+  let open: NoteEditor[] = [];
+
+  afterEach(() => {
+    for (const note of open) note.destroy();
+    open = [];
+    document.body.innerHTML = '';
+    document.body.removeAttribute('data-color');
+  });
+
+  function track(mounted: { note: NoteEditor; editor: any }) {
+    open.push(mounted.note);
+    return mounted;
+  }
+
+  function markIn(container: HTMLElement): HTMLElement {
+    const mark = container.querySelector('mark');
+    if (!mark) throw new Error('no highlight rendered');
+    return mark as HTMLElement;
+  }
+
+  function highlighted(markdown: string): { mark: HTMLElement; note: NoteEditor; editor: any } {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const note = new NoteEditor({ element: el, initialContent: '' });
+    note.setMarkdown(markdown);
+    track({ note, editor: note.getRawEditor() });
+    return { mark: markIn(el), note, editor: note.getRawEditor() };
+  }
+
+  it('paints a dark foreground for every highlight on the dark paper', () => {
+    document.body.setAttribute('data-color', 'black');
+
+    for (const entry of HIGHLIGHT_COLORS) {
+      if (entry.value === null) continue;
+      const { mark } = highlighted(
+        `<mark data-note-it-highlight="${entry.value}">marcado</mark>`,
+      );
+
+      // The colour actually applied to the element, not a palette calculation.
+      expect(getComputedStyle(mark).color, entry.label).toBe(HIGHLIGHT_TEXT);
+      expect(mark.style.backgroundColor, entry.label).toBeTruthy();
+    }
+  });
+
+  it('never leaves the inherit that used to keep the text white', () => {
+    document.body.setAttribute('data-color', 'black');
+    const { mark } = highlighted('<mark data-note-it-highlight="#FDE68A">marcado</mark>');
+
+    const style = mark.getAttribute('style') ?? '';
+    expect(style).toContain('color');
+    expect(style).not.toContain('inherit');
+    expect(getComputedStyle(mark).color).not.toBe('inherit');
+  });
+
+  it('renders the same dark foreground whatever the paper colour is', () => {
+    for (const paper of PAPER_COLORS) {
+      document.body.setAttribute('data-color', paper);
+      const { mark } = highlighted('<mark data-note-it-highlight="#BBF7D0">marcado</mark>');
+      expect(getComputedStyle(mark).color, paper).toBe(HIGHLIGHT_TEXT);
+    }
+  });
+
+  it('leaves unhighlighted text to inherit the paper colour', () => {
+    document.body.setAttribute('data-color', 'black');
+    const el = document.createElement('div');
+    document.body.append(el);
+    const note = new NoteEditor({ element: el, initialContent: '' });
+    note.setMarkdown('texto simples');
+    track({ note, editor: note.getRawEditor() });
+
+    // No inline colour anywhere, so the paper's own text colour applies.
+    expect(el.querySelector('mark')).toBeNull();
+    expect(el.innerHTML).not.toContain('color:');
+  });
+
+  it('returns to the normal colour when the highlight is removed', () => {
+    document.body.setAttribute('data-color', 'black');
+    const el = document.createElement('div');
+    document.body.append(el);
+    const note = new NoteEditor({ element: el, initialContent: '' });
+    note.setMarkdown('palavra destacada');
+    const editor = note.getRawEditor();
+    track({ note, editor });
+
+    selectWord(editor, 'destacada');
+    note.setHighlight('#FDE68A');
+    expect(getComputedStyle(markIn(el)).color).toBe(HIGHLIGHT_TEXT);
+
+    selectWord(editor, 'destacada');
+    note.setHighlight(null);
+
+    expect(el.querySelector('mark')).toBeNull();
+    // Nothing dark is left behind pinning the text.
+    expect(el.innerHTML).not.toContain(HIGHLIGHT_TEXT);
+    expect(note.getMarkdown()).not.toContain('data-note-it-highlight');
+  });
+
+  it('keeps the highlighted run dark even under an explicit text colour', () => {
+    document.body.setAttribute('data-color', 'black');
+    const { mark, note } = highlighted(
+      '<mark data-note-it-highlight="#FDE68A"><span data-note-it-color="#DC2626">x</span></mark>',
+    );
+
+    // Legibility wins while the highlight is there...
+    expect(getComputedStyle(mark).color).toBe(HIGHLIGHT_TEXT);
+    // ...and the user's own colour is still recorded in the note.
+    expect(note.getMarkdown()).toContain('data-note-it-color="#DC2626"');
+  });
+
+  it('brings an explicit colour back once the highlight is removed', () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const note = new NoteEditor({ element: el, initialContent: '' });
+    note.setMarkdown('palavra colorida');
+    const editor = note.getRawEditor();
+    track({ note, editor });
+
+    selectWord(editor, 'colorida');
+    note.setTextColor('#DC2626');
+    selectWord(editor, 'colorida');
+    note.setHighlight('#BFDBFE');
+    selectWord(editor, 'colorida');
+    note.setHighlight(null);
+
+    const span = el.querySelector('span[style*="color"]') as HTMLElement | null;
+    expect(span).not.toBeNull();
+    expect(getComputedStyle(span!).color).toBe('#DC2626');
+    expect(note.getMarkdown()).toContain('data-note-it-color="#DC2626"');
+  });
+
+  it('stays dark combined with bold, italic, strike, a size and a task item', () => {
+    document.body.setAttribute('data-color', 'black');
+    const el = document.createElement('div');
+    document.body.append(el);
+    const note = new NoteEditor({ element: el, initialContent: '' });
+    note.setMarkdown('- [ ] Comprar material');
+    const editor = note.getRawEditor();
+    track({ note, editor });
+
+    selectWord(editor, 'material');
+    note.setHighlight('#DDD6FE');
+    selectWord(editor, 'material');
+    note.setTextSize(22);
+    selectWord(editor, 'material');
+    editor.chain().toggleBold().toggleItalic().toggleStrike().run();
+
+    expect(getComputedStyle(markIn(el)).color).toBe(HIGHLIGHT_TEXT);
+
+    const markdown = note.getMarkdown();
+    const reopened = document.createElement('div');
+    document.body.append(reopened);
+    const again = new NoteEditor({ element: reopened, initialContent: '' });
+    again.setMarkdown(markdown);
+    track({ note: again, editor: again.getRawEditor() });
+
+    // Survives the round trip, still dark, still a task.
+    expect(again.getMarkdown()).toBe(markdown);
+    expect(getComputedStyle(markIn(reopened)).color).toBe(HIGHLIGHT_TEXT);
+    expect(again.getRawEditor().getHTML()).toContain('data-type="taskItem"');
+  });
+
+  it('never writes the highlight foreground into the Markdown', () => {
+    document.body.setAttribute('data-color', 'black');
+    const { note } = highlighted('<mark data-note-it-highlight="#FBCFE8">marcado</mark>');
+
+    const markdown = note.getMarkdown();
+    expect(markdown).toContain('data-note-it-highlight="#FBCFE8"');
+    // The paper colour must not leave a colour mark behind in the document.
+    expect(markdown).not.toContain(HIGHLIGHT_TEXT);
+    expect(markdown).not.toContain('data-note-it-color');
+  });
+
 });

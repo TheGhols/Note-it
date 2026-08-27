@@ -80,3 +80,12 @@ is: no note may be focused when the user wants them all out of the way. It runs
 `note-it toggle-collapse-all`, which collapses everything still expanded, and
 expands everything once they are all collapsed. Each note keeps its own
 `collapsed` flag and its own expanded size in `state.json`.
+
+The command has to be reachable from the compositor, which spawns it with a
+plain environment. Installing the binary somewhere on `PATH` — or a launcher
+pointing at the build — is part of setting the keybinding up; a bind naming a
+command that does not resolve fails silently.
+
+Because a spawned invocation is handed to the running instance through the
+single-instance dispatcher, the environment it is spawned with does not matter:
+the instance that already owns the notes is the one that acts on them.

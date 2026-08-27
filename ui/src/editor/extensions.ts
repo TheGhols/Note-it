@@ -7,6 +7,7 @@ import TaskList from '@tiptap/extension-task-list';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
+import { HIGHLIGHT_TEXT_COLOR } from '../ui/palettes.ts';
 import { NoteItTaskItem } from './taskItem.ts';
 import { NoteItTypography } from './typography.ts';
 import { normalizeTextSize } from './textSize.ts';
@@ -38,6 +39,32 @@ const NoteItUnderline = Underline.extend({
 
 // Custom Highlight serialized to <mark data-note-it-highlight="..." style="...">
 const NoteItHighlight = Highlight.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      color: {
+        ...(this.parent?.() as any)?.color,
+        /**
+         * Upstream renders `background-color: X; color: inherit`, and that
+         * inline `color: inherit` beats any stylesheet rule — which is why
+         * highlighted text stayed white on the dark paper. The foreground is
+         * set here instead, on the same inline style, so it actually applies.
+         * Nothing is written to the Markdown: this is rendering only.
+         */
+        renderHTML: (attributes: Record<string, unknown>) => {
+          const color = attributes.color;
+          if (!isValidHexColor(color)) {
+            return { style: `color: ${HIGHLIGHT_TEXT_COLOR}` };
+          }
+          return {
+            'data-color': color,
+            style: `background-color: ${color}; color: ${HIGHLIGHT_TEXT_COLOR}`,
+          };
+        },
+      },
+    };
+  },
+
   renderMarkdown(node: any, helpers: any) {
     const color = node.attrs?.color;
     if (isValidHexColor(color)) {

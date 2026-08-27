@@ -49,9 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
-- Highlighted text is readable on a dark note. The light default text used to stay light on the
-  pale highlights; highlighted text now always uses a dark foreground, and an explicitly chosen
-  text colour still wins.
+- Highlighted text is readable on a dark note. The highlight extension renders an inline
+  `color: inherit`, which beat the stylesheet rule meant to darken it, so highlighted text kept
+  inheriting the paper's white. The mark now paints its own dark foreground inline. An explicit
+  text colour is still recorded in the note and reappears when the highlight is removed.
 - The settings menu is no longer clipped on a collapsed note. The note expands first, so the menu
   opens on a surface tall enough to hold it.
 - Three text colours were darkened so every one of them stays readable on every highlight and on

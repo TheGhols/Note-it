@@ -30,6 +30,17 @@ export const TEXT_COLORS: readonly PaletteEntry[] = [
 ];
 
 /**
+ * Foreground for highlighted text.
+ *
+ * Every highlight in the palette is pale, so highlighted text needs a dark
+ * foreground whatever the paper colour is: on the dark paper the light default
+ * text would otherwise sit on a pale highlight and be unreadable. Applied by
+ * the highlight mark itself rather than by a stylesheet rule, because the mark
+ * carries an inline style and an inline style always wins the cascade.
+ */
+export const HIGHLIGHT_TEXT_COLOR = '#1E293B';
+
+/**
  * Highlight colours are kept pale so the note's own text stays readable on
  * every paper colour, including the dark one.
  */
