@@ -105,6 +105,17 @@
       `updated_at` moves only on a real edit, `created_at` never moves, and an untouched note keeps
       its file's modification time.
 
+### Phase 3.4R.2: Commit Point (Completed)
+- [x] The rename is the commit point: a save reports failure for anything before or at it, and
+      success from it onwards.
+- [x] A directory sync that fails after the rename is a durability warning, not a failed save, so
+      memory and file can never end up describing opposite versions of a note.
+- [x] Nothing tracks a missed sync: a directory sync flushes every pending entry, so the next
+      successful save makes the earlier rename durable too.
+- [x] What is not guaranteed is written down rather than implied — the sync is not retried and a
+      save whose sync failed is not guaranteed durable.
+- [x] Everything Phases 3.4R and 3.4R.1 established is unchanged.
+
 ### Phase 3.5: Smart Blocks (Planned)
 - [ ] Code blocks with a language, preserved through the Markdown round trip.
 - [ ] Syntax highlighting inside those blocks.

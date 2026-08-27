@@ -1822,6 +1822,74 @@ mod tests {
     }
 
     #[test]
+    fn a_save_committed_but_not_synced_is_adopted_like_any_other() {
+        // 3.4R.1 rolls back a save that failed; 3.4R.2 draws the line at the
+        // rename. Past that point the file *is* the new note, so refusing to
+        // adopt it would leave memory describing a version the file no longer
+        // holds — the same divergence 3.4R.1 closed, mirrored.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+
+        // The same store, through a handle whose directory sync fails after
+        // the rename has already replaced the file.
+        let unsyncable = storage.clone().failing_directory_sync();
+
+        let closed = Cell::new(false);
+        save_and_close(
+            &unsyncable,
+            &document,
+            id,
+            "conteúdo B".to_string(),
+            &|_| {
+                closed.set(true);
+                Ok(())
+            },
+        )
+        .expect("a completed rename is a completed save");
+
+        // The lifecycle hears a success, and the note may close.
+        assert!(closed.get(), "the note was refused a close it had earned");
+        // Memory and file describe the same version, not opposite ones.
+        assert_eq!(document.borrow().content, "conteúdo B");
+        let on_disk = storage.load_note(&id).expect("reload");
+        assert_eq!(on_disk.content, "conteúdo B");
+        assert_eq!(
+            document.borrow().metadata.updated_at,
+            on_disk.metadata.updated_at
+        );
+        assert!(on_disk.metadata.updated_at > updated_at);
+        assert_eq!(on_disk.metadata.created_at, created_at);
+
+        // Resending it is a genuine no-op now, because the note really is B —
+        // there is no pending write for the shortcut to swallow. What was left
+        // undone is durability, and that is not per-note state: the next real
+        // save syncs the directory and carries the earlier rename with it.
+        let path = storage.note_path(&id);
+        let before = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        save_content(&storage, &document, id, "conteúdo B".to_string()).expect("no-op save");
+        assert_eq!(
+            fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .expect("mtime"),
+            before,
+            "an identical save rewrote a note that was already stored"
+        );
+
+        save_content(&storage, &document, id, "conteúdo C".to_string()).expect("a later edit");
+        assert_eq!(
+            storage.load_note(&id).expect("reload").content,
+            "conteúdo C"
+        );
+    }
+
+    #[test]
     fn saving_content_moves_updated_at_and_keeps_created_at() {
         let tmp = tempdir().expect("tempdir");
         let storage = StorageManager::with_custom_paths(

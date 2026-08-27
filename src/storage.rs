@@ -10,6 +10,13 @@ pub struct StorageManager {
     config_dir: PathBuf,
     state_dir: PathBuf,
     runtime_dir: PathBuf,
+    /// Makes the post-commit directory sync fail, so the one failure that
+    /// happens *after* the rename can be exercised. It cannot be provoked from
+    /// outside the process: once the rename has returned, nothing a test can do
+    /// to the filesystem reaches back into the sync that follows it. Compiled
+    /// out of every real build.
+    #[cfg(test)]
+    fail_directory_sync: bool,
 }
 
 impl StorageManager {
@@ -36,6 +43,8 @@ impl StorageManager {
             config_dir,
             state_dir,
             runtime_dir,
+            #[cfg(test)]
+            fail_directory_sync: false,
         };
 
         manager.ensure_directories()?;
@@ -54,9 +63,19 @@ impl StorageManager {
             config_dir,
             state_dir,
             runtime_dir,
+            #[cfg(test)]
+            fail_directory_sync: false,
         };
         manager.ensure_directories()?;
         Ok(manager)
+    }
+
+    /// The same store, reached through a handle whose post-commit directory
+    /// sync always fails.
+    #[cfg(test)]
+    pub(crate) fn failing_directory_sync(mut self) -> Self {
+        self.fail_directory_sync = true;
+        self
     }
 
     pub fn ensure_directories(&self) -> Result<(), String> {
@@ -90,14 +109,25 @@ impl StorageManager {
 
     /// Writes a note, or leaves the one already on disk exactly as it was.
     ///
-    /// Either the rename lands and the note is the new one, or it does not and
-    /// the note is still the old one; there is no state in between. A failure
-    /// also takes the half-written temp file with it, because nothing else
-    /// ever collects one and it would sit in the notes directory forever.
+    /// **The commit point is the rename.** Everything before it — creating the
+    /// temp file, writing it, syncing it, and the rename itself — decides
+    /// whether the stored note changes at all. If any of that fails the target
+    /// file is untouched, the temp file is removed, and this reports the
+    /// failure; nothing was written and no caller may believe otherwise.
     ///
-    /// The result is what tells the caller which of the two happened, so a
-    /// caller must not treat a document as stored until this has returned
-    /// `Ok`.
+    /// Once the rename has returned, the target *is* the new note for every
+    /// reader from that moment on, and no later step can put the old one back.
+    /// So this returns `Ok` from the rename onwards. Syncing the notes
+    /// directory is what makes that rename survive a power loss, and it comes
+    /// after the commit point: a failure there means the save happened but may
+    /// not be durable, which is reported as a warning rather than as a failed
+    /// save. Calling it a failure would be worse than useless — the caller
+    /// would keep describing a note the file no longer holds.
+    ///
+    /// Nothing has to remember that a sync was missed. A directory sync
+    /// flushes every pending entry in that directory, not just the last one,
+    /// so the next successful save of any note makes the earlier rename
+    /// durable too.
     pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
         let serialized = doc.serialize()?;
         let target_path = self.note_path(&doc.metadata.id);
@@ -112,34 +142,34 @@ impl StorageManager {
         );
         let temp_path = self.notes_dir.join(temp_filename);
 
-        match self.write_then_rename(&serialized, &temp_path, &target_path) {
-            Ok(()) => Ok(target_path),
-            Err(error) => {
-                // Best effort: if this cannot be removed either, the save has
-                // already failed and the error worth reporting is that one.
-                let _ = fs::remove_file(&temp_path);
-                Err(error)
-            }
+        // Before the commit point.
+        if let Err(error) = write_and_rename(&serialized, &temp_path, &target_path) {
+            // Best effort: if this cannot be removed either, the save has
+            // already failed and the error worth reporting is that one.
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
         }
+
+        // After it. The note on disk is already the new one.
+        if let Err(error) = self.sync_notes_directory() {
+            eprintln!(
+                "Note {} was saved, but the notes directory could not be synced, \
+                 so the change may not survive a power loss: {error}",
+                doc.metadata.id
+            );
+        }
+
+        Ok(target_path)
     }
 
-    fn write_then_rename(
-        &self,
-        serialized: &str,
-        temp_path: &Path,
-        target_path: &Path,
-    ) -> Result<(), String> {
-        {
-            let mut file = File::create(temp_path)
-                .map_err(|e| format!("Failed to create temp file {}: {e}", temp_path.display()))?;
-            file.write_all(serialized.as_bytes())
-                .map_err(|e| format!("Failed to write to temp file: {e}"))?;
-            file.sync_all()
-                .map_err(|e| format!("Failed to sync temp file: {e}"))?;
+    /// Makes a rename that already happened durable. Post-commit: see
+    /// [`Self::save_note_atomic`] for why its failure is not a failed save.
+    fn sync_notes_directory(&self) -> Result<(), String> {
+        #[cfg(test)]
+        if self.fail_directory_sync {
+            return Err("simulated directory sync failure".to_string());
         }
 
-        fs::rename(temp_path, target_path)
-            .map_err(|e| format!("Failed to rename temp file to target: {e}"))?;
         File::open(&self.notes_dir)
             .and_then(|directory| directory.sync_all())
             .map_err(|e| format!("Failed to sync notes directory: {e}"))
@@ -187,10 +217,36 @@ impl StorageManager {
     }
 }
 
+/// Everything up to and including the commit point: on success the target
+/// file is the new note, on failure it is untouched.
+fn write_and_rename(serialized: &str, temp_path: &Path, target_path: &Path) -> Result<(), String> {
+    {
+        let mut file = File::create(temp_path)
+            .map_err(|e| format!("Failed to create temp file {}: {e}", temp_path.display()))?;
+        file.write_all(serialized.as_bytes())
+            .map_err(|e| format!("Failed to write to temp file: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync temp file: {e}"))?;
+    }
+
+    fs::rename(temp_path, target_path)
+        .map_err(|e| format!("Failed to rename temp file to target: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Temp files a save should never leave behind.
+    fn temp_debris_in(notes_dir: &Path) -> Vec<String> {
+        fs::read_dir(notes_dir)
+            .expect("read the notes directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tmp."))
+            .collect()
+    }
 
     #[test]
     fn test_storage_atomic_save_and_load() {
@@ -339,16 +395,54 @@ mod tests {
             .save_note_atomic(&doc)
             .expect_err("renaming a file over a directory must fail");
 
-        let debris: Vec<String> = fs::read_dir(manager.notes_dir())
-            .expect("read the notes directory")
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.starts_with(".tmp."))
-            .collect();
+        let debris = temp_debris_in(manager.notes_dir());
         assert!(
             debris.is_empty(),
             "a failed save left temp files behind: {debris:?}"
         );
+    }
+
+    #[test]
+    fn a_directory_sync_that_fails_after_the_rename_is_still_a_completed_save() {
+        // 3.4R.2. The one failure that happens *past* the commit point: the
+        // rename already replaced the file, so the save did happen, and only
+        // its durability is in doubt. Reporting it as a failed save would
+        // leave every caller describing a note the file no longer holds.
+        let tmp = tempdir().expect("tempdir");
+        let store = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "conteúdo A".to_string();
+        store.save_note_atomic(&doc).expect("initial save");
+        let id = doc.metadata.id;
+
+        let unsyncable = store.clone().failing_directory_sync();
+        doc.content = "conteúdo B".to_string();
+        let path = unsyncable
+            .save_note_atomic(&doc)
+            .expect("a rename that succeeded is a save, whatever the sync did");
+
+        // The rename really did replace the file...
+        assert_eq!(path, store.note_path(&id));
+        assert_eq!(store.load_note(&id).expect("reload").content, "conteúdo B");
+        // ...and nothing was left behind.
+        assert!(temp_debris_in(store.notes_dir()).is_empty());
+
+        // The next successful save syncs the directory again, which is what
+        // makes the earlier rename durable too — there is no missed sync to
+        // remember and nothing to retry by hand.
+        doc.content = "conteúdo C".to_string();
+        store
+            .save_note_atomic(&doc)
+            .expect("a later save syncs normally");
+        assert_eq!(store.load_note(&id).expect("reload").content, "conteúdo C");
+        assert!(temp_debris_in(store.notes_dir()).is_empty());
     }
 
     #[test]

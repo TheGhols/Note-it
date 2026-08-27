@@ -76,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- A note whose save *succeeded* is no longer treated as unsaved. The rename that replaces the note
+  file is the point at which the change becomes real, and syncing the notes directory happens after
+  it. A failure of that sync was being reported as a failed save, so the application kept the old
+  note in memory while the file already held the new one — the mirror image of the divergence just
+  fixed. The sync's failure is now reported as what it is: the save happened and may not survive a
+  power loss, which the next save of any note repairs on its own.
 - A note whose save failed is no longer treated as saved. The document held in memory was updated
   before the write was confirmed, so a failed write left memory holding text the file never
   received — and the identical-content check added just before it then compared the next attempt

@@ -283,12 +283,49 @@
   hazard, so it was replaced rather than preserved.
 - **New-note creation is already safe:** `create_new_note` writes the document before any window
   exists and returns on failure, so there is no in-memory note left claiming to be stored.
-- **A failed save cleans up after itself:** the temp file is removed when anything after its
-  creation fails. Nothing else ever collected one, so a run of failures used to leave `.tmp.*`
-  debris in the notes directory permanently.
+- **A failed save cleans up after itself:** the temp file is removed when anything up to and
+  including the rename fails. Nothing else ever collected one, so a run of failures used to leave
+  `.tmp.*` debris in the notes directory permanently.
 - **Testing I/O failure without touching the store:** the notes directory is moved aside and a
   plain file put in its place, so the kernel refuses every create and rename underneath it with
   `ENOTDIR`. That is path resolution rather than a permission bit, so it also fails for root, which
   is how the Rust CI job runs — a `chmod` would have silently passed there. The notes wait
   untouched in the directory that was moved aside, which is what lets the tests assert that the
   stored note survived the failed save unchanged.
+
+## ADR-020: The Rename Is the Commit Point
+- **Decision:** `save_note_atomic` reports failure for anything that happens **before or at** the
+  rename, and success from the rename onwards. Syncing the notes directory comes after the commit
+  point, so a failure there is reported as a durability warning on stderr and the save still
+  returns `Ok`.
+- **The defect this closes:** ADR-019 has the caller adopt a document only when the save returns
+  `Ok`, which is right for every failure that leaves the file alone. The directory sync is not one
+  of those. It runs *after* `rename` has already replaced the target, and it was inside the same
+  `?` chain, so its failure was reported as a failed save. The caller then kept the old document
+  while the file held the new one — memory and disk describing opposite versions, which is exactly
+  the divergence ADR-019 exists to prevent, mirrored. A save-and-close would also have refused to
+  close a note that really had been written.
+- **Why the rename:** it is the moment the change becomes visible. Every reader from then on gets
+  the new note, and nothing later in the function can put the old one back. Any report other than
+  "saved" would be false, and acting on it means describing a file that no longer exists that way.
+- **What the directory sync actually buys:** the note's *bytes* are already on stable storage — the
+  temp file is `fsync`ed before the rename. Syncing the directory is what makes the *rename* itself
+  survive a power loss. Without it, a crash at the wrong moment can leave the name still pointing
+  at the previous note. That is a lost update, never a torn or corrupted file: a reader sees the
+  old note or the new one, never half of either.
+- **Why no pending-durability state:** an `fsync` on a directory flushes every pending entry in it,
+  not just the most recent, so the next successful save of *any* note in the notes directory makes
+  the earlier rename durable too. There is nothing to remember, nothing to retry by hand, and the
+  identical-content shortcut has nothing to mask: after a committed-but-unsynced save the note on
+  disk really is the new one, so resending it really is a no-op. Tracking a missed sync would be
+  state that heals itself, which is the kind of bookkeeping ADR-019 refused for the same reason.
+- **What is deliberately not claimed:** there is no retry of the sync, no guarantee that a save is
+  durable when the sync fails, and no `fsync` of the note file after the rename. The contract is
+  that a note is never half-written and never silently reverts *within a running system*; the
+  durability window is documented in `docs/storage.md` rather than papered over.
+- **Testing past the commit point:** once `rename` has returned there is nothing a test can do to
+  the filesystem that reaches back into the sync that follows it, so this one failure is injected
+  in-process by a `#[cfg(test)]` handle whose directory sync always fails. It is compiled out of
+  every real build, and it drives the real `save_note_atomic` and the real `save_content`, so what
+  the tests check is the production path and not a reimplementation of it. The pre-commit failures
+  keep their real `ENOTDIR` injection, which reaches the syscalls themselves.

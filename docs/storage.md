@@ -142,11 +142,25 @@ To prevent data corruption during unexpected power loss or process crashes:
 3. Atomically rename/replace the destination file using `std::fs::rename`.
 4. Sync the notes directory, so the rename itself is durable.
 
-Either the rename lands and the note is the new one, or it does not and the note is still the
-previous one; there is no state in between. If anything after the temporary file is created fails,
-that file is removed rather than left in the notes directory, since nothing else would ever collect
-it.
+**The rename is the commit point.** Either it lands and the note is the new one, or it does not and
+the note is still the previous one; there is no state in between, and a reader never sees a torn
+file. If anything up to and including the rename fails, the temporary file is removed rather than
+left in the notes directory, since nothing else would ever collect it.
 
-The result of a save is what says which of the two happened, so no caller may treat a note as
-stored before it has returned successfully. That is the rule the in-memory document depends on:
-it is only replaced by a version that has actually been written.
+A save reports failure for anything before or at the rename, and success from the rename onwards.
+That is the rule the in-memory document depends on: it is replaced only by a version that has
+actually been written, and it is always replaced by one that has.
+
+Step 4 comes after the commit point. The note's bytes are already on stable storage by then —
+step 2 syncs them — so what the directory sync buys is that the **rename** survives a power loss.
+If it fails, the save still succeeded and is still reported as such; a warning is printed, because
+what is in doubt is durability, not whether the note was written. Calling it a failed save would
+leave the application describing a note the file no longer holds.
+
+Nothing tracks a missed sync. Syncing a directory flushes every pending entry in it, not just the
+last one, so the next successful save of any note makes the earlier rename durable too.
+
+What this does **not** claim: the sync is not retried, a save whose sync failed is not guaranteed
+durable, and the note file is not re-synced after the rename. The guarantee is that a note is never
+half-written and never silently reverts while the application is running; a power loss inside that
+window can cost the last save, never the file.
