@@ -25,7 +25,7 @@
 - [x] Transactional flush protocol before `hide` and `quit` to prevent data loss from debounced edits.
 - [x] End-to-end testing and validation on Niri compositor.
 
-## Phase 3: Editor Enhancements & User Experience (In Progress)
+## Phase 3: Editor, UX & Antinote-inspired Features (In Progress)
 
 ### Phase 3.0R.1: Editor & Geometry Stabilisation (Completed)
 - [x] Physical pt-BR keyboard, dead keys, and IME composition preserved inside the WebView.
@@ -79,11 +79,67 @@
 - [x] `--ui-*` token set separating the application's chrome from the note's paper, so a menu is
       legible over a black note and a yellow one in either theme.
 
-### Phase 3.5: Editor Enhancements (Planned)
-- [ ] Contextual floating bubble toolbar for formatting.
-- [ ] Code blocks, syntax highlighting, and callouts.
+### Phase 3.4R: `updated_at` Integrity (Completed)
+- [x] `updated_at` moves only when the note's persisted content actually changes. Opening and
+      closing, summoning, hiding, showing and quitting without editing all leave it alone.
+- [x] The comparison lives in the one path every content save funnels through — autosave, the
+      flush before hide and quit, and save-and-close — rather than in each caller.
+- [x] A note whose content is unchanged is not rewritten at all: no temp file, no rename, no fsync.
+- [x] Close and flush still report success on an identical save, so the lifecycle never stalls.
+- [x] Recency, which decides the note a summon brings back, now follows the last edit rather than
+      the last close. See the note under Phase 4 below.
 
-## Phase 4: Packaging & Distribution (Planned)
+### Phase 3.5: Smart Blocks (Planned)
+- [ ] Code blocks with a language, preserved through the Markdown round trip.
+- [ ] Syntax highlighting inside those blocks.
+- [ ] Callouts / admonitions.
+- [ ] Blockquote handling worth the name, beyond the current plain rendering.
+- [ ] Comments that stay out of the rendered note.
+- [ ] A reusable block architecture, where the shape of these features justifies one.
+
+### Phase 3.6: Math Engine (Planned)
+- [ ] Contextual inline calculation, evaluated as the note is written.
+- [ ] Percentages.
+- [ ] Variables, referenced later in the same note.
+- [ ] Reactive results that follow their inputs.
+- [ ] `sum`, `avg`, `count` over the lines they apply to.
+
+### Phase 3.7: Conversions (Planned)
+- [ ] Unit conversions.
+- [ ] Currencies later, with the external dependency isolated behind a boundary so the rest of the
+      application never depends on the network being there.
+
+### Phase 3.8: Search & Productivity (Planned)
+- [ ] Global search across notes.
+- [ ] Find and replace.
+- [ ] Productivity affordances around finding and moving between notes.
+- [ ] Compact links / AutoPaste, only where they fit the architecture rather than for their own
+      sake.
+
+### Phase 3.9: Reliability (Planned)
+- [ ] Recoverable trash, so a deleted note is not gone.
+- [ ] Automatic backup.
+- [ ] Note reliability work generally.
+
+## Phase 4: Core, CLI & Second Brain (Planned)
+
+Architectural evolution rather than more editor surface. Reserved, not started.
+
+- [ ] A safe, shareable core the CLI and the application both build on.
+- [ ] A complete CLI: list, search, read, create, append, and edit tasks and notes.
+- [ ] Structured output such as `--json`, so the CLI composes with other tools.
+- [ ] Filters over text, dates and tasks.
+- [ ] The foundation for AI / second-brain integration on top of that core.
+
+**Recency and the CLI.** Since Phase 3.4R, the file's `mtime` reflects the last real edit rather
+than the last close, and it is what decides which note a summon brings back when every note is
+closed. If a future phase needs "the note I last had open" as distinct from "the note I last wrote
+in", that belongs in `state.json` as explicit state, not in the filesystem's timestamps.
+
+## Phase 5: Packaging & Distribution (Planned)
+
+Moved out of Phase 4 rather than dropped: it follows the core and CLI work above.
+
 - [ ] Arch Linux PKGBUILD for AUR.
 - [ ] Release automation and binary artifacts.
 - [ ] v0.1.0 release.

@@ -167,6 +167,9 @@ The theme is the appearance of the **application**, not of a note.
   - A missing, expired, or invalid WebView response is a flush failure; the host never substitutes its potentially stale in-memory document as a successful confirmation.
   - If any note fails to confirm or save, the operation aborts: hide keeps every surface open in the previous mode, and quit keeps the daemon running. Without confirmation of current WebView content, neither operation destroys surfaces or exits.
 - **Standard YAML Front Matter:**
-  - Note ID, paper color, font size, and timestamps stored cleanly in note headers.
+  - Note ID, paper colour, paper type, pattern intensity, font size, and timestamps stored cleanly
+    in note headers.
   - `created_at` is fixed at creation; `updated_at` follows content edits only, not appearance or
     window changes. A note without timestamps still opens and reports them as unknown.
+  - Visiting a note is not editing it: opening and closing, summoning, hiding, showing or quitting
+    without changing the text leaves `updated_at` alone, and the file is not rewritten at all.

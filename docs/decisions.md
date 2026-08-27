@@ -220,3 +220,30 @@
   watched live so the desktop switching scheme reaches an open note. `matchMedia` is treated as
   optional throughout — a WebView that reports no colour scheme resolves `Sistema` to the light
   theme rather than ending up with no theme at all.
+
+## ADR-018: `updated_at` Is Compared, Not Assumed
+- **Decision:** `save_content` compares the incoming text with the content already held before
+  recording anything. Identical content updates nothing, writes nothing, and still returns `Ok`.
+- **The defect:** every path that carries content back from the page — autosave, the flush before
+  hide and quit, and save-and-close — funnelled into `save_content`, which assigned the content and
+  called `touch_content_modified()` unconditionally. All three routinely arrive with content that
+  has not changed: closing and flushing send whatever the editor holds whether or not it was
+  touched, and autosave can fire on an edit that serialises back to the same Markdown. So merely
+  opening a note and closing it moved its modification date, which contradicted the contract
+  `docs/storage.md` already stated. Measured on the previous release: an untouched note went from
+  `15:31:25` to `15:31:35` across one open/quit cycle.
+- **Where the fix lives:** in that single funnel, not in each caller. The three callers do not need
+  to agree on what counts as an edit, and no second dirty-tracking mechanism was introduced — the
+  document's own `content` field already *is* the last-persisted text.
+- **Why it still returns `Ok`:** save-and-close waits on this result before finalising the close,
+  and the hide and quit flushes wait on it before destroying surfaces or exiting. "Nothing changed"
+  must never become "nothing answered", or an untouched note would refuse to close.
+- **No write at all:** when the content matches, the file is left alone entirely — no temp file, no
+  rename, no fsync. Metadata-only changes (paper colour, type, intensity, font size) take their own
+  direct save path and are unaffected, so nothing that must be persisted is skipped.
+- **Consequence for recency:** the file's `mtime` decides which note a summon brings back when
+  every note is closed. It now tracks the last real edit rather than the last close. That is the
+  better reading of "the note used last", and it is covered by a test rather than left to chance.
+  Introducing a `last_active_note` in `state.json` was deliberately not done here: nothing approved
+  depends on the old meaning, and inventing state for it would have been a larger change than the
+  defect warranted.

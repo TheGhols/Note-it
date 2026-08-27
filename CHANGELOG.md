@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- Because an unchanged note is no longer rewritten, the note a summon brings back when everything
+  is closed is the one last written in, rather than the one whose window was closed last.
 - The settings menu gained **Tipo de papel**, **Intensidade** and **Tema**, each showing its
   current value on the root row, next to the entries that already did.
 - Menus, popovers and focus states are now dressed by the interface theme through a `--ui-*` token
@@ -74,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- Opening a note and closing it no longer counts as editing it. Closing and the flushes before hide
+  and quit all send whatever the editor holds, edited or not, and every one of them moved
+  `updated_at`. The single path they funnel through now compares the incoming text with what is
+  already stored: identical content records nothing and does not rewrite the file, while a real
+  change is recorded exactly as before. `created_at` was never affected.
 - Highlighted text is readable on a dark note. The highlight extension renders an inline
   `color: inherit`, which beat the stylesheet rule meant to darken it, so highlighted text kept
   inheriting the paper's white. The mark now paints its own dark foreground inline. An explicit

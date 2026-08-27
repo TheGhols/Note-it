@@ -668,6 +668,19 @@ fn expire_flush_request(pending_flushes: &PendingFlushes, request_id: u64) -> bo
     true
 }
 
+/// Persists content arriving from the page.
+///
+/// The three paths that carry content back — autosave, the flush before hide
+/// or quit, and save-and-close — all funnel through here, and all three can
+/// arrive with content identical to what is already stored: closing and
+/// flushing send whatever the editor holds, whether or not it was touched, and
+/// autosave can fire on an edit that serialises back to the same Markdown.
+/// Comparing first is what keeps `updated_at` a record of edits rather than of
+/// visits, and it means an untouched note is not rewritten at all.
+///
+/// An identical save still reports success. Close and both flushes wait on
+/// this result before the window may go, so "nothing changed" must never turn
+/// into "nothing answered".
 fn save_content(
     storage: &StorageManager,
     document: &Rc<RefCell<NoteDocument>>,
@@ -677,6 +690,9 @@ fn save_content(
     let mut doc = document.borrow_mut();
     if doc.metadata.id != expected_id {
         return Err("note identifier mismatch".to_string());
+    }
+    if doc.content == content {
+        return Ok(());
     }
     doc.content = content;
     doc.touch_content_modified();
@@ -1170,6 +1186,303 @@ mod tests {
         assert_eq!(reloaded[2].metadata.paper_type, "grid-large");
         assert_eq!(reloaded[2].metadata.paper_intensity, "strong");
         assert_eq!(reloaded[2].metadata.color, "black");
+    }
+
+    /// A note already stored, exactly as it sits on disk after a save.
+    fn stored_note(storage: &StorageManager, content: &str) -> Rc<RefCell<NoteDocument>> {
+        let mut doc = NoteDocument::new_empty();
+        doc.content = content.to_string();
+        storage.save_note_atomic(&doc).expect("initial save");
+        Rc::new(RefCell::new(doc))
+    }
+
+    fn storage_in(tmp: &tempfile::TempDir) -> StorageManager {
+        StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage")
+    }
+
+    #[test]
+    fn closing_a_note_nobody_edited_is_not_a_content_edit() {
+        // Case A. Closing always sends whatever the editor holds, edited or
+        // not, so this arrives with content identical to what is stored.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "# Minha nota\nConteúdo intacto");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+
+        let closed = Cell::new(false);
+        save_and_close(
+            &storage,
+            &document,
+            id,
+            "# Minha nota\nConteúdo intacto".to_string(),
+            &|_| {
+                closed.set(true);
+                Ok(())
+            },
+        )
+        .expect("closing an untouched note still succeeds");
+
+        // The window must still be allowed to go.
+        assert!(closed.get(), "close was not finalized");
+        assert_eq!(document.borrow().metadata.updated_at, updated_at);
+        assert_eq!(document.borrow().metadata.created_at, created_at);
+        assert_eq!(
+            storage.load_note(&id).expect("reload").metadata.updated_at,
+            updated_at
+        );
+    }
+
+    #[test]
+    fn closing_a_note_that_was_edited_records_the_edit() {
+        // Case B.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "Conteúdo A");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+
+        save_and_close(&storage, &document, id, "Conteúdo B".to_string(), &|_| {
+            Ok(())
+        })
+        .expect("save and close");
+
+        let reloaded = storage.load_note(&id).expect("reload");
+        assert_eq!(reloaded.content, "Conteúdo B");
+        assert!(reloaded.metadata.updated_at > updated_at);
+        assert_eq!(reloaded.metadata.created_at, created_at);
+    }
+
+    #[test]
+    fn a_flush_with_nothing_pending_leaves_the_note_alone() {
+        // Case C: the flush before hide and before quit both answer with the
+        // editor's content whether or not it was touched.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "texto estável");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        let outcome = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&outcome);
+        pending
+            .borrow_mut()
+            .insert(7, Box::new(move |result| *sink.borrow_mut() = Some(result)));
+
+        let accepted = complete_flush_response(
+            &storage,
+            &document,
+            id,
+            id,
+            7,
+            "texto estável".to_string(),
+            &pending,
+        );
+
+        assert!(accepted);
+        // The lifecycle still hears a success, or hide and quit would stall.
+        assert!(matches!(outcome.borrow().as_ref(), Some(Ok(()))));
+        assert_eq!(
+            storage.load_note(&id).expect("reload").metadata.updated_at,
+            updated_at
+        );
+    }
+
+    #[test]
+    fn a_flush_carrying_a_pending_edit_persists_it() {
+        // Case D.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "antes do flush");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        let pending: PendingFlushes = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        pending.borrow_mut().insert(8, Box::new(|_| {}));
+
+        assert!(complete_flush_response(
+            &storage,
+            &document,
+            id,
+            id,
+            8,
+            "depois do flush".to_string(),
+            &pending,
+        ));
+
+        let reloaded = storage.load_note(&id).expect("reload");
+        assert_eq!(reloaded.content, "depois do flush");
+        assert!(reloaded.metadata.updated_at > updated_at);
+    }
+
+    #[test]
+    fn repeating_an_autosave_does_not_keep_moving_the_date() {
+        // Case E: the first save records the edit, the identical repeat does
+        // not, so a note does not age just because autosave fired again.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "primeiro");
+        let id = document.borrow().metadata.id;
+        let first = document.borrow().metadata.updated_at;
+
+        save_content(&storage, &document, id, "segundo".to_string()).expect("real edit");
+        let second = storage.load_note(&id).expect("reload").metadata.updated_at;
+        assert!(second > first);
+
+        save_content(&storage, &document, id, "segundo".to_string()).expect("identical repeat");
+        assert_eq!(
+            storage.load_note(&id).expect("reload").metadata.updated_at,
+            second
+        );
+    }
+
+    #[test]
+    fn an_untouched_note_is_not_rewritten_at_all() {
+        // Nothing changed, so there is nothing to write: no temp file, no
+        // rename, no fsync, and the file's own timestamp stays put.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo idêntico");
+        let id = document.borrow().metadata.id;
+        let path = storage.note_path(&id);
+        let before = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+
+        // Far enough apart that a filesystem with coarse timestamps would
+        // still show the difference if a write happened.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        save_content(&storage, &document, id, "conteúdo idêntico".to_string()).expect("no-op save");
+
+        let after = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        assert_eq!(before, after, "an identical save rewrote the file");
+    }
+
+    #[test]
+    fn a_full_edit_and_reopen_cycle_never_moves_created_at() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "inicial");
+        let id = document.borrow().metadata.id;
+        let created_at = document.borrow().metadata.created_at;
+        assert!(created_at.is_some());
+
+        // open → edit → save → close → reopen
+        save_content(&storage, &document, id, "editado".to_string()).expect("edit");
+        save_and_close(&storage, &document, id, "editado".to_string(), &|_| Ok(())).expect("close");
+        let reopened = storage.load_note(&id).expect("reopen");
+        assert_eq!(reopened.metadata.created_at, created_at);
+
+        // ...and again, this time without touching anything.
+        let reopened_doc = Rc::new(RefCell::new(reopened));
+        save_and_close(&storage, &reopened_doc, id, "editado".to_string(), &|_| {
+            Ok(())
+        })
+        .expect("close untouched");
+        assert_eq!(
+            storage.load_note(&id).expect("reopen").metadata.created_at,
+            created_at
+        );
+    }
+
+    #[test]
+    fn no_appearance_change_is_ever_a_content_edit() {
+        // Case F, in one place: everything the menu can change about how a
+        // note looks goes through the metadata save, never through
+        // `save_content`, so none of it moves the modification date.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo que ninguém tocou");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+
+        {
+            let mut doc = document.borrow_mut();
+            doc.metadata.color = "black".to_string();
+            doc.metadata.paper_type = "grid-large".to_string();
+            doc.metadata.paper_intensity = "strong".to_string();
+            doc.metadata.font_size = 22;
+            storage.save_note_atomic(&doc).expect("appearance save");
+        }
+
+        let reloaded = storage.load_note(&id).expect("reload");
+        assert_eq!(reloaded.metadata.color, "black");
+        assert_eq!(reloaded.metadata.paper_type, "grid-large");
+        assert_eq!(reloaded.metadata.paper_intensity, "strong");
+        assert_eq!(reloaded.metadata.font_size, 22);
+        assert_eq!(reloaded.metadata.updated_at, updated_at);
+        assert_eq!(reloaded.metadata.created_at, created_at);
+        assert_eq!(reloaded.content, "conteúdo que ninguém tocou");
+
+        // Zoom, theme, collapse, geometry and the layer never reach the
+        // document at all: they live in `state.json` and `config.toml`.
+        assert_eq!(document.borrow().metadata.updated_at, updated_at);
+    }
+
+    #[test]
+    fn recency_now_follows_the_last_edit_rather_than_the_last_close() {
+        // Summon reopens the most recently *saved* note when everything is
+        // closed, and that ordering comes from the file's own mtime. Skipping
+        // identical saves therefore shifts what "last used" means: closing an
+        // untouched note no longer moves it to the front. The note last
+        // written in does, which is the note a summon should bring back.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+
+        let first = stored_note(&storage, "nota antiga");
+        // Distinct mtimes, so the ordering is decided by the writes and not by
+        // the identifier tie-break.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = stored_note(&storage, "nota recente");
+        let first_id = first.borrow().metadata.id;
+        let second_id = second.borrow().metadata.id;
+
+        assert_eq!(
+            storage.list_notes_by_recency().expect("listing")[0],
+            second_id,
+        );
+
+        // Closing the newer one untouched leaves the ordering alone...
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        save_and_close(
+            &storage,
+            &second,
+            second_id,
+            "nota recente".to_string(),
+            &|_| Ok(()),
+        )
+        .expect("close untouched");
+        assert_eq!(
+            storage.list_notes_by_recency().expect("listing")[0],
+            second_id,
+            "an untouched close must not reorder anything",
+        );
+
+        // ...while a real edit to the older one brings it to the front, so a
+        // summon answers with the note that was actually written in.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        save_content(
+            &storage,
+            &first,
+            first_id,
+            "nota antiga, editada".to_string(),
+        )
+        .expect("edit");
+        let ordering = storage.list_notes_by_recency().expect("listing");
+        assert_eq!(ordering[0], first_id);
+        assert_eq!(ordering.len(), 2);
     }
 
     #[test]

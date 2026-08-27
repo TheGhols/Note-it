@@ -50,14 +50,44 @@ application runs.
 ## Note Front Matter Timestamps
 
 `created_at` records when the note was created and never changes afterwards.
-`updated_at` records the last change to the note's **content**. Appearance and
-window state — paper colour, paper type, pattern intensity, font size, drag,
-resize, collapse/expand, opening the menu, hovering the header — deliberately
-leave `updated_at` alone.
+`updated_at` records the last change to the note's **content**.
+
+Content means the Markdown that is persisted. If that text differs from what is
+already stored, the change is recorded — whether it came from typing, a
+heading, a list, a task, bold, italic, strikethrough, a text colour, a
+highlight, or an inline size, since all of those are written into the note.
+
+Everything else deliberately leaves `updated_at` alone:
+
+- appearance: paper colour, paper type, pattern intensity, font size;
+- the interface theme, which is not stored in the note at all;
+- window and view state: drag, resize, zoom, collapse/expand, layer mode;
+- opening the menu, or hovering the header;
+- **and visiting the note.** Opening and closing it, summoning, hiding,
+  showing or quitting without editing all leave it untouched.
+
+That last point is enforced rather than assumed. Closing and flushing both send
+whatever the editor holds, edited or not, so the single path all content saves
+funnel through compares the incoming text with what is already stored and does
+nothing when they match. An unchanged note is not rewritten at all: no temp
+file, no rename, no fsync, and the file keeps its own modification time.
 
 Both fields are optional on read. A note whose front matter omits them still
 opens; the missing value is reported as unknown (`—`) rather than replaced by a
 fabricated date, and re-saving the note does not invent one either.
+
+## Which Note a Summon Brings Back
+
+When every note is closed, the application reopens the most recently written
+one, ordered by the files' own `mtime`. Because an unchanged note is never
+rewritten, that ordering follows the last real **edit** rather than the last
+close: closing a note you did not type in does not move it to the front.
+
+This is the intended reading of "the note used last" — the note actually
+written in. Reopening, summoning and single-instance dispatch are unaffected.
+A future need for "the note I last had open", as something distinct from "the
+note I last wrote in", belongs in `state.json` as explicit state rather than in
+a filesystem timestamp.
 
 ## Window State Fields
 
