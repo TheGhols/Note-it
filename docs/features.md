@@ -52,6 +52,16 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 - **Smart Cascade Placement:**
   - New notes cascade incrementally across the screen grid.
 
+## Note Lifecycle
+
+- **Closing keeps the note:** the `×` button saves the note, records it as closed, and destroys only
+  the window. The Markdown file, its geometry, colour, zoom and collapsed state all stay on disk.
+- **Summoning brings it back:** running `note-it` restores the notes and makes them visible. With
+  every note closed, the one used last is reopened instead of a blank note being created.
+- **One instance:** a second invocation reaches the running instance through the single-instance
+  dispatcher and exits; it never starts a second application.
+- **`note-it new`** is the explicit way to create an additional note.
+
 ## Tasks
 
 - **Markdown Task Lists:**
@@ -86,6 +96,8 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - Discrete text sizes (12–32 px) applied to a selection, independent of headings and of the zoom
   - Bullet lists and numbered lists
   - Interactive checklists (`- [ ]` / `- [x]`)
+  - Typing `->` becomes a real `→`, stored as the character itself rather than relying on a font
+    with ligatures, and left untouched inside inline code and code blocks
   - Blockquotes and inline code / code blocks
 - **Font Scaling:**
   - The note's base font size is stored in its front matter and applied when the note loads.

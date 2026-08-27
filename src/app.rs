@@ -62,6 +62,34 @@ impl LifecycleCoordinator {
     }
 }
 
+/// What a summon should do about the layer the notes sit on.
+///
+/// A `Bottom` surface is always below ordinary windows on Wayland, so a note
+/// left on the desktop cannot be made visible over another application without
+/// moving it to the overlay. The elevation is deliberately temporary: the
+/// user's own preference is remembered rather than overwritten.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum SummonLayerPlan {
+    /// Apply the persisted mode unchanged.
+    Persisted(LayerMode),
+    /// Show above other windows, remembering the mode to return to.
+    Elevate { restore: LayerMode },
+}
+
+fn plan_summon_layer(persisted: LayerMode, already_running: bool) -> SummonLayerPlan {
+    match persisted {
+        // Coming back from hidden is a real state change, as `note-it toggle`
+        // already treats it.
+        LayerMode::Hidden => SummonLayerPlan::Persisted(LayerMode::Overlay),
+        // Only a summon into a running application elevates. Launching the
+        // application is not a summon, so it simply honours the preference.
+        LayerMode::Desktop if already_running => SummonLayerPlan::Elevate {
+            restore: LayerMode::Desktop,
+        },
+        other => SummonLayerPlan::Persisted(other),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum StartupPlan {
     Background,
@@ -116,6 +144,13 @@ pub struct AppContext {
     pub windows: HashMap<Uuid, NoteWindow>,
     pub ui_dist_path: PathBuf,
     lifecycle: LifecycleCoordinator,
+    /// Layer preference to return to after a temporary summon elevation.
+    /// Never persisted: it only records that the live layer is currently
+    /// ahead of the stored preference.
+    summon_restore: Option<LayerMode>,
+    /// False until the first command has been handled, so launching the
+    /// application is not mistaken for summoning it.
+    activated: bool,
 }
 
 pub struct NoteItApp {
@@ -144,6 +179,8 @@ impl NoteItApp {
             windows: HashMap::new(),
             ui_dist_path,
             lifecycle: LifecycleCoordinator::default(),
+            summon_restore: None,
+            activated: false,
         }));
 
         Self {
@@ -179,9 +216,10 @@ impl NoteItApp {
                 controller.save_and_quit();
             }
             None => {
-                controller.restore_saved_notes(is_background);
+                controller.summon(is_background);
             }
         }
+        controller.context.borrow_mut().activated = true;
     }
 }
 
@@ -192,6 +230,59 @@ pub struct NoteItAppClone {
 }
 
 impl NoteItAppClone {
+    /// Brings Note-it to the user: restores the notes and makes them visible.
+    ///
+    /// This is what a global keybinding runs. It reaches the already running
+    /// instance through the single-instance command line, so no second
+    /// application is ever started.
+    pub fn summon(&self, is_background: bool) {
+        if is_background {
+            let mut ctx = self.context.borrow_mut();
+            ctx.state.active_layer_mode = LayerMode::Hidden;
+            return;
+        }
+
+        let (persisted, already_running) = {
+            let ctx = self.context.borrow();
+            (ctx.state.active_layer_mode, ctx.activated)
+        };
+
+        match plan_summon_layer(persisted, already_running) {
+            SummonLayerPlan::Persisted(mode) => self.restore_saved_notes_in_mode(mode),
+            SummonLayerPlan::Elevate { restore } => {
+                self.restore_saved_notes_in_mode(LayerMode::Overlay);
+                // The stored preference stays as it was; only the live layer
+                // moves, so the note returns to the desktop on the next
+                // explicit layer change or restart.
+                let mut ctx = self.context.borrow_mut();
+                ctx.state.active_layer_mode = restore;
+                ctx.summon_restore = Some(restore);
+                if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+                    eprintln!("Failed to persist note state after summon: {error}");
+                }
+            }
+        }
+    }
+
+    /// The layer the surfaces are actually on, which is ahead of the stored
+    /// preference while a summon elevation is in effect.
+    fn effective_layer_mode(&self) -> LayerMode {
+        let ctx = self.context.borrow();
+        if ctx.summon_restore.is_some() {
+            LayerMode::Overlay
+        } else {
+            ctx.state.active_layer_mode
+        }
+    }
+
+    fn restore_saved_notes_in_mode(&self, mode: LayerMode) {
+        self.restore_saved_notes(false);
+        let windows: Vec<NoteWindow> = self.context.borrow().windows.values().cloned().collect();
+        for window in windows {
+            window.set_layer_mode(mode);
+        }
+    }
+
     pub fn restore_saved_notes(&self, is_background: bool) {
         if is_background {
             let mut ctx = self.context.borrow_mut();
@@ -201,24 +292,24 @@ impl NoteItAppClone {
 
         let plan = {
             let ctx = self.context.borrow();
-            let all_ids = match ctx.storage.list_notes() {
+            let ids_by_recency = match ctx.storage.list_notes_by_recency() {
                 Ok(ids) => ids,
                 Err(error) => {
                     eprintln!("Failed to list saved notes: {error}");
                     Vec::new()
                 }
             };
-            plan_startup(false, all_ids, &ctx.state)
+            plan_startup(false, ids_by_recency, &ctx.state)
         };
 
         match plan {
             StartupPlan::Background => {}
             StartupPlan::CreateNew => self.create_new_note(),
             StartupPlan::Restore { note_ids, mode } => {
-                for id in note_ids {
-                    self.instantiate_note_by_id(id, mode);
+                for id in &note_ids {
+                    self.instantiate_note_by_id(*id, mode);
                 }
-                self.context.borrow_mut().state.active_layer_mode = mode;
+                self.mark_notes_open(&note_ids, mode);
             }
         }
     }
@@ -337,7 +428,9 @@ impl NoteItAppClone {
     /// The shared Desktop/Overlay switch, reached from the note menu, the
     /// keyboard shortcut and `note-it toggle` alike.
     pub fn toggle_layer_mode(&self) {
-        let next = self.context.borrow().state.active_layer_mode.toggled();
+        // Toggling from a summoned note starts at the layer it is really on,
+        // so the first press sends it back to the desktop as expected.
+        let next = self.effective_layer_mode().toggled();
         self.set_layer_mode(next);
     }
 
@@ -356,9 +449,11 @@ impl NoteItAppClone {
                         state,
                         windows,
                         lifecycle,
+                        summon_restore,
                         ..
                     } = &mut *ctx;
                     let state_path = storage.state_file_path();
+                    *summon_restore = None;
                     let commit_result = commit_hidden_transition(
                         state,
                         |next_state| next_state.save_to_file(&state_path),
@@ -391,6 +486,8 @@ impl NoteItAppClone {
 
         let needs_instantiation = {
             let mut ctx = self.context.borrow_mut();
+            // An explicit layer choice replaces any temporary elevation.
+            ctx.summon_restore = None;
             ctx.state.active_layer_mode = mode;
             if ctx.windows.is_empty() {
                 true
@@ -405,16 +502,17 @@ impl NoteItAppClone {
         if needs_instantiation {
             let plan = {
                 let ctx = self.context.borrow();
-                let all_ids = ctx.storage.list_notes().unwrap_or_default();
-                plan_startup(false, all_ids, &ctx.state)
+                let ids_by_recency = ctx.storage.list_notes_by_recency().unwrap_or_default();
+                plan_startup(false, ids_by_recency, &ctx.state)
             };
             match plan {
                 StartupPlan::Background => {}
                 StartupPlan::CreateNew => self.create_new_note(),
                 StartupPlan::Restore { note_ids, .. } => {
-                    for id in note_ids {
-                        self.instantiate_note_by_id(id, mode);
+                    for id in &note_ids {
+                        self.instantiate_note_by_id(*id, mode);
                     }
+                    self.mark_notes_open(&note_ids, mode);
                 }
             }
         }
@@ -466,6 +564,19 @@ impl NoteItAppClone {
             .borrow()
             .lifecycle
             .ensure_structural_action_allowed(action)
+    }
+
+    /// Records restored notes as open and persists the result, so a note
+    /// brought back after being closed does not stay marked as closed.
+    fn mark_notes_open(&self, note_ids: &[Uuid], mode: LayerMode) {
+        let mut ctx = self.context.borrow_mut();
+        ctx.state.active_layer_mode = mode;
+        for id in note_ids {
+            ctx.state.notes.entry(*id).or_default().is_open = true;
+        }
+        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+            eprintln!("Failed to persist restored notes: {error}");
+        }
     }
 
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
@@ -527,21 +638,23 @@ where
     Ok(())
 }
 
-fn note_ids_to_restore(all_ids: Vec<Uuid>, state: &AppState) -> Vec<Uuid> {
+fn note_ids_to_restore(all_ids: &[Uuid], state: &AppState) -> Vec<Uuid> {
     all_ids
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|id| state.notes.get(id).map(|note| note.is_open).unwrap_or(true))
         .collect()
 }
 
-fn plan_startup(is_background: bool, all_ids: Vec<Uuid>, state: &AppState) -> StartupPlan {
+/// Decides what a summon should put on screen.
+///
+/// `ids_by_recency` must be ordered most recently saved first. Closing the last
+/// note leaves it on disk with `is_open = false`; without the fallback below
+/// there would be no way back to it, and a summon would answer with a blank
+/// note instead of the note that was just closed.
+fn plan_startup(is_background: bool, ids_by_recency: Vec<Uuid>, state: &AppState) -> StartupPlan {
     if is_background {
         return StartupPlan::Background;
-    }
-
-    let note_ids = note_ids_to_restore(all_ids, state);
-    if note_ids.is_empty() {
-        return StartupPlan::CreateNew;
     }
 
     let mode = if state.active_layer_mode == LayerMode::Hidden {
@@ -549,7 +662,23 @@ fn plan_startup(is_background: bool, all_ids: Vec<Uuid>, state: &AppState) -> St
     } else {
         state.active_layer_mode
     };
-    StartupPlan::Restore { note_ids, mode }
+
+    let open_ids = note_ids_to_restore(&ids_by_recency, state);
+    if !open_ids.is_empty() {
+        return StartupPlan::Restore {
+            note_ids: open_ids,
+            mode,
+        };
+    }
+
+    // Everything is closed: bring back the note that was used last.
+    match ids_by_recency.first() {
+        Some(most_recent) => StartupPlan::Restore {
+            note_ids: vec![*most_recent],
+            mode,
+        },
+        None => StartupPlan::CreateNew,
+    }
 }
 
 fn prepare_new_note(
@@ -678,8 +807,8 @@ fn find_ui_dist_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_hidden_transition, commit_quit, plan_startup, prepare_new_note, FlushBatch,
-        LifecycleCoordinator, LifecycleOperation, StartupPlan,
+        commit_hidden_transition, commit_quit, plan_startup, plan_summon_layer, prepare_new_note,
+        FlushBatch, LifecycleCoordinator, LifecycleOperation, StartupPlan, SummonLayerPlan,
     };
     use crate::settings::AppConfig;
     use crate::state::{AppState, LayerMode};
@@ -802,14 +931,96 @@ mod tests {
     }
 
     #[test]
-    fn normal_startup_without_open_notes_creates_one() {
+    fn a_summon_reopens_the_last_note_instead_of_creating_a_blank_one() {
+        // The note was closed with the X: still on disk, marked closed.
         let closed_id = Uuid::new_v4();
         let mut state = AppState::default();
         state.notes.entry(closed_id).or_default().is_open = false;
 
         assert_eq!(
             plan_startup(false, vec![closed_id], &state),
+            StartupPlan::Restore {
+                note_ids: vec![closed_id],
+                mode: LayerMode::Overlay,
+            }
+        );
+    }
+
+    #[test]
+    fn a_summon_brings_back_the_most_recently_saved_of_several_closed_notes() {
+        let newest = Uuid::new_v4();
+        let middle = Uuid::new_v4();
+        let oldest = Uuid::new_v4();
+        let mut state = AppState::default();
+        for id in [newest, middle, oldest] {
+            state.notes.entry(id).or_default().is_open = false;
+        }
+
+        // Only the most recent one comes back; the others stay closed.
+        assert_eq!(
+            plan_startup(false, vec![newest, middle, oldest], &state),
+            StartupPlan::Restore {
+                note_ids: vec![newest],
+                mode: LayerMode::Overlay,
+            }
+        );
+    }
+
+    #[test]
+    fn a_summon_creates_a_note_only_when_none_exist_at_all() {
+        let state = AppState::default();
+        assert_eq!(
+            plan_startup(false, Vec::new(), &state),
             StartupPlan::CreateNew
+        );
+    }
+
+    #[test]
+    fn a_summon_leaves_already_open_notes_alone() {
+        let open_id = Uuid::new_v4();
+        let closed_id = Uuid::new_v4();
+        let mut state = AppState::default();
+        state.notes.entry(open_id).or_default().is_open = true;
+        state.notes.entry(closed_id).or_default().is_open = false;
+
+        // A closed note is not resurrected while something is still open.
+        assert_eq!(
+            plan_startup(false, vec![closed_id, open_id], &state),
+            StartupPlan::Restore {
+                note_ids: vec![open_id],
+                mode: LayerMode::Overlay,
+            }
+        );
+    }
+
+    #[test]
+    fn a_summon_keeps_the_desktop_layer_preference() {
+        let closed_id = Uuid::new_v4();
+        let mut state = AppState {
+            active_layer_mode: LayerMode::Desktop,
+            ..AppState::default()
+        };
+        state.notes.entry(closed_id).or_default().is_open = false;
+
+        // Restoring must not silently promote the note to the overlay.
+        assert_eq!(
+            plan_startup(false, vec![closed_id], &state),
+            StartupPlan::Restore {
+                note_ids: vec![closed_id],
+                mode: LayerMode::Desktop,
+            }
+        );
+    }
+
+    #[test]
+    fn background_startup_still_creates_nothing_even_with_closed_notes() {
+        let closed_id = Uuid::new_v4();
+        let mut state = AppState::default();
+        state.notes.entry(closed_id).or_default().is_open = false;
+
+        assert_eq!(
+            plan_startup(true, vec![closed_id], &state),
+            StartupPlan::Background
         );
     }
 
@@ -865,5 +1076,47 @@ mod tests {
             .expect_err("creation must be rejected");
         assert!(error.contains("Hide"));
         assert_eq!(coordinator.active, Some(LifecycleOperation::Hide));
+    }
+
+    #[test]
+    fn summoning_a_desktop_note_elevates_it_without_losing_the_preference() {
+        // A Bottom surface is always under ordinary windows, so a summon has
+        // to elevate; the preference is remembered rather than replaced.
+        assert_eq!(
+            plan_summon_layer(LayerMode::Desktop, true),
+            SummonLayerPlan::Elevate {
+                restore: LayerMode::Desktop
+            }
+        );
+    }
+
+    #[test]
+    fn launching_the_application_is_not_a_summon() {
+        // Starting Note-it honours the stored preference instead of pulling
+        // the note to the front.
+        assert_eq!(
+            plan_summon_layer(LayerMode::Desktop, false),
+            SummonLayerPlan::Persisted(LayerMode::Desktop)
+        );
+    }
+
+    #[test]
+    fn summoning_an_overlay_note_changes_no_layer_state() {
+        for already_running in [false, true] {
+            assert_eq!(
+                plan_summon_layer(LayerMode::Overlay, already_running),
+                SummonLayerPlan::Persisted(LayerMode::Overlay)
+            );
+        }
+    }
+
+    #[test]
+    fn summoning_a_hidden_application_brings_it_back_as_an_overlay() {
+        for already_running in [false, true] {
+            assert_eq!(
+                plan_summon_layer(LayerMode::Hidden, already_running),
+                SummonLayerPlan::Persisted(LayerMode::Overlay)
+            );
+        }
     }
 }

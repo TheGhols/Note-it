@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
     author = "Note-it contributors",
     version = "0.1.0",
     about = "Minimalist sticky notes for Linux Wayland",
-    long_about = "Note-it is a local-first, distraction-free desktop note application built with Wayland Layer Shell."
+    long_about = "Note-it is a local-first, distraction-free desktop note application built with Wayland Layer Shell.\n\nRun without a subcommand to summon Note-it: the notes are restored and brought to the front, reusing the instance already running. If every note has been closed, the one used last comes back rather than a blank note."
 )]
 pub struct CliArgs {
     /// Start the application in background daemon mode without creating a note window
@@ -23,7 +23,7 @@ pub enum CliCommand {
     New,
     /// Toggle notes between desktop background and overlay mode
     Toggle,
-    /// Bring all notes into overlay mode
+    /// Bring all notes into overlay mode and keep that as the preference
     Show,
     /// Hide all notes
     Hide,

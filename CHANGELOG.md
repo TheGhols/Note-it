@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Typing `->` in prose becomes a real `→`. The note stores the character itself, so it does not
+  depend on a font with ligatures, and code spans and code blocks are left exactly as typed.
 - Markdown task lists: typing `- [ ] ` or `- [x] ` creates a real task with a square checkbox,
   nested to any depth, with completed tasks struck through automatically.
 - Per-task completion timestamps, shown as `Concluído dd/MM/aaaa HH:mm` and stored alongside the
@@ -32,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- Running `note-it` now summons: it restores the notes and brings them to the front through the
+  instance already running. When it is on the desktop layer it is raised so it is genuinely visible,
+  without rewriting the stored layer preference.
 - `Ctrl+=` and `Ctrl+-` now drive the view zoom rather than the note's base font size. The base size
   is still read from the note's front matter when it loads.
 - The paper colour is now chosen from the settings menu instead of a colour dot that cycled through
@@ -40,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- Closing the last note no longer makes it unreachable. Running Note-it again reopens the note that
+  was used last instead of creating a blank one; the closed note's content was never lost, but there
+  had been no way back to it.
 - A fast resize no longer exposes a dark strip before the note repaints: the window is backed with
   the note's own paper colour, which is kept in step when the colour changes.
 - Typing `- [ ] ` produces a task item instead of a bullet containing the literal `[ ]`.

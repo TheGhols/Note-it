@@ -8,6 +8,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
 import { NoteItTaskItem } from './taskItem.ts';
+import { NoteItTypography } from './typography.ts';
 import { normalizeTextSize } from './textSize.ts';
 
 // Custom Underline serialized to <u>...</u>
@@ -233,6 +234,7 @@ export const editorExtensions = [
   NoteItTaskItem.configure({
     nested: true,
   }),
+  NoteItTypography,
   Placeholder.configure({
     placeholder: 'Type your note here...',
   }),

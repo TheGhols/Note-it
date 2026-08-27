@@ -52,6 +52,12 @@
 - [x] `Ctrl+Shift+M` collapse, `Ctrl+Shift+Space` layer switch, `Ctrl+Shift+>` / `Ctrl+Shift+<`
       text size, all routed through the single keyboard controller.
 
+### Phase 3.2R: Summon, Reopen & Typography (Completed)
+- [x] `note-it` summons the running instance from any focused application, raising a desktop-layer
+      note temporarily without losing the stored preference.
+- [x] Closing the last note no longer strands it: the note used last is reopened on the next summon.
+- [x] Typing `->` produces a real `→`, outside code.
+
 ### Phase 3.3: Editor Enhancements (Planned)
 - [ ] Contextual floating bubble toolbar for formatting.
 - [ ] Visual polish, paper textures, and typography adjustments.

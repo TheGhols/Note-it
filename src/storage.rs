@@ -127,23 +127,38 @@ impl StorageManager {
         NoteDocument::parse(&content)
     }
 
-    pub fn list_notes(&self) -> Result<Vec<Uuid>, String> {
+    /// Note identifiers ordered by last write, most recent first.
+    ///
+    /// Used to decide which note to bring back when every note has been
+    /// closed. The modification time comes from the file itself, so nothing
+    /// has to be parsed and the ordering still reflects the last save.
+    pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
         let entries = fs::read_dir(&self.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;
 
-        let mut note_ids = Vec::new();
+        let mut notes: Vec<(Uuid, std::time::SystemTime)> = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(id) = Uuid::parse_str(stem) {
-                        note_ids.push(id);
-                    }
-                }
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
             }
+            let Some(id) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|stem| Uuid::parse_str(stem).ok())
+            else {
+                continue;
+            };
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            notes.push((id, modified));
         }
 
-        Ok(note_ids)
+        // Newest first; ties fall back to the identifier so the order is stable.
+        notes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        Ok(notes.into_iter().map(|(id, _)| id).collect())
     }
 }
 
@@ -174,7 +189,7 @@ mod tests {
         assert_eq!(loaded.content, doc.content);
         assert_eq!(loaded.metadata.id, doc.metadata.id);
 
-        let list = manager.list_notes().expect("List notes");
+        let list = manager.list_notes_by_recency().expect("List notes");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0], doc.metadata.id);
     }
@@ -200,7 +215,7 @@ mod tests {
             ids.push(doc.metadata.id);
         }
 
-        let listed = manager.list_notes().expect("list notes");
+        let listed = manager.list_notes_by_recency().expect("list notes");
         assert_eq!(listed.len(), count);
 
         // Verify that in a background scenario, filtering is_open produces zero active notes
@@ -239,5 +254,63 @@ mod tests {
         assert_eq!(open_notes.len(), 2);
         assert!(open_notes.contains(&ids[0]));
         assert!(open_notes.contains(&ids[1]));
+    }
+
+    #[test]
+    fn notes_are_listed_with_the_most_recently_saved_first() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            let mut doc = NoteDocument::new_empty();
+            doc.content = format!("note {index}");
+            manager.save_note_atomic(&doc).expect("save note");
+            ids.push(doc.metadata.id);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let by_recency = manager.list_notes_by_recency().expect("list by recency");
+        assert_eq!(by_recency.len(), 3);
+        assert_eq!(by_recency[0], ids[2], "the newest save must come first");
+        assert_eq!(by_recency[2], ids[0]);
+
+        // Saving the oldest note again moves it to the front.
+        let mut refreshed = manager.load_note(&ids[0]).expect("load oldest");
+        refreshed.content = "touched".to_string();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        manager.save_note_atomic(&refreshed).expect("resave");
+
+        let after = manager.list_notes_by_recency().expect("list again");
+        assert_eq!(after[0], ids[0]);
+    }
+
+    #[test]
+    fn listing_by_recency_ignores_unrelated_files() {
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let doc = NoteDocument::new_empty();
+        manager.save_note_atomic(&doc).expect("save note");
+        fs::write(notes_dir.join("not-a-note.txt"), "ignored").expect("write stray file");
+        fs::write(notes_dir.join("not-a-uuid.md"), "ignored").expect("write stray note");
+
+        assert_eq!(
+            manager.list_notes_by_recency().expect("list"),
+            vec![doc.metadata.id]
+        );
     }
 }

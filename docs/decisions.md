@@ -86,3 +86,30 @@
   base `font_size` in the front matter is still honoured when a note is loaded; it simply no longer
   has a keyboard binding.
 
+## ADR-010: Summoning Goes Through the Command Line, Not the WebView
+- **Decision:** A global summon is a compositor keybinding that spawns `note-it`, which reaches the
+  running instance through the existing single-instance dispatcher. In-application shortcuts stay
+  as they are, for when the note is already focused.
+- **Rationale:** Shortcuts inside the note are ordinary key events in its WebView, and a Wayland
+  client only receives key events while it holds keyboard focus. They can never fire while the
+  browser is in front — no amount of work inside the application changes that. The compositor is
+  the only component that sees the key, so the reliable path has to start there.
+- **Layer handling:** a `bottom` surface is always below ordinary windows, so a note on the desktop
+  cannot be shown over another application without moving it to `overlay`. Summoning elevates it
+  but keeps the stored preference, so `note-it toggle`, `Ctrl+Shift+Space` and the next restart all
+  still reflect what the user chose. `note-it show` remains the explicit, persisted mode change.
+- **Not a summon:** launching the application honours the stored preference instead of pulling the
+  note to the front, so starting Note-it on the desktop layer leaves it on the desktop.
+
+## ADR-011: Closing a Note Must Leave a Way Back
+- **Decision:** With every note closed, a summon reopens the most recently saved note instead of
+  creating a blank one. A note is only created when none exist at all, or on `note-it new`.
+- **Rationale:** The `×` button saves the note and records `is_open = false`, keeping the Markdown,
+  the geometry and every other stored property. But startup only ever restored notes marked open,
+  so once the last note was closed it became unreachable and the application answered with an empty
+  note. Nothing was lost on disk; there was simply no route back to it.
+- **Ordering:** recency comes from the note file's modification time, so no note has to be parsed
+  to decide which one to reopen, and the order still reflects the last save.
+- **Consequence:** restoring also records the notes as open again, so a reopened note is not left
+  contradicting its own state file.
+
