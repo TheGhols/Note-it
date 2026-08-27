@@ -11,6 +11,32 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     };
   }
 
+  function typeText(editor: NoteEditor, text: string): void {
+    const rawEditor = editor.getRawEditor();
+    for (const character of text) {
+      const { from, to } = rawEditor.state.selection;
+      const handled = rawEditor.view.someProp('handleTextInput', (handler) =>
+        handler(
+          rawEditor.view,
+          from,
+          to,
+          character,
+          () => rawEditor.state.tr.insertText(character, from, to),
+        ),
+      );
+      if (!handled) {
+        rawEditor.view.dispatch(rawEditor.state.tr.insertText(character, from, to));
+      }
+    }
+  }
+
+  function appendBlock(editor: NoteEditor, markdownPrefix: string, text: string): void {
+    const rawEditor = editor.getRawEditor();
+    rawEditor.commands.focus('end');
+    rawEditor.commands.enter();
+    typeText(editor, `${markdownPrefix}${text}`);
+  }
+
   it('parses formatted markdown and serializes back correctly', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -25,6 +51,110 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     expect(output).toContain('# Heading 1');
     expect(output).toContain('**bold**');
     expect(output).toContain('*italic*');
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it('round-trips H1 through H6 without losing heading levels', () => {
+    const input = [1, 2, 3, 4, 5, 6]
+      .map((level) => `${'#'.repeat(level)} Heading ${level}`)
+      .join('\n\n');
+    const { editor, container } = createEditor(input);
+
+    for (let level = 1; level <= 6; level += 1) {
+      expect(container.querySelector(`h${level}`)?.textContent).toBe(`Heading ${level}`);
+      expect(editor.getMarkdown()).toContain(`${'#'.repeat(level)} Heading ${level}`);
+    }
+
+    editor.setMarkdown(editor.getMarkdown());
+    for (let level = 1; level <= 6; level += 1) {
+      expect(container.querySelector(`h${level}`)?.textContent).toBe(`Heading ${level}`);
+    }
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it.each([1, 2, 3, 4, 5, 6])(
+    'creates H%s by input rule in a new block after existing content',
+    (level) => {
+      const { editor, container } = createEditor('Existing paragraph before the heading.');
+      appendBlock(editor, `${'#'.repeat(level)} `, `Typed H${level}`);
+
+      expect(container.querySelector(`h${level}`)?.textContent).toBe(`Typed H${level}`);
+      expect(editor.getMarkdown()).toContain(`${'#'.repeat(level)} Typed H${level}`);
+
+      editor.destroy();
+      container.remove();
+    },
+  );
+
+  it('applies inline Markdown input rules in the middle and after earlier content', () => {
+    const { editor, container } = createEditor('Before  after');
+    const rawEditor = editor.getRawEditor();
+    rawEditor.commands.setTextSelection(8);
+    typeText(editor, '**bold**');
+    rawEditor.commands.focus('end');
+    typeText(editor, ' then *italic* and ~~strike~~');
+
+    expect(container.querySelector('strong')?.textContent).toBe('bold');
+    expect(container.querySelector('em')?.textContent).toBe('italic');
+    expect(container.querySelector('s')?.textContent).toBe('strike');
+    const markdown = editor.getMarkdown();
+    expect(markdown).toContain('**bold**');
+    expect(markdown).toContain('*italic*');
+    expect(markdown).toContain('~~strike~~');
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it('applies bold and italic input rules in the first paragraph', () => {
+    const { editor, container } = createEditor('');
+    typeText(editor, '**first bold** and *first italic*');
+
+    expect(container.querySelector('strong')?.textContent).toBe('first bold');
+    expect(container.querySelector('em')?.textContent).toBe('first italic');
+    expect(editor.getMarkdown()).toContain('**first bold** and *first italic*');
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it('keeps a hash literal in the middle of a paragraph', () => {
+    const { editor, container } = createEditor('Text before ');
+    editor.getRawEditor().commands.focus('end');
+    typeText(editor, '# not a heading');
+
+    expect(container.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull();
+    expect(editor.getMarkdown()).toContain('Text before # not a heading');
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it('creates lists after several existing paragraphs and preserves three nested levels', () => {
+    const existing = ['First paragraph.', 'Second paragraph.', 'Third paragraph.'].join('\n\n');
+    const { editor, container } = createEditor(existing);
+    appendBlock(editor, '- ', 'Later bullet');
+    expect(container.querySelector('ul > li')?.textContent).toContain('Later bullet');
+
+    const nested = [
+      '1. First',
+      '  1. Second',
+      '    1. Third',
+      '',
+      '- Bullet first',
+      '  - Bullet second',
+      '    - Bullet third',
+    ].join('\n');
+    editor.setMarkdown(nested);
+
+    expect(container.querySelectorAll('ol ol ol')).toHaveLength(1);
+    expect(container.querySelectorAll('ul ul ul')).toHaveLength(1);
+    expect(editor.getMarkdown()).toContain('    1. Third');
+    expect(editor.getMarkdown()).toContain('    - Bullet third');
 
     editor.destroy();
     container.remove();

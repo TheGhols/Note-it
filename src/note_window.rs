@@ -40,6 +40,29 @@ type PendingFlushes = Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>
 const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content";
 
+#[derive(Default)]
+struct SubpixelDeltaAccumulator {
+    remainder_x: f64,
+    remainder_y: f64,
+}
+
+impl SubpixelDeltaAccumulator {
+    fn reset(&mut self) {
+        self.remainder_x = 0.0;
+        self.remainder_y = 0.0;
+    }
+
+    fn consume(&mut self, dx: f64, dy: f64) -> (i32, i32) {
+        self.remainder_x += dx;
+        self.remainder_y += dy;
+        let pixel_x = self.remainder_x.trunc() as i32;
+        let pixel_y = self.remainder_y.trunc() as i32;
+        self.remainder_x -= f64::from(pixel_x);
+        self.remainder_y -= f64::from(pixel_y);
+        (pixel_x, pixel_y)
+    }
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct NoteWindow {
@@ -150,6 +173,8 @@ impl NoteWindow {
         let on_close_clone = Rc::clone(&options.on_close);
         let on_geom_clone = Rc::clone(&options.on_geometry_changed);
         let flushes_clone = Rc::clone(&pending_flushes);
+        let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
+        let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
         content_manager.connect_script_message_received(
             Some("noteItHost"),
@@ -242,8 +267,14 @@ impl NoteWindow {
                                 eprintln!("Failed to open approved external URL: {error}");
                             }
                         }
-                        WebviewToHostMessage::DragStart => {}
+                        WebviewToHostMessage::DragStart => {
+                            drag_deltas.borrow_mut().reset();
+                        }
                         WebviewToHostMessage::DragUpdate { dx, dy } => {
+                            let (dx, dy) = drag_deltas.borrow_mut().consume(dx, dy);
+                            if dx == 0 && dy == 0 {
+                                return;
+                            }
                             let mut st = state_clone.borrow_mut();
                             st.x += dx;
                             st.y += dy;
@@ -259,8 +290,14 @@ impl NoteWindow {
                             let snapshot = state_clone.borrow().clone();
                             on_geom_clone(id, snapshot);
                         }
-                        WebviewToHostMessage::ResizeStart => {}
+                        WebviewToHostMessage::ResizeStart => {
+                            resize_deltas.borrow_mut().reset();
+                        }
                         WebviewToHostMessage::ResizeUpdate { dx, dy } => {
+                            let (dx, dy) = resize_deltas.borrow_mut().consume(dx, dy);
+                            if dx == 0 && dy == 0 {
+                                return;
+                            }
                             let mut st = state_clone.borrow_mut();
                             st.width += dx;
                             st.height += dy;
@@ -431,7 +468,7 @@ fn file_uri_for_path(path: &Path) -> String {
 mod tests {
     use super::{
         complete_flush_response, expire_flush_request, file_uri_for_path, save_and_close,
-        save_content, PendingFlushes, FLUSH_TIMEOUT_ERROR,
+        save_content, PendingFlushes, SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
     };
     use crate::model::NoteDocument;
     use crate::storage::StorageManager;
@@ -441,6 +478,39 @@ mod tests {
     use std::rc::Rc;
     use tempfile::tempdir;
     use uuid::Uuid;
+
+    #[test]
+    fn fractional_drag_preserves_small_accumulated_deltas() {
+        let mut accumulator = SubpixelDeltaAccumulator::default();
+        assert_eq!(accumulator.consume(0.3, 0.2), (0, 0));
+        assert_eq!(accumulator.consume(0.3, 0.2), (0, 0));
+        assert_eq!(accumulator.consume(0.3, 0.2), (0, 0));
+        assert_eq!(accumulator.consume(0.3, 0.4), (1, 1));
+        assert!((accumulator.remainder_x - 0.2).abs() < f64::EPSILON * 4.0);
+        assert!(accumulator.remainder_y.abs() < f64::EPSILON * 4.0);
+    }
+
+    #[test]
+    fn fractional_drag_preserves_negative_deltas_without_overshoot() {
+        let mut accumulator = SubpixelDeltaAccumulator::default();
+        assert_eq!(accumulator.consume(-0.6, -0.4), (0, 0));
+        assert_eq!(accumulator.consume(-0.6, -0.7), (-1, -1));
+        assert!((accumulator.remainder_x + 0.2).abs() < f64::EPSILON * 4.0);
+        assert!((accumulator.remainder_y + 0.1).abs() < f64::EPSILON * 4.0);
+    }
+
+    #[test]
+    fn fractional_resize_uses_the_same_subpixel_accumulation() {
+        let mut accumulator = SubpixelDeltaAccumulator::default();
+        let updates = [(0.45, 0.35), (0.45, 0.35), (0.45, 0.35)];
+        let total = updates.into_iter().fold((0, 0), |(x, y), (dx, dy)| {
+            let (pixel_x, pixel_y) = accumulator.consume(dx, dy);
+            (x + pixel_x, y + pixel_y)
+        });
+        assert_eq!(total, (1, 1));
+        assert!((accumulator.remainder_x - 0.35).abs() < f64::EPSILON * 4.0);
+        assert!((accumulator.remainder_y - 0.05).abs() < f64::EPSILON * 4.0);
+    }
 
     #[test]
     fn failed_save_keeps_latest_content_in_memory() {

@@ -2,6 +2,7 @@ import './styles/theme.css';
 import { bridge } from './bridge/bridge.ts';
 import { NoteEditor } from './editor/editor.ts';
 import { PaperColor } from './bridge/types.ts';
+import { PointerDeltaCoalescer } from './geometry/pointerDelta.ts';
 
 const PAPER_COLORS: PaperColor[] = [
   'yellow',
@@ -98,12 +99,19 @@ function initUI(): void {
     let isDragging = false;
     let lastX = 0;
     let lastY = 0;
+    const deltas = new PointerDeltaCoalescer((dx, dy) => {
+      bridge.sendMessage({
+        type: 'drag_update',
+        payload: { dx, dy },
+      });
+    });
 
     dragRegion.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || !Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
       isDragging = true;
       lastX = e.screenX;
       lastY = e.screenY;
+      deltas.reset();
       dragRegion.setPointerCapture(e.pointerId);
       bridge.sendMessage({ type: 'drag_start' });
     });
@@ -114,17 +122,13 @@ function initUI(): void {
       const dy = e.screenY - lastY;
       lastX = e.screenX;
       lastY = e.screenY;
-      if (dx !== 0 || dy !== 0) {
-        bridge.sendMessage({
-          type: 'drag_update',
-          payload: { dx, dy },
-        });
-      }
+      deltas.add(dx, dy);
     });
 
     const endDrag = (e: PointerEvent) => {
       if (!isDragging) return;
       isDragging = false;
+      deltas.flush();
       try {
         dragRegion.releasePointerCapture(e.pointerId);
       } catch {
@@ -143,14 +147,21 @@ function initUI(): void {
     let isResizing = false;
     let lastX = 0;
     let lastY = 0;
+    const deltas = new PointerDeltaCoalescer((dx, dy) => {
+      bridge.sendMessage({
+        type: 'resize_update',
+        payload: { dx, dy },
+      });
+    });
 
     resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || !Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
       e.preventDefault();
       e.stopPropagation();
       isResizing = true;
       lastX = e.screenX;
       lastY = e.screenY;
+      deltas.reset();
       resizeHandle.setPointerCapture(e.pointerId);
       bridge.sendMessage({ type: 'resize_start' });
     });
@@ -161,17 +172,13 @@ function initUI(): void {
       const dy = e.screenY - lastY;
       lastX = e.screenX;
       lastY = e.screenY;
-      if (dx !== 0 || dy !== 0) {
-        bridge.sendMessage({
-          type: 'resize_update',
-          payload: { dx, dy },
-        });
-      }
+      deltas.add(dx, dy);
     });
 
     const endResize = (e: PointerEvent) => {
       if (!isResizing) return;
       isResizing = false;
+      deltas.flush();
       try {
         resizeHandle.releasePointerCapture(e.pointerId);
       } catch {

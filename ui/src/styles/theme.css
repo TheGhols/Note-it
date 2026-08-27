@@ -210,10 +210,44 @@ html, body {
   margin-bottom: 0.2em;
 }
 
+.ProseMirror h4 {
+  font-size: 1em;
+  font-weight: 650;
+  margin-top: 0.3em;
+  margin-bottom: 0.2em;
+}
+
+.ProseMirror h5 {
+  font-size: 0.95em;
+  font-weight: 650;
+  margin-top: 0.25em;
+  margin-bottom: 0.15em;
+}
+
+.ProseMirror h6 {
+  font-size: 0.9em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  margin-top: 0.25em;
+  margin-bottom: 0.15em;
+}
+
 .ProseMirror ul,
 .ProseMirror ol {
-  padding-left: 1.4em;
+  padding-left: 1.3em;
   margin-bottom: 0.5em;
+}
+
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  padding-left: 1.2em;
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+}
+
+.ProseMirror li::marker {
+  color: var(--paper-muted);
+  font-weight: 600;
 }
 
 .ProseMirror ul[data-type="taskList"] {

@@ -3,6 +3,8 @@ use uuid::Uuid;
 use webkit6::prelude::*;
 use webkit6::WebView;
 
+const MAX_GEOMETRY_DELTA: f64 = 100_000.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "snake_case")]
@@ -57,14 +59,14 @@ pub enum WebviewToHostMessage {
     },
     DragStart,
     DragUpdate {
-        dx: i32,
-        dy: i32,
+        dx: f64,
+        dy: f64,
     },
     DragEnd,
     ResizeStart,
     ResizeUpdate {
-        dx: i32,
-        dy: i32,
+        dx: f64,
+        dy: f64,
     },
     ResizeEnd,
     FlushResponse {
@@ -83,8 +85,24 @@ pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
 }
 
 pub fn parse_webview_message(raw_json: &str) -> Result<WebviewToHostMessage, String> {
-    serde_json::from_str::<WebviewToHostMessage>(raw_json)
-        .map_err(|e| format!("Failed to parse webview message: {e}"))
+    let message = serde_json::from_str::<WebviewToHostMessage>(raw_json)
+        .map_err(|e| format!("Failed to parse webview message: {e}"))?;
+    match &message {
+        WebviewToHostMessage::DragUpdate { dx, dy }
+        | WebviewToHostMessage::ResizeUpdate { dx, dy } => validate_geometry_delta(*dx, *dy)?,
+        _ => {}
+    }
+    Ok(message)
+}
+
+fn validate_geometry_delta(dx: f64, dy: f64) -> Result<(), String> {
+    if !dx.is_finite() || !dy.is_finite() {
+        return Err("Geometry delta must be finite".to_string());
+    }
+    if dx.abs() > MAX_GEOMETRY_DELTA || dy.abs() > MAX_GEOMETRY_DELTA {
+        return Err("Geometry delta exceeds the allowed range".to_string());
+    }
+    Ok(())
 }
 
 pub fn validate_external_url(url: &str) -> Result<(), String> {
@@ -106,7 +124,9 @@ pub fn validate_external_url(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_webview_message, validate_external_url, WebviewToHostMessage};
+    use super::{
+        parse_webview_message, validate_external_url, validate_geometry_delta, WebviewToHostMessage,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -162,33 +182,51 @@ mod tests {
     }
 
     #[test]
-    fn parses_drag_and_resize_messages() {
+    fn parses_fractional_drag_and_resize_messages() {
         let drag_json = serde_json::json!({
             "type": "drag_update",
-            "payload": { "dx": 15, "dy": -8 }
+            "payload": { "dx": 9.9140625, "dy": -0.87109375 }
         })
         .to_string();
         let drag_msg = parse_webview_message(&drag_json).expect("drag message");
         match drag_msg {
             WebviewToHostMessage::DragUpdate { dx, dy } => {
-                assert_eq!(dx, 15);
-                assert_eq!(dy, -8);
+                assert_eq!(dx, 9.9140625);
+                assert_eq!(dy, -0.87109375);
             }
             other => panic!("unexpected message: {other:?}"),
         }
 
         let resize_json = serde_json::json!({
             "type": "resize_update",
-            "payload": { "dx": 50, "dy": 40 }
+            "payload": { "dx": 50.25, "dy": -40.75 }
         })
         .to_string();
         let resize_msg = parse_webview_message(&resize_json).expect("resize message");
         match resize_msg {
             WebviewToHostMessage::ResizeUpdate { dx, dy } => {
-                assert_eq!(dx, 50);
-                assert_eq!(dy, 40);
+                assert_eq!(dx, 50.25);
+                assert_eq!(dy, -40.75);
             }
             other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_geometry_deltas() {
+        assert!(validate_geometry_delta(f64::NAN, 0.0).is_err());
+        assert!(validate_geometry_delta(0.0, f64::INFINITY).is_err());
+        for payload in [
+            serde_json::json!({ "dx": 100_000.1, "dy": 0 }),
+            serde_json::json!({ "dx": 0, "dy": -100_000.1 }),
+            serde_json::json!({ "dx": "NaN", "dy": 0 }),
+        ] {
+            let raw = serde_json::json!({
+                "type": "drag_update",
+                "payload": payload,
+            })
+            .to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
         }
     }
 
