@@ -152,6 +152,16 @@
       allowlist and the Markdown/HTML sanitizers, the smart blocks and their round trips, geometry
       clamping and collapse, and the summon/hide/show/restart layer transitions.
 
+### Phase 3.5R.1: Global Layer Toggle Refinement
+- [x] Niri owns the authoritative `Ctrl+Shift+Space`; the WebView shortcut is a local fallback.
+- [x] The direct `toggle-layer` GAction reaches one shared layer decision without launching a
+      second GTK process.
+- [x] Desktop-to-Overlay promotion forces a timely Wayland commit without stealing focus from the
+      normal application; the reverse transition stays live and does not re-present the surface.
+- [x] Layer persistence is debounced and reads current state, while lifecycle commits retain the
+      existing atomic durability guarantees.
+- [x] Auto-repeat is suppressed for discrete note commands and for the Niri binding.
+
 ### Phase 3.6: Math Engine (Planned)
 - [ ] Contextual inline calculation, evaluated as the note is written.
 - [ ] Percentages.

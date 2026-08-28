@@ -1,9 +1,14 @@
 use crate::atomic_file::write_atomic;
+use crate::diagnostics;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use uuid::Uuid;
+
+static STATE_WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -180,8 +185,23 @@ impl AppState {
     /// replaced — a directory sync that fails *after* the rename is a
     /// durability warning, not a failed save.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        Self::ensure_parent(path)?;
-        write_atomic(path, self.serialize()?.as_bytes(), "the window state")
+        let started = Instant::now();
+        let write = STATE_WRITE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        diagnostics::log(format_args!(
+            "event=state-write-begin write={} mode={}",
+            write,
+            self.active_layer_mode.as_str()
+        ));
+        let result = Self::ensure_parent(path)
+            .and_then(|_| write_atomic(path, self.serialize()?.as_bytes(), "the window state"));
+        diagnostics::log(format_args!(
+            "event=state-write-end write={} mode={} duration_us={} ok={}",
+            write,
+            self.active_layer_mode.as_str(),
+            started.elapsed().as_micros(),
+            result.is_ok()
+        ));
+        result
     }
 
     fn ensure_parent(path: &Path) -> Result<(), String> {

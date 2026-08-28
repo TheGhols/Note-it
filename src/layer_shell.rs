@@ -258,32 +258,164 @@ pub fn setup_layer_shell_window(
     window.set_default_size(w, h);
     window.set_size_request(MIN_NOTE_WIDTH, min_h);
 
-    apply_layer_mode(window, mode);
+    configure_layer_mode(window, mode);
 }
 
-pub fn apply_layer_mode(window: &gtk4::Window, mode: LayerMode) {
+/// Configures the layer-shell role without deciding whether the surface should
+/// be presented. Initial creation and a live layer transition are different
+/// operations: only creation needs to map the window.
+fn configure_layer_mode(window: &gtk4::Window, mode: LayerMode) -> bool {
     if !window.is_layer_window() {
-        return;
+        return false;
     }
 
+    let mut changed = false;
     match mode {
         LayerMode::Desktop => {
-            window.set_layer(Layer::Bottom);
-            window.set_keyboard_mode(KeyboardMode::OnDemand);
-            window.set_visible(true);
-            window.present();
+            if window.layer() != Layer::Bottom {
+                window.set_layer(Layer::Bottom);
+                changed = true;
+            }
+            // Map a restored desktop note without taking focus. NoteWindow
+            // restores OnDemand after Niri has observed this initial map, so
+            // the note remains click-to-focus without activating at startup.
+            if window.keyboard_mode() != KeyboardMode::None {
+                window.set_keyboard_mode(KeyboardMode::None);
+                changed = true;
+            }
         }
         LayerMode::Overlay => {
-            window.set_layer(Layer::Overlay);
-            window.set_keyboard_mode(KeyboardMode::OnDemand);
-            window.set_visible(true);
-            window.present();
+            if window.layer() != Layer::Overlay {
+                window.set_layer(Layer::Overlay);
+                changed = true;
+            }
+            if window.keyboard_mode() != KeyboardMode::OnDemand {
+                window.set_keyboard_mode(KeyboardMode::OnDemand);
+                changed = true;
+            }
         }
         LayerMode::Hidden => {
-            window.set_keyboard_mode(KeyboardMode::None);
-            window.set_visible(false);
+            if window.keyboard_mode() != KeyboardMode::None {
+                window.set_keyboard_mode(KeyboardMode::None);
+                changed = true;
+            }
+            if window.is_visible() {
+                window.set_visible(false);
+                changed = true;
+            }
         }
     }
+    changed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LiveLayerTransitionPlan {
+    set_layer: bool,
+    set_keyboard_mode: bool,
+    hide: bool,
+    remap: bool,
+}
+
+fn plan_live_layer_transition(
+    current: LayerMode,
+    keyboard_mode_matches: bool,
+    visible: bool,
+    target: LayerMode,
+) -> LiveLayerTransitionPlan {
+    match target {
+        LayerMode::Desktop | LayerMode::Overlay => LiveLayerTransitionPlan {
+            set_layer: current != target,
+            set_keyboard_mode: !keyboard_mode_matches,
+            hide: false,
+            // A fully occluded Bottom surface receives no timely frame
+            // callback. Niri applies set_layer only on the next wl_surface
+            // commit; queue_draw, queue_render and present all remained
+            // throttled for close to a second. Remapping only this direction
+            // forces that commit without permanently changing visibility.
+            remap: current == LayerMode::Desktop && target == LayerMode::Overlay,
+        },
+        LayerMode::Hidden => LiveLayerTransitionPlan {
+            set_layer: false,
+            set_keyboard_mode: !keyboard_mode_matches,
+            hide: visible,
+            remap: false,
+        },
+    }
+}
+
+/// Maps a newly created note exactly once, after its child and focus handlers
+/// have been installed.
+pub fn show_initial_layer_surface(window: &gtk4::Window, mode: LayerMode) {
+    configure_layer_mode(window, mode);
+    if mode != LayerMode::Hidden && !window.is_visible() {
+        window.present();
+    }
+}
+
+/// Applies a mode change to an already visible surface.
+///
+/// gtk4-layer-shell protocol v4 lets Niri update the layer of a mapped surface
+/// directly. Re-presenting it is not an unconditional part of that transition
+/// and can create avoidable activation/focus churn, so the global inactive path
+/// changes only properties that are actually different. `present()` is kept
+/// only when a deliberate promotion must retain focus the note already owns.
+pub fn apply_live_layer_mode(
+    window: &gtk4::Window,
+    mode: LayerMode,
+    retain_keyboard_focus: bool,
+) -> bool {
+    if !window.is_layer_window() {
+        return false;
+    }
+
+    let target_layer = match mode {
+        LayerMode::Desktop => Some(Layer::Bottom),
+        LayerMode::Overlay => Some(Layer::Overlay),
+        LayerMode::Hidden => None,
+    };
+    let target_keyboard = if mode == LayerMode::Hidden
+        || (!retain_keyboard_focus && window.keyboard_mode() == KeyboardMode::None)
+    {
+        KeyboardMode::None
+    } else {
+        KeyboardMode::OnDemand
+    };
+    let current = match window.layer() {
+        Layer::Bottom => LayerMode::Desktop,
+        Layer::Overlay => LayerMode::Overlay,
+        _ => LayerMode::Hidden,
+    };
+    let plan = plan_live_layer_transition(
+        current,
+        window.keyboard_mode() == target_keyboard,
+        window.is_visible(),
+        mode,
+    );
+    if plan.remap {
+        // Mapping an on-demand layer surface makes Niri give it keyboard focus,
+        // even when Brave or another normal window was focused. Map the
+        // promoted surface as non-interactive, then restore click-to-focus once
+        // it exists on Overlay.
+        window.set_keyboard_mode(KeyboardMode::None);
+    }
+    if plan.set_layer {
+        window.set_layer(target_layer.expect("visible layer mode has a layer"));
+    }
+    if plan.set_keyboard_mode && !plan.remap {
+        window.set_keyboard_mode(target_keyboard);
+    }
+    if plan.hide {
+        window.set_visible(false);
+    }
+    if plan.remap {
+        window.set_visible(false);
+        window.set_visible(true);
+        if retain_keyboard_focus {
+            window.set_keyboard_mode(target_keyboard);
+            window.present();
+        }
+    }
+    plan.set_layer || plan.set_keyboard_mode || plan.hide
 }
 
 pub fn update_window_position(window: &gtk4::Window, x: i32, y: i32) {
@@ -377,6 +509,35 @@ mod tests {
         assert!(conn.is_none());
         assert_eq!(w, DEFAULT_MONITOR_WIDTH);
         assert_eq!(h, DEFAULT_MONITOR_HEIGHT);
+    }
+
+    #[test]
+    fn a_live_layer_change_only_remaps_the_occluded_direction() {
+        let to_overlay =
+            plan_live_layer_transition(LayerMode::Desktop, true, true, LayerMode::Overlay);
+        assert!(to_overlay.set_layer);
+        assert!(to_overlay.remap);
+        assert!(!to_overlay.hide);
+
+        let to_desktop =
+            plan_live_layer_transition(LayerMode::Overlay, true, true, LayerMode::Desktop);
+        assert!(to_desktop.set_layer);
+        assert!(!to_desktop.remap);
+        assert!(!to_desktop.hide);
+    }
+
+    #[test]
+    fn an_unchanged_live_layer_is_a_complete_no_op() {
+        let plan = plan_live_layer_transition(LayerMode::Overlay, true, true, LayerMode::Overlay);
+        assert_eq!(
+            plan,
+            LiveLayerTransitionPlan {
+                set_layer: false,
+                set_keyboard_mode: false,
+                hide: false,
+                remap: false,
+            }
+        );
     }
 
     #[test]

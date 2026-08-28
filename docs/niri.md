@@ -17,43 +17,64 @@ focus, so those shortcuts work when the note itself is focused and do nothing
 while the browser or the terminal is in front. Summoning the note therefore has
 to come from the compositor.
 
-The path is the command line: every invocation reaches the already running
-instance through Note-it's single-instance dispatcher, so a keybinding never
-starts a second application.
+The authoritative layer toggle is a compositor binding. It activates the
+`toggle-layer` GApplication action on the already-running Note-it process, so
+it does not depend on a note, GTK window or WebView holding focus.
 
 ```text
-Niri keybinding
-    ↓  spawn "note-it"
-single-instance dispatcher
+Ctrl+Shift+Space
     ↓
-the instance already running
+Niri global binding (repeat=false, allow-inhibiting=false)
+    ↓  gapplication action io.github.theghols.NoteIt toggle-layer
+the already-running Note-it instance
     ↓
-notes restored and made visible
+one shared live layer decision applied to every note surface
 ```
 
-## Recommended Keybindings (`~/.config/niri/config.kdl`)
+## Recommended Keybindings
 
-Add the following to your Niri configuration:
+Add the following to the configuration Niri actually loads. That may be
+`~/.config/niri/config.kdl`, a file included from it such as `binds.kdl`, or the
+path selected by `NIRI_CONFIG`. Run `niri validate` after editing it.
 
 ```kdl
 // Spawn background daemon on compositor startup
 spawn-at-startup "note-it" "--background"
 
 binds {
+    // Authoritative global Desktop ↔ Overlay toggle. `Space` is the XKB name.
+    Ctrl+Shift+Space repeat=false allow-inhibiting=false {
+        spawn "gapplication" "action" "io.github.theghols.NoteIt" "toggle-layer"
+    }
+
     // Summon Note-it from any application: restores the notes and brings
     // them to the front. This is the binding to reach for.
     Mod+Shift+N { spawn "note-it"; }
 
-    // Switch between "always on top" and "on the desktop"
-    Mod+Shift+D { spawn "note-it" "toggle"; }
-
     // Collapse every note to its bar, or expand them all again
-    Mod+Shift+M { spawn "note-it" "toggle-collapse-all"; }
+    Mod+Shift+M repeat=false { spawn "note-it" "toggle-collapse-all"; }
 
     // Quick create new note
     Mod+Alt+N { spawn "note-it" "new"; }
 }
 ```
+
+Keep an existing `Mod+Shift+D` alias if it already belongs to Note-it and does
+not conflict with another application. It may continue to call `note-it
+toggle`; it is not needed for the core workflow.
+
+The desktop entry `io.github.theghols.NoteIt.desktop` must be installed in an
+XDG applications directory so `gapplication` can resolve the application ID:
+
+```bash
+install -Dm644 resources/io.github.theghols.NoteIt.desktop \
+    ~/.local/share/applications/io.github.theghols.NoteIt.desktop
+update-desktop-database ~/.local/share/applications
+```
+
+`note-it toggle` remains the CLI fallback and reaches the same shared
+transition, but launching a second GTK process makes it slower than the direct
+application action.
 
 ## What a Summon Does to the Layer
 
@@ -72,26 +93,27 @@ notes in overlay mode, and it does store that as the preference.
 
 ### Coming Back from the Desktop Layer
 
-`Ctrl+Shift+Space` is a key event inside the note's own WebView, so it only
-reaches the note that holds keyboard focus. A layer surface asks for
-`on-demand` keyboard interactivity, which means the compositor grants focus
-when the surface is clicked — and changing layer re-maps the surface, so the
-note gives that focus up each time it moves.
-
-Going **to** the desktop layer therefore works from the keyboard. Coming
-**back** needs the note to be reachable: click it where it shows through, and
-the shortcut works again. If another window covers it there is nothing to
-click, and no key can reach a surface the compositor is not sending keys to.
-
-That is a property of the layer, not a bug to fix in the note: a `bottom`
-surface is behind everything by definition. The way back that always works is
-the compositor keybinding, which does not depend on focus at all:
+The Niri binding above is the real `Ctrl+Shift+Space` workflow. It works when a
+browser, terminal or editor is focused, when the note is completely covered,
+and when the note has never been clicked since it moved to the desktop.
 
 ```kdl
-Mod+Shift+D { spawn "note-it" "toggle"; }
+Ctrl+Shift+Space repeat=false allow-inhibiting=false {
+    spawn "gapplication" "action" "io.github.theghols.NoteIt" "toggle-layer"
+}
 ```
 
-Binding it is recommended for exactly this reason.
+The WebView still handles `Ctrl+Shift+Space` as a local fallback when the note
+already owns focus. It is useful, but it is not authoritative and cannot make
+a covered `bottom` surface receive keyboard input.
+
+On Niri 26.04 with layer-shell protocol version 4, changing `bottom` to
+`overlay` does not inherently recreate the surface. An occluded bottom surface
+can nevertheless wait for a frame before its layer request is committed. To
+make promotion immediate, Note-it deliberately remaps only that direction,
+with keyboard interactivity temporarily disabled so the browser keeps focus.
+`overlay` to `bottom` uses the live protocol transition directly. Neither live
+path blindly calls `present()`.
 
 ## Collapsing One Note or All of Them
 

@@ -105,6 +105,40 @@ describe('NoteKeyboardController', () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it('suppresses auto-repeat for every discrete note command', () => {
+    const actions = mockActions();
+    controller = new NoteKeyboardController(window, actions);
+
+    window.dispatchEvent(keyboardEvent('n', { repeat: true, code: 'KeyN' }));
+    window.dispatchEvent(keyboardEvent('w', { repeat: true, code: 'KeyW' }));
+    window.dispatchEvent(
+      keyboardEvent('M', { shiftKey: true, repeat: true, code: 'KeyM' }),
+    );
+    const layerRepeat = keyboardEvent(' ', {
+      shiftKey: true,
+      repeat: true,
+      code: 'Space',
+    });
+    window.dispatchEvent(layerRepeat);
+
+    expect(actions.newNote).not.toHaveBeenCalled();
+    expect(actions.closeNote).not.toHaveBeenCalled();
+    expect(actions.toggleCollapsed).not.toHaveBeenCalled();
+    expect(actions.toggleLayerMode).not.toHaveBeenCalled();
+    expect(layerRepeat.defaultPrevented).toBe(true);
+  });
+
+  it('intentionally keeps zoom in and zoom out repeatable', () => {
+    const actions = mockActions();
+    controller = new NoteKeyboardController(window, actions);
+
+    window.dispatchEvent(keyboardEvent('=', { repeat: true, code: 'Equal' }));
+    window.dispatchEvent(keyboardEvent('-', { repeat: true, code: 'Minus' }));
+
+    expect(actions.zoomIn).toHaveBeenCalledOnce();
+    expect(actions.zoomOut).toHaveBeenCalledOnce();
+  });
+
   it('leaves a plain space, Ctrl+Space and AltGr chords alone', () => {
     const actions = mockActions();
     controller = new NoteKeyboardController(window, actions);

@@ -128,8 +128,9 @@ note-it quit                  # salva tudo e encerra o aplicativo
 Os mesmos comandos funcionam com `./scripts/run-note-it <comando>` durante o desenvolvimento.
 
 Atalhos dentro de uma nota: `Ctrl+N` cria outra nota, `Ctrl+W` fecha a atual, `Ctrl+=` / `Ctrl+-` /
-`Ctrl+0` controlam o zoom, `Ctrl+Shift+M` recolhe ou expande, e `Ctrl+Shift+Espaço` alterna a
-camada.
+`Ctrl+0` controlam o zoom e `Ctrl+Shift+M` recolhe ou expande. A nota também aceita
+`Ctrl+Shift+Espaço` localmente quando já está focada; o caminho global e autoritativo para alternar
+a camada é a ligação do Niri abaixo.
 
 ## Integração com o Niri
 
@@ -139,9 +140,11 @@ Adicione ao seu `~/.config/niri/config.kdl`:
 // Sobe o daemon do Note-it junto com a sessão
 spawn-at-startup "note-it" "--background"
 
-// Atalho global para alternar a camada
+// Atalho global autoritativo para alternar a camada
 binds {
-    Mod+Shift+N { spawn "note-it" "toggle"; }
+    Ctrl+Shift+Space repeat=false allow-inhibiting=false {
+        spawn "gapplication" "action" "io.github.theghols.NoteIt" "toggle-layer"
+    }
 }
 ```
 

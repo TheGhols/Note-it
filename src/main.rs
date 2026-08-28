@@ -1,6 +1,7 @@
 mod app;
 mod atomic_file;
 mod cli;
+mod diagnostics;
 mod layer_shell;
 mod model;
 mod note_window;

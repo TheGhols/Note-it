@@ -59,7 +59,7 @@ export class NoteKeyboardController {
     const key = event.key;
 
     if (event.shiftKey) {
-      const handled = this.handleShiftChord(key, event.code);
+      const handled = this.handleShiftChord(key, event.code, event.repeat);
       if (handled) event.preventDefault();
       return;
     }
@@ -67,15 +67,15 @@ export class NoteKeyboardController {
     switch (key.toLowerCase()) {
       case 'n':
         event.preventDefault();
-        this.actions.newNote();
+        if (!event.repeat) this.actions.newNote();
         break;
       case 'w':
         event.preventDefault();
-        this.actions.closeNote();
+        if (!event.repeat) this.actions.closeNote();
         break;
       case 'r':
         event.preventDefault();
-        this.actions.toggleStrike();
+        if (!event.repeat) this.actions.toggleStrike();
         break;
       case '+':
       case '=':
@@ -89,7 +89,7 @@ export class NoteKeyboardController {
         break;
       case '0':
         event.preventDefault();
-        this.actions.resetZoom();
+        if (!event.repeat) this.actions.resetZoom();
         break;
     }
   };
@@ -99,21 +99,21 @@ export class NoteKeyboardController {
    * which of the two a layout reports depends on the layout itself, so both the
    * produced character and the physical `code` are accepted.
    */
-  private handleShiftChord(key: string, code: string): boolean {
+  private handleShiftChord(key: string, code: string, repeat: boolean): boolean {
     if (key === 'M' || key === 'm' || code === 'KeyM') {
-      this.actions.toggleCollapsed();
+      if (!repeat) this.actions.toggleCollapsed();
       return true;
     }
     if (key === ' ' || code === 'Space') {
-      this.actions.toggleLayerMode();
+      if (!repeat) this.actions.toggleLayerMode();
       return true;
     }
     if (key === '>' || key === '.' || code === 'Period') {
-      this.actions.increaseTextSize();
+      if (!repeat) this.actions.increaseTextSize();
       return true;
     }
     if (key === '<' || key === ',' || code === 'Comma') {
-      this.actions.decreaseTextSize();
+      if (!repeat) this.actions.decreaseTextSize();
       return true;
     }
     return false;

@@ -1,4 +1,5 @@
 use crate::cli::CliCommand;
+use crate::diagnostics::{self, LayerToggleTrace};
 use crate::layer_shell::{
     calculate_cascade_position, find_monitor_by_connector, install_paper_color_styles,
     DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
@@ -14,9 +15,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use uuid::Uuid;
 
 static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
+const LAYER_PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(180);
 
 type LifecycleCallback = Box<dyn FnOnce(Result<(), String>)>;
 
@@ -90,6 +93,27 @@ fn plan_summon_layer(persisted: LayerMode, already_running: bool) -> SummonLayer
     }
 }
 
+fn is_live_layer_noop(
+    stored: LayerMode,
+    target: LayerMode,
+    has_windows: bool,
+    summon_restore: Option<LayerMode>,
+) -> bool {
+    target != LayerMode::Hidden && has_windows && summon_restore.is_none() && stored == target
+}
+
+fn preferred_layer_after_new_note(
+    stored: LayerMode,
+    live_target: LayerMode,
+    summon_restore: Option<LayerMode>,
+) -> LayerMode {
+    if summon_restore.is_some() {
+        stored
+    } else {
+        live_target
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum StartupPlan {
     Background,
@@ -104,6 +128,32 @@ struct FlushBatch {
     remaining: usize,
     first_error: Option<String>,
     on_complete: Option<LifecycleCallback>,
+}
+
+#[derive(Debug, Default)]
+struct StatePersistenceDebouncer {
+    generation: u64,
+    pending: Option<u64>,
+}
+
+impl StatePersistenceDebouncer {
+    fn schedule(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = Some(self.generation);
+        self.generation
+    }
+
+    fn settle(&mut self, generation: u64) -> bool {
+        if self.pending != Some(generation) {
+            return false;
+        }
+        self.pending = None;
+        true
+    }
+
+    fn cancel(&mut self) {
+        self.pending = None;
+    }
 }
 
 impl FlushBatch {
@@ -151,6 +201,7 @@ pub struct AppContext {
     /// False until the first command has been handled, so launching the
     /// application is not mistaken for summoning it.
     activated: bool,
+    layer_state_persistence: StatePersistenceDebouncer,
 }
 
 pub struct NoteItApp {
@@ -162,6 +213,11 @@ pub struct NoteItApp {
 impl NoteItApp {
     pub fn new(app: &gtk4::Application) -> Self {
         let hold_guard = app.hold();
+
+        diagnostics::log(format_args!(
+            "event=startup layer_shell_protocol_version={}",
+            gtk4_layer_shell::protocol_version()
+        ));
 
         if let Some(display) = gtk4::gdk::Display::default() {
             install_paper_color_styles(&display);
@@ -181,7 +237,23 @@ impl NoteItApp {
             lifecycle: LifecycleCoordinator::default(),
             summon_restore: None,
             activated: false,
+            layer_state_persistence: StatePersistenceDebouncer::default(),
         }));
+
+        let action = gio::SimpleAction::new("toggle-layer", None);
+        let action_context = Rc::clone(&context);
+        let weak_app = app.downgrade();
+        action.connect_activate(move |_, _| {
+            let Some(app) = weak_app.upgrade() else {
+                return;
+            };
+            NoteItAppClone {
+                app,
+                context: Rc::clone(&action_context),
+            }
+            .toggle_layer_mode_from("gaction");
+        });
+        app.add_action(&action);
 
         Self {
             app: app.clone(),
@@ -204,7 +276,7 @@ impl NoteItApp {
                 controller.create_new_note();
             }
             Some(CliCommand::Toggle) => {
-                controller.toggle_layer_mode();
+                controller.toggle_layer_mode_from("command-line");
             }
             Some(CliCommand::Show) => {
                 controller.set_layer_mode(LayerMode::Overlay);
@@ -260,7 +332,7 @@ impl NoteItAppClone {
                 let mut ctx = self.context.borrow_mut();
                 ctx.state.active_layer_mode = restore;
                 ctx.summon_restore = Some(restore);
-                if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+                if let Err(error) = persist_state_now(&mut ctx, "summon") {
                     eprintln!("Failed to persist note state after summon: {error}");
                 }
             }
@@ -302,7 +374,7 @@ impl NoteItAppClone {
         for (id, snapshot) in changed {
             ctx.state.notes.insert(id, snapshot);
         }
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+        if let Err(error) = persist_state_now(&mut ctx, "collapse-all") {
             eprintln!("Failed to persist collapse state for every note: {error}");
         }
     }
@@ -400,8 +472,12 @@ impl NoteItAppClone {
         let mut ctx = self.context.borrow_mut();
         ctx.state.notes.insert(note_id, win_state);
         ctx.windows.insert(note_id, note_window);
-        ctx.state.active_layer_mode = target_mode;
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+        ctx.state.active_layer_mode = preferred_layer_after_new_note(
+            ctx.state.active_layer_mode,
+            target_mode,
+            ctx.summon_restore,
+        );
+        if let Err(error) = persist_state_now(&mut ctx, "new-note") {
             eprintln!("Failed to persist application state after note creation: {error}");
         }
     }
@@ -415,7 +491,7 @@ impl NoteItAppClone {
 
         let previous_state = ctx.state.clone();
         ctx.state.notes.entry(*id).or_default().is_open = false;
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+        if let Err(error) = persist_state_now(&mut ctx, "close-note") {
             ctx.state = previous_state;
             return Err(format!("failed to persist closed note state: {error}"));
         }
@@ -433,7 +509,7 @@ impl NoteItAppClone {
         }
         let mut ctx = self.context.borrow_mut();
         ctx.state.notes.insert(id, geom);
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+        if let Err(error) = persist_state_now(&mut ctx, "geometry") {
             eprintln!("Failed to persist updated note geometry: {error}");
         }
     }
@@ -496,13 +572,27 @@ impl NoteItAppClone {
     /// The shared Desktop/Overlay switch, reached from the note menu, the
     /// keyboard shortcut and `note-it toggle` alike.
     pub fn toggle_layer_mode(&self) {
+        self.toggle_layer_mode_from("webview");
+    }
+
+    fn toggle_layer_mode_from(&self, source: &str) {
+        let trace = LayerToggleTrace::begin(source);
         // Toggling from a summoned note starts at the layer it is really on,
         // so the first press sends it back to the desktop as expected.
-        let next = self.effective_layer_mode().toggled();
-        self.set_layer_mode(next);
+        let current = self.effective_layer_mode();
+        let next = current.toggled();
+        trace.phase(
+            "T1",
+            format_args!("current={} target={}", current.as_str(), next.as_str()),
+        );
+        self.set_layer_mode_traced(next, Some(trace));
     }
 
     pub fn set_layer_mode(&self, mode: LayerMode) {
+        self.set_layer_mode_traced(mode, None);
+    }
+
+    fn set_layer_mode_traced(&self, mode: LayerMode, trace: Option<LayerToggleTrace>) {
         if mode == LayerMode::Hidden {
             if let Err(error) = self.begin_lifecycle(LifecycleOperation::Hide) {
                 eprintln!("Hide operation rejected: {error}");
@@ -518,10 +608,12 @@ impl NoteItAppClone {
                         windows,
                         lifecycle,
                         summon_restore,
+                        layer_state_persistence,
                         ..
                     } = &mut *ctx;
                     let state_path = storage.state_file_path();
                     *summon_restore = None;
+                    layer_state_persistence.cancel();
                     let commit_result = commit_hidden_transition(
                         state,
                         |next_state| next_state.save_to_file(&state_path),
@@ -552,7 +644,27 @@ impl NoteItAppClone {
             return;
         }
 
+        {
+            let ctx = self.context.borrow();
+            if is_live_layer_noop(
+                ctx.state.active_layer_mode,
+                mode,
+                !ctx.windows.is_empty(),
+                ctx.summon_restore,
+            ) {
+                diagnostics::log(format_args!(
+                    "event=shared-layer-noop target={} windows={}",
+                    mode.as_str(),
+                    ctx.windows.len()
+                ));
+                return;
+            }
+        }
+
         let needs_instantiation = {
+            if let Some(trace) = trace {
+                trace.phase("T2", format_args!("target={}", mode.as_str()));
+            }
             let mut ctx = self.context.borrow_mut();
             // An explicit layer choice replaces any temporary elevation.
             ctx.summon_restore = None;
@@ -560,9 +672,15 @@ impl NoteItAppClone {
             if ctx.windows.is_empty() {
                 true
             } else {
-                for window in ctx.windows.values() {
-                    window.set_layer_mode(mode);
-                }
+                let changed = apply_shared_layer_transition(ctx.windows.values(), |window| {
+                    window.set_layer_mode(mode)
+                });
+                diagnostics::log(format_args!(
+                    "event=shared-layer-transition target={} windows={} changed={}",
+                    mode.as_str(),
+                    ctx.windows.len(),
+                    changed
+                ));
                 false
             }
         };
@@ -585,10 +703,11 @@ impl NoteItAppClone {
             }
         }
 
-        let ctx = self.context.borrow();
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
-            eprintln!("Failed to persist layer mode: {error}");
+        if let Some(trace) = trace {
+            trace.phase("T3", format_args!("target={}", mode.as_str()));
         }
+
+        self.schedule_layer_state_persistence(trace);
     }
 
     pub fn save_and_quit(&self) {
@@ -601,8 +720,8 @@ impl NoteItAppClone {
             Ok(()) => {
                 if let Err(error) = commit_quit(
                     || {
-                        let ctx = self_clone.context.borrow();
-                        ctx.state.save_to_file(&ctx.storage.state_file_path())
+                        let mut ctx = self_clone.context.borrow_mut();
+                        persist_state_now(&mut ctx, "quit")
                     },
                     || self_clone.app.quit(),
                 ) {
@@ -634,6 +753,46 @@ impl NoteItAppClone {
             .ensure_structural_action_allowed(action)
     }
 
+    fn schedule_layer_state_persistence(&self, trace: Option<LayerToggleTrace>) {
+        let generation = self.context.borrow_mut().layer_state_persistence.schedule();
+        let context = Rc::clone(&self.context);
+        glib::timeout_add_local_once(LAYER_PERSISTENCE_DEBOUNCE, move || {
+            let mut ctx = context.borrow_mut();
+            if !ctx.layer_state_persistence.settle(generation) {
+                diagnostics::log(format_args!(
+                    "event=state-write-coalesced generation={generation}"
+                ));
+                return;
+            }
+
+            if let Some(trace) = trace {
+                trace.phase(
+                    "T4",
+                    format_args!(
+                        "generation={} target={}",
+                        generation,
+                        ctx.state.active_layer_mode.as_str()
+                    ),
+                );
+            }
+            let result = ctx.state.save_to_file(&ctx.storage.state_file_path());
+            if let Some(trace) = trace {
+                trace.phase(
+                    "T5",
+                    format_args!(
+                        "generation={} target={} ok={}",
+                        generation,
+                        ctx.state.active_layer_mode.as_str(),
+                        result.is_ok()
+                    ),
+                );
+            }
+            if let Err(error) = result {
+                eprintln!("Failed to persist layer mode: {error}");
+            }
+        });
+    }
+
     /// Records restored notes as open and persists the result, so a note
     /// brought back after being closed does not stay marked as closed.
     fn mark_notes_open(&self, note_ids: &[Uuid], mode: LayerMode) {
@@ -642,7 +801,7 @@ impl NoteItAppClone {
         for id in note_ids {
             ctx.state.notes.entry(*id).or_default().is_open = true;
         }
-        if let Err(error) = ctx.state.save_to_file(&ctx.storage.state_file_path()) {
+        if let Err(error) = persist_state_now(&mut ctx, "restore-notes") {
             eprintln!("Failed to persist restored notes: {error}");
         }
     }
@@ -677,6 +836,22 @@ impl NoteItAppClone {
             Err(error) => eprintln!("Failed to load note {id}: {error}"),
         }
     }
+}
+
+fn persist_state_now(ctx: &mut AppContext, reason: &str) -> Result<(), String> {
+    ctx.layer_state_persistence.cancel();
+    diagnostics::log(format_args!("event=state-persist-now reason={reason}"));
+    ctx.state.save_to_file(&ctx.storage.state_file_path())
+}
+
+fn apply_shared_layer_transition<T>(
+    surfaces: impl IntoIterator<Item = T>,
+    mut apply: impl FnMut(T) -> bool,
+) -> usize {
+    surfaces
+        .into_iter()
+        .map(|surface| usize::from(apply(surface)))
+        .sum()
 }
 
 fn commit_hidden_transition<P, C>(
@@ -897,9 +1072,10 @@ fn find_ui_dist_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_hidden_transition, commit_quit, effective_layer_mode, plan_startup,
-        plan_summon_layer, prepare_new_note, FlushBatch, LifecycleCoordinator, LifecycleOperation,
-        StartupPlan, SummonLayerPlan,
+        apply_shared_layer_transition, commit_hidden_transition, commit_quit, effective_layer_mode,
+        is_live_layer_noop, plan_startup, plan_summon_layer, preferred_layer_after_new_note,
+        prepare_new_note, FlushBatch, LifecycleCoordinator, LifecycleOperation, StartupPlan,
+        StatePersistenceDebouncer, SummonLayerPlan,
     };
     use crate::settings::AppConfig;
     use crate::state::{AppState, LayerMode};
@@ -924,6 +1100,92 @@ mod tests {
         let (callback, result) = batch.record(Ok(())).expect("third confirmation completes");
         callback(result);
         assert!(completion.borrow().as_ref().expect("completion").is_ok());
+    }
+
+    #[test]
+    fn one_global_layer_decision_reaches_each_surface_exactly_once() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls_clone = Rc::clone(&calls);
+        let changed = apply_shared_layer_transition([1, 2, 3, 4], move |surface| {
+            calls_clone.borrow_mut().push(surface);
+            true
+        });
+
+        assert_eq!(changed, 4);
+        assert_eq!(&*calls.borrow(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn twenty_rapid_layer_changes_coalesce_to_the_final_state() {
+        let mut debouncer = StatePersistenceDebouncer::default();
+        let mut mode = LayerMode::Overlay;
+        let mut generations = Vec::new();
+
+        for _ in 0..20 {
+            mode = mode.toggled();
+            generations.push(debouncer.schedule());
+        }
+
+        let mut written = Vec::new();
+        for generation in generations {
+            if debouncer.settle(generation) {
+                written.push(mode);
+            }
+        }
+
+        assert_eq!(
+            mode,
+            LayerMode::Overlay,
+            "an even count returns to the start"
+        );
+        assert_eq!(written, vec![LayerMode::Overlay]);
+    }
+
+    #[test]
+    fn odd_and_even_toggle_counts_have_deterministic_parity() {
+        let initial = LayerMode::Desktop;
+        let after_nineteen = (0..19).fold(initial, |mode, _| mode.toggled());
+        let after_twenty = (0..20).fold(initial, |mode, _| mode.toggled());
+
+        assert_eq!(after_nineteen, LayerMode::Overlay);
+        assert_eq!(after_twenty, initial);
+    }
+
+    #[test]
+    fn an_explicit_unchanged_layer_skips_the_shared_transition() {
+        assert!(is_live_layer_noop(
+            LayerMode::Desktop,
+            LayerMode::Desktop,
+            true,
+            None
+        ));
+        assert!(!is_live_layer_noop(
+            LayerMode::Desktop,
+            LayerMode::Overlay,
+            true,
+            None
+        ));
+        assert!(!is_live_layer_noop(
+            LayerMode::Desktop,
+            LayerMode::Desktop,
+            false,
+            None
+        ));
+        assert!(!is_live_layer_noop(
+            LayerMode::Desktop,
+            LayerMode::Desktop,
+            true,
+            Some(LayerMode::Desktop)
+        ));
+    }
+
+    #[test]
+    fn an_immediate_lifecycle_save_supersedes_a_pending_layer_write() {
+        let mut debouncer = StatePersistenceDebouncer::default();
+        let pending = debouncer.schedule();
+        debouncer.cancel();
+
+        assert!(!debouncer.settle(pending));
     }
 
     #[test]
@@ -1138,10 +1400,20 @@ mod tests {
             1080,
         );
         assert_eq!(mode, LayerMode::Overlay);
+        assert_eq!(
+            preferred_layer_after_new_note(
+                LayerMode::Desktop,
+                LayerMode::Overlay,
+                Some(LayerMode::Desktop)
+            ),
+            LayerMode::Desktop,
+            "a new overlay surface must not replace the summoned preference"
+        );
 
         // With no elevation in effect the stored preference is the truth.
         for stored in [LayerMode::Desktop, LayerMode::Overlay] {
             assert_eq!(effective_layer_mode(stored, None), stored);
+            assert_eq!(preferred_layer_after_new_note(stored, stored, None), stored);
         }
         // Hidden is never a layer to open a note on.
         let (_, _, from_hidden) = prepare_new_note(

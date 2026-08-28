@@ -413,9 +413,7 @@ A note is a `gtk4-layer-shell` window holding one WebView. Such a window is
 mapped with no focus widget at all: the window can be active, with the
 compositor sending it keys, while GDK has nowhere to deliver them and drops
 them before WebKit. Every shortcut inside a note was therefore dead until a
-click happened to focus the WebView as a side effect — and changing layer
-re-maps the surface and cleared the focus again, which is why `Ctrl+Shift+Space`
-worked once and then stopped.
+click happened to focus the WebView as a side effect.
 
 Focus is not something to grab once at startup. The window loses and regains
 keyboard focus over its lifetime — a click, a layer change, a summon — so the
@@ -426,5 +424,15 @@ the surface the compositor is talking to.
 What this does not do, and cannot, is give keys to a surface the compositor is
 not sending them to. A note on the `bottom` layer is behind every window and is
 granted focus only when it is clicked; if it is covered there is nothing to
-click. `note-it toggle` from a compositor keybinding is the way back that does
-not depend on focus. See `docs/niri.md`.
+click. The authoritative `Ctrl+Shift+Space` therefore belongs to Niri and calls
+the running application's `toggle-layer` GAction. The WebView chord remains a
+local fallback. See `docs/niri.md`.
+
+Measurements on Niri 26.04 and layer-shell protocol version 4 also corrected a
+separate assumption: setting `Bottom`/`Overlay` does not inherently remap the
+surface. The old `present()`/visibility fast path was application behaviour,
+not a protocol requirement. Note-it now deliberately remaps only an occluded
+Desktop-to-Overlay promotion to force the pending Wayland commit, maps it with
+keyboard interactivity disabled to retain normal-window focus, and restores
+click-to-focus after the compositor has observed the map. The reverse direction
+uses the live protocol change without presentation.

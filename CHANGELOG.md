@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An authoritative global Niri `Ctrl+Shift+Space` binding backed by the running application's
+  `toggle-layer` GAction; the focused WebView shortcut remains available as a local fallback.
 - Smart blocks, all four reachable from a **Blocos** section of the note's existing menu:
   - **Code blocks** whose language survives the Markdown round trip exactly as written. A fence
     with no language stays without one, an unknown language keeps its spelling and simply goes
@@ -65,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-instance lifecycle and command-line interface specification.
 
 ### Changed
+- Desktop-to-Overlay promotion now commits immediately even when the note is fully covered, keeps
+  the focused normal application active, and avoids unconditional `present()` calls. Layer state
+  persistence is coalesced for rapid toggles without weakening atomic state writes.
 - Blockquotes are presented as quotations rather than dimmed italics: indented, ruled down the side,
   and set in the note's own text colour. Several lines of quoted prose used to be harder to read
   than the paragraph around them.

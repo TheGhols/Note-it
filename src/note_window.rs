@@ -1,7 +1,9 @@
+use crate::diagnostics;
 use crate::layer_shell::{
-    apply_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
-    setup_layer_shell_window, update_window_position, update_window_size, WindowGeometry,
-    COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
+    apply_live_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
+    setup_layer_shell_window, show_initial_layer_surface, update_window_position,
+    update_window_size, WindowGeometry, COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT,
+    DEFAULT_MONITOR_WIDTH,
 };
 use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
 use crate::settings::theme_name;
@@ -13,6 +15,7 @@ use crate::webview_bridge::{
 };
 use gtk4::gdk;
 use gtk4::prelude::*;
+use gtk4_layer_shell::LayerShell;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
@@ -46,6 +49,7 @@ type PendingFlushes = Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>
 
 const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content";
+const CLICK_FOCUS_RESTORE_DELAY: std::time::Duration = std::time::Duration::from_millis(60);
 
 #[derive(Default)]
 struct SubpixelDeltaAccumulator {
@@ -81,6 +85,7 @@ pub struct NoteWindow {
     pub storage: StorageManager,
     monitor_size: (i32, i32),
     layer_mode: Rc<Cell<LayerMode>>,
+    layer_transition_generation: Rc<Cell<u64>>,
     theme: Rc<RefCell<String>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
@@ -508,20 +513,59 @@ impl NoteWindow {
 
         window.set_child(Some(&webview));
 
+        let mapped_webview = webview.downgrade();
+        window.connect_map(move |win| {
+            let webview_focus = mapped_webview
+                .upgrade()
+                .map(|webview| webview.has_focus())
+                .unwrap_or(false);
+            diagnostics::log(format_args!(
+                "event=map note={} layer={:?} keyboard={:?} active={} webview_focus={} visible={} mapped={}",
+                id,
+                win.layer(),
+                win.keyboard_mode(),
+                win.is_active(),
+                webview_focus,
+                win.is_visible(),
+                win.is_mapped()
+            ));
+        });
+        let unmapped_webview = webview.downgrade();
+        window.connect_unmap(move |win| {
+            let webview_focus = unmapped_webview
+                .upgrade()
+                .map(|webview| webview.has_focus())
+                .unwrap_or(false);
+            diagnostics::log(format_args!(
+                "event=unmap note={} layer={:?} keyboard={:?} active={} webview_focus={} visible={} mapped={}",
+                id,
+                win.layer(),
+                win.keyboard_mode(),
+                win.is_active(),
+                webview_focus,
+                win.is_visible(),
+                win.is_mapped()
+            ));
+        });
+
         // Keep the page as the window's focus widget whenever the surface holds
         // keyboard focus.
         //
         // A layer-shell window is mapped with no focus widget at all, so GDK
         // receives key events and drops them before WebKit: nothing reaches the
         // page, and every in-note shortcut is dead until a click happens to
-        // focus the WebView by accident. Switching layer re-maps the surface and
-        // clears that focus again, which is what made Ctrl+Shift+Space work
-        // exactly once and then stop. Focusing the WebView each time the window
-        // becomes active covers both: a note is keyboard-ready as soon as the
-        // compositor grants it keyboard focus, and it stays that way across a
-        // layer change.
+        // focus the WebView by accident. Focusing the WebView whenever the
+        // window becomes active covers initial presentation, a later click and
+        // the deliberate promotion remap: the local shortcuts are ready as soon
+        // as the compositor grants the note keyboard focus.
         let focus_target = webview.downgrade();
         window.connect_is_active_notify(move |win| {
+            diagnostics::log(format_args!(
+                "event=active-notify note={} active={} mapped={}",
+                id,
+                win.is_active(),
+                win.is_mapped()
+            ));
             if !win.is_active() {
                 return;
             }
@@ -537,6 +581,31 @@ impl NoteWindow {
             webview.grab_focus();
         }
 
+        let focus_window = window.downgrade();
+        webview.connect_has_focus_notify(move |webview| {
+            diagnostics::log(format_args!(
+                "event=webview-focus-notify note={} webview_focus={} window_active={} mapped={}",
+                id,
+                webview.has_focus(),
+                focus_window
+                    .upgrade()
+                    .map(|window| window.is_active())
+                    .unwrap_or(false),
+                webview.is_mapped()
+            ));
+        });
+
+        let layer_transition_generation = Rc::new(Cell::new(0));
+        show_initial_layer_surface(window.upcast_ref(), options.layer_mode);
+        if options.layer_mode == LayerMode::Desktop {
+            schedule_click_focus_restore(
+                window.upcast_ref(),
+                options.layer_mode,
+                Rc::clone(&layer_transition_generation),
+                0,
+            );
+        }
+
         Self {
             id,
             window: window.upcast(),
@@ -546,6 +615,7 @@ impl NoteWindow {
             storage: options.storage,
             monitor_size: (mon_w, mon_h),
             layer_mode: layer_mode_cell,
+            layer_transition_generation,
             theme: theme_cell,
             allow_close,
             pending_flushes,
@@ -601,9 +671,55 @@ impl NoteWindow {
         );
     }
 
-    pub fn set_layer_mode(&self, mode: LayerMode) {
+    pub fn set_layer_mode(&self, mode: LayerMode) -> bool {
+        diagnostics::log(format_args!(
+            "event=window-layer-begin note={} requested={} stored={} layer={:?} keyboard={:?} active={} webview_focus={} visible={} mapped={}",
+            self.id,
+            mode.as_str(),
+            self.layer_mode.get().as_str(),
+            self.window.layer(),
+            self.window.keyboard_mode(),
+            self.window.is_active(),
+            self.webview.has_focus(),
+            self.window.is_visible(),
+            self.window.is_mapped()
+        ));
+        if self.layer_mode.get() == mode {
+            diagnostics::log(format_args!(
+                "event=window-layer-noop note={} requested={}",
+                self.id,
+                mode.as_str()
+            ));
+            return false;
+        }
+
+        let retain_keyboard_focus = self.window.is_active();
+        let generation = self.layer_transition_generation.get().wrapping_add(1);
+        self.layer_transition_generation.set(generation);
+        let changed = apply_live_layer_mode(&self.window, mode, retain_keyboard_focus);
         self.layer_mode.set(mode);
-        apply_layer_mode(&self.window, mode);
+        if mode != LayerMode::Hidden
+            && !retain_keyboard_focus
+            && self.window.keyboard_mode() == gtk4_layer_shell::KeyboardMode::None
+        {
+            schedule_click_focus_restore(
+                &self.window,
+                mode,
+                Rc::clone(&self.layer_transition_generation),
+                generation,
+            );
+        }
+        diagnostics::log(format_args!(
+            "event=window-layer-end note={} requested={} layer={:?} keyboard={:?} active={} webview_focus={} visible={} mapped={}",
+            self.id,
+            mode.as_str(),
+            self.window.layer(),
+            self.window.keyboard_mode(),
+            self.window.is_active(),
+            self.webview.has_focus(),
+            self.window.is_visible(),
+            self.window.is_mapped()
+        ));
         // Keep the note's own menu showing the shared mode.
         send_to_webview(
             &self.webview,
@@ -611,6 +727,7 @@ impl NoteWindow {
                 layer_mode: mode.as_str().to_string(),
             },
         );
+        changed
     }
 
     /// Rewrites the note exactly as it is held. Since a document is only
@@ -646,6 +763,37 @@ impl NoteWindow {
         self.allow_close.set(true);
         self.window.close();
     }
+}
+
+fn schedule_click_focus_restore(
+    window: &gtk4::Window,
+    mode: LayerMode,
+    live_generation: Rc<Cell<u64>>,
+    generation: u64,
+) {
+    let window = window.downgrade();
+    glib::timeout_add_local_once(CLICK_FOCUS_RESTORE_DELAY, move || {
+        if live_generation.get() != generation {
+            return;
+        }
+        let Some(window) = window.upgrade() else {
+            return;
+        };
+        let expected_layer = match mode {
+            LayerMode::Desktop => gtk4_layer_shell::Layer::Bottom,
+            LayerMode::Overlay => gtk4_layer_shell::Layer::Overlay,
+            LayerMode::Hidden => return,
+        };
+        if window.is_visible()
+            && window.layer() == expected_layer
+            && window.keyboard_mode() != gtk4_layer_shell::KeyboardMode::OnDemand
+        {
+            window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+            diagnostics::log(format_args!(
+                "event=keyboard-mode-restored generation={generation}"
+            ));
+        }
+    });
 }
 
 /// Applies a collapse/expand request to the window state and re-clamps the
