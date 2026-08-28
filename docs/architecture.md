@@ -49,5 +49,10 @@ Note-it separates native system integration from document editing through a clea
   `evaluate.ts`, `document.ts` (a note's lines, evaluated top-down) and `format.ts`. It knows
   nothing about ProseMirror; `ui/src/editor/math.ts` is the only thing that joins the two, reading
   lines out of the document and painting results back as decorations.
+- `ui/src/units/`: the unit table and the conversion itself — `types.ts`, `registry.ts` and
+  `convert.ts`. It knows nothing about parsing, about notes or about the editor: it is data plus
+  arithmetic. The dependency runs one way, `math/parser.ts` → `units/registry.ts`, because the
+  parser has to know what counts as a unit; nothing in `units/` refers back. That edge is also the
+  boundary a future currency source must sit behind — see ADR-025.
 - `ui/src/bridge/`: Native message handlers for load, save, theme, and font changes.
 - `ui/src/styles/`: Minimalist themes, paper color definitions, and layout styling.

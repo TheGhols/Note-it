@@ -3,6 +3,18 @@ import { evaluateNote } from '../src/math/document.ts';
 import { MAX_EXPRESSION_LENGTH, MAX_TOKENS } from '../src/math/lexer.ts';
 import { MATH_SOURCES } from './support/sources.ts';
 
+/**
+ * A module with its comments removed.
+ *
+ * These assertions are about what the engine *does*, and the engine explains
+ * itself at length in prose — `lexer.ts` names `fetch(...)` precisely to say
+ * that it cannot be spelled. Scanning the comments too would make the tests
+ * fail on their own documentation.
+ */
+function codeOnly(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 /** The engine's answer to one calculation line. */
 function answer(expression: string): string {
   const [result] = evaluateNote([`= ${expression}`]);
@@ -22,13 +34,34 @@ function answer(expression: string): string {
  */
 describe('nothing in a note can reach the runtime', () => {
   it('has no evaluator in the source at all', () => {
-    expect(Object.keys(MATH_SOURCES).length).toBeGreaterThanOrEqual(5);
-    for (const [name, source] of Object.entries(MATH_SOURCES)) {
+    expect(Object.keys(MATH_SOURCES).length).toBeGreaterThanOrEqual(9);
+    for (const [name, module] of Object.entries(MATH_SOURCES)) {
+      const source = codeOnly(module);
       expect(source, name).not.toMatch(/\beval\s*\(/);
       expect(source, name).not.toMatch(/\bnew\s+Function\b/);
       expect(source, name).not.toMatch(/\bsetTimeout\s*\(|\bsetInterval\s*\(/);
       expect(source, name).not.toMatch(/\bimport\s*\(/);
     }
+  });
+
+  it('reaches no network, for a unit or for anything else', () => {
+    // Every unit Note-it converts is a constant. Nothing in the engine may ask
+    // anyone for a number, and a currency rate is the one that would want to —
+    // which is why the boundary is documented rather than half-built.
+    for (const [name, module] of Object.entries(MATH_SOURCES)) {
+      const source = codeOnly(module);
+      expect(source, name).not.toMatch(/\bfetch\s*\(/);
+      expect(source, name).not.toMatch(/\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b/);
+      expect(source, name).not.toMatch(/\bnavigator\b|\blocalStorage\b|\bwindow\./);
+    }
+  });
+
+  it('covers both the math engine and the unit registry', () => {
+    const files = Object.keys(MATH_SOURCES);
+    expect(files).toContain('math/lexer.ts');
+    expect(files).toContain('math/parser.ts');
+    expect(files).toContain('units/registry.ts');
+    expect(files).toContain('units/convert.ts');
   });
 
   it('treats a global as an unknown variable and nothing more', () => {
@@ -111,6 +144,43 @@ describe('nothing in a note can reach the runtime', () => {
     expect(nested.length).toBeLessThan(MAX_EXPRESSION_LENGTH);
     expect(() => answer(nested)).not.toThrow();
     expect(answer(nested)).toBe('invalid-expression');
+  });
+
+  it('cannot reach the runtime through a unit either', () => {
+    // A unit is resolved from a `Map` built out of the table, exactly as a
+    // variable is. A name that is a JavaScript property is a name the table
+    // does not have.
+    expect(answer('10 constructor em m')).toBe('unknown-unit');
+    expect(answer('10 __proto__ em m')).toBe('unknown-unit');
+    expect(answer('10 km em constructor')).toBe('unknown-unit');
+    expect(answer('10 km em __proto__')).toBe('unknown-unit');
+    expect(answer('10 toString em valueOf')).toBe('unknown-unit');
+
+    // ...and a global on the left is still just a variable nobody declared.
+    expect(answer('window km em m')).toBe('unknown-variable');
+    expect(answer('constructor km em m')).toBe('unknown-variable');
+    expect(answer('__proto__ km em m')).toBe('unknown-variable');
+    expect(answer('fetch km em m')).toBe('unknown-variable');
+  });
+
+  it('has no syntax for reaching into a unit', () => {
+    expect(answer('10 km.constructor em m')).toBe('invalid-expression');
+    expect(answer('10 km em m.constructor')).toBe('invalid-expression');
+    expect(answer('10 km() em m')).toBe('invalid-expression');
+    expect(answer('10 km em m em km')).toBe('invalid-expression');
+  });
+
+  it('holds the same ceilings for a unit name as for anything else', () => {
+    const long = 'k'.repeat(MAX_EXPRESSION_LENGTH * 2);
+    expect(() => answer(`10 ${long} em m`)).not.toThrow();
+    expect(answer(`10 ${long} em m`)).toBe('invalid-expression');
+
+    // Just under the length cap, where the unit is simply not in the table.
+    const shorter = 'k'.repeat(200);
+    expect(answer(`10 ${shorter} em m`)).toBe('unknown-unit');
+
+    // And a conversion cannot be used to smuggle past the depth limit.
+    expect(answer(`${'('.repeat(100)}1${')'.repeat(100)} km em m`)).toBe('invalid-expression');
   });
 
   it('never produces infinity or a value that is not a number', () => {

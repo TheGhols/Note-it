@@ -503,3 +503,94 @@ would produce a note where the same line calculates in one place and not in
 another for reasons the reader cannot see. The boundary is one rule, stated in
 the documentation and tested; widening it later is a change to one function.
 
+## ADR-025: Conversion Is a Line-Level Suffix, and the Unit Table Is Data
+
+Phase 3.7 had to add conversions without building a second calculating engine
+beside the first one, and without letting a unit table grow into a physics
+library. Four decisions did that.
+
+**`em` sits at the line level, not inside the expression grammar.** A line is
+`expression unitRef 'em' unitRef`, and the expression parser runs first and
+stops of its own accord at the source unit — an identifier following a complete
+expression is not something any rule can continue. That single placement is why
+conversion cost the expression grammar nothing: `10`, `distancia`, `(10 + 5)`
+and `x * 2` parse exactly as they did in 3.6, and whatever they leave behind is
+where the units are read from. Putting `em` inside the grammar, as `de` is,
+would have meant a unit becoming a kind of operand, and with it a decision about
+what `2 * 3 km` means before there was any need to have one.
+
+The cost is one stated rule: **the unit applies to the whole left-hand
+expression**, so `= 10 + 5 km em m` is fifteen kilometres. There is no unit
+algebra to give the other reading a meaning, and one rule a reader can hold in
+their head beats two they have to guess between.
+
+**A unit is a row in a table, not a branch.** Every conversion library
+eventually learns that `if km then m, if m then cm` is O(n²) rules to write and
+O(n²) rules to get wrong. Each row carries a dimension and a scale, the
+conversion is `value × from.scale ÷ to.scale`, and adding a unit is adding a
+line. Temperature is the exception the shape has to allow for — its scales have
+different zeroes, and no multiplication takes 0 to 32 and 100 to 212 at the same
+time — so those rows carry `toBase`/`fromBase` instead, and nothing outside
+`convert.ts` has to know which kind a row is.
+
+Two consequences worth stating. **Area is its own dimension**: `m²` is a row
+with factor 1 and `cm²` a row with factor 0.0001, not `m` with an exponent, so
+`1 m²` is `10 000 cm²` and not `100`. And **speed is three named rows**, not a
+length divided by a time. A derived-unit system would have been the start of a
+physics library; `km/h`, `m/s` and `mph` are a table with three lines and one
+extra rule in the unit reader, which is where this phase drew the line.
+
+**Exact spellings, no case folding, and only values that are not opinions.**
+Lookup is a `Map` keyed by every spelling the table lists, matched exactly. `m`
+is a metre and `M` is nothing, because a rule that folded them would fold `MB`
+onto `mb`, which differ by a factor of eight million; where a lower-case
+convenience is safe it is listed as an alias, which is why `ml` and `l` work.
+The `Map` is also the security property, the same one the math engine's
+variables have: an object would answer `constructor` and `__proto__` with real
+JavaScript values.
+
+What is *not* in the table matters as much. `cup`, `tsp`, `xícara` and
+`alqueire` are real measurements with more than one real value, and a conversion
+whose answer depends on which definition the reader had in mind is worse than no
+conversion, because it is wrong silently. Portuguese aliases are ASCII
+(`quilometros`, not `quilômetros`) because variable names and unit names share
+one lexer, and widening it for accents would change what an accented word means
+in an expression — a policy decision about variables, made accidentally, to buy
+an alias. Three characters *were* added, `°`, `²` and `³`, because they appear
+in unit symbols and in nothing else, and refusing a pasted `1 m² em cm²` would
+have been the wrong kind of strict.
+
+**A variable holds a number, not a quantity.** `distancia := 10 km` is an
+invalid expression, and the supported form is `distancia := 10` with the unit on
+the line that uses it. Carrying units through variables means the engine's value
+type stops being `number`, and percentages, aggregation, `isLiteral` and every
+rule already established have to be re-decided around a quantity type. That is a
+real feature and a coherent one, but it is not a thing to slip in beside a unit
+table; the roadmap asked for a conscious choice rather than a hybrid, and this
+is it, documented where a reader meets it.
+
+For the same reason **a converted line ends an aggregation block**. `sum`, `avg`
+and `count` add up plain numbers and know nothing about units. Letting a
+converted quantity into a block would total ten thousand of one thing against
+five of another and present the answer as a fact. Aggregating over units is a
+feature; aggregating silently across them is a bug.
+
+**Currencies are absent, and the absence is the deliverable.** Everything in the
+registry is a constant: a kilometre is a thousand metres on a machine that has
+never had a network interface, and it will be in ten years. That property is
+what makes it safe to compute a conversion silently, as a decoration, with no
+cache and no staleness to reason about. A currency has none of it — no answer
+without a rate, a different rate every minute, and a rate hardcoded here would
+be wrong before the commit adding it finished pushing.
+
+So the boundary is the module edge, and honouring it now cost nothing:
+`Dimension` lists only quantities that are constants, and `convertValue` is
+synchronous and total. A rate-backed conversion is neither, so it cannot be
+added to this function without the change being obvious — it belongs behind an
+asynchronous provider with its own staleness, its own failure state and its own
+way of telling the reader how old the number is. No provider interface was
+written, because an empty abstraction is a worse guide to the future than a
+plain statement of what the future has to look like. What this phase owes the
+next one is the absence of a hardcoded rate, and a test asserts that nothing in
+the engine can reach the network at all.
+

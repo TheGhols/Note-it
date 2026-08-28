@@ -1,5 +1,6 @@
 import { MathError } from './errors.ts';
 import { MathNode } from './parser.ts';
+import { convertValue } from '../units/convert.ts';
 
 /**
  * Everything an expression is allowed to see.
@@ -23,9 +24,12 @@ export const EMPTY_SCOPE: MathScope = { variables: new Map(), samples: [] };
 /**
  * Evaluates a parsed expression.
  *
- * Nothing here interprets text: it walks a tree of six node shapes and does
+ * Nothing here interprets text: it walks a tree of seven node shapes and does
  * arithmetic. There is no path from a note to a function call, a property
- * access or a global — those are not nodes this tree can hold.
+ * access or a global — those are not nodes this tree can hold. A conversion
+ * node is no different: the two units on it were resolved from the registry
+ * while parsing, so what reaches this function is a scale or a pair of
+ * closures written in `units/registry.ts`, never a string from the note.
  */
 export function evaluate(node: MathNode, scope: MathScope): number {
   return finite(evaluateNode(node, scope));
@@ -60,6 +64,20 @@ function evaluateNode(node: MathNode, scope: MathScope): number {
 
     case 'aggregate':
       return aggregate(node.name, scope.samples);
+
+    case 'conversion': {
+      // Whatever the expression on the left came to is a quantity in the
+      // source unit. The registry does the rest; the dimensions were already
+      // checked when the line was parsed, so what can still fail here is a
+      // conversion that has no answer rather than one that was never allowed.
+      const result = convertValue(evaluateNode(node.operand, scope), node.from, node.to);
+      if (!result.ok) {
+        throw new MathError(
+          result.failure === 'incompatible' ? 'incompatible-units' : 'invalid-conversion',
+        );
+      }
+      return result.value;
+    }
 
     case 'binary':
       return binary(node, scope);

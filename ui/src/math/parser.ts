@@ -1,5 +1,7 @@
 import { MathError } from './errors.ts';
 import { AGGREGATE_NAMES, Token, tokenize } from './lexer.ts';
+import { findUnit } from '../units/registry.ts';
+import { Unit } from '../units/types.ts';
 
 export type AggregateName = 'sum' | 'avg' | 'count';
 
@@ -14,7 +16,13 @@ export type MathNode =
       readonly left: MathNode;
       readonly right: MathNode;
     }
-  | { readonly kind: 'aggregate'; readonly name: AggregateName };
+  | { readonly kind: 'aggregate'; readonly name: AggregateName }
+  | {
+      readonly kind: 'conversion';
+      readonly operand: MathNode;
+      readonly from: Unit;
+      readonly to: Unit;
+    };
 
 /** Deep enough for any expression a person writes, shallow enough to be safe. */
 export const MAX_DEPTH = 64;
@@ -23,6 +31,10 @@ export const MAX_DEPTH = 64;
  * The grammar, written out once:
  *
  * ```text
+ * line           := aggregate | conversion | expression
+ * conversion     := expression unitRef 'em' unitRef
+ * unitRef        := name ('/' name)?
+ *
  * expression     := additive
  * additive       := multiplicative (('+' | '-') multiplicative)*
  * multiplicative := unary (('*' | '/' | 'de') unary)*
@@ -31,12 +43,25 @@ export const MAX_DEPTH = 64;
  * primary        := number | name | '(' expression ')'
  * ```
  *
- * plus one whole-expression form, `sum`, `avg` or `count` standing alone.
+ * where `aggregate` is `sum`, `avg` or `count` standing alone as the whole
+ * line.
  *
  * `de` sits at the multiplicative level and is accepted only when what stands
  * to its left is a percentage — `10% de 200` reads, `200 de 10` does not. That
  * check is syntactic and happens here, so the reader is told the expression is
  * invalid rather than being handed a number nobody meant.
+ *
+ * `em` sits at the line level instead, and that placement is what makes
+ * conversion cost the expression grammar nothing. The expression parser is run
+ * first and stops of its own accord at the source unit — an identifier
+ * following a complete expression is not something any rule can continue — so
+ * `10`, `distancia`, `(10 + 5)` and `x * 2` all parse exactly as they did
+ * before, and whatever they leave behind is where the units are read from.
+ *
+ * The unit therefore applies to **the whole left-hand expression**:
+ * `= 10 + 5 km em m` is fifteen kilometres, not ten plus five kilometres.
+ * There is no unit algebra here to make the second reading meaningful, and one
+ * rule the reader can hold in their head beats two they have to guess between.
  */
 export function parse(source: string): MathNode {
   const tokens = tokenize(source);
@@ -54,8 +79,8 @@ export function parse(source: string): MathNode {
 
   const parser = new Parser(tokens);
   const node = parser.parseExpression(0);
-  parser.expectEnd();
-  return node;
+  if (parser.atEnd()) return node;
+  return parser.parseConversionTail(node);
 }
 
 class Parser {
@@ -74,8 +99,63 @@ class Parser {
     return next;
   }
 
-  expectEnd(): void {
-    if (this.index !== this.tokens.length) throw new MathError('invalid-expression');
+  atEnd(): boolean {
+    return this.index === this.tokens.length;
+  }
+
+  private expectEnd(): void {
+    if (!this.atEnd()) throw new MathError('invalid-expression');
+  }
+
+  /**
+   * Reads `unitRef 'em' unitRef` off the end of a line whose expression is
+   * already parsed, and resolves both units.
+   *
+   * Resolution happens here rather than during evaluation, so an unknown unit
+   * and a mismatched pair are both settled before any arithmetic is attempted.
+   * A dimension is a static property of a spelling: `= 10 kg em km` cannot
+   * become valid for some value of the expression, so there is no reason to
+   * evaluate the expression first only to throw the answer away.
+   */
+  parseConversionTail(operand: MathNode): MathNode {
+    const from = this.parseUnitRef();
+
+    // Anything other than `em` here is trailing text the grammar has no rule
+    // for — `= 10 km` among them. There is no conversion without a target, and
+    // guessing one would be inventing the reader's intent.
+    if (this.peek()?.type !== 'em') throw new MathError('invalid-expression');
+    this.index += 1;
+
+    const to = this.parseUnitRef();
+    this.expectEnd();
+
+    if (from.dimension !== to.dimension) throw new MathError('incompatible-units');
+    return { kind: 'conversion', operand, from, to };
+  }
+
+  /**
+   * One unit reference: a name, optionally over another name.
+   *
+   * The `/` form exists for `km/h` and `m/s`, which are single rows in the
+   * registry rather than a length divided by a time — there is no dimensional
+   * algebra behind them. The slash is only consumed when a name follows it, so
+   * a division that happens to sit where a unit could has already been taken
+   * by the expression parser and never reaches here.
+   */
+  private parseUnitRef(): Unit {
+    const first = this.peek();
+    if (first?.type !== 'identifier') throw new MathError('invalid-expression');
+    this.index += 1;
+
+    let text = first.text;
+    if (this.peek()?.type === 'slash' && this.tokens[this.index + 1]?.type === 'identifier') {
+      text = `${text}/${this.tokens[this.index + 1].text}`;
+      this.index += 2;
+    }
+
+    const unit = findUnit(text);
+    if (!unit) throw new MathError('unknown-unit');
+    return unit;
   }
 
   parseExpression(depth: number): MathNode {

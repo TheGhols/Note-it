@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Unit conversions, written the way the rest of the engine is and shown the same way:
+  - `= 10 km em m` shows `10000 m` beside the line. `em` is the conversion keyword, and the only
+    one.
+  - Eight dimensions, every spelling listed in `docs/features.md`: **comprimento** (`mm`, `cm`,
+    `m`, `km`, `in`, `ft`, `yd`, `mi`), **massa** (`mg`, `g`, `kg`, `t`, `oz`, `lb`), **volume**
+    (`mL`, `cL`, `dL`, `L`, `cm³`, `m³`), **temperatura** (`°C`, `°F`, `K`), **tempo** (`ms`, `s`,
+    `min`, `h`, `dia`, `semana`), **área** (`mm²`, `cm²`, `m²`, `km²`, `ha`), **dados digitais**
+    (`B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, `TiB`) and **velocidade** (`m/s`, `km/h`,
+    `mph`), each with ASCII and Portuguese aliases.
+  - The left-hand side is a full math-engine expression, so `= (10 + 5) km em m`,
+    `= distancia km em m` and `= x * 2 km em m` all read. The unit applies to the whole expression.
+  - Temperature converts as scales with different zeroes rather than as a factor: `= 0 C em F` is
+    `32 °F` and `= 0 C em K` is `273,15 K`. Area is its own unit rather than a length with an
+    exponent, so `= 1 m2 em cm2` is `10000 cm²`.
+  - SI and IEC prefixes stay apart: `= 1 GB em MB` is `1000 MB` and `= 1 GiB em MiB` is `1024 MiB`.
+  - `= 10 banana em m` says *unidade desconhecida*, `= 10 kg em km` says *unidades incompatíveis*
+    and `= -300 C em K` says *conversão inválida* — quietly, beside the line, and never in the file.
+  - A converted quantity ends an aggregation block, because `sum`, `avg` and `count` add up plain
+    numbers and know nothing about units.
+  - Conversions are read exactly where calculations are: plain paragraphs only.
+- Every conversion is local, offline and deterministic, and the factors are the defined ones — an
+  inch is exactly 0.0254 m, a pound exactly 453.59237 g. Nothing whose value depends on which
+  definition the reader had in mind was included, which is why there is no `cup` and no `alqueire`.
+- Currencies were deliberately **not** implemented and no rate was hardcoded. The boundary a future
+  rate source has to sit behind is written down in `ui/src/units/convert.ts` and ADR-025, and a test
+  asserts that nothing in the engine can reach the network.
 - A math engine. A note calculates as it is written, with nothing to press and no mode to enter:
   - `= 2 + 2` shows `4` beside the line; `+`, `-`, `*`, `/` and parentheses, with the usual
     precedence. Decimals may be written `10.5` or `10,5`; a number with two separators is refused

@@ -61,8 +61,22 @@ function errorOf(failure: unknown): MathLineResult {
   return { kind: 'error', code: 'invalid-expression' };
 }
 
-function valueOf(value: number): MathLineResult {
-  return { kind: 'value', value, text: formatNumber(value) };
+/**
+ * A result, spelled for the reader.
+ *
+ * A conversion carries its target unit, because `10000` on its own answers a
+ * different question from `10000 m`. Everything else is a bare number, exactly
+ * as it was before conversions existed. The unit is the registry's own symbol
+ * — `°C`, `cm²`, `km/h` — and never anything the note wrote, so a spelling in
+ * a note can reach the screen only by being one of the table's own.
+ */
+function valueOf(value: number, node: MathNode): MathLineResult {
+  if (node.kind !== 'conversion') {
+    return { kind: 'value', value, text: formatNumber(value) };
+  }
+  const { symbol, plural } = node.to;
+  const unit = plural !== undefined && Math.abs(value) !== 1 ? plural : symbol;
+  return { kind: 'value', value, text: `${formatNumber(value)} ${unit}` };
 }
 
 /**
@@ -121,7 +135,7 @@ export function evaluateNote(lines: readonly MathSource[]): MathLineResult[] {
       let result: MathLineResult;
       try {
         node = parse(expression);
-        result = valueOf(evaluate(node, { variables, samples: run }));
+        result = valueOf(evaluate(node, { variables, samples: run }), node);
       } catch (failure) {
         result = errorOf(failure);
       }
@@ -129,6 +143,14 @@ export function evaluateNote(lines: readonly MathSource[]): MathLineResult[] {
 
       if (node?.kind === 'aggregate') {
         afterAggregate = true;
+      } else if (node?.kind === 'conversion') {
+        // A converted quantity ends the block. `sum`, `avg` and `count` add up
+        // plain numbers and know nothing about units, so letting `10 km em m`
+        // into a block would total ten thousand of something against five of
+        // something else and present the answer as a fact. Aggregating over
+        // units is a real feature; silently aggregating across them is a bug.
+        run = [];
+        afterAggregate = false;
       } else if (result.kind === 'value') {
         if (afterAggregate) {
           run = [result.value];
@@ -161,10 +183,14 @@ export function evaluateNote(lines: readonly MathSource[]): MathLineResult[] {
     try {
       declared = parse(expression);
       const value = evaluate(declared, { variables, samples });
+      // A variable holds a number and only a number. `metros := 10 km em m`
+      // stores 10000, not "10000 metres": carrying a unit through a variable
+      // would mean every value in the engine becoming a quantity, and with it
+      // percentages, aggregation and every existing rule. See ADR-025.
       variables.set(name, value);
       // The value of `preco := 120` is already on the line. Only a declaration
       // that computes something gets a result drawn beside it.
-      results.push(isLiteral(declared) ? NOTHING : valueOf(value));
+      results.push(isLiteral(declared) ? NOTHING : valueOf(value, declared));
     } catch (failure) {
       // A declaration that failed declares nothing. Everything below that used
       // the name reports an unknown variable, which is the truth: from this

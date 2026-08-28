@@ -288,6 +288,231 @@ own two, over the same faint ground the code block, the callout and the comment
 already use. It clears 4.5:1 on all seven papers, takes no part in selection or
 pointer interaction, and needs no colour or theme override of its own.
 
+## Conversions
+
+A conversion is a calculation with a unit on each side, and it works the way
+every other result does: written in the note, computed as you type, shown
+beside the line, and never written into the file.
+
+```text
+= 10 km em m                      10000 m
+= 1500 m em km                    1,5 km
+= 0 C em F                        32 °F
+```
+
+### The syntax
+
+```text
+= <expressão> <unidade> em <unidade>
+```
+
+`em` is the conversion keyword and the only one — there is no second spelling
+for the same thing. It is a reserved word, so no variable may be called `em`.
+
+The left-hand side is a full expression from the math engine, so all of these
+read:
+
+```text
+= (10 + 5) km em m                15000 m
+= 2 * 3 km em m                   6000 m
+
+distancia := 12
+= distancia km em m               12000 m
+
+x := 5
+= x * 2 km em m                   10000 m
+```
+
+The unit applies to **the whole expression on its left**, so `= 10 + 5 km em m`
+is fifteen kilometres. There is no unit algebra here to give the other reading
+a meaning, and one rule you can hold in your head beats two you have to guess
+between. Use parentheses when the grouping matters to you.
+
+A declaration may hold a conversion — `metros := 10 km em m` — and the variable
+then holds `10000`. It holds a **number**, not a quantity: a unit in a variable
+is not part of this version, so `distancia := 10 km` is an invalid expression
+rather than a distance. See the limitation at the end of this section.
+
+### The units
+
+Every spelling below is matched **exactly**. There is no case folding: `m` is a
+metre and `M` is nothing at all, because a rule that folded them would fold `MB`
+onto `mb` too. Where a lower-case convenience is safe it is simply listed as an
+alias, which is why `ml` and `l` work and `mb` does not.
+
+### Comprimento — base `m`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `mm` | `milimetro`, `milimetros` | mm | 0.001 |
+| `cm` | `centimetro`, `centimetros` | cm | 0.01 |
+| `m` | `metro`, `metros` | m | 1 |
+| `km` | `quilometro`, `quilometros` | km | 1000 |
+| `in` | `polegada`, `polegadas` | in | 0.0254 |
+| `ft` | `pe`, `pes` | ft | 0.3048 |
+| `yd` | `jarda`, `jardas` | yd | 0.9144 |
+| `mi` | `milha`, `milhas` | mi | 1609.344 |
+
+### Massa — base `g`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `mg` | `miligrama`, `miligramas` | mg | 0.001 |
+| `g` | `grama`, `gramas` | g | 1 |
+| `kg` | `quilograma`, `quilogramas`, `quilo`, `quilos` | kg | 1000 |
+| `t` | `tonelada`, `toneladas` | t | 1000000 |
+| `oz` | `onca`, `oncas` | oz | 28.349523125 |
+| `lb` | `libra`, `libras` | lb | 453.59237 |
+
+### Volume — base `mL`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `mL` | `ml`, `mililitro`, `mililitros` | mL | 1 |
+| `cL` | `cl`, `centilitro`, `centilitros` | cL | 10 |
+| `dL` | `dl`, `decilitro`, `decilitros` | dL | 100 |
+| `L` | `l`, `litro`, `litros` | L | 1000 |
+| `cm³` | `cm3`, `cc` | cm³ | 1 |
+| `m³` | `m3` | m³ | 1000000 |
+
+### Temperatura — base `K`
+
+| unidade | aliases | exibida | conversão |
+| --- | --- | --- | --- |
+| `°C` | `C`, `c`, `celsius` | °C | `K = °C + 273,15` |
+| `°F` | `F`, `f`, `fahrenheit` | °F | `K = (°F + 459,67) × 5/9` |
+| `K` | `kelvin` | K | — |
+
+### Tempo — base `s`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `ms` | `milissegundo`, `milissegundos` | ms | 0.001 |
+| `s` | `seg`, `segundo`, `segundos` | s | 1 |
+| `min` | `minuto`, `minutos` | min | 60 |
+| `h` | `hora`, `horas` | h | 3600 |
+| `dia` | `dias`, `d` | dia / dias | 86400 |
+| `semana` | `semanas` | semana / semanas | 604800 |
+
+### Área — base `m²`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `mm²` | `mm2` | mm² | 0.000001 |
+| `cm²` | `cm2` | cm² | 0.0001 |
+| `m²` | `m2` | m² | 1 |
+| `km²` | `km2` | km² | 1000000 |
+| `ha` | `hectare`, `hectares` | ha | 10000 |
+
+An area unit is its own unit with its own factor, not a length with an
+exponent: `= 1 m2 em cm2` is `10000 cm²`.
+
+### Dados digitais — base `B`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `B` | `byte`, `bytes` | B | 1 |
+| `KB` | — | KB | 1000 |
+| `MB` | — | MB | 1000000 |
+| `GB` | — | GB | 1000000000 |
+| `TB` | — | TB | 1000000000000 |
+| `KiB` | — | KiB | 1024 |
+| `MiB` | — | MiB | 1048576 |
+| `GiB` | — | GiB | 1073741824 |
+| `TiB` | — | TiB | 1099511627776 |
+
+The SI prefixes are **decimal** and the IEC prefixes are **binary**, which is
+what the two sets of names exist to distinguish: `= 1 GB em MB` is `1000 MB`
+and `= 1 GiB em MiB` is `1024 MiB`. Note-it never blurs them.
+
+### Velocidade — base `m/s`
+
+| unidade | aliases | exibida | fator |
+| --- | --- | --- | --- |
+| `m/s` | — | m/s | 1 |
+| `km/h` | — | km/h | 1/3,6 |
+| `mph` | — | mph | 0.44704 |
+
+Three named rows, not a length divided by a time. There is no derived-unit
+algebra behind them, so `kg/L` and `m/s²` are unknown units rather than
+quantities Note-it works out.
+
+### `m` is a metre, `min` is a minute
+
+`m` is never a minute, in any context. If minutes ever gained a one-letter
+abbreviation the two would collide, so they do not have one.
+
+### What a conversion refuses
+
+| | |
+| --- | --- |
+| `= 10 banana em m` | unidade desconhecida |
+| `= 10 km em foo` | unidade desconhecida |
+| `= 10 kg em km` | unidades incompatíveis |
+| `= 1 m2 em m` | unidades incompatíveis |
+| `= -300 C em K` | conversão inválida — nothing is colder than absolute zero |
+| `= 10 km` | expressão inválida — a conversion has no target |
+| `= banana km em m` | variável desconhecida |
+
+An incompatible pair is refused before the expression is even evaluated: a
+dimension is a property of the spelling, so `= 10 kg em km` cannot become valid
+for some value of the left-hand side.
+
+### Where a conversion is read
+
+Exactly where a calculation is: **plain paragraphs only**. Inside a fenced code
+block, an inline code span, a comment, a heading, a list, a task, a quote or a
+callout, `= 10 km em m` is the text it is.
+
+### Aggregators and converted quantities
+
+`sum`, `avg` and `count` add up plain numbers and know nothing about units, so a
+converted line **ends** the block they read rather than being totalled into it.
+Aggregating over units is a real feature; aggregating silently across them is a
+bug.
+
+### Precision, and how a result is written
+
+The factors are the defined ones and nothing was rounded to tidy a table: an
+inch is exactly 0.0254 m, a pound exactly 453.59237 g, a mile exactly 1609.344 m.
+Temperature carries its own converters rather than a factor, because no
+multiplication takes 0 to 32 and 100 to 212 at the same time.
+
+Results are written by the same formatter the math engine has always used:
+comma for the decimal separator, no thousands separator, twelve significant
+digits. The missing grouping is deliberate — `.` and `,` are both read as
+decimal separators, so a grouped result would be one this same engine reads back
+as a different number.
+
+`dia` and `semana` are the only units whose displayed name changes with the
+value, because `1 dia` and `7 dias` both have to read as Portuguese.
+
+### Currencies are not here
+
+`USD em BRL` has no answer without a rate, the rate changes every minute, and a
+rate written into a table is wrong before it is committed. Note-it converts only
+quantities that are constants, offline, and identical when the note is reopened
+in ten years. Currencies are a later phase with a source of its own — see
+`docs/decisions.md`, ADR-025.
+
+### Known limitation: a unit cannot live in a variable
+
+```text
+distancia := 10 km     ← expressão inválida
+```
+
+A variable holds a number, so the unit goes on the line that uses it:
+
+```text
+distancia := 10
+= distancia km em m    10000 m
+```
+
+Carrying units through variables would mean every value in the engine becoming
+a quantity, and with it percentages, aggregation and every rule already
+established. It is a deliberate boundary for this version rather than a
+half-built one.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**

@@ -14,6 +14,7 @@ export type TokenType =
   | 'number'
   | 'identifier'
   | 'de'
+  | 'em'
   | 'plus'
   | 'minus'
   | 'star'
@@ -32,11 +33,12 @@ export interface Token {
 /**
  * The names the grammar keeps for itself, matched without regard to case.
  *
- * `de` is the percentage preposition and the three others are the aggregators.
- * None of them can be a variable name, which is what keeps `= sum` unambiguous
- * whatever else the note declares.
+ * `de` is the percentage preposition, `em` is the conversion preposition, and
+ * the three others are the aggregators. None of them can be a variable name,
+ * which is what keeps `= sum` and `= 10 km em m` unambiguous whatever else the
+ * note declares.
  */
-export const RESERVED_NAMES: ReadonlySet<string> = new Set(['de', 'sum', 'avg', 'count']);
+export const RESERVED_NAMES: ReadonlySet<string> = new Set(['de', 'em', 'sum', 'avg', 'count']);
 
 export const AGGREGATE_NAMES: ReadonlySet<string> = new Set(['sum', 'avg', 'count']);
 
@@ -72,8 +74,21 @@ export const MAX_EXPRESSION_LENGTH = 1000;
 export const MAX_TOKENS = 512;
 
 const DIGIT = /[0-9]/;
-const NAME_START = /[A-Za-z_]/;
-const NAME_PART = /[A-Za-z0-9_]/;
+
+/**
+ * What a name may be spelled with.
+ *
+ * ASCII letters and `_`, plus exactly three characters that exist so that unit
+ * symbols can be typed as they are written elsewhere: `°` opens `°C` and `°F`,
+ * and `²`/`³` close `m²` and `cm³`. They are not a step towards Unicode
+ * identifiers — a letter with an accent is still not a letter here, and the
+ * rule for what a *variable* may be called (`NAME_PATTERN`) is unchanged and
+ * still ASCII. These three simply cannot appear in prose that means anything
+ * else, so recognising them costs no ambiguity and saves a reader who pasted
+ * `1 m² em cm²` from being told their expression is invalid.
+ */
+const NAME_START = /[A-Za-z_°]/;
+const NAME_PART = /[A-Za-z0-9_²³]/;
 
 const SINGLE_CHARACTER: Record<string, TokenType> = {
   '+': 'plus',
@@ -160,9 +175,17 @@ export function tokenize(source: string): Token[] {
 
     if (NAME_START.test(character)) {
       const start = index;
+      // The opening character is consumed on its own, because `°` may start a
+      // name without being able to continue one.
+      index += 1;
       while (index < source.length && NAME_PART.test(source[index])) index += 1;
       const name = source.slice(start, index);
-      tokens.push(name.toLowerCase() === 'de' ? token('de', name) : token('identifier', name));
+      const keyword = name.toLowerCase();
+      if (keyword === 'de' || keyword === 'em') {
+        tokens.push(token(keyword, name));
+      } else {
+        tokens.push(token('identifier', name));
+      }
       continue;
     }
 

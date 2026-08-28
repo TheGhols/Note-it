@@ -1630,7 +1630,8 @@ mod tests {
 
     #[test]
     fn a_note_full_of_calculations_is_not_edited_by_being_recalculated() {
-        // 3.6. Every result in a note is a decoration in the page and never
+        // 3.6, and 3.7 with it. Every result in a note — an arithmetic one and
+        // a converted quantity alike — is a decoration in the page and never
         // part of the document, so opening the note, recomputing all of it and
         // closing it sends back exactly the Markdown that was stored. Nothing
         // about a calculation can reach this side at all — but the guarantee is
@@ -1643,7 +1644,11 @@ mod tests {
             "quantidade := 3\n",
             "= preco * quantidade\n",
             "= 10% de 200\n",
-            "= sum"
+            "= sum\n",
+            "distancia := 5\n",
+            "= distancia km em m\n",
+            "= 0 C em F\n",
+            "= 1 GiB em MiB"
         );
         let document = stored_note(&storage, note);
         let id = document.borrow().metadata.id;

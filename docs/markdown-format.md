@@ -147,6 +147,18 @@ The full grammar is in `docs/features.md`. What matters to the file format:
 - results are recomputed on load. A note whose expressions have not changed is
   byte-identical after being opened, recalculated and closed.
 
+A conversion is the same thing with a unit on each side:
+
+```md
+distancia := 10
+= distancia km em m
+```
+
+`em` is the conversion keyword. The file holds those two lines and nothing else;
+`10000 m` is drawn beside the second one and never written. The units are
+ordinary words in ordinary prose, so another editor shows the note exactly as it
+is stored, and a `.md` written elsewhere converts the moment Note-it opens it.
+
 ### Comments
 
 ```md

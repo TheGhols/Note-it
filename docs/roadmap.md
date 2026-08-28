@@ -179,10 +179,22 @@
 - [x] A parser with no evaluator behind it — no `eval`, no `Function`, no property access, no call
       syntax — and no new dependency of any kind.
 
-### Phase 3.7: Conversions (Planned)
-- [ ] Unit conversions.
-- [ ] Currencies later, with the external dependency isolated behind a boundary so the rest of the
-      application never depends on the network being there.
+### Phase 3.7: Conversions (Completed)
+- [x] Unit conversions written as `= 10 km em m`, evaluated as the note is written and shown as a
+      decoration beside the line, exactly as a calculation is.
+- [x] Eight dimensions, all deterministic and offline: length, mass, volume, temperature, time,
+      area, digital data and speed. Every spelling is listed in `docs/features.md`.
+- [x] The left-hand side is a full math-engine expression, so parentheses, arithmetic and variables
+      all feed a conversion.
+- [x] Temperature as scales with different zeroes rather than a factor, and area as its own unit
+      rather than a length with an exponent.
+- [x] SI and IEC prefixes kept apart: `1 GB` is 1000 MB and `1 GiB` is 1024 MiB.
+- [x] Unknown units, incompatible dimensions and impossible conversions each reported in their own
+      words, discreetly, with nothing written to the file.
+- [x] Nothing new in the file format, nothing new in the visual mechanism, and no new dependency:
+      the unit table is data and the result is the decoration the math engine already draws.
+- [x] Currencies deliberately **not** implemented, and no rate hardcoded. The boundary a future
+      source has to sit behind is written down in `ui/src/units/convert.ts` and ADR-025.
 
 ### Phase 3.8: Search & Productivity (Planned)
 - [ ] Global search across notes.

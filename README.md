@@ -70,6 +70,20 @@ Tudo listado aqui já está implementado.
 - O interpretador não tem `eval` nem execução de código de espécie alguma, e não trouxe nenhuma
   dependência nova.
 
+**Conversões de unidades**
+
+- `= 10 km em m` mostra `10000 m` ao lado da linha, enquanto se escreve.
+- Comprimento, massa, volume, temperatura, tempo, área, dados digitais e velocidade — a lista
+  completa de unidades e apelidos está em [docs/features.md](docs/features.md).
+- O lado esquerdo é uma expressão completa: `= (10 + 5) km em m` e `= distancia km em m` funcionam,
+  e mudar a variável atualiza a conversão na hora.
+- Temperatura converte como escala, não como fator: `= 0 C em F` é `32 °F`.
+- `KB` é decimal e `KiB` é binário — `= 1 GB em MB` dá `1000 MB` e `= 1 GiB em MiB` dá `1024 MiB`.
+- Unidade desconhecida, unidades incompatíveis e conversão impossível são avisos discretos ao lado
+  da linha, nunca no arquivo.
+- Tudo local, offline e determinístico. Moedas ainda não existem — e nenhuma cotação foi chumbada
+  no código, justamente porque estaria errada no minuto seguinte.
+
 **Confiabilidade e privacidade**
 
 - Salvamento automático com escrita atômica em disco: ou a nota nova está gravada, ou a anterior
@@ -192,9 +206,9 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 
 ## Estado atual
 
-O editor e o ciclo de vida das notas estão completos até a Fase 3.6 (motor de cálculo). O que vem
-depois — conversões de unidades, busca global, lixeira e backup, além do núcleo compartilhado com
-uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
+O editor e o ciclo de vida das notas estão completos até a Fase 3.7 (conversões de unidades). O que
+vem depois — busca global, lixeira e backup, moedas com cotação real, além do núcleo compartilhado
+com uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
 
 ## Licença
 

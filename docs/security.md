@@ -40,7 +40,20 @@ called, and declaring one stores a key rather than reaching a prototype.
 
 Expression length, token count and nesting depth are all capped, so a hostile or
 accidental paste costs a fixed amount rather than the stack. Error messages are
-four constants; no part of a note is ever echoed back through one.
+seven constants; no part of a note is ever echoed back through one.
+
+Units are resolved the same way, and for the same reason. `ui/src/units/registry.ts`
+builds one `Map` from a literal table and every lookup goes through it, so
+`= 10 constructor em m` and `= 10 km em __proto__` are unknown units rather than
+reaching a JavaScript property. Nothing is ever indexed dynamically off a host
+object, and the two characters conversions added to the lexer — `°` for `°C` and
+`²`/`³` for `m²` and `cm³` — are identifier characters and grant no new
+capability. The rule for what a *variable* may be called is unchanged and still
+ASCII.
+
+Nothing in the engine reaches the network, and a test asserts it: no `fetch`, no
+`XMLHttpRequest`, no `WebSocket`, no `navigator`, no storage. Every unit Note-it
+converts is a constant, which is exactly why currencies are not among them.
 
 ## Production Markdown pipeline
 

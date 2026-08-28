@@ -2,14 +2,18 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
-/** Every module of the math engine, by file name. Read here for the same
- *  reason the stylesheet is: a test asserting what the engine cannot contain
- *  has to read the files the application actually ships. */
+/** Every module of the math engine and the unit registry, by path. Read here
+ *  for the same reason the stylesheet is: a test asserting what the engine
+ *  cannot contain has to read the files the application actually ships. */
 function mathSources(): Record<string, string> {
-  const directory = fileURLToPath(new URL('./src/math', import.meta.url));
   const sources: Record<string, string> = {};
-  for (const name of readdirSync(directory)) {
-    if (name.endsWith('.ts')) sources[name] = readFileSync(`${directory}/${name}`, 'utf8');
+  for (const folder of ['math', 'units']) {
+    const directory = fileURLToPath(new URL(`./src/${folder}`, import.meta.url));
+    for (const name of readdirSync(directory)) {
+      if (name.endsWith('.ts')) {
+        sources[`${folder}/${name}`] = readFileSync(`${directory}/${name}`, 'utf8');
+      }
+    }
   }
   return sources;
 }
@@ -42,6 +46,12 @@ export default defineConfig({
         'utf8',
       ),
       mathSources: mathSources(),
+      // The documented unit table has to be the table the application ships,
+      // so the test that compares them reads the real file.
+      featuresDoc: readFileSync(
+        fileURLToPath(new URL('../docs/features.md', import.meta.url)),
+        'utf8',
+      ),
     },
   },
 });
