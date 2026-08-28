@@ -118,6 +118,35 @@ An ordinary blockquote stays an ordinary blockquote:
 It is never promoted to a callout on its own, and it is written back without
 decoration of any kind — no attributes, no classes, no HTML.
 
+### Calculations
+
+A line beginning with `=` is a calculation and a line of the form `nome := …` is
+a declaration. Both are **ordinary Markdown text**, and that is the whole point:
+
+```md
+preco := 120
+quantidade := 3
+= preco * quantidade
+```
+
+Another editor opens this and sees three lines of prose, because that is what
+they are. Note-it draws `360` beside the third one as an editor decoration —
+the same mechanism syntax highlighting uses — and **writes nothing**. No result,
+no marker, no attribute reaches the file, so a note is never rewritten by being
+recalculated and its modification date never moves for one.
+
+The full grammar is in `docs/features.md`. What matters to the file format:
+
+- calculation is read from **plain paragraphs only**. A heading, a list, a task,
+  a quote, a callout, a code block, a comment and an inline code span are all
+  left as the text they are;
+- `*` in a calculation is escaped as `\*` on the way out, which is how Markdown
+  writes a literal asterisk in prose, and reads back as `*`. This is the
+  serializer's existing rule for any prose, not something calculations
+  introduced;
+- results are recomputed on load. A note whose expressions have not changed is
+  byte-identical after being opened, recalculated and closed.
+
 ### Comments
 
 ```md

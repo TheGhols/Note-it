@@ -1629,6 +1629,81 @@ mod tests {
     }
 
     #[test]
+    fn a_note_full_of_calculations_is_not_edited_by_being_recalculated() {
+        // 3.6. Every result in a note is a decoration in the page and never
+        // part of the document, so opening the note, recomputing all of it and
+        // closing it sends back exactly the Markdown that was stored. Nothing
+        // about a calculation can reach this side at all — but the guarantee is
+        // worth a test on the side that owns `updated_at`.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+
+        let note = concat!(
+            "preco := 120\n",
+            "quantidade := 3\n",
+            "= preco * quantidade\n",
+            "= 10% de 200\n",
+            "= sum"
+        );
+        let document = stored_note(&storage, note);
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let path = storage.note_path(&id);
+        let file_before = fs::read(&path).expect("read the stored note");
+
+        // Coarse filesystem timestamps would still separate these.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Opened, recalculated, closed. Twice, because a second open must not
+        // be an edit either.
+        for _ in 0..2 {
+            save_and_close(&storage, &document, id, note.to_string(), &|_| Ok(()))
+                .expect("closing a recalculated note must succeed");
+        }
+
+        assert_eq!(
+            document.borrow().metadata.updated_at,
+            updated_at,
+            "recalculating a note is not editing it"
+        );
+        assert_eq!(
+            fs::read(&path).expect("read the stored note again"),
+            file_before,
+            "a note nobody edited must not be rewritten, results included"
+        );
+    }
+
+    #[test]
+    fn editing_an_expression_moves_updated_at_once_however_many_results_change() {
+        // The other half of the same guarantee: one edit to the variable every
+        // expression below depends on is one content change, so it moves the
+        // modification date exactly once. The results that followed it are not
+        // content and cost nothing.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+
+        let before = "preco := 100\n= preco * 2\n= preco * 3\n= preco + 50";
+        let after = "preco := 150\n= preco * 2\n= preco * 3\n= preco + 50";
+        let document = stored_note(&storage, before);
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+
+        save_content(&storage, &document, id, after.to_string()).expect("save the edit");
+        let once = document.borrow().metadata.updated_at;
+        assert!(once > updated_at, "editing an expression is an edit");
+
+        // The page recalculates three results from that one edit and sends
+        // nothing further, so the next save is a no-op.
+        save_content(&storage, &document, id, after.to_string()).expect("no-op save");
+        assert_eq!(
+            document.borrow().metadata.updated_at,
+            once,
+            "a recalculated result must not move the date a second time"
+        );
+        assert_eq!(storage.load_note(&id).expect("reload").content, after);
+    }
+
+    #[test]
     fn closing_a_note_that_was_edited_records_the_edit() {
         // Case B.
         let tmp = tempdir().expect("tempdir");

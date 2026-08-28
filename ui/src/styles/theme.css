@@ -849,6 +849,41 @@ body[data-collapsed="true"] .resize-handle {
   user-select: none;
 }
 
+/* A calculated result. It is a ProseMirror decoration and never content, so it
+   sits beside the expression without being part of the line: it cannot be
+   selected, copied, edited or serialized. It stands on the same faint ground
+   the code block, the callout and the comment already use, so it belongs to
+   whatever paper it lands on, in either theme, without a colour of its own. */
+.ProseMirror .note-math-result {
+  display: inline-block;
+  margin-left: 1.1em;
+  padding: 0 0.45em;
+  border-radius: 4px;
+  background-color: var(--block-bg);
+  /* Lighter than the note's own text and still readable on all seven papers.
+     Mixed from the two inks the paper already defines rather than given a
+     palette of its own, so a paper added later needs nothing here; the plain
+     muted ink below it is the fallback where `color-mix` is unavailable. */
+  color: var(--paper-muted);
+  color: color-mix(in srgb, var(--paper-text) 30%, var(--paper-muted));
+  font-size: 0.88em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  vertical-align: baseline;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+/* A calculation that cannot produce a number says so quietly, in words, on the
+   same ground. Nothing pops up and nothing is written to the file. */
+.ProseMirror .note-math-result[data-note-it-math="error"] {
+  font-size: 0.8em;
+  font-style: italic;
+  letter-spacing: 0.01em;
+}
+
 /* The highlight mark paints its own foreground inline, because the extension
    renders an inline style that would beat a rule here. Only the shape is
    styled from the stylesheet. */

@@ -436,3 +436,70 @@ Desktop-to-Overlay promotion to force the pending Wayland commit, maps it with
 keyboard interactivity disabled to retain normal-window focus, and restores
 click-to-focus after the compositor has observed the map. The reverse direction
 uses the live protocol change without presentation.
+
+## ADR-024: A Calculated Result Is a Decoration, and the Parser Has No Evaluator
+
+Two decisions carry Phase 3.6, and neither is about arithmetic.
+
+**A result is never content.** Every value the engine produces is a ProseMirror
+widget decoration — the same mechanism that paints syntax highlighting over a
+code fence. Writing results into the document would have been simpler to build
+and wrong in five separate ways at once: the `.md` would gain numbers nobody
+typed; `updated_at` would move because something was *recalculated* rather than
+edited, undoing everything Phase 3.4R established; opening a note would be an
+edit; a stale result would be saved over a note edited elsewhere; and the file
+would stop being portable Markdown. As a decoration the note on disk is the note
+that was written, reopening recomputes from the text, and there is nothing to go
+stale. It also means undo and redo needed no work at all: results are not steps,
+so one edit is one undo and the results follow whatever the document becomes.
+
+**The parser has no evaluator behind it.** A lexer that knows ten token shapes,
+a recursive-descent parser producing six node kinds, and a walk over that tree.
+No `eval`, no `Function`, no property access, no call syntax, no host object.
+`= window.location` is not a filtered input — it is unspellable, and stops at
+the `.`. Variables live in a `Map` rather than an object, which is a security
+property and not a style choice: an object would answer `constructor`,
+`__proto__` and `toString` with real JavaScript values. Nothing was added to
+`package.json`; a general expression library would have been larger than the
+grammar and would have brought capabilities this note format has no use for.
+The engine costs about 2.5 kB gzipped.
+
+**Explicit syntax, because the alternative is a guessing machine.** A
+calculation starts with `=` and a declaration uses `:=`. Without a marker the
+engine would spend its life deciding which numbers in a note are arithmetic —
+a date, a version, "2 + 2 = 4" written in a sentence — and would be wrong
+visibly and often. The same reasoning fixes the aggregation boundary: `sum`
+reads the block of `=` lines directly above it and never a bare number sitting
+in prose.
+
+**Predictability over cleverness, at the two points where they conflict.**
+`200 + 10%` reads as an increase because that is what everyone means by it, but
+the rule is attached to a `%` written on the line and not to a value that came
+from one, so `taxa := 10%` followed by `= 200 + taxa` adds `0,1`. And a number
+with two separators is refused rather than read as a grouping: `1.234.567` is a
+thousand-grouped number in one convention and nonsense in the other, and the
+result of guessing is a wrong answer that looks right. Results are printed
+without a thousands separator for the same reason — a result that this same
+engine cannot read back would be a trap.
+
+**Top-down, so there is no graph.** A variable exists from its declaration
+downwards. That makes `= preco * 2` above `preco := 100` an unknown variable
+rather than a puzzle, and it makes cycles impossible without a resolver to
+prevent them: `a := b + 1` over `b := a + 1` fails on the first line because `b`
+is not there yet. A dependency graph would have been a resolver, a cycle
+detector and an evaluation order to get wrong, in exchange for a behaviour
+nobody asked for.
+
+**Recalculate everything, and measure before optimising.** Each document change
+re-evaluates the whole note. It is a scan and a small parser over one window's
+worth of text; on a note with 100 paragraphs, 20 variables, 50 expressions and
+three aggregators it is a fraction of a millisecond, which is less than the
+bookkeeping an incremental version would need. Reactivity then falls out for
+free rather than being a feature: there is no cache to invalidate.
+
+**Plain paragraphs only.** Calculation is not read inside code blocks, inline
+code, comments, headings, lists, tasks, quotes or callouts. Half-supporting them
+would produce a note where the same line calculates in one place and not in
+another for reasons the reader cannot see. The boundary is one rule, stated in
+the documentation and tested; widening it later is a change to one function.
+

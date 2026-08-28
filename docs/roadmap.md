@@ -162,12 +162,22 @@
       existing atomic durability guarantees.
 - [x] Auto-repeat is suppressed for discrete note commands and for the Niri binding.
 
-### Phase 3.6: Math Engine (Planned)
-- [ ] Contextual inline calculation, evaluated as the note is written.
-- [ ] Percentages.
-- [ ] Variables, referenced later in the same note.
-- [ ] Reactive results that follow their inputs.
-- [ ] `sum`, `avg`, `count` over the lines they apply to.
+### Phase 3.6: Math Engine (Completed)
+- [x] Contextual inline calculation, evaluated as the note is written: a line beginning with `=`
+      shows its result beside it, and a `nome := expressão` line declares a value the lines below
+      it can use.
+- [x] Percentages in the forms people actually write — `10% de 200`, `200 + 10%`, `200 - 10%` —
+      with the contextual reading tied to a `%` written on the line rather than to a value that
+      once came from one.
+- [x] Variables local to the note, resolved top-down, so a variable exists from its declaration
+      downwards and cycles are impossible without a resolver to prevent them.
+- [x] Reactive results: the whole note is re-evaluated on every document change, so changing one
+      declaration moves every result under it with no dependency tracking to go stale.
+- [x] `sum`, `avg` and `count` over the block of consecutive calculation lines directly above them.
+- [x] Results are ProseMirror decorations and never content: nothing is written into the `.md`,
+      `updated_at` does not move for a recalculation, and reopening a note recomputes it.
+- [x] A parser with no evaluator behind it — no `eval`, no `Function`, no property access, no call
+      syntax — and no new dependency of any kind.
 
 ### Phase 3.7: Conversions (Planned)
 - [ ] Unit conversions.

@@ -45,5 +45,9 @@ Note-it separates native system integration from document editing through a clea
 - `ui/src/main.ts`: Webview entry point and bridge bootstrap.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
+- `ui/src/math/`: the math engine, independent of the editor — `lexer.ts`, `parser.ts`,
+  `evaluate.ts`, `document.ts` (a note's lines, evaluated top-down) and `format.ts`. It knows
+  nothing about ProseMirror; `ui/src/editor/math.ts` is the only thing that joins the two, reading
+  lines out of the document and painting results back as decorations.
 - `ui/src/bridge/`: Native message handlers for load, save, theme, and font changes.
 - `ui/src/styles/`: Minimalist themes, paper color definitions, and layout styling.

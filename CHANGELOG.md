@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A math engine. A note calculates as it is written, with nothing to press and no mode to enter:
+  - `= 2 + 2` shows `4` beside the line; `+`, `-`, `*`, `/` and parentheses, with the usual
+    precedence. Decimals may be written `10.5` or `10,5`; a number with two separators is refused
+    rather than read as a thousands grouping, and results are printed without one so they can
+    always be read back.
+  - `preco := 120` declares a value the lines below it can use. Names are ASCII, variables are
+    local to the note and resolved top-down, so a variable exists from its declaration downwards
+    and a cycle cannot be written.
+  - Percentages in the forms people write: `10% de 200` → `20`, `200 + 10%` → `220`,
+    `200 - 10%` → `180`, and `taxa := 10%` followed by `= taxa * 200` → `20`. The contextual
+    reading belongs to a `%` written on the line, never to a value that once came from one.
+  - `sum`, `avg` and `count` over the block of consecutive calculation lines directly above them.
+    Prose, a heading, a declaration or a failed line ends the block, so a number sitting in a
+    sentence is never added to anything.
+  - Results are **reactive**: the whole note is re-evaluated on every change, so editing one
+    declaration moves every result under it at once, with no dependency tracking to go stale.
+  - A calculation that cannot answer says so in four words beside the line — *divisão por zero*,
+    *variável desconhecida*, *expressão inválida*, *nome inválido* — with no dialog, no popup and
+    nothing written to the file.
+  - Calculation is read from plain paragraphs only. Inside a code block, an inline code span, a
+    comment, a heading, a list, a task, a quote or a callout, `= 2 + 2` is the text it is.
+- Results are ProseMirror decorations and never content, so the stored `.md` holds exactly what was
+  typed: no result reaches the file, `updated_at` does not move for a recalculation, opening a note
+  is not an edit, undo and redo operate on the text alone, and reopening recomputes everything.
+- The expression parser has no evaluator behind it — no `eval`, no `Function`, no property access,
+  no call syntax, and no new dependency. `= window.location` and `= constructor.constructor(...)`
+  are unspellable in the grammar rather than filtered out of it, and variables live in a `Map`, so
+  no note can reach an inherited JavaScript property.
 - An authoritative global Niri `Ctrl+Shift+Space` binding backed by the running application's
   `toggle-layer` GAction; the focused WebView shortcut remains available as a local fallback.
 - Smart blocks, all four reachable from a **Blocos** section of the note's existing menu:

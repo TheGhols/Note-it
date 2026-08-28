@@ -57,6 +57,19 @@ Tudo listado aqui já está implementado.
   editável, sem fazer parte do texto visível da nota.
 - `->` vira uma seta de verdade enquanto se digita, exceto dentro de código.
 
+**Cálculos na nota**
+
+- `= 2 + 2` mostra `4` ao lado da linha, enquanto se escreve. Sem botão, sem modo, sem recalcular.
+- `preco := 120` declara um valor que as linhas abaixo podem usar. Mudar a declaração atualiza todos
+  os resultados que dependem dela na hora.
+- Porcentagens do dia a dia: `10% de 200`, `200 + 10%`, `200 - 10%`.
+- `sum`, `avg` e `count` sobre o bloco de linhas de cálculo logo acima.
+- Decimal com `.` ou com `,` — `10,5` funciona como se espera de um teclado brasileiro.
+- O resultado é uma decoração do editor, nunca conteúdo: o `.md` guarda exatamente o que foi
+  digitado, a data de modificação não se move por um recálculo, e reabrir a nota recalcula tudo.
+- O interpretador não tem `eval` nem execução de código de espécie alguma, e não trouxe nenhuma
+  dependência nova.
+
 **Confiabilidade e privacidade**
 
 - Salvamento automático com escrita atômica em disco: ou a nota nova está gravada, ou a anterior
@@ -179,9 +192,9 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 
 ## Estado atual
 
-O editor e o ciclo de vida das notas estão completos até a Fase 3.5 (Smart Blocks). O que vem
-depois — motor de cálculo, conversões, busca global, lixeira e backup, além do núcleo compartilhado
-com uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
+O editor e o ciclo de vida das notas estão completos até a Fase 3.6 (motor de cálculo). O que vem
+depois — conversões de unidades, busca global, lixeira e backup, além do núcleo compartilhado com
+uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
 
 ## Licença
 

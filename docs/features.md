@@ -152,6 +152,142 @@ Every colour a smart block paints — seven syntax tokens and five callout accen
 paper rather than being surfaces of their own, so a note keeps its colour under
 every block.
 
+## Math Engine
+
+A note calculates as it is written. Nothing is pressed, nothing is re-run, there
+is no calculate button and no mode to enter: a line that looks like arithmetic
+shows its answer beside it, and the answer follows the note as the note changes.
+
+The result is a **decoration**, not text. It is not in the document, so it is
+not saved, not selected, not copied, and not part of an undo step. The `.md` on
+disk holds exactly what was typed, which is what makes it safe to open the same
+note in another editor.
+
+### Calculating a line
+
+A calculation begins with `=`:
+
+```text
+= 2 + 2                            4
+= (100 + 50) / 3                  50
+= 10 * 8                          80
+```
+
+`+`, `-`, `*`, `/` and parentheses, with the usual precedence and
+left-associativity. Numbers may be negative and may be written `10.5` or `10,5`
+— both separators are read as decimal. A number with **two** separators
+(`1.234.567`) is refused rather than guessed at: Note-it accepts no thousands
+separator, in either direction, so a result can always be read back as itself.
+
+There is no modulo operator. `%` means percent and only percent, because a
+symbol that means two things is a symbol nobody can rely on.
+
+### Variables
+
+A declaration is `nome := expressão`:
+
+```text
+preco := 120
+quantidade := 3
+subtotal := preco * quantidade    360
+= subtotal + 10%                 396
+```
+
+- Names are ASCII: a letter or `_`, then letters, digits and `_`. `preço` is not
+  a name, and a line that says `:=` with an unusable name is reported as **nome
+  inválido** rather than quietly read as prose.
+- `sum`, `avg`, `count` and `de` belong to the grammar and cannot be names.
+- Variables are **local to the note** and resolved **top-down**: a variable
+  exists from its declaration downwards. `= preco * 2` written *above*
+  `preco := 100` reports an unknown variable, which is also what makes cycles
+  impossible — `a := b + 1` over `b := a + 1` simply fails on the first line.
+- A later declaration replaces an earlier one from that line down. A declaration
+  that fails un-declares the name, so everything below it says so.
+- A declaration whose right-hand side is a bare number shows no result: the
+  value is already on the line.
+
+### Percentages
+
+```text
+= 10% de 200                      20
+= 200 + 10%                      220
+= 200 - 10%                      180
+taxa := 10%
+= taxa * 200                      20
+```
+
+`X%` is a hundredth. The contextual readings — an increase, a discount, and
+`de` — apply to a `%` **written on the line**, never to a value that once came
+from one: `taxa` holds `0.1`, so `= 200 + taxa` is `200,1`. What you can see is
+what applies. `de` requires a percentage on its left; `200 de 10` is an invalid
+expression rather than a number nobody meant.
+
+### `sum`, `avg` and `count`
+
+An aggregator is the **whole** expression of its line, and it reads the block of
+consecutive calculation lines directly above it:
+
+```text
+= 10                              10
+= 20                              20
+= 30                              30
+= sum                             60
+= avg                             20
+= count                            3
+```
+
+The block is exactly "the `=` lines immediately above that produced a value". A
+line of prose, a heading, a declaration or a failed calculation ends it, so a
+number sitting in a sentence is never added to anything and two lists separated
+by a line of text stay two lists. The three aggregators read the block without
+consuming it, so they stack; the first value under one starts a new block.
+
+An empty block sums to `0` and counts `0`; its average is `0 / 0` and says so.
+
+### When it will not calculate
+
+Calculation is read from **plain paragraphs only**. Inside a fenced code block,
+an inline code span, a comment, a heading, a list, a task, a quote or a callout,
+`= 2 + 2` is the text it is. This is a deliberate first-version boundary: a line
+that calculates in one place and not in another for invisible reasons is worse
+than one that never calculates in either.
+
+### When it cannot answer
+
+A failure is four words beside the line, in italics, and nothing else — no
+dialog, no popup, no stack trace, and nothing written to the file:
+
+| | |
+| --- | --- |
+| `= 1 / 0` | divisão por zero |
+| `= nao_existe * 2` | variável desconhecida |
+| `= (2 + 3` | expressão inválida |
+| `12preco := 1` | nome inválido |
+
+### Reactivity, and what it costs
+
+The whole note is re-evaluated on every document change. That is the entire
+reactivity mechanism: change `preco` and every line under it moves in the same
+pass, with no dependency graph to go stale and no timers. Measured on a note far
+larger than a post-it — 100 paragraphs of prose, 20 variables, 50 expressions
+and all three aggregators — one keystroke costs a fraction of a millisecond.
+
+### There is no evaluator
+
+Expressions are read by a small lexer and a recursive-descent parser written for
+this and nothing else. There is no `eval`, no `Function`, no property access, no
+call syntax and no host object anywhere in it, and no dependency was added. A
+note writing `window.location`, `constructor.constructor(...)` or `fetch(...)`
+is writing an invalid expression or naming a variable that does not exist —
+variables live in a `Map`, which has no prototype chain to reach into.
+
+### How it looks
+
+Discreet: a small chip at the end of the line, in an ink mixed from the paper's
+own two, over the same faint ground the code block, the callout and the comment
+already use. It clears 4.5:1 on all seven papers, takes no part in selection or
+pointer interaction, and needs no colour or theme override of its own.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**

@@ -11,6 +11,7 @@ import { HIGHLIGHT_TEXT_COLOR } from '../ui/palettes.ts';
 import { NoteItBlockquote } from './callout.ts';
 import { NoteItCodeBlock } from './codeBlock.ts';
 import { NoteItComment } from './comment.ts';
+import { NoteItMath } from './math.ts';
 import { NoteItTaskItem } from './taskItem.ts';
 import { NoteItTypography } from './typography.ts';
 import { normalizeTextSize } from './textSize.ts';
@@ -272,6 +273,7 @@ export const editorExtensions = [
     nested: true,
   }),
   NoteItTypography,
+  NoteItMath,
   Placeholder.configure({
     placeholder: 'Type your note here...',
   }),

@@ -1,6 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+
+/** Every module of the math engine, by file name. Read here for the same
+ *  reason the stylesheet is: a test asserting what the engine cannot contain
+ *  has to read the files the application actually ships. */
+function mathSources(): Record<string, string> {
+  const directory = fileURLToPath(new URL('./src/math', import.meta.url));
+  const sources: Record<string, string> = {};
+  for (const name of readdirSync(directory)) {
+    if (name.endsWith('.ts')) sources[name] = readFileSync(`${directory}/${name}`, 'utf8');
+  }
+  return sources;
+}
 
 export default defineConfig({
   base: './',
@@ -29,6 +41,7 @@ export default defineConfig({
         fileURLToPath(new URL('./src/styles/theme.css', import.meta.url)),
         'utf8',
       ),
+      mathSources: mathSources(),
     },
   },
 });
