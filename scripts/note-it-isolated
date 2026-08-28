@@ -178,8 +178,30 @@ resolve_binary() {
 
 # ---------------------------------------------------------------- private bus
 
+# Whether a pid names a process that is still *running*.
+#
+# `kill -0` only asks whether the pid exists, and a process that has exited but
+# not been reaped still does. In a container whose PID 1 does not reap — a CI
+# runner, for instance — a stopped `dbus-daemon` lingers as a zombie and
+# `kill -0` keeps answering yes, so the state letter from `/proc` is read
+# instead. Parsed in bash alone: the second field of `stat` is the command name
+# and may contain spaces and parentheses, so everything up to the last `) ` is
+# discarded first.
+process_is_running() {
+  local pid="${1:-}" stat_line state
+  [[ -n "$pid" ]] || return 1
+  if [[ -r "/proc/$pid/stat" ]]; then
+    read -r stat_line < "/proc/$pid/stat" || return 1
+    stat_line="${stat_line##*) }"
+    state="${stat_line%% *}"
+    [[ -n "$state" && "$state" != Z && "$state" != X ]]
+    return
+  fi
+  kill -0 "$pid" 2>/dev/null
+}
+
 bus_is_alive() {
-  [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null
+  process_is_running "${1:-}"
 }
 
 # Every well-known name currently on the private bus.
@@ -257,12 +279,27 @@ assert_application_absent() {
   fi
 }
 
+# Stopping means stopped: the signal is sent and the process is waited for,
+# escalating if it has to, so a caller may check the moment this returns.
 stop_private_bus() {
-  bus_is_alive "$BUS_PID" && kill "$BUS_PID" 2>/dev/null || true
+  local signal
+  for signal in TERM KILL; do
+    process_is_running "$BUS_PID" || break
+    kill "-$signal" "$BUS_PID" 2>/dev/null || true
+    for _ in $(seq 1 25); do
+      process_is_running "$BUS_PID" || break
+      sleep 0.1
+    done
+  done
+
   if [[ -n "$BUS_SOCKET_DIR" && "$BUS_SOCKET_DIR" == "${TMPDIR:-/tmp}"/note-it-bus-* ]]; then
     rm -rf "$BUS_SOCKET_DIR"
   fi
   rm -f "$SESSION_DIR/bus.address" "$SESSION_DIR/bus.pid" "$SESSION_DIR/bus.dir"
+
+  if process_is_running "$BUS_PID"; then
+    die "the private D-Bus session would not stop (pid $BUS_PID)" 92
+  fi
 }
 
 # ------------------------------------------------------------- --stop, --verify

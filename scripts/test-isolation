@@ -83,6 +83,28 @@ count_notes() {
   find "$1" -name '*.md' -type f | wc -l
 }
 
+# Whether a pid names a process that is still *running*.
+#
+# `kill -0` only asks whether the pid exists, and a process that has exited but
+# not been reaped still does. In a container whose PID 1 does not reap — a CI
+# runner, for instance — a stopped `dbus-daemon` lingers as a zombie and
+# `kill -0` keeps answering yes, so the state letter from `/proc` is read
+# instead. Parsed in bash alone: the second field of `stat` is the command name
+# and may contain spaces and parentheses, so everything up to the last `) ` is
+# discarded first.
+process_is_running() {
+  local pid="${1:-}" stat_line state
+  [[ -n "$pid" ]] || return 1
+  if [[ -r "/proc/$pid/stat" ]]; then
+    read -r stat_line < "/proc/$pid/stat" || return 1
+    stat_line="${stat_line##*) }"
+    state="${stat_line%% *}"
+    [[ -n "$state" && "$state" != Z && "$state" != X ]]
+    return
+  fi
+  kill -0 "$pid" 2>/dev/null
+}
+
 names_on() {
   DBUS_SESSION_BUS_ADDRESS="$1" dbus-send --session --print-reply=literal \
     --dest=org.freedesktop.DBus /org/freedesktop/DBus \
@@ -290,7 +312,7 @@ BUS_PID_FILE="$ISOLATED_ROOT/session/bus.pid"
 ISOLATED_BUS_PID=""
 [[ -r "$BUS_PID_FILE" ]] && ISOLATED_BUS_PID="$(<"$BUS_PID_FILE")"
 
-if [[ -n "$ISOLATED_BUS_PID" ]] && kill -0 "$ISOLATED_BUS_PID" 2>/dev/null; then
+if process_is_running "$ISOLATED_BUS_PID"; then
   pass "the private bus persisted between commands (pid $ISOLATED_BUS_PID)"
 else
   fail 'the private bus did not persist between commands'
@@ -299,13 +321,13 @@ fi
 run_isolated --root "$ISOLATED_ROOT" --stop > "$WORK/stop.log" 2>&1 \
   || fail "--stop failed: $(tail -3 "$WORK/stop.log")"
 
-if [[ -n "$ISOLATED_BUS_PID" ]] && kill -0 "$ISOLATED_BUS_PID" 2>/dev/null; then
+if process_is_running "$ISOLATED_BUS_PID"; then
   fail 'the private bus is still running after --stop'
 else
   pass 'the private bus was stopped'
 fi
 
-if kill -0 "$AMBIENT_BUS_PID" 2>/dev/null && names_on "$AMBIENT_BUS_ADDRESS" >/dev/null; then
+if process_is_running "$AMBIENT_BUS_PID" && names_on "$AMBIENT_BUS_ADDRESS" >/dev/null; then
   pass 'the ambient session bus is still running and still answering'
 else
   fail 'the ambient session bus did not survive'
@@ -387,7 +409,7 @@ else
   owned=0
   for _ in $(seq 1 40); do
     if names_on "$AMBIENT_BUS_ADDRESS" | grep -q "$APPLICATION_ID"; then owned=1; break; fi
-    kill -0 "$STANDIN_DAEMON_PID" 2>/dev/null || break
+    process_is_running "$STANDIN_DAEMON_PID" || break
     sleep 0.25
   done
 
@@ -442,7 +464,7 @@ else
     isolated --stop > "$WORK/iso-stop.log" 2>&1 || true
     wait "$iso_daemon" 2>/dev/null || true
 
-    if kill -0 "$STANDIN_DAEMON_PID" 2>/dev/null \
+    if process_is_running "$STANDIN_DAEMON_PID" \
       && names_on "$AMBIENT_BUS_ADDRESS" | grep -q "$APPLICATION_ID"; then
       pass 'the already-running daemon is still running and still owns its name'
     else

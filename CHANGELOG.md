@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Note-it is launched, and the launched process's environment is read back from `/proc`. Exit
     codes 90–93 name the guarantee that could not be met.
   - `--root DIR` keeps the private session alive across invocations, `--verify` asserts the instance
-    is on it, and `--stop` ends it.
+    is on it, and `--stop` ends it — synchronously, and reading process liveness from `/proc` rather
+    than from `kill -0`, because where nothing reaps orphans a stopped daemon lingers as a zombie
+    that `kill -0` still reports as alive.
   - `scripts/test-isolation` reproduces the incident and runs under `cargo test`; against the old
     harness it fails with the stray note in the ambient store, and against the new one it passes.
   - No application code changed: the defect was in the harness.
