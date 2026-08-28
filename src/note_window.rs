@@ -508,6 +508,35 @@ impl NoteWindow {
 
         window.set_child(Some(&webview));
 
+        // Keep the page as the window's focus widget whenever the surface holds
+        // keyboard focus.
+        //
+        // A layer-shell window is mapped with no focus widget at all, so GDK
+        // receives key events and drops them before WebKit: nothing reaches the
+        // page, and every in-note shortcut is dead until a click happens to
+        // focus the WebView by accident. Switching layer re-maps the surface and
+        // clears that focus again, which is what made Ctrl+Shift+Space work
+        // exactly once and then stop. Focusing the WebView each time the window
+        // becomes active covers both: a note is keyboard-ready as soon as the
+        // compositor grants it keyboard focus, and it stays that way across a
+        // layer change.
+        let focus_target = webview.downgrade();
+        window.connect_is_active_notify(move |win| {
+            if !win.is_active() {
+                return;
+            }
+            if let Some(webview) = focus_target.upgrade() {
+                if !webview.has_focus() {
+                    webview.grab_focus();
+                }
+            }
+        });
+        // The window may already be active by the time the child is attached,
+        // in which case the notification above has been and gone.
+        if window.is_active() {
+            webview.grab_focus();
+        }
+
         Self {
             id,
             window: window.upcast(),
@@ -712,11 +741,15 @@ fn save_content(
         if doc.metadata.id != expected_id {
             return Err("note identifier mismatch".to_string());
         }
+        // Compared and stored in the one canonical spelling, so the blank line
+        // the page's serializer puts after a trailing list — or the newline
+        // another editor ended the file with — is not mistaken for an edit.
+        let content = NoteDocument::canonical_content(&content);
         if doc.content == content {
             return Ok(());
         }
         let mut candidate = doc.clone();
-        candidate.content = content;
+        candidate.content = content.to_string();
         candidate.touch_content_modified();
         candidate
     };
@@ -1321,6 +1354,96 @@ mod tests {
             tmp.path().join("runtime"),
         )
         .expect("storage")
+    }
+
+    #[test]
+    fn a_note_written_by_another_editor_is_not_edited_by_merely_opening_it() {
+        // 3.5R. Editors conventionally terminate a file with a newline, and
+        // that terminator is not part of the note: the page serialises the same
+        // document back without it. Comparing the two forms directly made a
+        // plain open-and-close look like an edit and moved `updated_at` once,
+        // for a note nobody touched.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+
+        // A note as `vim` or any other editor would leave it on disk.
+        let mut written_elsewhere = NoteDocument::new_empty();
+        written_elsewhere.content = "# Lista\n\n- um\n- dois\n".to_string();
+        storage
+            .save_note_atomic(&written_elsewhere)
+            .expect("store the externally written note");
+        let id = written_elsewhere.metadata.id;
+
+        // Note-it opens it exactly as any restore would.
+        let loaded = storage.load_note(&id).expect("load the external note");
+        let updated_at = loaded.metadata.updated_at;
+        let file_before = fs::read(storage.note_path(&id)).expect("read the stored file");
+        let document = Rc::new(RefCell::new(loaded));
+
+        // Closing sends back what the editor holds: the same document, without
+        // the file's trailing newline.
+        // Exactly what the page sends back for this note: its serializer
+        // terminates a document ending in a list with a blank line. Verified
+        // against the real editor in
+        // `ui/tests/markdown_roundtrip.test.ts`.
+        save_and_close(
+            &storage,
+            &document,
+            id,
+            "# Lista\n\n- um\n- dois\n\n".to_string(),
+            &|_| Ok(()),
+        )
+        .expect("closing an untouched note must succeed");
+
+        // And again, because a note must not be rewritten on the second open
+        // either.
+        save_and_close(
+            &storage,
+            &document,
+            id,
+            "# Lista\n\n- um\n- dois\n\n".to_string(),
+            &|_| Ok(()),
+        )
+        .expect("closing it again must still succeed");
+
+        assert_eq!(
+            document.borrow().metadata.updated_at,
+            updated_at,
+            "opening a note written elsewhere is not an edit"
+        );
+        assert_eq!(
+            fs::read(storage.note_path(&id)).expect("read the stored file again"),
+            file_before,
+            "an untouched note must not be rewritten at all"
+        );
+    }
+
+    #[test]
+    fn a_real_edit_after_an_external_newline_still_moves_updated_at() {
+        // The guarantee runs both ways: ignoring the file terminator must not
+        // start ignoring genuine edits.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+
+        let mut written_elsewhere = NoteDocument::new_empty();
+        written_elsewhere.content = "texto\n".to_string();
+        storage.save_note_atomic(&written_elsewhere).expect("store");
+        let id = written_elsewhere.metadata.id;
+
+        let loaded = storage.load_note(&id).expect("load");
+        let updated_at = loaded.metadata.updated_at;
+        let document = Rc::new(RefCell::new(loaded));
+
+        save_content(&storage, &document, id, "texto editado".to_string()).expect("save the edit");
+
+        assert!(
+            document.borrow().metadata.updated_at > updated_at,
+            "a real edit must still move the modification date"
+        );
+        assert_eq!(
+            storage.load_note(&id).expect("reload").content,
+            "texto editado"
+        );
     }
 
     #[test]

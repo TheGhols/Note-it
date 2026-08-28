@@ -98,6 +98,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry, or the collapsed state no longer marks the note as modified.
 
 ### Fixed
+- Keyboard shortcuts work inside a note again, and `Ctrl+Shift+Space` switches between **Área de
+  trabalho** and **Sempre no topo** as it should. A layer-shell window is mapped with no focus
+  widget at all, so GDK received every key press and dropped it before WebKit: nothing reached the
+  page, and every in-note shortcut was dead until a click happened to focus the WebView by accident.
+  Switching layer re-maps the surface and cleared that focus again, which is why the shortcut worked
+  once and then stopped. The page is now made the window's focus widget whenever the surface holds
+  keyboard focus, so a note is keyboard-ready as soon as the compositor gives it focus and stays
+  that way across a layer change. The menu entry and `note-it toggle` were never affected — see
+  "Coming back from the desktop layer" in `docs/niri.md`.
+- Opening a note written by another editor, or any note ending in a list, callout or code block, no
+  longer counts as editing it. Two things put newlines on the end of a note and neither is content:
+  the newline a file is terminated with, and the blank line the editor's own serializer puts after a
+  document that ends in a block. Comparing those spellings literally made a plain open and close
+  rewrite the file and move `updated_at` once. A note is now compared and stored in one canonical
+  spelling, and stored files are terminated the way every other tool writes them. A real edit still
+  moves `updated_at` exactly as before.
+- A note created right after summoning Note-it is no longer filed behind every window. A summon
+  lifts the notes to the overlay while deliberately keeping the stored preference as it was, so the
+  preference read "desktop" while every surface was on the overlay — and a new note was opened from
+  the preference, on the bottom layer, invisible moments after the user asked for Note-it. It now
+  opens on the layer its siblings are actually on.
+- `state.json` is no longer reported as unsaved when it was in fact written. It never got the commit
+  point rule the notes were given in Phase 3.4R.2: a directory sync failing *after* the rename was
+  reported as a failed save, and every caller treats that as "nothing was written" — closing a note
+  rolled its state back and left the window open, and hiding refused to close the windows — while
+  the file already held the new state. Notes, window state and configuration now share one atomic
+  write with one commit-point rule.
+- `config.toml` is replaced whole or not at all. It was written straight over the real file, which
+  truncates it first, so an interrupted write left a half-written configuration — and loading falls
+  back to the defaults without a word, silently resetting the theme and every other preference.
 - A note whose save *succeeded* is no longer treated as unsaved. The rename that replaces the note
   file is the point at which the change becomes real, and syncing the notes directory happens after
   it. A failure of that sync was being reported as a failed save, so the application kept the old

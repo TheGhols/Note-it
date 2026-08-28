@@ -1,6 +1,6 @@
+use crate::atomic_file::write_atomic;
 use crate::model::NoteDocument;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -109,70 +109,25 @@ impl StorageManager {
 
     /// Writes a note, or leaves the one already on disk exactly as it was.
     ///
-    /// **The commit point is the rename.** Everything before it — creating the
-    /// temp file, writing it, syncing it, and the rename itself — decides
-    /// whether the stored note changes at all. If any of that fails the target
-    /// file is untouched, the temp file is removed, and this reports the
-    /// failure; nothing was written and no caller may believe otherwise.
-    ///
-    /// Once the rename has returned, the target *is* the new note for every
-    /// reader from that moment on, and no later step can put the old one back.
-    /// So this returns `Ok` from the rename onwards. Syncing the notes
-    /// directory is what makes that rename survive a power loss, and it comes
-    /// after the commit point: a failure there means the save happened but may
-    /// not be durable, which is reported as a warning rather than as a failed
-    /// save. Calling it a failure would be worse than useless — the caller
-    /// would keep describing a note the file no longer holds.
-    ///
-    /// Nothing has to remember that a sync was missed. A directory sync
-    /// flushes every pending entry in that directory, not just the last one,
-    /// so the next successful save of any note makes the earlier rename
-    /// durable too.
+    /// The commit point is the rename: see [`crate::atomic_file::write_atomic`]
+    /// for the rule this, the window state and the configuration all share.
     pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
         let serialized = doc.serialize()?;
         let target_path = self.note_path(&doc.metadata.id);
+        let what = format!("note {}", doc.metadata.id);
 
-        let temp_filename = format!(
-            ".tmp.{}.{}",
-            doc.metadata.id,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        let temp_path = self.notes_dir.join(temp_filename);
-
-        // Before the commit point.
-        if let Err(error) = write_and_rename(&serialized, &temp_path, &target_path) {
-            // Best effort: if this cannot be removed either, the save has
-            // already failed and the error worth reporting is that one.
-            let _ = fs::remove_file(&temp_path);
-            return Err(error);
-        }
-
-        // After it. The note on disk is already the new one.
-        if let Err(error) = self.sync_notes_directory() {
-            eprintln!(
-                "Note {} was saved, but the notes directory could not be synced, \
-                 so the change may not survive a power loss: {error}",
-                doc.metadata.id
-            );
-        }
-
-        Ok(target_path)
-    }
-
-    /// Makes a rename that already happened durable. Post-commit: see
-    /// [`Self::save_note_atomic`] for why its failure is not a failed save.
-    fn sync_notes_directory(&self) -> Result<(), String> {
         #[cfg(test)]
         if self.fail_directory_sync {
-            return Err("simulated directory sync failure".to_string());
+            crate::atomic_file::write_atomic_with_failing_sync(
+                &target_path,
+                serialized.as_bytes(),
+                &what,
+            )?;
+            return Ok(target_path);
         }
 
-        File::open(&self.notes_dir)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|e| format!("Failed to sync notes directory: {e}"))
+        write_atomic(&target_path, serialized.as_bytes(), &what)?;
+        Ok(target_path)
     }
 
     pub fn load_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
@@ -215,22 +170,6 @@ impl StorageManager {
         notes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         Ok(notes.into_iter().map(|(id, _)| id).collect())
     }
-}
-
-/// Everything up to and including the commit point: on success the target
-/// file is the new note, on failure it is untouched.
-fn write_and_rename(serialized: &str, temp_path: &Path, target_path: &Path) -> Result<(), String> {
-    {
-        let mut file = File::create(temp_path)
-            .map_err(|e| format!("Failed to create temp file {}: {e}", temp_path.display()))?;
-        file.write_all(serialized.as_bytes())
-            .map_err(|e| format!("Failed to write to temp file: {e}"))?;
-        file.sync_all()
-            .map_err(|e| format!("Failed to sync temp file: {e}"))?;
-    }
-
-    fs::rename(temp_path, target_path)
-        .map_err(|e| format!("Failed to rename temp file to target: {e}"))
 }
 
 #[cfg(test)]

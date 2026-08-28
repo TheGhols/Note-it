@@ -70,6 +70,29 @@ chose. The elevation lasts until the next explicit layer change or restart.
 `note-it show` is different on purpose: it is an explicit request to put the
 notes in overlay mode, and it does store that as the preference.
 
+### Coming Back from the Desktop Layer
+
+`Ctrl+Shift+Space` is a key event inside the note's own WebView, so it only
+reaches the note that holds keyboard focus. A layer surface asks for
+`on-demand` keyboard interactivity, which means the compositor grants focus
+when the surface is clicked — and changing layer re-maps the surface, so the
+note gives that focus up each time it moves.
+
+Going **to** the desktop layer therefore works from the keyboard. Coming
+**back** needs the note to be reachable: click it where it shows through, and
+the shortcut works again. If another window covers it there is nothing to
+click, and no key can reach a surface the compositor is not sending keys to.
+
+That is a property of the layer, not a bug to fix in the note: a `bottom`
+surface is behind everything by definition. The way back that always works is
+the compositor keybinding, which does not depend on focus at all:
+
+```kdl
+Mod+Shift+D { spawn "note-it" "toggle"; }
+```
+
+Binding it is recommended for exactly this reason.
+
 ## Collapsing One Note or All of Them
 
 `Ctrl+Shift+M` inside a note collapses that note alone; it is a key event in

@@ -24,6 +24,23 @@ note_it:
 
 Remember to check <u>underlined points</u> and <span data-note-it-color="#D32F2F" style="color:#D32F2F">urgent tasks</span>.
 
+## Trailing Blank Lines Are Not Content
+
+A stored note ends with a single newline, the way every other tool writes a
+file. That terminator is not part of the note, and neither is any blank line
+before it: Markdown gives trailing blank lines no meaning, and Note-it's own
+editor terminates a document ending in a block — a list, a callout, a code
+block — with one, while a document ending in a paragraph gets none.
+
+So the same note has several equally valid spellings. Note-it compares and
+stores one canonical form, with trailing newlines removed, and writes the
+terminator back on save. This is what makes opening a note a read: a `.md`
+written by another editor, or any note ending in a list, is not rewritten and
+does not have its `updated_at` moved by being opened.
+
+Trailing **spaces** are left alone — two of them are Markdown's hard line break
+and are content.
+
 ## Block Syntax
 
 Everything Note-it writes is ordinary Markdown. Nothing below is a private

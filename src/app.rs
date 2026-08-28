@@ -311,11 +311,7 @@ impl NoteItAppClone {
     /// preference while a summon elevation is in effect.
     fn effective_layer_mode(&self) -> LayerMode {
         let ctx = self.context.borrow();
-        if ctx.summon_restore.is_some() {
-            LayerMode::Overlay
-        } else {
-            ctx.state.active_layer_mode
-        }
+        effective_layer_mode(ctx.state.active_layer_mode, ctx.summon_restore)
     }
 
     fn restore_saved_notes_in_mode(&self, mode: LayerMode) {
@@ -369,7 +365,10 @@ impl NoteItAppClone {
             let ctx = self.context.borrow();
             prepare_new_note(
                 &ctx.config,
-                ctx.state.active_layer_mode,
+                // The layer the other notes are really on: a note created
+                // right after a summon must not be filed behind every window
+                // while its siblings sit on top.
+                effective_layer_mode(ctx.state.active_layer_mode, ctx.summon_restore),
                 ctx.windows.len(),
                 conn_name,
                 mon_w,
@@ -750,6 +749,21 @@ fn plan_startup(is_background: bool, ids_by_recency: Vec<Uuid>, state: &AppState
     }
 }
 
+/// The layer the surfaces are actually on.
+///
+/// A summon elevates the notes to the overlay without overwriting the stored
+/// preference, so while `summon_restore` is set the preference is behind the
+/// live layer. Anything that has to agree with what is on screen — toggling,
+/// and opening a new note beside the others — must ask this rather than read
+/// the preference directly.
+fn effective_layer_mode(active: LayerMode, summon_restore: Option<LayerMode>) -> LayerMode {
+    if summon_restore.is_some() {
+        LayerMode::Overlay
+    } else {
+        active
+    }
+}
+
 fn prepare_new_note(
     config: &AppConfig,
     active_mode: LayerMode,
@@ -883,8 +897,9 @@ fn find_ui_dist_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_hidden_transition, commit_quit, plan_startup, plan_summon_layer, prepare_new_note,
-        FlushBatch, LifecycleCoordinator, LifecycleOperation, StartupPlan, SummonLayerPlan,
+        commit_hidden_transition, commit_quit, effective_layer_mode, plan_startup,
+        plan_summon_layer, prepare_new_note, FlushBatch, LifecycleCoordinator, LifecycleOperation,
+        StartupPlan, SummonLayerPlan,
     };
     use crate::settings::AppConfig;
     use crate::state::{AppState, LayerMode};
@@ -1098,6 +1113,46 @@ mod tests {
             plan_startup(true, vec![closed_id], &state),
             StartupPlan::Background
         );
+    }
+
+    #[test]
+    fn a_note_created_after_a_summon_opens_beside_the_others() {
+        // 3.5R. A summon lifts the notes to the overlay and deliberately keeps
+        // the stored preference as it was, so while the elevation is in effect
+        // the preference reads "desktop" while every surface is on the
+        // overlay. Creating a note from the preference filed it on the bottom
+        // layer, behind every window — invisible, moments after the user asked
+        // for Note-it. It has to join the layer its siblings are on.
+        assert_eq!(
+            effective_layer_mode(LayerMode::Desktop, Some(LayerMode::Desktop)),
+            LayerMode::Overlay
+        );
+
+        let config = AppConfig::default();
+        let (_, _, mode) = prepare_new_note(
+            &config,
+            effective_layer_mode(LayerMode::Desktop, Some(LayerMode::Desktop)),
+            0,
+            None,
+            1920,
+            1080,
+        );
+        assert_eq!(mode, LayerMode::Overlay);
+
+        // With no elevation in effect the stored preference is the truth.
+        for stored in [LayerMode::Desktop, LayerMode::Overlay] {
+            assert_eq!(effective_layer_mode(stored, None), stored);
+        }
+        // Hidden is never a layer to open a note on.
+        let (_, _, from_hidden) = prepare_new_note(
+            &config,
+            effective_layer_mode(LayerMode::Hidden, None),
+            0,
+            None,
+            1920,
+            1080,
+        );
+        assert_eq!(from_hidden, LayerMode::Overlay);
     }
 
     #[test]

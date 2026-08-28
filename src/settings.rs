@@ -1,6 +1,6 @@
+use crate::atomic_file::write_atomic;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 
 /// Interface themes, in the order the menu offers them.
@@ -92,6 +92,13 @@ impl AppConfig {
             .unwrap_or_default()
     }
 
+    /// Writes the configuration under the same commit-point rule as a note and
+    /// the window state: see [`crate::atomic_file::write_atomic`].
+    ///
+    /// This used to write straight over the real file, which truncates it
+    /// first, so an interrupted write left a half-written `config.toml` — and
+    /// loading falls back to the defaults without a word, silently resetting
+    /// every preference. The file is now replaced whole or not at all.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -101,12 +108,7 @@ impl AppConfig {
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config to TOML: {e}"))?;
 
-        let mut file = File::create(path)
-            .map_err(|e| format!("Failed to write config file {}: {e}", path.display()))?;
-        file.write_all(toml_str.as_bytes())
-            .map_err(|e| format!("Failed to write config file content: {e}"))?;
-
-        Ok(())
+        write_atomic(path, toml_str.as_bytes(), "the configuration")
     }
 }
 
@@ -139,6 +141,49 @@ mod tests {
         for name in THEMES {
             assert_eq!(theme_name(name), *name);
         }
+    }
+
+    #[test]
+    fn a_configuration_is_replaced_whole_or_not_at_all() {
+        // 3.5R. The configuration was written straight over the real file with
+        // `File::create`, which truncates first. A crash or a full disk part
+        // way through left a half-written `config.toml`, and loading falls
+        // back to the defaults without a word — silently resetting the theme
+        // and every other preference. It is now written the way the notes and
+        // the state are: to a temp file, then renamed into place.
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("config.toml");
+
+        let config = AppConfig {
+            theme: "dark".to_string(),
+            default_color: "blue".to_string(),
+            ..AppConfig::default()
+        };
+        config.save_to_file(&path).expect("save the configuration");
+
+        // A directory where the file belongs: the rename cannot land, and the
+        // configuration already stored must survive untouched.
+        let blocked = tmp.path().join("blocked.toml");
+        fs::create_dir(&blocked).expect("occupy the config path");
+        AppConfig::default()
+            .save_to_file(&blocked)
+            .expect_err("a save that cannot be completed must be reported");
+
+        let reloaded = AppConfig::load_from_file(&path);
+        assert_eq!(reloaded.theme, "dark");
+        assert_eq!(reloaded.default_color, "blue");
+
+        // Nothing is left lying beside it.
+        let debris: Vec<String> = fs::read_dir(tmp.path())
+            .expect("read the directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tmp."))
+            .collect();
+        assert!(
+            debris.is_empty(),
+            "a save left temp files behind: {debris:?}"
+        );
     }
 
     #[test]

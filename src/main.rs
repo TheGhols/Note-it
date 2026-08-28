@@ -1,4 +1,5 @@
 mod app;
+mod atomic_file;
 mod cli;
 mod layer_shell;
 mod model;

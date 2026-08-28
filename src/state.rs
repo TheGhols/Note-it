@@ -1,7 +1,7 @@
+use crate::atomic_file::write_atomic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -174,34 +174,36 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Writes the window state under the same commit-point rule as a note: see
+    /// [`crate::atomic_file::write_atomic`]. Callers roll their own state back
+    /// when this fails, so a failure must mean the file was genuinely not
+    /// replaced — a directory sync that fails *after* the rename is a
+    /// durability warning, not a failed save.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create state directory: {e}"))?;
-        }
+        Self::ensure_parent(path)?;
+        write_atomic(path, self.serialize()?.as_bytes(), "the window state")
+    }
 
-        let serialized = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize app state: {e}"))?;
+    fn ensure_parent(path: &Path) -> Result<(), String> {
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create state directory: {e}"))
+    }
 
-        let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-        {
-            let mut file = File::create(&temp_path)
-                .map_err(|e| format!("Failed to create state temp file: {e}"))?;
-            file.write_all(serialized.as_bytes())
-                .map_err(|e| format!("Failed to write state file: {e}"))?;
-            file.sync_all()
-                .map_err(|e| format!("Failed to sync state file: {e}"))?;
-        }
+    #[cfg(test)]
+    fn save_to_file_with_failing_sync(&self, path: &Path) -> Result<(), String> {
+        Self::ensure_parent(path)?;
+        crate::atomic_file::write_atomic_with_failing_sync(
+            path,
+            self.serialize()?.as_bytes(),
+            "the window state",
+        )
+    }
 
-        fs::rename(&temp_path, path)
-            .map_err(|e| format!("Failed to atomically rename state file: {e}"))?;
-        if let Some(parent) = path.parent() {
-            File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|e| format!("Failed to sync state directory: {e}"))?;
-        }
-
-        Ok(())
+    fn serialize(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize app state: {e}"))
     }
 }
 
@@ -209,6 +211,59 @@ impl AppState {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_state_sync_that_fails_after_the_rename_is_still_a_saved_state() {
+        // 3.5R. `state.json` never got the commit-point rule the notes were
+        // given in 3.4R.2: a directory sync failing *after* the rename was
+        // reported as a failed save. Every caller treats that as "nothing was
+        // written" — closing a note rolls its state back and leaves the window
+        // open, and hiding refuses to close the windows — while the file on
+        // disk already holds the new state. Memory and disk then disagree.
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("state.json");
+
+        let mut state = AppState {
+            active_layer_mode: LayerMode::Desktop,
+            ..AppState::default()
+        };
+        state.save_to_file(&path).expect("seed the state file");
+
+        state.active_layer_mode = LayerMode::Overlay;
+        state
+            .save_to_file_with_failing_sync(&path)
+            .expect("a rename that succeeded is a save, whatever the sync did");
+
+        assert_eq!(
+            AppState::load_from_file(&path).active_layer_mode,
+            LayerMode::Overlay,
+            "the rename replaced the file, so the state really was saved"
+        );
+    }
+
+    #[test]
+    fn a_state_save_that_cannot_be_completed_leaves_the_old_state_alone() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("state.json");
+
+        let state = AppState {
+            active_layer_mode: LayerMode::Desktop,
+            ..AppState::default()
+        };
+        state.save_to_file(&path).expect("seed the state file");
+
+        // A directory where the state file belongs: the rename cannot land.
+        let blocked = tmp.path().join("blocked.json");
+        fs::create_dir(&blocked).expect("occupy the state path");
+        AppState::default()
+            .save_to_file(&blocked)
+            .expect_err("a save that cannot be completed must be reported");
+
+        assert_eq!(
+            AppState::load_from_file(&path).active_layer_mode,
+            LayerMode::Desktop
+        );
+    }
 
     #[test]
     fn test_app_state_persistence() {

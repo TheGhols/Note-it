@@ -303,4 +303,69 @@ describe('Tiptap 3 Markdown Round-Trip', () => {
     editor.destroy();
     container.remove();
   });
+  it('reaches a stable serialization on the path the host actually uses', () => {
+    // 3.5R. The host decides whether a note was edited by comparing what the
+    // page sends back with what it stored. Two things put newlines on the end
+    // of a note and neither is content: the newline a file is terminated with,
+    // and the blank line this serializer puts after a document that ends in a
+    // block. A note ending in a list, a callout or a code block therefore comes
+    // back spelled differently from how it was written — which is why opening
+    // one used to move its modification date.
+    //
+    // `setMarkdown` is the path a note is loaded through, and it is not the
+    // constructor: the two produce different trailing whitespace, so testing
+    // the constructor here proves nothing about the running application.
+    const cases = [
+      '# E\n\n- um\n- dois',
+      '- a',
+      '> [!NOTE]\n> x',
+      '```py\nx\n```',
+      '# E\n\npara',
+      'texto',
+      'linha  ',
+    ];
+
+    for (const stored of cases) {
+      const { editor, container } = createEditor('');
+      editor.setMarkdown(stored);
+      const first = editor.getMarkdown();
+
+      // Whatever it adds, it adds only blank lines at the very end...
+      expect(first.replace(/[\n\r]+$/, '')).toBe(stored.replace(/[\n\r]+$/, ''));
+
+      // ...and it settles at once, so the host sees the same text every time.
+      editor.setMarkdown(first);
+      expect(editor.getMarkdown()).toBe(first);
+
+      editor.destroy();
+      container.remove();
+    }
+  });
+
+  it('serialises a note it just loaded back byte for byte', () => {
+    // The no-op contract the host's content comparison rests on: loading a
+    // note the editor itself wrote and serialising it again must produce the
+    // very same Markdown, or every open would be recorded as an edit.
+    const stored = [
+      '# Reunião',
+      '',
+      '- [ ] Preparar pauta',
+      '- [x] Enviar convite',
+      '',
+      '> [!NOTE]',
+      '> Lembrete importante',
+      '',
+      '```python',
+      'print("olá")',
+      '```',
+      '',
+      'Texto **final** com `código`.',
+    ].join('\n');
+
+    const { editor, container } = createEditor('');
+    editor.setMarkdown(stored);
+    expect(editor.getMarkdown()).toBe(stored);
+    editor.destroy();
+    container.remove();
+  });
 });

@@ -130,6 +130,28 @@
       second toolbar.
 - [x] No block architecture was extracted. The four have almost nothing in common — see ADR-021.
 
+### Phase 3.5R: Regression Audit & Stabilization (Completed)
+- [x] `Ctrl+Shift+Space` toggles the layer again. The break was host-side focus, not the shortcut:
+      a layer-shell window is mapped with no focus widget, so GDK received keys and dropped them
+      before WebKit, and a layer change cleared the focus again. The WebView is now focused whenever
+      the window is active. Isolating the three entry points is what located it — the menu and
+      `note-it toggle` both worked, the keyboard did not.
+- [x] Every in-note shortcut benefits: `Ctrl+N`, `Ctrl+W`, `Ctrl+R`, `Ctrl+=`/`-`/`0` and
+      `Ctrl+Shift+M` were dead for the same reason whenever the note had not been clicked.
+- [x] The shortcut never types a space into the note, is ignored during pt-BR composition, and
+      leaves AltGr — reported as `Ctrl+Alt` — to the editor.
+- [x] A note is compared and stored in one canonical spelling, so neither the newline a file is
+      terminated with nor the blank line the serializer puts after a trailing block is mistaken for
+      an edit. Everything Phase 3.4R established still holds: a real edit still moves `updated_at`.
+- [x] A note created during a summon elevation opens on the layer the other notes are on rather
+      than on the stored preference.
+- [x] `state.json` and `config.toml` are written under the same commit-point rule as a note, in one
+      shared atomic write: the rename commits, a directory sync failing after it is a durability
+      warning, and a configuration is replaced whole or not at all.
+- [x] Audited without finding a defect: the lifecycle coordinator and flush batching, the URL
+      allowlist and the Markdown/HTML sanitizers, the smart blocks and their round trips, geometry
+      clamping and collapse, and the summon/hide/show/restart layer transitions.
+
 ### Phase 3.6: Math Engine (Planned)
 - [ ] Contextual inline calculation, evaluated as the note is written.
 - [ ] Percentages.

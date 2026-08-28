@@ -380,3 +380,51 @@
   built from the same panel and row helpers as every other section, and the rows reflect what the
   cursor is in rather than offering a fixed list. No shortcuts were added: the useful chords are
   taken, and typing the Markdown still works.
+
+## ADR-022: One Atomic Write, One Commit Point, for Every File Note-it Stores
+
+Phase 3.4R.2 established that the rename is the commit point for a note: a save
+reports failure for anything up to and including it, and success from it
+onwards, because after the rename the file on disk *is* the new content and no
+caller may believe otherwise. `state.json` and `config.toml` never got that
+rule, and they had drifted apart from it in opposite directions.
+
+`state.json` was written atomically but propagated a post-rename directory-sync
+failure as a failed save. Every caller treats that as "nothing was written":
+closing a note rolled its state back in memory and left the window open, and
+hiding refused to close the windows — while the file already held the new
+state. Memory and disk then described different applications.
+
+`config.toml` was not written atomically at all. It went straight over the real
+file with a truncating open, so an interrupted write left a half-written
+configuration; loading falls back to the defaults without a word, which turns a
+partial write into a silent reset of the theme and every other preference.
+
+Three copies of a subtle rule is how it drifted, so there is now one:
+`atomic_file::write_atomic` holds the rule and its explanation, and notes,
+window state and configuration all go through it. Creating the parent directory
+is left to the caller — the store's directories are made once at startup, and a
+notes directory that has since vanished is a fault to report rather than one to
+paper over.
+
+## ADR-023: The Page Is the Window's Focus Widget
+
+A note is a `gtk4-layer-shell` window holding one WebView. Such a window is
+mapped with no focus widget at all: the window can be active, with the
+compositor sending it keys, while GDK has nowhere to deliver them and drops
+them before WebKit. Every shortcut inside a note was therefore dead until a
+click happened to focus the WebView as a side effect — and changing layer
+re-maps the surface and cleared the focus again, which is why `Ctrl+Shift+Space`
+worked once and then stopped.
+
+Focus is not something to grab once at startup. The window loses and regains
+keyboard focus over its lifetime — a click, a layer change, a summon — so the
+WebView is focused whenever the window *becomes* active. That covers the first
+map and every re-map with one rule, and it grabs nothing while the note is not
+the surface the compositor is talking to.
+
+What this does not do, and cannot, is give keys to a surface the compositor is
+not sending them to. A note on the `bottom` layer is behind every window and is
+granted focus only when it is clicked; if it is covered there is nothing to
+click. `note-it toggle` from a compositor keybinding is the way back that does
+not depend on focus. See `docs/niri.md`.

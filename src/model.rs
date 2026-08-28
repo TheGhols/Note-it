@@ -134,6 +134,28 @@ impl NoteDocument {
         self.metadata.updated_at = Some(Utc::now());
     }
 
+    /// The note as Note-it holds it, without the blank lines a file or a
+    /// serializer ends with.
+    ///
+    /// Two things put newlines on the end of a note and neither of them is
+    /// content. Every editor terminates a file with one, and Markdown gives a
+    /// trailing blank line no meaning. The page's own serializer terminates a
+    /// document that ends in a block — a list, a callout, a code block — with
+    /// a blank line, while one ending in a paragraph gets none.
+    ///
+    /// So the same note has several equally valid spellings, and comparing
+    /// them literally made opening a note look like editing it: a `.md` written
+    /// elsewhere, or any note ending in a list, was rewritten and had its
+    /// modification date moved by nothing more than being opened. Everything
+    /// that decides whether a note changed compares this form, and this is the
+    /// form that gets stored.
+    ///
+    /// Only line terminators are removed. Trailing spaces are Markdown's hard
+    /// line break and are content.
+    pub fn canonical_content(content: &str) -> &str {
+        content.trim_end_matches(['\n', '\r'])
+    }
+
     pub fn parse(raw: &str) -> Result<Self, String> {
         let trimmed = raw.trim_start();
         if !trimmed.starts_with("---") {
@@ -141,7 +163,7 @@ impl NoteDocument {
             let doc = Self::new_empty();
             return Ok(Self {
                 metadata: doc.metadata,
-                content: raw.to_string(),
+                content: Self::canonical_content(raw).to_string(),
             });
         }
 
@@ -159,7 +181,7 @@ impl NoteDocument {
 
         Ok(Self {
             metadata: wrapper.note_it,
-            content: content.to_string(),
+            content: Self::canonical_content(content).to_string(),
         })
     }
 
@@ -171,7 +193,10 @@ impl NoteDocument {
         let yaml_str = serde_yaml::to_string(&wrapper)
             .map_err(|e| format!("Failed to serialize YAML front matter: {e}"))?;
 
-        Ok(format!("---\n{}---\n\n{}", yaml_str, self.content))
+        // The note is stored terminated, the way every other tool writes a
+        // file; `parse` takes that terminator back off, so the pair round-trips
+        // a note unchanged however many times it is written and read.
+        Ok(format!("---\n{}---\n\n{}\n", yaml_str, self.content))
     }
 }
 
@@ -248,7 +273,10 @@ mod tests {
         for paper_type in PAPER_TYPES {
             for intensity in PAPER_INTENSITIES {
                 let mut doc = NoteDocument::new_empty();
-                doc.content = "# Conteúdo\n\n- [ ] Tarefa\n".to_string();
+                // No trailing newline: the terminator belongs to the file,
+                // and `parse` strips it back off. See
+                // `the_file_terminator_is_not_part_of_the_note`.
+                doc.content = "# Conteúdo\n\n- [ ] Tarefa".to_string();
                 doc.metadata.paper_type = (*paper_type).to_string();
                 doc.metadata.paper_intensity = (*intensity).to_string();
 
@@ -303,7 +331,7 @@ mod tests {
             paper_intensity_name(&parsed.metadata.paper_intensity),
             DEFAULT_PAPER_INTENSITY
         );
-        assert_eq!(parsed.content, "texto\n");
+        assert_eq!(parsed.content, "texto");
     }
 
     #[test]
@@ -324,6 +352,77 @@ mod tests {
 
         // Nothing here goes through `touch_content_modified`.
         assert_eq!(doc.metadata.updated_at, updated_at);
+    }
+
+    #[test]
+    fn the_file_terminator_is_not_part_of_the_note() {
+        // 3.5R. A `.md` written by another editor ends with a newline. That
+        // terminator belongs to the file, not to the note: the editor
+        // serialises the same document back without it, and treating the two
+        // as different content made a plain open-and-close look like an edit.
+        let with_newline = concat!(
+            "---\n",
+            "note_it:\n",
+            "  version: 1\n",
+            "  id: 00000000-0000-0000-0000-000000000042\n",
+            "  color: yellow\n",
+            "  font_size: 15\n",
+            "---\n\n",
+            "texto\n",
+        );
+        let without_newline = with_newline.trim_end_matches('\n');
+
+        assert_eq!(
+            NoteDocument::parse(with_newline).expect("parse").content,
+            NoteDocument::parse(without_newline).expect("parse").content,
+        );
+        assert_eq!(
+            NoteDocument::parse(with_newline).expect("parse").content,
+            "texto"
+        );
+
+        // Blank lines inside the note are content and stay untouched; only the
+        // terminator at the very end goes.
+        let multi = with_newline.replace("texto\n", "um\n\ndois\n\n\n");
+        assert_eq!(
+            NoteDocument::parse(&multi).expect("parse").content,
+            "um\n\ndois"
+        );
+    }
+
+    #[test]
+    fn a_stored_note_ends_with_exactly_one_newline() {
+        // Serializing terminates the file the way every other tool expects,
+        // and parsing takes that terminator straight back off, so a note
+        // survives any number of round trips through both unchanged.
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "# Título\n\nCorpo".to_string();
+
+        let serialized = doc.serialize().expect("serialize");
+        assert!(serialized.ends_with("Corpo\n"));
+        assert!(!serialized.ends_with("Corpo\n\n"));
+
+        let reparsed = NoteDocument::parse(&serialized).expect("parse");
+        assert_eq!(reparsed.content, doc.content);
+        assert_eq!(reparsed.serialize().expect("re-serialize"), serialized);
+    }
+
+    #[test]
+    fn a_trailing_hard_line_break_keeps_its_spaces() {
+        // Only newlines are stripped. Two trailing spaces are Markdown's hard
+        // line break and are content.
+        let doc = NoteDocument::parse(concat!(
+            "---\n",
+            "note_it:\n",
+            "  version: 1\n",
+            "  id: 00000000-0000-0000-0000-000000000043\n",
+            "  color: yellow\n",
+            "  font_size: 15\n",
+            "---\n\n",
+            "linha  \n",
+        ))
+        .expect("parse");
+        assert_eq!(doc.content, "linha  ");
     }
 
     #[test]
