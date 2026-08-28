@@ -196,6 +196,25 @@
 - [x] Currencies deliberately **not** implemented, and no rate hardcoded. The boundary a future
       source has to sit behind is written down in `ui/src/units/convert.ts` and ADR-025.
 
+### Phase 3.7R: Test Harness Isolation (Completed)
+- [x] `scripts/note-it-isolated` isolates the **session bus** as well as XDG. Note-it is a
+      single-instance `GApplication`, so with a daemon already running on the real bus an "isolated"
+      command was forwarded to it and the real store did the writing — which is how a test note
+      reached the user's own notes directory during Phase 3.7's physical testing.
+- [x] A private `dbus-daemon` per test run, with `DBUS_SESSION_BUS_ADDRESS` pointed at it and the
+      D-Bus starter variables cleared. The real daemon is never stopped and never notices.
+- [x] Fail-closed throughout: the bus is started, proved distinct from the real one and proved
+      reachable *before* Note-it is launched, and the launched process's environment is read back
+      from `/proc` and checked. Exit codes 90–93 say which guarantee could not be met.
+- [x] `--root DIR` keeps the private bus alive across invocations, so a daemon started by one
+      command and a `new` sent by the next reach the same instance; `--stop` ends it and `--verify`
+      asserts the instance really is on the private bus.
+- [x] `scripts/test-isolation` reproduces the incident — an ambient session with its own bus, store
+      and, where a display exists, a genuine daemon owning the well-known name — and asserts the
+      note lands only in the throwaway store while the ambient one is unchanged to the nanosecond.
+      It runs under `cargo test`.
+- [x] No application code changed. The defect was in the harness, not in Note-it.
+
 ### Phase 3.8: Search & Productivity (Planned)
 - [ ] Global search across notes.
 - [ ] Find and replace.

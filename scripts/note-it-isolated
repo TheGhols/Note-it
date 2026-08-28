@@ -1,29 +1,94 @@
 #!/usr/bin/env bash
 #
-# Runs Note-it against a throwaway XDG tree.
+# Runs Note-it against a throwaway XDG tree *and* a private D-Bus session.
 #
-# Every experimental or integration run must go through this script. It sets
-# all four XDG variables together, because overriding only some of them leaves
-# the rest resolving to the real store — which is exactly how a stray note once
-# ended up in it. Before launching anything it verifies that no configured
-# directory resolves inside the real store, and aborts if one does.
+# ISOLATING XDG IS NOT ENOUGH.
+#
+# Note-it is a single-instance `GApplication`. Single-instance is implemented by
+# claiming a well-known name on the **session bus**: the second process to start
+# finds the name already owned, hands its command line to the owner over D-Bus,
+# and exits. The owner then does the work — in whatever store *it* was started
+# with.
+#
+# So overriding the four XDG variables only configures the process this script
+# launches. If a Note-it daemon is already running on the real session bus, that
+# process never opens a store at all: it forwards the command and quits, and the
+# real daemon writes to the real store. The isolation is real and completely
+# beside the point.
+#
+# That is not hypothetical. During Phase 3.7 physical testing a daemon was
+# already running; every isolated command was forwarded to it, and a test note
+# was created in the user's own store. `scripts/test-isolation` reproduces that
+# exact situation and is the regression test for it.
+#
+# The fix is to isolate the bus as well. This script starts a private
+# `dbus-daemon`, points `DBUS_SESSION_BUS_ADDRESS` at it, and verifies before
+# launching anything that the address is genuinely not the real one. On that bus
+# the well-known name is unowned, so the isolated process becomes the primary
+# instance and does its own work in its own store — with the user's daemon left
+# running and untouched.
+#
+# Everything here is fail-closed. If the private bus cannot be started, cannot be
+# reached, or turns out to be the real one, the script aborts *before* Note-it is
+# started. It never falls back to "well, at least XDG is isolated", because that
+# is precisely the failure it exists to prevent.
 #
 # Usage:
 #   scripts/note-it-isolated [--keep] [--root DIR] [-- <note-it args>]
+#   scripts/note-it-isolated --root DIR --verify
+#   scripts/note-it-isolated --root DIR --stop [--keep]
 #
+#   --root DIR   use DIR instead of a fresh mktemp directory, and make the
+#                private bus **persistent**: it is recorded under DIR/session
+#                and reused by every later invocation naming the same DIR, so a
+#                daemon started by one command and a `new` sent by the next land
+#                on the same instance. End it with --stop.
 #   --keep       leave the temporary tree in place after exiting
-#   --root DIR   use DIR instead of a fresh mktemp directory
+#   --verify     assert that a live isolated session exists for DIR and that the
+#                Note-it instance is on its private bus; changes nothing
+#   --stop       quit the isolated instance and stop its private bus. A caller
+#                supplied --root DIR is never deleted; that stays the caller's.
+#
+# Exit codes:
+#   90  XDG isolation could not be guaranteed
+#   91  no note-it binary
+#   92  D-Bus isolation could not be guaranteed
+#   93  the launched process does not carry the isolated environment
 #
 set -euo pipefail
 
+# The real session, captured before this script changes anything about it. Every
+# "is this actually isolated?" question is answered against these.
+readonly REAL_DBUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"
+readonly REAL_RUNTIME_BUS="${XDG_RUNTIME_DIR:-}/bus"
+
+# The name Note-it claims for single-instance dispatch. Kept in step with
+# `APPLICATION_ID` in src/main.rs.
+readonly APPLICATION_ID="io.github.theghols.NoteIt"
+
 KEEP=0
 ROOT=""
+STOP=0
+VERIFY=0
 BINARY="${NOTE_IT_BINARY:-}"
+
+# Set once a bus is started by *this* invocation and nothing else will need it.
+OWNS_BUS=0
+BUS_ADDRESS=""
+BUS_PID=""
+BUS_SOCKET_DIR=""
+
+die() {
+  printf 'ABORT: %s\n' "$1" >&2
+  exit "${2:-90}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
     --root) ROOT="${2:?--root needs a directory}"; shift 2 ;;
+    --stop) STOP=1; shift ;;
+    --verify) VERIFY=1; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -50,24 +115,30 @@ if [[ -n "$ROOT" ]]; then
   for base in "${REAL_BASES[@]}"; do
     base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
     if [[ "$ROOT_CHECK" == "$base_resolved" || "$ROOT_CHECK" == "$base_resolved"/* ]]; then
-      echo "ABORT: --root $ROOT is inside the real XDG tree ($base_resolved)" >&2
-      exit 90
+      die "--root $ROOT is inside the real XDG tree ($base_resolved)"
     fi
   done
   if [[ "$ROOT_CHECK" == "$(readlink -f "$HOME")" ]]; then
-    echo "ABORT: --root must not be the home directory" >&2
-    exit 90
+    die "--root must not be the home directory"
   fi
   mkdir -p "$ROOT"
 else
+  if [[ "$STOP" -eq 1 || "$VERIFY" -eq 1 ]]; then
+    die "--stop and --verify need the --root of the session they act on"
+  fi
   ROOT="$(mktemp -d "${TMPDIR:-/tmp}/note-it-test-XXXXXX")"
+  # Only an invocation that made its own throwaway root owns the bus it starts;
+  # a named root keeps its session alive for the commands that follow.
+  OWNS_BUS=1
 fi
+
+SESSION_DIR="$ROOT/session"
 
 export XDG_CONFIG_HOME="$ROOT/config"
 export XDG_DATA_HOME="$ROOT/data"
 export XDG_STATE_HOME="$ROOT/state"
 export XDG_CACHE_HOME="$ROOT/cache"
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$SESSION_DIR"
 
 # Abort rather than risk the real store: no configured directory may be, or sit
 # inside, any real XDG base directory.
@@ -78,13 +149,11 @@ abort_if_real() {
     local base_resolved
     base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
     if [[ "$resolved" == "$base_resolved" || "$resolved" == "$base_resolved"/* ]]; then
-      echo "ABORT: $name resolves into the real XDG tree ($resolved)" >&2
-      exit 90
+      die "$name resolves into the real XDG tree ($resolved)"
     fi
   done
   if [[ "$resolved" == "$(readlink -f "$HOME")" ]]; then
-    echo "ABORT: $name resolves to the home directory" >&2
-    exit 90
+    die "$name resolves to the home directory"
   fi
 }
 
@@ -92,8 +161,173 @@ abort_if_real XDG_CONFIG_HOME "$XDG_CONFIG_HOME"
 abort_if_real XDG_DATA_HOME "$XDG_DATA_HOME"
 abort_if_real XDG_STATE_HOME "$XDG_STATE_HOME"
 abort_if_real XDG_CACHE_HOME "$XDG_CACHE_HOME"
+abort_if_real session "$SESSION_DIR"
 
+resolve_binary() {
+  if [[ -n "$BINARY" ]]; then return; fi
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -x "$repo_root/target/debug/note-it" ]]; then
+    BINARY="$repo_root/target/debug/note-it"
+  elif [[ -x "$repo_root/target/release/note-it" ]]; then
+    BINARY="$repo_root/target/release/note-it"
+  else
+    die "no note-it binary found; run 'cargo build' first" 91
+  fi
+}
+
+# ---------------------------------------------------------------- private bus
+
+bus_is_alive() {
+  [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null
+}
+
+# Every well-known name currently on the private bus.
+names_on_private_bus() {
+  DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS" dbus-send --session \
+    --dest=org.freedesktop.DBus --print-reply=literal \
+    /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null
+}
+
+load_private_bus() {
+  [[ -r "$SESSION_DIR/bus.address" && -r "$SESSION_DIR/bus.pid" ]] || return 1
+  BUS_ADDRESS="$(<"$SESSION_DIR/bus.address")"
+  BUS_PID="$(<"$SESSION_DIR/bus.pid")"
+  BUS_SOCKET_DIR="$(cat "$SESSION_DIR/bus.dir" 2>/dev/null || printf '')"
+  [[ -n "$BUS_ADDRESS" ]] || return 1
+  bus_is_alive "$BUS_PID" || return 1
+}
+
+start_private_bus() {
+  command -v dbus-daemon >/dev/null 2>&1 \
+    || die "dbus-daemon is not installed, so the session bus cannot be isolated" 92
+
+  # The socket lives in a short path of its own rather than under the root: a
+  # unix socket path is capped near 107 bytes and a throwaway root can be deep.
+  BUS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/note-it-bus-XXXXXX")"
+
+  local reported=()
+  mapfile -t reported < <(
+    dbus-daemon --session --address="unix:dir=$BUS_SOCKET_DIR" \
+      --fork --print-address --print-pid 2>/dev/null || true
+  )
+
+  BUS_ADDRESS=""
+  BUS_PID=""
+  local line
+  for line in "${reported[@]}"; do
+    if [[ "$line" == unix:* ]]; then
+      BUS_ADDRESS="$line"
+    elif [[ "$line" =~ ^[0-9]+$ ]]; then
+      BUS_PID="$line"
+    fi
+  done
+
+  if [[ -z "$BUS_ADDRESS" || -z "$BUS_PID" ]]; then
+    rm -rf "$BUS_SOCKET_DIR"
+    die "the private D-Bus session did not report both an address and a pid" 92
+  fi
+
+  printf '%s\n' "$BUS_ADDRESS" > "$SESSION_DIR/bus.address"
+  printf '%s\n' "$BUS_PID" > "$SESSION_DIR/bus.pid"
+  printf '%s\n' "$BUS_SOCKET_DIR" > "$SESSION_DIR/bus.dir"
+}
+
+# The checks that make this fail-closed. Each one is a way the bus could turn
+# out to be the real one after all; every one of them aborts.
+assert_bus_is_private() {
+  [[ -n "$BUS_ADDRESS" ]] || die "no private D-Bus address" 92
+
+  if [[ -n "$REAL_DBUS_ADDRESS" && "$BUS_ADDRESS" == "$REAL_DBUS_ADDRESS" ]]; then
+    die "the private bus address is the real session bus address" 92
+  fi
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && "$BUS_ADDRESS" == *"$REAL_RUNTIME_BUS"* ]]; then
+    die "the private bus address points at the real session bus socket" 92
+  fi
+  bus_is_alive "$BUS_PID" || die "the private D-Bus session is not running" 92
+  names_on_private_bus >/dev/null || die "the private D-Bus session is not reachable" 92
+}
+
+# On a bus this invocation has just created, nothing can own the application's
+# name. If something does, the address is not the private bus it claims to be —
+# which is the shape the Phase 3.7 incident took.
+assert_application_absent() {
+  if names_on_private_bus | grep -q "$APPLICATION_ID"; then
+    die "$APPLICATION_ID is already owned on the bus that was just created" 92
+  fi
+}
+
+stop_private_bus() {
+  bus_is_alive "$BUS_PID" && kill "$BUS_PID" 2>/dev/null || true
+  if [[ -n "$BUS_SOCKET_DIR" && "$BUS_SOCKET_DIR" == "${TMPDIR:-/tmp}"/note-it-bus-* ]]; then
+    rm -rf "$BUS_SOCKET_DIR"
+  fi
+  rm -f "$SESSION_DIR/bus.address" "$SESSION_DIR/bus.pid" "$SESSION_DIR/bus.dir"
+}
+
+# ------------------------------------------------------------- --stop, --verify
+
+if [[ "$STOP" -eq 1 ]]; then
+  resolve_binary
+  if load_private_bus; then
+    if names_on_private_bus | grep -q "$APPLICATION_ID"; then
+      # Quit the isolated instance the way anything else would, on its own bus.
+      # The real session is never addressed here.
+      DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS" "$BINARY" quit >/dev/null 2>&1 || true
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        names_on_private_bus | grep -q "$APPLICATION_ID" || break
+        sleep 0.2
+      done
+    fi
+    stop_private_bus
+    echo "note-it-isolated: stopped the isolated session for $ROOT"
+  else
+    echo "note-it-isolated: no live isolated session for $ROOT"
+  fi
+  if [[ "$KEEP" -eq 0 && "$ROOT" == "${TMPDIR:-/tmp}"/note-it-test-* ]]; then
+    rm -rf "$ROOT"
+  fi
+  exit 0
+fi
+
+if [[ "$VERIFY" -eq 1 ]]; then
+  load_private_bus || die "no live isolated session for $ROOT" 92
+  assert_bus_is_private
+  names_on_private_bus | grep -q "$APPLICATION_ID" \
+    || die "no Note-it instance is on the private bus for $ROOT" 92
+  echo "note-it-isolated: $APPLICATION_ID is on the private bus for $ROOT"
+  echo "DBUS_SESSION_BUS_ADDRESS=$BUS_ADDRESS"
+  exit 0
+fi
+
+# --------------------------------------------------------------------- launch
+
+if ! load_private_bus; then
+  start_private_bus
+  assert_bus_is_private
+  assert_application_absent
+else
+  assert_bus_is_private
+fi
+
+# From here on, everything this script starts talks to the private bus. The
+# starter variables are cleared too: GIO consults them when looking for a bus,
+# and one left pointing at the real session would undo all of the above.
+export DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS"
+unset DBUS_STARTER_ADDRESS DBUS_STARTER_BUS_TYPE
+
+# The last word before anything is launched.
+[[ "${DBUS_SESSION_BUS_ADDRESS:-}" == "$BUS_ADDRESS" ]] \
+  || die "DBUS_SESSION_BUS_ADDRESS was not set to the private bus" 92
+if [[ -n "$REAL_DBUS_ADDRESS" && "$DBUS_SESSION_BUS_ADDRESS" == "$REAL_DBUS_ADDRESS" ]]; then
+  die "DBUS_SESSION_BUS_ADDRESS is still the real session bus" 92
+fi
+
+# shellcheck disable=SC2329  # invoked by the EXIT trap below.
 cleanup() {
+  if [[ "$OWNS_BUS" -eq 1 ]]; then
+    stop_private_bus
+  fi
   if [[ "$KEEP" -eq 1 ]]; then
     echo "note-it-isolated: kept $ROOT" >&2
     return
@@ -105,23 +339,52 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "note-it-isolated: isolated XDG environment"
+echo "note-it-isolated: isolated XDG environment and private D-Bus session"
 echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
 echo "XDG_DATA_HOME=$XDG_DATA_HOME"
 echo "XDG_STATE_HOME=$XDG_STATE_HOME"
 echo "XDG_CACHE_HOME=$XDG_CACHE_HOME"
+echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
 
-if [[ -z "$BINARY" ]]; then
-  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  if [[ -x "$REPO_ROOT/target/debug/note-it" ]]; then
-    BINARY="$REPO_ROOT/target/debug/note-it"
-  elif [[ -x "$REPO_ROOT/target/release/note-it" ]]; then
-    BINARY="$REPO_ROOT/target/release/note-it"
-  else
-    echo "ABORT: no note-it binary found; run 'cargo build' first" >&2
-    exit 91
-  fi
-fi
-
+resolve_binary
 echo "binary=$BINARY"
-"$BINARY" "$@"
+
+# The process is started in the background so its environment can be read back
+# from the kernel before anything is trusted, then waited on so the script still
+# behaves like the plain foreground runner it replaced.
+"$BINARY" "$@" &
+CHILD=$!
+
+# What the process actually inherited, read from `/proc` rather than assumed.
+# A short-lived dispatch may already be gone by now; the guarantee then rests on
+# the pre-flight checks above and on the kernel's own inheritance, which is why
+# an unreadable `environ` is not a failure.
+verify_child_environment() {
+  local environ="/proc/$CHILD/environ" child_env variable expected
+  [[ -r "$environ" ]] || return 0
+  child_env="$(tr '\0' '\n' < "$environ" 2>/dev/null || printf '')"
+  [[ -n "$child_env" ]] || return 0
+
+  for variable in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
+                  DBUS_SESSION_BUS_ADDRESS; do
+    expected="${!variable}"
+    if ! grep -qxF "$variable=$expected" <<<"$child_env"; then
+      kill "$CHILD" 2>/dev/null || true
+      die "the Note-it process does not carry the isolated $variable" 93
+    fi
+  done
+
+  # Stated separately from the loop above because it is the specific thing that
+  # went wrong in Phase 3.7, and a test reads better than an inference.
+  if [[ -n "$REAL_DBUS_ADDRESS" ]] \
+    && grep -qxF "DBUS_SESSION_BUS_ADDRESS=$REAL_DBUS_ADDRESS" <<<"$child_env"; then
+    kill "$CHILD" 2>/dev/null || true
+    die "the Note-it process is on the real session bus" 93
+  fi
+}
+
+verify_child_environment
+
+status=0
+wait "$CHILD" || status=$?
+exit "$status"

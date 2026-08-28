@@ -17,7 +17,7 @@ jobs:
         run: |
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git pkgconf gtk4 gtk4-layer-shell webkitgtk-6.0 rust
+          pacman -S --noconfirm git pkgconf gtk4 gtk4-layer-shell webkitgtk-6.0 rust dbus
 
       - uses: actions/checkout@v4
 

@@ -594,3 +594,60 @@ plain statement of what the future has to look like. What this phase owes the
 next one is the absence of a hardcoded rate, and a test asserts that nothing in
 the engine can reach the network at all.
 
+## ADR-026: Test Isolation Has to Cover the IPC Channel, Not Only the Filesystem
+
+`scripts/note-it-isolated` overrode the four XDG base directories and nothing
+else. That is the obvious reading of "isolate the store", and it is wrong for
+this application in a way that is invisible until it costs something.
+
+Note-it is a single-instance `GApplication`. Single-instance is not a lock file
+or a pid check: it is a well-known name on the **session bus**. The second
+process to start finds the name owned, hands its command line to the owner over
+D-Bus, and exits. The owner does the work.
+
+So the XDG variables configured a process that never opened a store. With a
+daemon already running on the real bus, every "isolated" command was forwarded
+to it, and the real daemon wrote to the real store. During Phase 3.7's physical
+testing that put a test note in the user's own notes directory.
+
+**The decision: a test environment must isolate every channel by which work can
+leave it, and for a single-instance application the IPC bus is one of them.** The
+harness now starts a private `dbus-daemon` per session and points
+`DBUS_SESSION_BUS_ADDRESS` at it. On that bus the well-known name is unowned, so
+the isolated process becomes the primary instance and does its own work. The
+real daemon is never stopped and never notices, which matters: a harness that
+required killing the user's session would simply not be used.
+
+**Fail-closed, with no partial success.** Every check runs before Note-it is
+launched — the bus starts, it is proved to be a different address from the real
+one, it is proved to answer — and the launched process's environment is then read
+back from `/proc` and compared. Four exit codes name the four guarantees (90 XDG,
+91 binary, 92 bus, 93 launched environment). There is deliberately no path that
+degrades to "at least the XDG part worked", because that is exactly the state the
+old script was in while it was failing.
+
+**`XDG_RUNTIME_DIR` stays real.** `WAYLAND_DISPLAY` resolves inside it, so
+replacing it would cost the display. `DBUS_SESSION_BUS_ADDRESS` decides the bus
+and wins over the runtime directory's socket, so setting it is both sufficient
+and the only thing that does not break something else. The D-Bus *starter*
+variables are cleared for the same reason a belt has a brace.
+
+**The bus is per-session, not per-command.** A single-instance application can
+only be tested across several commands if they share a bus, so `--root DIR`
+records the bus under that root and every later invocation naming it reuses it.
+That is what makes "start a daemon, then send it `new`" testable at all, and it
+is the shape every physical test in this project takes.
+
+**The regression test builds the incident rather than describing it.**
+`scripts/test-isolation` stands up an ambient session with its own bus and its
+own lived-in store, fingerprints it to the nanosecond, and — where a display
+exists — puts a genuine `note-it --background` daemon on it owning the real
+well-known name. Then it runs the harness. Against the fixed harness the note
+lands only in the throwaway store; against the old one the test reports the stray
+note sitting in the ambient daemon's store, which is the incident exactly. It
+runs under `cargo test`, because a test nobody remembers to run is documentation.
+
+The stub half of that test exists so the whole thing runs in CI, where there is
+no display. What the stub proves is where the harness *points* a process, which
+is the thing that failed; the daemon half proves the consequence.
+

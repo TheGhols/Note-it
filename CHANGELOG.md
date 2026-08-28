@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The isolated test harness now isolates the **session bus** as well as the XDG directories.
+  Note-it is a single-instance `GApplication`: with a daemon already running on the real bus, an
+  "isolated" command was handed to that daemon over D-Bus and the real store did the writing, so
+  overriding `XDG_*` protected nothing. `scripts/note-it-isolated` now starts a private
+  `dbus-daemon` for each test session, points `DBUS_SESSION_BUS_ADDRESS` at it and clears the D-Bus
+  starter variables, so the isolated process becomes the primary instance and works in its own
+  store — with the real daemon left running and untouched.
+  - Fail-closed: the bus is started, proved distinct from the real one and proved reachable before
+    Note-it is launched, and the launched process's environment is read back from `/proc`. Exit
+    codes 90–93 name the guarantee that could not be met.
+  - `--root DIR` keeps the private session alive across invocations, `--verify` asserts the instance
+    is on it, and `--stop` ends it.
+  - `scripts/test-isolation` reproduces the incident and runs under `cargo test`; against the old
+    harness it fails with the stray note in the ambient store, and against the new one it passes.
+  - No application code changed: the defect was in the harness.
+
 ### Added
 - Unit conversions, written the way the rest of the engine is and shown the same way:
   - `= 10 km em m` shows `10000 m` beside the line. `em` is the conversion keyword, and the only
