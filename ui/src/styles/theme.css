@@ -5,6 +5,18 @@
   --border-radius: 12px;
   --transition-fast: 150ms ease;
   --note-header-height: 28px;
+  /* The strip along the top of the note that is always the note's own rather
+     than the text's: it summons the chrome, it is what the note is dragged by,
+     and it is exactly the editor's top padding so no line ever sits under it.
+     Kept in step with REVEAL_ZONE_PX in src/ui/headerReveal.ts, which
+     tests/header_ux.test.ts checks rather than assumes. */
+  --note-chrome-gutter: 24px;
+  /* Long enough to read as a movement, short enough that reaching the top of
+     the note and finding the controls there feels immediate. */
+  --note-header-reveal: 120ms ease;
+  /* Icon size for the header's quick actions. Larger than the hamburger and
+     the close cross because those are drawn with a much heavier stroke. */
+  --header-action-size: 15px;
   /* View scale of the note content; never applied to the header bar. */
   --note-zoom: 1;
 
@@ -214,26 +226,32 @@ html, body {
   transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
+/* The note's chrome, overlaid on the paper.
+   Absent rather than faint: the bar paints nothing and takes no pointer event
+   until the reveal controller says the pointer has reached the top strip, a
+   control has the keyboard, a popover is open, or the note is collapsed. The
+   header itself is never a target — only the strip and, once they can be seen,
+   the buttons — so a hidden control can never take a click meant for the line
+   of text it is sitting over. */
 .note-header {
   position: absolute;
   inset: 0 0 auto 0;
   z-index: 20;
   display: flex;
-  align-items: center;
+  /* Top-aligned, so the controls sit in the gutter rather than in the middle
+     of the bar's height, where they would land on the first line of the note. */
+  align-items: flex-start;
   justify-content: space-between;
   height: var(--note-header-height);
   flex: 0 0 auto;
   padding: 0 8px;
   user-select: none;
-  opacity: 0.06;
-  transition: opacity var(--transition-fast);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--note-header-reveal);
 }
 
-.note-header:hover,
-.note-header:focus-within {
-  opacity: 1;
-}
-
+body[data-header-revealed="true"] .note-header,
 /* A collapsed note is only its header bar, so the bar stays legible. */
 body[data-collapsed="true"] .note-header {
   opacity: 1;
@@ -242,17 +260,48 @@ body[data-collapsed="true"] .note-header {
 .note-controls-left {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex: 0 0 auto;
+  pointer-events: none;
 }
 
+.note-controls-right {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+/* The strip that summons the chrome is also the one the note is dragged by, so
+   it stays live whether or not the bar is showing — dragging a note must not
+   require revealing anything first. It is exactly as tall as the editor's top
+   padding, which is what keeps it off the text. A collapsed note has no text,
+   so there the whole bar is the drag region and a click anywhere on it
+   expands. */
 .drag-region {
   flex: 1;
   min-width: 0;
-  height: 100%;
+  height: var(--note-chrome-gutter);
+  align-self: flex-start;
   display: flex;
   align-items: center;
   cursor: grab;
+  pointer-events: auto;
+}
+
+/* A collapsed note is the bar and nothing else, so the controls and the title
+   centre in it and a click anywhere on it expands. */
+body[data-collapsed="true"] .note-header {
+  align-items: center;
+}
+
+body[data-collapsed="true"] .note-header .icon-btn {
+  margin-top: 0;
+}
+
+body[data-collapsed="true"] .drag-region {
+  height: 100%;
+  align-self: center;
 }
 
 .drag-region:active {
@@ -263,7 +312,7 @@ body[data-collapsed="true"] .note-header {
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 4px;
+  padding: 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -272,32 +321,39 @@ body[data-collapsed="true"] .note-header {
   transition: color var(--transition-fast), background-color var(--transition-fast);
 }
 
+/* A control is a pointer target only while it can be seen. */
+.note-header .icon-btn {
+  margin-top: 2px;
+  pointer-events: none;
+}
+
+body[data-header-revealed="true"] .note-header .icon-btn,
+body[data-collapsed="true"] .note-header .icon-btn {
+  pointer-events: auto;
+}
+
 .icon-btn:hover {
   color: var(--paper-text);
   background-color: var(--selection-bg);
 }
 
+/* Quick-action icons. The drawing is inline SVG written into the page from the
+   asset files at build time, so nothing is fetched: WebKitGTK enforces this
+   page's `default-src 'self'`, under which a CSS mask or background image
+   pointing at a `data:` URL is blocked and the button comes out blank. Every
+   shape inherits `currentColor`, which is the button's own colour, so one file
+   serves yellow paper and black paper and both interface themes. */
 .header-action-icon {
   display: block;
-  width: 13px;
-  height: 13px;
-  background-color: currentColor;
-  -webkit-mask-image: var(--header-action-mask);
-  -webkit-mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  mask-image: var(--header-action-mask);
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
+  width: var(--header-action-size);
+  height: var(--header-action-size);
+  color: inherit;
 }
 
-.header-action-icon-color {
-  --header-action-mask: url('../../../IconesNote-it/palette-round-svgrepo-com.svg');
-}
-
-.header-action-icon-text-size {
-  --header-action-mask: url('../../../IconesNote-it/larger-text-svgrepo-com.svg');
+.header-action-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .note-title {
@@ -328,6 +384,11 @@ body[data-collapsed="true"] .note-title {
   top: calc(100% + 4px);
   left: 0;
   z-index: 30;
+  /* The popover lives inside the header, which is not a pointer target; a
+     popover that cannot be clicked is not a menu, so it opts back in. It is
+     only ever open while the chrome is held out, so it is always visible when
+     it is live. */
+  pointer-events: auto;
   min-width: 168px;
   max-width: calc(100vw - 12px);
   max-height: calc(100vh - var(--note-header-height) - 8px);
@@ -589,10 +650,15 @@ body[data-collapsed="true"] .note-title {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* The editor paints the whole paper behind the overlay header, while its
-     first clickable line stays exactly where it was when the header occupied
-     layout space. */
-  padding: calc(var(--note-header-height) + 8px) 14px 14px 14px;
+  /* The note starts where the note starts. The bar is chrome laid over the
+     paper, so the editor reserves only the gutter — the strip that is always
+     the note's own — rather than the whole height the bar takes when it is
+     revealed. The reveal threshold is that same gutter, which is what makes
+     both requirements hold at once: the reader can click, select and place the
+     caret on the first line everywhere, because reaching a row that has text
+     under it never brings the controls out, and the controls are not pointer
+     targets while they cannot be seen. */
+  padding: var(--note-chrome-gutter) 14px 14px 14px;
   outline: none;
   /* Zoom scales the rendered text through the font size the editor inherits,
      so layout, caret position and hit testing all stay in agreement. A CSS
@@ -602,7 +668,7 @@ body[data-collapsed="true"] .note-title {
   /* The paper pattern is painted here; see the rules further down. `local`
      makes it travel with the text as the note scrolls. */
   background-repeat: repeat;
-  background-position-y: var(--note-header-height);
+  background-position-y: var(--note-chrome-gutter);
   background-attachment: local;
   /* Composed on the element that paints it, deliberately.
      `var()` is substituted where the declaration sits, using that element's

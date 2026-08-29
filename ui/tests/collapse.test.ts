@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { NoteEditor } from '../src/editor/editor.ts';
+import { collapseTransition } from '../src/ui/collapse.ts';
 
 /** Mirrors the presentation switch main.ts applies on collapse/expand. */
 function setCollapsed(collapsed: boolean): void {
@@ -75,5 +76,41 @@ describe('collapsed presentation', () => {
     expect(after).toBe(before);
     expect(after).toContain('## Tarefas');
     expect(after).toContain('**importante**');
+  });
+});
+
+/**
+ * What a change of collapse state obliges the page to do.
+ *
+ * Collapsing hides the editor with `display: none`, and an element that stops
+ * being displayed stops holding the selection. Before this, expanding brought
+ * the note back looking ready and deaf: every keystroke went nowhere until the
+ * note was clicked, and a note on the desktop layer sits behind every window,
+ * so there may be no click available to give it. That is the shape the
+ * "Recolher nota does not work on the desktop layer" report actually had.
+ */
+describe('the collapse transition', () => {
+  it('closes everything that needs room to be typed into, on the way in', () => {
+    expect(collapseTransition(false, true)).toEqual({
+      closePanels: true,
+      restoreCaret: false,
+    });
+  });
+
+  it('gives the caret back on the way out', () => {
+    expect(collapseTransition(true, false)).toEqual({
+      closePanels: false,
+      restoreCaret: true,
+    });
+  });
+
+  it('does not take the caret from a note that was never collapsed', () => {
+    // The host sends the expanded state on every load, and a note being loaded
+    // is not a note being expanded.
+    expect(collapseTransition(false, false).restoreCaret).toBe(false);
+  });
+
+  it('a repeated collapse request changes nothing about where the caret is', () => {
+    expect(collapseTransition(true, true).restoreCaret).toBe(false);
   });
 });

@@ -8,6 +8,9 @@
 </head>
 <body>
   <div id="app">
+    <!-- Overlaid chrome. It carries no drawing of its own: the six quick-action
+         spans are filled in at build time from the reviewed icon files, so the
+         icons ship as inline SVG and there is exactly one copy of each. -->
     <div id="drag-handle" class="note-header">
       <div id="note-controls-left" class="note-controls-left">
         <button id="btn-menu" class="icon-btn" title="Configurações da nota" aria-label="Configurações da nota">
@@ -18,10 +21,22 @@
           </svg>
         </button>
         <button id="btn-note-color" class="icon-btn header-quick-action" title="Cor da nota" aria-label="Cor da nota">
-          <span class="header-action-icon header-action-icon-color" aria-hidden="true"></span>
+          <span class="header-action-icon" data-quick-icon="note-color"></span>
         </button>
         <button id="btn-text-size" class="icon-btn header-quick-action" title="Tamanho do texto" aria-label="Tamanho do texto">
-          <span class="header-action-icon header-action-icon-text-size" aria-hidden="true"></span>
+          <span class="header-action-icon" data-quick-icon="text-size"></span>
+        </button>
+        <button id="btn-text-color" class="icon-btn header-quick-action" title="Cor do texto" aria-label="Cor do texto">
+          <span class="header-action-icon" data-quick-icon="text-color"></span>
+        </button>
+        <button id="btn-highlight" class="icon-btn header-quick-action" title="Marca-texto" aria-label="Marca-texto">
+          <span class="header-action-icon" data-quick-icon="highlight"></span>
+        </button>
+        <button id="btn-blocks" class="icon-btn header-quick-action" title="Blocos" aria-label="Blocos">
+          <span class="header-action-icon" data-quick-icon="blocks"></span>
+        </button>
+        <button id="btn-search" class="icon-btn header-quick-action" title="Buscar" aria-label="Buscar">
+          <span class="header-action-icon" data-quick-icon="search"></span>
         </button>
       </div>
       <div class="drag-region">

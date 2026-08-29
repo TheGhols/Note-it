@@ -22,8 +22,10 @@ function buildNote() {
   btnMenu.id = 'btn-menu';
   const btnNoteColor = document.createElement('button');
   btnNoteColor.id = 'btn-note-color';
+  btnNoteColor.className = 'icon-btn header-quick-action';
   const btnTextSize = document.createElement('button');
   btnTextSize.id = 'btn-text-size';
+  btnTextSize.className = 'icon-btn header-quick-action';
   left.append(btnMenu, btnNoteColor, btnTextSize);
   const dragRegion = document.createElement('div');
   dragRegion.className = 'drag-region';

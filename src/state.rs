@@ -640,4 +640,114 @@ mod tests {
     fn collapsing_everything_does_nothing_without_notes() {
         assert_eq!(next_collapse_all(&[]), None);
     }
+
+    /// Layer and collapse are two switches on the same note, and Phase 3.9UX.R
+    /// was reported as "Recolher nota does not work on the desktop layer".
+    /// Running the matrix against a real Niri showed both operations working in
+    /// both layers, so what is fixed here is that they stay independent: the
+    /// state a shortcut lands in must not depend on which shortcut was pressed
+    /// first, and one press must be one change.
+    ///
+    /// What no test in this process can decide is whether the compositor still
+    /// routes the keyboard to a `Layer::Bottom` surface. That is Niri's answer,
+    /// and `docs/niri.md` records how it was asked.
+    #[test]
+    fn changing_the_layer_leaves_every_note_as_collapsed_as_it_was() {
+        let mut state = AppState::default();
+        let collapsed_note = Uuid::new_v4();
+        let expanded_note = Uuid::new_v4();
+        state.notes.insert(
+            collapsed_note,
+            NoteWindowState {
+                collapsed: true,
+                height: 30,
+                expanded_height: Some(300),
+                ..NoteWindowState::default()
+            },
+        );
+        state
+            .notes
+            .insert(expanded_note, NoteWindowState::default());
+
+        state.active_layer_mode = state.active_layer_mode.toggled();
+        assert_eq!(state.active_layer_mode, LayerMode::Desktop);
+
+        assert!(state.notes[&collapsed_note].collapsed);
+        assert_eq!(state.notes[&collapsed_note].expanded_height, Some(300));
+        assert!(!state.notes[&expanded_note].collapsed);
+    }
+
+    #[test]
+    fn collapsing_a_note_leaves_the_layer_where_it_was() {
+        let mut state = AppState {
+            active_layer_mode: LayerMode::Desktop,
+            ..AppState::default()
+        };
+        let id = Uuid::new_v4();
+        state.notes.insert(id, NoteWindowState::default());
+
+        assert!(state.notes.get_mut(&id).unwrap().apply_collapsed(true, 30));
+        assert!(state.notes.get_mut(&id).unwrap().apply_collapsed(false, 30));
+
+        assert_eq!(state.active_layer_mode, LayerMode::Desktop);
+    }
+
+    #[test]
+    fn a_layer_change_then_a_collapse_is_exactly_one_of_each() {
+        let mut state = AppState::default();
+        let id = Uuid::new_v4();
+        state.notes.insert(id, NoteWindowState::default());
+
+        state.active_layer_mode = state.active_layer_mode.toggled();
+        let collapsed = state.notes.get_mut(&id).unwrap().apply_collapsed(true, 30);
+
+        assert!(collapsed);
+        assert_eq!(state.active_layer_mode, LayerMode::Desktop);
+        assert!(state.notes[&id].collapsed);
+        assert_eq!(state.notes[&id].height, 30);
+        assert_eq!(state.notes[&id].expanded_height, Some(300));
+    }
+
+    #[test]
+    fn a_collapse_then_a_layer_change_does_not_repeat_either_operation() {
+        let mut state = AppState::default();
+        let id = Uuid::new_v4();
+        state.notes.insert(id, NoteWindowState::default());
+
+        assert!(state.notes.get_mut(&id).unwrap().apply_collapsed(true, 30));
+        state.active_layer_mode = state.active_layer_mode.toggled();
+
+        // Neither operation is re-applied by the other. A second request for
+        // the state the note is already in reports no change, so nothing
+        // downstream resizes, persists or overwrites the expanded geometry.
+        assert!(!state.notes.get_mut(&id).unwrap().apply_collapsed(true, 30));
+        assert_eq!(state.notes[&id].expanded_height, Some(300));
+        assert_eq!(state.active_layer_mode, LayerMode::Desktop);
+
+        state.active_layer_mode = state.active_layer_mode.toggled();
+        assert_eq!(state.active_layer_mode, LayerMode::Overlay);
+        assert!(state.notes[&id].collapsed);
+    }
+
+    #[test]
+    fn collapse_survives_a_round_trip_through_every_layer() {
+        let mut state = AppState::default();
+        let id = Uuid::new_v4();
+        state.notes.insert(id, NoteWindowState::default());
+        state.notes.get_mut(&id).unwrap().apply_collapsed(true, 30);
+
+        for mode in [LayerMode::Desktop, LayerMode::Hidden, LayerMode::Overlay] {
+            state.active_layer_mode = mode;
+            assert!(
+                state.notes[&id].collapsed,
+                "collapse lost on {}",
+                mode.as_str()
+            );
+            assert_eq!(state.notes[&id].height, 30);
+        }
+
+        assert!(state.notes.get_mut(&id).unwrap().apply_collapsed(false, 30));
+        assert_eq!(state.notes[&id].height, 300);
+        assert_eq!(state.active_layer_mode, LayerMode::Overlay);
+    }
 }

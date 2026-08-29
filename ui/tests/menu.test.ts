@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NoteMenu } from '../src/ui/menu.ts';
+import { QUICK_ACTIONS } from '../src/ui/icons.ts';
+import { MenuPanel, NoteMenu } from '../src/ui/menu.ts';
 import { PaperColor } from '../src/bridge/types.ts';
 import { declarationIn } from './support/stylesheet.ts';
 
@@ -13,24 +14,40 @@ function buildHeader() {
   left.id = 'note-controls-left';
   const trigger = document.createElement('button');
   trigger.id = 'btn-menu';
-  const colorTrigger = document.createElement('button');
-  colorTrigger.id = 'btn-note-color';
-  colorTrigger.setAttribute('aria-label', 'Cor da nota');
-  const textSizeTrigger = document.createElement('button');
-  textSizeTrigger.id = 'btn-text-size';
-  textSizeTrigger.setAttribute('aria-label', 'Tamanho do texto');
-  left.append(trigger, colorTrigger, textSizeTrigger);
+  left.append(trigger);
+
+  // The six header actions, built from the same list the page is built from.
+  const quickTriggers: Partial<Record<MenuPanel, HTMLElement>> = {};
+  for (const action of QUICK_ACTIONS) {
+    const button = document.createElement('button');
+    button.id = action.buttonId;
+    button.className = 'icon-btn header-quick-action';
+    button.setAttribute('aria-label', action.label);
+    left.append(button);
+    quickTriggers[action.panel] = button;
+  }
 
   const dragRegion = document.createElement('div');
   dragRegion.className = 'drag-region';
 
   header.append(left, dragRegion);
   document.body.append(header);
-  return { header, left, trigger, colorTrigger, textSizeTrigger, dragRegion };
+  return {
+    header,
+    left,
+    trigger,
+    quickTriggers,
+    colorTrigger: quickTriggers.paper as HTMLElement,
+    textSizeTrigger: quickTriggers.textSize as HTMLElement,
+    textColorTrigger: quickTriggers.textColor as HTMLElement,
+    highlightTrigger: quickTriggers.highlight as HTMLElement,
+    dragRegion,
+  };
 }
 
 function mountMenu() {
-  const { left, trigger, colorTrigger, textSizeTrigger, dragRegion } = buildHeader();
+  const header = buildHeader();
+  const { left, trigger, colorTrigger, textSizeTrigger, dragRegion } = header;
   const handlers = {
     onSelectColor: vi.fn(),
     onSelectPaperType: vi.fn(),
@@ -63,9 +80,18 @@ function mountMenu() {
     mount: left,
     colors: COLORS,
     handlers,
-    quickTriggers: { paper: colorTrigger, textSize: textSizeTrigger },
+    quickTriggers: header.quickTriggers,
   });
-  return { menu, trigger, colorTrigger, textSizeTrigger, dragRegion, handlers };
+  return {
+    menu,
+    trigger,
+    colorTrigger,
+    textSizeTrigger,
+    textColorTrigger: header.textColorTrigger,
+    highlightTrigger: header.highlightTrigger,
+    dragRegion,
+    handlers,
+  };
 }
 
 /** The value chip shown on a root row, addressed by that row's label. */
@@ -276,7 +302,7 @@ describe('NoteMenu', () => {
     }
   });
 
-  it('keeps colour and text size out of the root menu and in the two header actions', () => {
+  it('keeps every quick action out of the root menu and in the header bar', () => {
     const { menu, trigger } = mountMenu();
     active = menu;
     click(trigger);
@@ -297,17 +323,26 @@ describe('NoteMenu', () => {
     expect(panels).toEqual([
       'paperType',
       'paperIntensity',
-      'textColor',
-      'highlight',
-      'blocks',
-      'search',
       'data',
       'zoom',
       'theme',
       'layer',
     ]);
-    expect(rootPanel?.textContent).not.toContain('Cor da nota');
-    expect(rootPanel?.textContent).not.toContain('Tamanho do texto');
+    // The six the header bar carries are not repeated here: one function, one
+    // place to reach it. Their panels are still built, and are still the only
+    // panels those buttons open.
+    for (const label of [
+      'Cor da nota',
+      'Tamanho do texto',
+      'Cor do texto',
+      'Marca-texto',
+      'Blocos',
+      'Buscar',
+    ]) {
+      expect(rootPanel?.textContent).not.toContain(label);
+    }
+    // What is left is what the bar cannot hold, plus the collapse entry.
+    expect(rootPanel?.textContent).toContain('Recolher nota');
   });
 
   it('shows the current zoom and steps it from the submenu', () => {
@@ -461,10 +496,9 @@ describe('NoteMenu', () => {
   });
 
   it('leaves the text colour swatch ground to the stylesheet', () => {
-    const { menu, trigger } = mountMenu();
+    const { menu, textColorTrigger } = mountMenu();
     active = menu;
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="textColor"]')!);
+    click(textColorTrigger);
 
     const swatches = menu.element.querySelectorAll<HTMLElement>(
       '.note-menu-colors .note-menu-swatch:not(.note-menu-swatch-none)',
@@ -516,19 +550,17 @@ describe('NoteMenu', () => {
   });
 
   it('applies a text colour and a highlight from their palettes', () => {
-    const { menu, trigger, handlers } = mountMenu();
+    const { menu, textColorTrigger, highlightTrigger, handlers } = mountMenu();
     active = menu;
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="textColor"]')!);
+    click(textColorTrigger);
     const colors = menu.element.querySelectorAll<HTMLElement>(
       '.note-menu-colors .note-menu-swatch',
     );
     click(colors[2]);
     expect(handlers.onSelectTextColor).toHaveBeenCalledWith('#DC2626');
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="highlight"]')!);
+    click(highlightTrigger);
     const highlights = menu.element.querySelectorAll<HTMLElement>(
       '.note-menu-highlights .note-menu-swatch',
     );
@@ -536,8 +568,7 @@ describe('NoteMenu', () => {
     expect(handlers.onSelectHighlight).toHaveBeenCalledWith('#FDE68A');
 
     // The first entry of each palette clears the mark.
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="textColor"]')!);
+    click(textColorTrigger);
     click(menu.element.querySelectorAll<HTMLElement>('.note-menu-colors .note-menu-swatch')[0]);
     expect(handlers.onSelectTextColor).toHaveBeenLastCalledWith(null);
   });

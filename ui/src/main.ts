@@ -18,7 +18,10 @@ import {
   stepFind,
 } from './editor/find.ts';
 import { FindBar } from './ui/findBar.ts';
-import { NoteMenu } from './ui/menu.ts';
+import { collapseTransition } from './ui/collapse.ts';
+import { HeaderReveal } from './ui/headerReveal.ts';
+import { QUICK_ACTIONS } from './ui/icons.ts';
+import { MenuPanel, NoteMenu } from './ui/menu.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
 import { NoteStatus } from './ui/status.ts';
@@ -57,6 +60,7 @@ let dragMoved = false;
 let isCollapsed = false;
 let noteEditor: NoteEditor | null = null;
 let noteMenu: NoteMenu | null = null;
+let headerReveal: HeaderReveal | null = null;
 let infoTooltip: NoteInfoTooltip | null = null;
 let searchPalette: SearchPalette | null = null;
 let findBar: FindBar | null = null;
@@ -217,19 +221,23 @@ function setNoteTitle(markdown: string): void {
  * the content and the Tiptap instance survive untouched.
  */
 function setCollapsed(collapsed: boolean): void {
+  const wasCollapsed = isCollapsed;
   isCollapsed = collapsed;
   if (collapsed) setNoteTitle(noteEditor?.getMarkdown() ?? '');
   document.body.setAttribute('data-collapsed', String(collapsed));
   noteMenu?.setCollapsed(collapsed);
-  // A collapsed note is a header bar. Nothing that needs room to be typed into
-  // may survive that, or it would be left hanging over a surface that no
-  // longer exists.
-  if (collapsed) {
+  // The bar is the whole of a collapsed note, so it stops hiding itself.
+  headerReveal?.setCollapsed(collapsed);
+  // A collapsed note is a header bar, and expanding one has to give the reader
+  // the text back. Both halves of that are stated in `collapseTransition`.
+  const transition = collapseTransition(wasCollapsed, collapsed);
+  if (transition.closePanels) {
     searchPalette?.close();
     findBar?.close();
     trashPanel?.close();
     noteStatus?.hide();
   }
+  if (transition.restoreCaret) noteEditor?.focus();
 }
 
 /**
@@ -352,25 +360,37 @@ function initUI(): void {
 
   const dragRegion = document.querySelector('.drag-region') as HTMLElement | null;
 
+  // The chrome is laid over the paper, so something has to decide when it is
+  // on show. Created before the menu, which holds it out while it is open.
+  const noteHeader = document.getElementById('drag-handle');
+  if (noteHeader) {
+    headerReveal = new HeaderReveal({ header: noteHeader, body: document.body });
+  }
+
   // Note settings menu. The trigger and the popover both sit outside the drag
   // region, so interacting with them can never move the window.
   const btnMenu = document.getElementById('btn-menu');
-  const btnNoteColor = document.getElementById('btn-note-color');
-  const btnTextSize = document.getElementById('btn-text-size');
   const menuMount = document.getElementById('note-controls-left');
+  // The six header actions, each bound to the panel the menu already builds.
+  // Nothing here creates a second way of changing anything.
+  const quickTriggers: Partial<Record<MenuPanel, HTMLElement>> = {};
+  for (const action of QUICK_ACTIONS) {
+    const button = document.getElementById(action.buttonId);
+    if (button) quickTriggers[action.panel] = button;
+  }
   if (btnMenu && menuMount) {
     noteMenu = new NoteMenu({
       trigger: btnMenu,
       mount: menuMount,
       colors: PAPER_COLORS,
-      quickTriggers: btnNoteColor && btnTextSize
-        ? { paper: btnNoteColor, textSize: btnTextSize }
-        : undefined,
+      quickTriggers,
       handlers: {
         onOpen: () => {
           infoTooltip?.hide();
+          headerReveal?.setHeld(true);
           syncInlineFormatting();
         },
+        onClose: () => headerReveal?.setHeld(false),
         onSelectColor: (color) => {
           setPaperColor(color);
           if (activeNoteId) {

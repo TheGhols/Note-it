@@ -116,7 +116,11 @@ describe('the Blocos menu section', () => {
   function mountMenu() {
     const mountPoint = document.createElement('div');
     const trigger = document.createElement('button');
-    mountPoint.append(trigger);
+    // Blocos is a header quick action now, so this is how the section is
+    // reached. It is still the same panel and the same handlers.
+    const blocksTrigger = document.createElement('button');
+    blocksTrigger.id = 'btn-blocks';
+    mountPoint.append(trigger, blocksTrigger);
     document.body.append(mountPoint);
 
     const handlers = {
@@ -144,9 +148,15 @@ describe('the Blocos menu section', () => {
   onOpenTrash: vi.fn(),
   onCreateBackup: vi.fn(),
     };
-    const menu = new NoteMenu({ trigger, mount: mountPoint, colors: COLORS, handlers });
+    const menu = new NoteMenu({
+      trigger,
+      mount: mountPoint,
+      colors: COLORS,
+      handlers,
+      quickTriggers: { blocks: blocksTrigger },
+    });
     active = menu;
-    return { menu, trigger, handlers };
+    return { menu, trigger, blocksTrigger, handlers };
   }
 
   function click(element: Element): void {
@@ -154,9 +164,8 @@ describe('the Blocos menu section', () => {
   }
 
   it('offers the four blocks in one section of the existing menu', () => {
-    const { menu, trigger } = mountMenu();
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    const { menu, blocksTrigger } = mountMenu();
+    click(blocksTrigger);
 
     expect(menu.activePanel()).toBe('blocks');
     const labels = Array.from(
@@ -172,7 +181,7 @@ describe('the Blocos menu section', () => {
   });
 
   it('offers every language and every callout kind', () => {
-    const { menu, trigger } = mountMenu();
+    const { menu, blocksTrigger } = mountMenu();
     menu.setBlockState({
       codeBlock: true,
       codeLanguage: 'python',
@@ -180,8 +189,7 @@ describe('the Blocos menu section', () => {
       callout: null,
       comment: false,
     });
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
     click(menu.element.querySelector('[data-panel="codeLanguage"]')!);
 
     const languages = Array.from(
@@ -237,7 +245,7 @@ describe('the Blocos menu section', () => {
   });
 
   it('reports each choice through the existing handler contract', () => {
-    const { menu, trigger, handlers } = mountMenu();
+    const { menu, blocksTrigger, handlers } = mountMenu();
     menu.setBlockState({
       codeBlock: true,
       codeLanguage: null,
@@ -245,8 +253,7 @@ describe('the Blocos menu section', () => {
       callout: null,
       comment: false,
     });
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
 
     const item = (label: string) =>
       Array.from(
@@ -257,24 +264,20 @@ describe('the Blocos menu section', () => {
     expect(handlers.onInsertComment).toHaveBeenCalledTimes(1);
     expect(menu.isOpen()).toBe(false);
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
     click(item('Citação'));
     expect(handlers.onToggleBlockquote).toHaveBeenCalledTimes(1);
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
     click(item('Bloco de código'));
     expect(handlers.onToggleCodeBlock).toHaveBeenCalledTimes(1);
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
     click(menu.element.querySelector('[data-panel="callout"]')!);
     click(menu.element.querySelector('.note-menu-callout [data-value="TIP"]')!);
     expect(handlers.onSelectCallout).toHaveBeenCalledWith('TIP');
 
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="blocks"]')!);
+    click(blocksTrigger);
     click(menu.element.querySelector('[data-panel="codeLanguage"]')!);
     click(menu.element.querySelector('.note-menu-code-language [data-value=""]')!);
     expect(handlers.onSelectCodeLanguage).toHaveBeenCalledWith(null);

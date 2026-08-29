@@ -526,6 +526,56 @@ mod tests {
         assert!(!to_desktop.hide);
     }
 
+    /// The layer transition and the collapse state never read each other.
+    ///
+    /// Phase 3.9UX.R was reported as collapse failing on the desktop layer. The
+    /// plan a layer change produces is computed from the layer, the keyboard
+    /// mode and whether the surface is mapped — and from nothing else — so a
+    /// collapsed note and an expanded one take exactly the same path. The size
+    /// floor is the mirror image: it reads the collapse and nothing about the
+    /// layer.
+    #[test]
+    fn a_layer_transition_is_decided_without_reference_to_the_collapse() {
+        for target in [LayerMode::Desktop, LayerMode::Overlay] {
+            for current in [LayerMode::Desktop, LayerMode::Overlay] {
+                let plan = plan_live_layer_transition(current, true, true, target);
+                // Both collapse states resolve the same surface geometry rules,
+                // so the plan cannot differ between them: there is no collapse
+                // input to differ on.
+                assert_eq!(plan.set_layer, current != target);
+                assert!(!plan.hide);
+            }
+        }
+    }
+
+    #[test]
+    fn the_height_floor_follows_the_collapse_and_never_the_layer() {
+        assert_eq!(min_note_height(true), COLLAPSED_NOTE_HEIGHT);
+        assert_eq!(min_note_height(false), MIN_NOTE_HEIGHT);
+
+        // Collapsing while on the desktop shrinks to the same bar it shrinks to
+        // on the overlay: the clamp has no layer input at all.
+        for collapsed in [true, false] {
+            let (_, _, _, h) = clamp_geometry_with_min_height(
+                0,
+                0,
+                360,
+                1,
+                1920,
+                1080,
+                min_note_height(collapsed),
+            );
+            assert_eq!(
+                h,
+                if collapsed {
+                    COLLAPSED_NOTE_HEIGHT
+                } else {
+                    MIN_NOTE_HEIGHT
+                }
+            );
+        }
+    }
+
     #[test]
     fn an_unchanged_live_layer_is_a_complete_no_op() {
         let plan = plan_live_layer_transition(LayerMode::Overlay, true, true, LayerMode::Overlay);

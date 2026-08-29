@@ -48,8 +48,15 @@ test-data-local/
 Thumbs.db
 .directory
 
-# Icon source drop. Phase 3.9UX uses only the two reviewed assets below; keep
-# the rest of the supplied collection local rather than accidentally shipping it.
+# Icon source drop. Only the six assets the header's quick actions are actually
+# drawn from are released; the rest of the supplied collection stays local
+# rather than being shipped by accident. Each file below is the single source
+# for one icon: the build inlines it into index.html, so nothing in the page
+# duplicates a drawing that also lives here.
 IconesNote-it/*
-!IconesNote-it/palette-round-svgrepo-com.svg
+!IconesNote-it/bucket-svgrepo-com.svg
 !IconesNote-it/larger-text-svgrepo-com.svg
+!IconesNote-it/text-svgrepo-com.svg
+!IconesNote-it/edite-svgrepo-com.svg
+!IconesNote-it/Category.svg
+!IconesNote-it/Search.svg

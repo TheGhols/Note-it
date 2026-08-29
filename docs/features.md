@@ -17,18 +17,32 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 
 ## Note Header
 
-- An expanded note keeps one transparent overlay header. Moving the pointer into its top strip
-  reveals the controls with a short transition; leaving the strip makes the chrome recede again,
-  while the same hit area remains available for dragging.
-- **Quick actions:** the existing colour and inline text-size panels open directly from the header.
-  They reuse `IconesNote-it/palette-round-svgrepo-com.svg` and
-  `IconesNote-it/larger-text-svgrepo-com.svg` as colour-adapting masks. Those are the only files
-  from the supplied icon collection included in the build.
+- An expanded note keeps one overlay header, and it paints nothing at all until it is asked for.
+  Moving the pointer into the strip along the top of the note reveals the controls over about
+  120 ms; leaving the bar lets them recede. Keyboard focus inside the header, an open quick-action
+  panel and a collapsed note each hold the chrome out on their own.
+- The editor reserves only that strip — `--note-chrome-gutter`, not the bar's full height — so the
+  note starts near its own top edge. The strip is the one part of the surface that is always a
+  pointer target, and it is exactly the editor's top padding, so no line of text ever sits under
+  it: the first line stays clickable, selectable and caret-addressable everywhere. While the
+  chrome is hidden the controls take no pointer event at all, so an invisible button can never
+  claim a click meant for the text below it.
+- **Quick actions:** six icon-only buttons, each opening a panel the menu already owns —
+  **Cor da nota**, **Tamanho do texto**, **Cor do texto**, **Marca-texto**, **Blocos** and
+  **Buscar**. None of them has logic of its own; they are a second way into the same panel and the
+  same handler. They are hidden while the note is collapsed.
+  - Their drawings are inline SVG written into `index.html` at build time from six files in the
+    supplied icon collection — `bucket`, `larger-text`, `text`, `edite`, `Category` and `Search`.
+    Those six are the only ones the build releases, and each is the single source for its icon.
+    Nothing is fetched: the page's own `default-src 'self'` blocks an image request for a CSS mask
+    or a `data:` URL, which is why the earlier masked icons came out blank on WebKitGTK.
+  - Every shape inherits `currentColor` at full strength, so one file serves all seven papers and
+    both interface themes and clears 3:1 against every one of them.
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
-  - Entries: **Tipo de papel**, **Intensidade**, **Cor do texto**, **Marca-texto**, **Blocos**,
-    **Buscar**, **Dados**, **Zoom**, **Tema**, **Camada**, and **Recolher nota** /
-    **Expandir nota**. Colour and text size live only in the two quick actions above.
+  - Entries: **Tipo de papel**, **Intensidade**, **Dados**, **Zoom**, **Tema**, **Camada**, and
+    **Recolher nota** / **Expandir nota**. The six quick actions are not repeated here — one
+    function, one place to reach it — but the panels they open are the menu's own.
   - The menu shows the current paper, intensity, zoom, theme and layer on their own rows, so none
     of them depends on opening a submenu or knowing a shortcut.
   - On a short note the popover is capped at the WebView's remaining height and scrolls vertically;

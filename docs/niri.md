@@ -135,6 +135,32 @@ Because a spawned invocation is handed to the running instance through the
 single-instance dispatcher, the environment it is spawned with does not matter:
 the instance that already owns the notes is the one that acts on them.
 
+### What the Matrix Says, and What It Cannot
+
+Collapse was reported as failing on the desktop layer. Running every trigger
+against a real Niri session, with an isolated store and a private bus, found
+the collapse itself working in both layers and through every entry point:
+the menu's **Recolher nota**, `Ctrl+Shift+M`, and `toggle-collapse-all`, before
+a layer change, after one, and in both directions of one. The surface really
+does shrink to its bar on `bottom`, occluded or not.
+
+What is layer-specific is reach, not collapse. `Ctrl+Shift+M` is a key event in
+the note's own WebView, so it needs the note to hold keyboard focus, and a
+`bottom` surface sits behind every window: once focus has gone elsewhere there
+is nothing left to click. On the overlay layer the note is on top and one click
+brings focus back, which is why the same chord appears to work there and not
+here. The way back is the compositor bindings, which is exactly what they are
+for — `Ctrl+Shift+Space` to promote the notes, or `Mod+Shift+M` to collapse and
+expand them all without focusing anything.
+
+The synthetic suites cover what a process can decide on its own: that a layer
+change never alters a note's `collapsed` flag, that a collapse never alters the
+layer, that either order produces exactly one change of each, and that no chord
+fires twice (`src/state.rs`, `src/layer_shell.rs`, `ui/tests/layer_collapse.test.ts`).
+Whether the compositor still routes the keyboard to a `bottom` surface, and
+whether clicking one restores focus to it, are Niri's answers and have to be
+asked of a running session.
+
 ## The System Theme and the Desktop
 
 **Tema → Sistema** follows the desktop's colour scheme, read inside the WebView through

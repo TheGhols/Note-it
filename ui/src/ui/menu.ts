@@ -54,7 +54,7 @@ const PAPER_COLOR_NAMES: Record<PaperColor, string> = {
   black: 'Preto',
 };
 
-type MenuPanel =
+export type MenuPanel =
   | 'root'
   | 'paper'
   | 'paperType'
@@ -79,11 +79,15 @@ export interface NoteMenuOptions {
   mount: HTMLElement;
   colors: readonly PaperColor[];
   handlers: NoteMenuHandlers;
-  /** The two header actions that open existing panels directly. */
-  quickTriggers?: {
-    paper: HTMLElement;
-    textSize: HTMLElement;
-  };
+  /**
+   * Header buttons that open an existing panel directly.
+   *
+   * A quick action is a second way in, never a second implementation: the
+   * button is bound to a panel this menu already builds, so Cor da nota and
+   * the menu's own paper panel are the same panel and go through the same
+   * handler.
+   */
+  quickTriggers?: Partial<Record<MenuPanel, HTMLElement>>;
   /** Defaults to the document owning the trigger. */
   document?: Document;
 }
@@ -173,9 +177,6 @@ export class NoteMenu {
       paperIntensityItem.lastElementChild,
     );
 
-    const textColorItem = this.createSubmenuItem('Cor do texto', 'textColor');
-    const highlightItem = this.createSubmenuItem('Marca-texto', 'highlight');
-
     const zoomItem = this.createSubmenuItem('Zoom', 'zoom');
     this.zoomValue = this.doc.createElement('span');
     this.zoomValue.className = 'note-menu-value';
@@ -186,8 +187,6 @@ export class NoteMenu {
     this.themeValue.className = 'note-menu-value';
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
-    const blocksItem = this.createSubmenuItem('Blocos', 'blocks');
-    const searchItem = this.createSubmenuItem('Buscar', 'search');
     const dataItem = this.createSubmenuItem('Dados', 'data');
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
@@ -208,13 +207,14 @@ export class NoteMenu {
     // update them without rebuilding anything.
     const blocksPanel = this.buildBlocksPanel();
 
+    // The root holds what the header bar does not. Cor da nota, Tamanho do
+    // texto, Cor do texto, Marca-texto, Blocos and Buscar are one click away
+    // in the bar, so repeating them here would be two places to find the same
+    // panel and two places to keep in step. The panels themselves are still
+    // built above and are still the only ones any of those buttons opens.
     rootPanel.append(
       paperTypeItem,
       paperIntensityItem,
-      textColorItem,
-      highlightItem,
-      blocksItem,
-      searchItem,
       dataItem,
       zoomItem,
       themeItem,
@@ -308,9 +308,8 @@ export class NoteMenu {
     this.root.addEventListener('pointerdown', (event) => event.stopPropagation());
 
     this.bindTrigger(options.trigger, 'root');
-    if (options.quickTriggers) {
-      this.bindTrigger(options.quickTriggers.paper, 'paper');
-      this.bindTrigger(options.quickTriggers.textSize, 'textSize');
+    for (const [panel, trigger] of Object.entries(options.quickTriggers ?? {})) {
+      if (trigger) this.bindTrigger(trigger, panel as MenuPanel);
     }
 
     this.doc.addEventListener('pointerdown', this.handleDocumentPointerDown, true);
