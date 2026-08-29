@@ -580,6 +580,50 @@ mod tests {
     }
 
     #[test]
+    fn a_trash_listing_shows_the_words_and_never_the_storage_around_them() {
+        // 3.9UX.R.1. The trash is a presentation surface like any other and
+        // reads notes through the same projection search does.
+        let store = store();
+        let id = Uuid::new_v4();
+        write_note(
+            &store.notes,
+            &id,
+            concat!(
+                "# <mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">",
+                "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>",
+                "</mark>\n\n**OBSERVAÇÃO:** MARCADOR-8391\n\n",
+                "<!-- esse é um comentário de teste -->",
+            ),
+        );
+        move_to_trash(&store.notes, &store.trash, &id, now()).expect("move to trash");
+
+        let entries = list_trash(&store.trash);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "teste de verdade");
+        assert!(entries[0].snippet.contains("OBSERVAÇÃO: MARCADOR-8391"));
+        assert!(entries[0].snippet.contains("esse é um comentário de teste"));
+
+        for spelling in [
+            "data-note-it-color",
+            "data-note-it-highlight",
+            "<span",
+            "<mark",
+            "<!--",
+            "**",
+            "note_it",
+        ] {
+            assert!(
+                !entries[0].label.contains(spelling),
+                "label leaks {spelling:?}"
+            );
+            assert!(
+                !entries[0].snippet.contains(spelling),
+                "snippet leaks {spelling:?}",
+            );
+        }
+    }
+
+    #[test]
     fn the_trash_is_listed_with_the_most_recently_deleted_first() {
         let store = store();
         let mut ids = Vec::new();

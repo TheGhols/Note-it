@@ -1290,6 +1290,73 @@ mod tests {
     }
 
     #[test]
+    fn presenting_and_searching_a_formatted_note_writes_nothing_and_moves_no_date() {
+        // 3.9UX.R.1. Presentation reads. Naming a note in a list, quoting it
+        // in a result and answering a query all happen without opening a file
+        // for writing, so nothing about how a note is *shown* can charge the
+        // reader an edit.
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = concat!(
+            "# <mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">",
+            "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>",
+            "</mark>\n\n**OBSERVAÇÃO:** MARCADOR-8391\n\n",
+            "<!-- esse é um comentário de teste -->",
+        )
+        .to_string();
+        doc.metadata.updated_at = Some(at(1_000));
+        manager.save_note_atomic(&doc).expect("save note");
+
+        let path = manager.note_path(&doc.metadata.id);
+        let bytes_before = fs::read(&path).expect("read note");
+        let modified_before = fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .expect("modification time");
+
+        for query in ["", "verdade", "MARCADOR-8391", "data-note-it-color"] {
+            let bodies = manager.read_note_bodies_by_recency();
+            let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
+            let results = if query.is_empty() {
+                crate::search::recent_notes(notes)
+            } else {
+                crate::search::search_notes(query, notes)
+            };
+            for result in &results {
+                assert!(!result.label.contains("data-note-it-"));
+                assert!(!result.snippet.contains("data-note-it-"));
+            }
+        }
+
+        // The attribute is storage, so it finds nothing; the words find the
+        // note, and the label is the phrase rather than the span around it.
+        assert!(search_finds(&manager, "data-note-it-color").is_empty());
+        assert_eq!(
+            search_finds(&manager, "teste de verdade"),
+            vec![doc.metadata.id]
+        );
+
+        assert_eq!(fs::read(&path).expect("read note"), bytes_before);
+        assert_eq!(
+            fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .expect("modification time"),
+            modified_before,
+        );
+        let reread = NoteDocument::parse(&String::from_utf8(bytes_before).expect("utf8"))
+            .expect("parse note");
+        assert_eq!(reread.metadata.updated_at, Some(at(1_000)));
+        assert_eq!(reread.content, doc.content);
+    }
+
+    #[test]
     fn a_trashed_note_is_not_searchable() {
         let tmp = tempdir().expect("tempdir");
         let (manager, id) = store_with_one_note(&tmp, "MARCADOR-LIXEIRA-8391 no corpo");

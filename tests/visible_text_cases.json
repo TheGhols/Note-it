@@ -1,0 +1,205 @@
+[
+  {
+    "name": "plain text is already what the reader sees",
+    "stored": "Comprar madeira amanhã",
+    "visible": "Comprar madeira amanhã"
+  },
+  {
+    "name": "every heading level reads as its words",
+    "stored": "# H1\n\n## H2\n\n### H3\n\n#### H4\n\n##### H5\n\n###### H6",
+    "visible": "H1\n\nH2\n\nH3\n\nH4\n\nH5\n\nH6"
+  },
+  {
+    "name": "a hash inside a word is part of the word",
+    "stored": "#urgente hoje",
+    "visible": "#urgente hoje"
+  },
+  {
+    "name": "bold, italic, strike, underline and code",
+    "stored": "a **forte** b *itálico* c ~~riscado~~ d <u>sublinhado</u> e `código` f",
+    "visible": "a forte b itálico c riscado d sublinhado e código f"
+  },
+  {
+    "name": "a coloured run reads as the phrase",
+    "stored": "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>",
+    "visible": "teste de verdade"
+  },
+  {
+    "name": "a highlighted run reads as the phrase",
+    "stored": "<mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">teste de verdade</mark>",
+    "visible": "teste de verdade"
+  },
+  {
+    "name": "colour nested inside a highlight",
+    "stored": "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\"><mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">teste de verdade</mark></span>",
+    "visible": "teste de verdade"
+  },
+  {
+    "name": "a highlight with no colour attribute",
+    "stored": "<mark>teste de verdade</mark>",
+    "visible": "teste de verdade"
+  },
+  {
+    "name": "an explicit text size",
+    "stored": "<span data-note-it-font-size=\"22\" style=\"font-size:22px\">texto grande</span>",
+    "visible": "texto grande"
+  },
+  {
+    "name": "size and colour nested together",
+    "stored": "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\"><span data-note-it-font-size=\"22\" style=\"font-size:22px\">grande e colorido</span></span>",
+    "visible": "grande e colorido"
+  },
+  {
+    "name": "a heading carrying every inline mark at once",
+    "stored": "## <mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">**Título** <span data-note-it-color=\"#64748B\" style=\"color:#64748B\">colorido</span></mark>",
+    "visible": "Título colorido"
+  },
+  {
+    "name": "bold with a colon, as reported",
+    "stored": "**OBSERVAÇÃO:** algo importante",
+    "visible": "OBSERVAÇÃO: algo importante"
+  },
+  {
+    "name": "a Note-it comment reads as its text",
+    "stored": "<!-- esse é um comentário de teste -->",
+    "visible": "esse é um comentário de teste"
+  },
+  {
+    "name": "a comment that carries an escaped terminator",
+    "stored": "<!-- seta --&gt; final -->",
+    "visible": "seta --> final",
+    "readerTyped": true
+  },
+  {
+    "name": "a comment spanning several lines",
+    "stored": "<!-- linha um\nlinha dois -->",
+    "visible": "linha um\nlinha dois"
+  },
+  {
+    "name": "a comment before the note's own text",
+    "stored": "<!-- oculto -->\n\nvisível",
+    "visible": "oculto\n\nvisível"
+  },
+  {
+    "name": "a callout shows its body, never its marker",
+    "stored": "> [!WARNING]\n> Cuidado com isso",
+    "visible": "\nCuidado com isso"
+  },
+  {
+    "name": "an unknown callout marker is text somebody typed",
+    "stored": "> \\[!FOO\\]\n> texto",
+    "visible": "[!FOO]\ntexto"
+  },
+  {
+    "name": "a blockquote reads as the quotation",
+    "stored": "> uma citação",
+    "visible": "uma citação"
+  },
+  {
+    "name": "a nested blockquote",
+    "stored": "> > citação dupla",
+    "visible": "citação dupla"
+  },
+  {
+    "name": "bullet and ordered lists",
+    "stored": "- um\n- dois\n\n1. primeiro\n2. segundo",
+    "visible": "um\ndois\n\nprimeiro\nsegundo"
+  },
+  {
+    "name": "a nested list keeps every item",
+    "stored": "- pai\n  - filho\n    - neto",
+    "visible": "pai\nfilho\nneto"
+  },
+  {
+    "name": "task boxes are drawing, not words",
+    "stored": "- [ ] pendente\n- [x] feito",
+    "visible": "pendente\nfeito"
+  },
+  {
+    "name": "a task's completion metadata is never on screen",
+    "stored": "- [x] feito <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->",
+    "visible": "feito"
+  },
+  {
+    "name": "a metadata comment on a line of its own disappears",
+    "stored": "<!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->\ntexto",
+    "visible": "\ntexto"
+  },
+  {
+    "name": "a coloured task",
+    "stored": "- [ ] <span data-note-it-color=\"#64748B\" style=\"color:#64748B\">colorida</span>",
+    "visible": "colorida"
+  },
+  {
+    "name": "a link reads as its words",
+    "stored": "veja [a proposta](https://exemplo.com/proposta) hoje",
+    "visible": "veja a proposta hoje"
+  },
+  {
+    "name": "an image reads as its alternative text",
+    "stored": "![diagrama do fígado](https://exemplo.com/a.png)",
+    "visible": "diagrama do fígado"
+  },
+  {
+    "name": "a code span is shown exactly as typed",
+    "stored": "use `data-note-it-color` no CSS",
+    "visible": "use data-note-it-color no CSS",
+    "readerTyped": true
+  },
+  {
+    "name": "a fenced block is its code and not its fence",
+    "stored": "```rust\nlet cor = \"#64748B\";\n```",
+    "visible": "let cor = \"#64748B\";"
+  },
+  {
+    "name": "a horizontal rule says nothing",
+    "stored": "antes\n\n---\n\ndepois",
+    "visible": "antes\n\n\n\ndepois"
+  },
+  {
+    "name": "escaped punctuation reads as the punctuation",
+    "stored": "multiplique 3 \\* 4 e veja arquivo note\\_it\\_config.toml",
+    "visible": "multiplique 3 * 4 e veja arquivo note_it_config.toml"
+  },
+  {
+    "name": "an unpaired delimiter is the character it is",
+    "stored": "isto contém .* mesmo assim",
+    "visible": "isto contém .* mesmo assim"
+  },
+  {
+    "name": "an underscore inside a word is not emphasis",
+    "stored": "arquivo note_it_config.toml aqui",
+    "visible": "arquivo note_it_config.toml aqui"
+  },
+  {
+    "name": "delimiters with spaces around them are not emphasis",
+    "stored": "a ** b ** c",
+    "visible": "a ** b ** c"
+  },
+  {
+    "name": "entities read as the characters they stand for",
+    "stored": "a &amp; b &lt; c &gt; d",
+    "visible": "a & b < c > d"
+  },
+  {
+    "name": "a tag the reader typed survives, because it is stored escaped",
+    "stored": "eu escrevi &lt;span data-note-it-color=\"#fff\"&gt; num texto",
+    "visible": "eu escrevi <span data-note-it-color=\"#fff\"> num texto",
+    "readerTyped": true
+  },
+  {
+    "name": "accents, emoji and other scripts are untouched",
+    "stored": "🎉 festa <span data-note-it-color=\"#64748B\" style=\"color:#64748B\">ação</span> 日本語",
+    "visible": "🎉 festa ação 日本語"
+  },
+  {
+    "name": "a note with nothing in it projects to nothing",
+    "stored": "",
+    "visible": ""
+  },
+  {
+    "name": "a note of only blank lines projects to nothing",
+    "stored": " \n\t\n",
+    "visible": ""
+  }
+]

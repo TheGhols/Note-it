@@ -81,6 +81,13 @@ export default defineConfig({
       // the icon drop, and that every file the page uses is one of them.
       gitignore: readFileSync(fileURLToPath(new URL('../.gitignore', import.meta.url)), 'utf8'),
       mathSources: mathSources(),
+      // The host and the page each carry a `stored note -> visible text`
+      // projection, and two implementations only *described* as equivalent
+      // drift. Both test suites are held to this one corpus, so they cannot.
+      visibleTextCases: readFileSync(
+        fileURLToPath(new URL('../tests/visible_text_cases.json', import.meta.url)),
+        'utf8',
+      ),
       // The documented unit table has to be the table the application ships,
       // so the test that compares them reads the real file.
       featuresDoc: readFileSync(

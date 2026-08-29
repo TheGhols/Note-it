@@ -14,6 +14,7 @@
 //! invalidated, rebuilt after an external edit, versioned, backed up and
 //! recovered after a crash. See ADR-027 for the measurements behind that.
 
+use crate::visible_text::visible_text;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -188,53 +189,19 @@ pub fn prepare_query(query: &str) -> Option<Folded> {
     Some(folded)
 }
 
-/// Markers that name a line's *kind* rather than saying anything, removed so a
-/// heading reads as its words in the result list. The file is never touched:
-/// this is presentation, exactly as a calculated result is.
-fn strip_markdown_markers(line: &str) -> &str {
-    let mut text = line.trim();
-
-    loop {
-        let before = text;
-        text = text.trim_start_matches('>').trim_start();
-        if let Some(rest) = text
-            .strip_prefix("- [ ]")
-            .or_else(|| text.strip_prefix("- [x]"))
-        {
-            text = rest.trim_start();
-        } else if let Some(rest) = text
-            .strip_prefix("- ")
-            .or_else(|| text.strip_prefix("* "))
-            .or_else(|| text.strip_prefix("+ "))
-        {
-            text = rest.trim_start();
-        } else if text.starts_with('#') {
-            let hashes = text.trim_start_matches('#');
-            // `#tag` is a word, `# Título` is a heading.
-            if hashes.starts_with(' ') {
-                text = hashes.trim_start();
-            }
-        }
-        if text == before {
-            break;
-        }
-    }
-
-    text.trim_end()
-}
-
 /// A name for the note, taken from its first line with something on it.
 ///
 /// Note-it has no title field and is not about to grow one: a title would be
 /// content the reader did not write. The first line is what a person would
-/// point at if asked which note this is, so that is what the list shows.
+/// point at if asked which note this is, so that is what the list shows — as
+/// the reader sees that line, not as the file spells it.
 pub fn label_for(content: &str) -> String {
-    let line = content
-        .lines()
-        .map(strip_markdown_markers)
-        .find(|line| !line.is_empty());
+    label_of_visible(&visible_text(content))
+}
 
-    match line {
+/// The same, for a caller that has already projected the note.
+fn label_of_visible(visible: &str) -> String {
+    match visible.lines().map(str::trim).find(|line| !line.is_empty()) {
         None => EMPTY_LABEL.to_string(),
         Some(line) => truncate_chars(line, MAX_LABEL_CHARS),
     }
@@ -295,7 +262,7 @@ fn snippet_around(content: &str, from: usize) -> String {
 /// The same window an empty query gives a result, so a note looks the same
 /// wherever it is listed — the search palette and the trash included.
 pub fn opening_of(content: &str) -> String {
-    snippet_around(content, 0)
+    snippet_around(&visible_text(content), 0)
 }
 
 /// Counts every occurrence and returns where the first one starts.
@@ -321,17 +288,23 @@ fn locate(haystack: &Folded, needle: &str) -> Option<(usize, usize)> {
 
 /// Searches one note, returning a result only when the query occurs in it.
 pub fn search_note(query: &Folded, note_id: Uuid, content: &str) -> Option<SearchResult> {
-    let folded = fold(content);
+    // Everything below happens on the note as the reader sees it, which is
+    // what makes `data-note-it-color` unfindable: the attribute is not in the
+    // text, so there is nothing to match. It also makes `matched_text` a
+    // phrase the editor's own find can locate, since that searches the
+    // document rather than the file.
+    let visible = visible_text(content);
+    let folded = fold(&visible);
     let (start, count) = locate(&folded, &query.text)?;
-    let from = source_offset_of(content, start);
-    let to = source_offset_of(content, start + query.text.len());
+    let from = source_offset_of(&visible, start);
+    let to = source_offset_of(&visible, start + query.text.len());
 
     Some(SearchResult {
         note_id,
-        label: label_for(content),
-        snippet: snippet_around(content, from),
+        label: label_of_visible(&visible),
+        snippet: snippet_around(&visible, from),
         match_count: count,
-        matched_text: content[from..to.max(from)].to_string(),
+        matched_text: visible[from..to.max(from)].to_string(),
     })
 }
 
@@ -377,12 +350,15 @@ where
     notes
         .into_iter()
         .take(MAX_RESULTS)
-        .map(|(note_id, content)| SearchResult {
-            note_id,
-            label: label_for(content),
-            snippet: snippet_around(content, 0),
-            match_count: 0,
-            matched_text: String::new(),
+        .map(|(note_id, content)| {
+            let visible = visible_text(content);
+            SearchResult {
+                note_id,
+                label: label_of_visible(&visible),
+                snippet: snippet_around(&visible, 0),
+                match_count: 0,
+                matched_text: String::new(),
+            }
         })
         .collect()
 }
@@ -618,6 +594,222 @@ mod tests {
         assert_eq!(found("🎉", &notes), vec![id(1)]);
         assert_eq!(found("日本語", &notes), vec![id(2)]);
         assert_eq!(found("amanha", &notes), vec![id(1)]);
+    }
+
+    /// A note using every mark Note-it can write, as its own serializer
+    /// spells them. The stored text is the source of truth; none of it is
+    /// something a reader typed except the words.
+    const FORMATTED: &str = concat!(
+        "# <mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">",
+        "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>",
+        "</mark>\n",
+        "\n",
+        "**OBSERVAÇÃO:** um *itálico*, um ~~riscado~~ e um <u>sublinhado</u>.\n",
+        "\n",
+        "<span data-note-it-font-size=\"22\" style=\"font-size:22px\">texto grande</span>\n",
+        "\n",
+        "<!-- esse é um comentário de teste -->\n",
+        "\n",
+        "> [!WARNING]\n",
+        "> Cuidado com a agulha\n",
+        "\n",
+        "- [x] comprar pão <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->\n",
+    );
+
+    /// Every spelling of Note-it's storage that could reach a reader's eye.
+    const STORAGE_SPELLINGS: &[&str] = &[
+        "data-note-it-color",
+        "data-note-it-highlight",
+        "data-note-it-font-size",
+        "note-it:completed_at",
+        "<span",
+        "</span>",
+        "<mark",
+        "</mark>",
+        "<u>",
+        "<!--",
+        "-->",
+        "background-color",
+        "font-size:22px",
+        "[!WARNING]",
+    ];
+
+    #[test]
+    fn a_label_shows_the_words_and_never_the_storage_around_them() {
+        // 3.9UX.R.1. The reported leak: a coloured phrase was named after the
+        // span Note-it wrapped it in.
+        assert_eq!(
+            label_for(
+                "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>"
+            ),
+            "teste de verdade"
+        );
+        assert_eq!(
+            label_for(
+                concat!(
+                    "<mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">",
+                    "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">teste de verdade</span>",
+                    "</mark>",
+                )
+            ),
+            "teste de verdade"
+        );
+        assert_eq!(label_for("**OBSERVAÇÃO:** algo"), "OBSERVAÇÃO: algo");
+        assert_eq!(label_for("*itálico*"), "itálico");
+        assert_eq!(label_for("~~riscado~~"), "riscado");
+        assert_eq!(label_for("<u>sublinhado</u>"), "sublinhado");
+        assert_eq!(
+            label_for("<span data-note-it-font-size=\"22\" style=\"font-size:22px\">grande</span>"),
+            "grande"
+        );
+        assert_eq!(
+            label_for("<!-- esse é um comentário de teste -->"),
+            "esse é um comentário de teste"
+        );
+        assert_eq!(label_for("> [!WARNING]\n> Cuidado"), "Cuidado");
+        assert_eq!(label_for(FORMATTED), "teste de verdade");
+    }
+
+    #[test]
+    fn no_result_carries_a_shred_of_the_storage_it_came_from() {
+        let notes = [(id(1), FORMATTED)];
+
+        let mut surfaces = vec![
+            label_for(FORMATTED),
+            opening_of(FORMATTED),
+            recent_notes(notes.iter().copied())[0].label.clone(),
+            recent_notes(notes.iter().copied())[0].snippet.clone(),
+        ];
+        for query in ["verdade", "observação", "agulha", "comentário", "pão"] {
+            let results = search_notes(query, notes.iter().copied());
+            assert_eq!(results.len(), 1, "{query:?} has to find the note");
+            surfaces.push(results[0].label.clone());
+            surfaces.push(results[0].snippet.clone());
+            surfaces.push(results[0].matched_text.clone());
+        }
+
+        for surface in &surfaces {
+            for spelling in STORAGE_SPELLINGS {
+                assert!(
+                    !surface.contains(spelling),
+                    "{spelling:?} reached a reader in {surface:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_names_note_it_invented_are_not_words_a_query_can_find() {
+        // Serialization is not text: a note is found by what it says, and it
+        // says nothing about the attributes it happens to be stored with.
+        let notes = [(id(1), FORMATTED)];
+        for query in STORAGE_SPELLINGS {
+            assert!(
+                found(query, &notes).is_empty(),
+                "{query:?} matched the storage rather than the note",
+            );
+        }
+        // ...and the words in the same note are all still found.
+        for query in ["teste de verdade", "OBSERVAÇÃO", "sublinhado", "grande"] {
+            assert_eq!(found(query, &notes), vec![id(1)], "{query:?} must be found");
+        }
+    }
+
+    #[test]
+    fn a_reader_who_really_wrote_the_attribute_still_finds_it() {
+        // The other half of the contract. A `<` somebody types is stored as
+        // `&lt;`, so text about Note-it's own markup is text like any other.
+        let typed = "eu escrevi &lt;span data-note-it-color=\"#fff\"&gt; num texto";
+        assert_eq!(
+            label_for(typed),
+            "eu escrevi <span data-note-it-color=\"#fff\"> num texto"
+        );
+        assert_eq!(found("data-note-it-color", &[(id(1), typed)]), vec![id(1)]);
+        // The same word inside a code span is source somebody typed too.
+        let quoted = "use `data-note-it-color` no CSS";
+        assert_eq!(found("data-note-it-color", &[(id(2), quoted)]), vec![id(2)]);
+    }
+
+    #[test]
+    fn the_matched_text_is_a_phrase_the_editor_can_find_again() {
+        // What travels back is what the note *shows*, because that is what the
+        // editor's own find searches. A slice of a `<span>` could never be
+        // revealed in the document.
+        let content =
+            "<mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">Biópsia hepática</mark>";
+        let results = search_notes("biopsia hepatica", [(id(1), content)]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].matched_text, "Biópsia hepática");
+    }
+
+    #[test]
+    fn folding_still_reaches_across_the_marks_a_phrase_was_split_by() {
+        // Half a phrase in one colour and half in another is one phrase to the
+        // reader, so it is one phrase to search.
+        let content = concat!(
+            "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">Biópsia</span>",
+            " <mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">hepática</mark>",
+        );
+        let results = search_notes("biopsia hepatica", [(id(1), content)]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].matched_text, "Biópsia hepática");
+        assert_eq!(results[0].label, "Biópsia hepática");
+    }
+
+    #[test]
+    fn presentation_keeps_accents_emoji_and_other_scripts_exactly() {
+        let content = concat!(
+            "# 🎉 <span data-note-it-color=\"#64748B\" style=\"color:#64748B\">ação</span> ",
+            "日本語 — coração\n",
+        );
+        assert_eq!(label_for(content), "🎉 ação 日本語 — coração");
+
+        let results = search_notes("coracao", [(id(1), content)]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].matched_text, "coração");
+        assert!(results[0].snippet.contains('🎉'));
+        assert!(results[0].snippet.contains("日本語"));
+        assert_eq!(found("🎉", &[(id(1), content)]), vec![id(1)]);
+    }
+
+    #[test]
+    fn every_heading_level_is_named_after_its_words() {
+        for level in 1..=6 {
+            let content = format!("{} Biópsia hepática\n\ncorpo", "#".repeat(level));
+            assert_eq!(label_for(&content), "Biópsia hepática");
+        }
+    }
+
+    #[test]
+    fn a_listing_shows_the_same_clean_text_a_search_does() {
+        let notes = [
+            (id(1), FORMATTED),
+            (id(2), "- [ ] <span data-note-it-color=\"#64748B\" style=\"color:#64748B\">ligar para Ana</span>"),
+            (id(3), ""),
+        ];
+        let listed = recent_notes(notes.iter().copied());
+        assert_eq!(
+            listed.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+            vec!["teste de verdade", "ligar para Ana", EMPTY_LABEL]
+        );
+        // A listing is a listing: nothing matched, so nothing is carried.
+        assert!(listed.iter().all(|result| result.match_count == 0));
+        assert!(listed.iter().all(|result| result.matched_text.is_empty()));
+    }
+
+    #[test]
+    fn projecting_for_presentation_never_touches_what_was_given() {
+        // Presentation reads. It has no opinion about the file, and nothing
+        // here could move `updated_at` because nothing here is a note.
+        let content = FORMATTED.to_string();
+        let before = content.clone();
+
+        let _ = label_for(&content);
+        let _ = opening_of(&content);
+        let _ = search_notes("verdade", [(id(1), content.as_str())]);
+        let _ = recent_notes([(id(1), content.as_str())]);
+
+        assert_eq!(content, before);
     }
 
     #[test]
