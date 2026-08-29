@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Search now does what it says it does. Four corrections, no new behaviour:
+  - **Every note is searched.** The scan stopped at 5 000 notes, so a store one note larger held a
+    note that could never be found and nothing would have reported it skipped. The scan now reads
+    the whole store; the **result** list is still capped at 100. The empty-query listing keeps its
+    cap, because it shows at most a hundred notes.
+  - **The palette drops any answer to a question it is no longer asking.** Numbering caught a slow
+    reply arriving after a fast one, but not the other order: the answer to `bio` arriving while
+    `biopsia` was still in flight was older than the current question and newer than anything
+    accepted, so it was shown. Only the outstanding request's answer can change the list.
+  - **"Most recent" is the note's own `updated_at`, not the file's date.** Changing a note's
+    colour, paper, pattern intensity or font size rewrites the file without being an edit, so
+    ordering by the file's modification time made repainting a note count as writing in it — in
+    the quick switcher and in which note a summon brought back. A note with no readable
+    `updated_at` falls back to the file's date, exactly as before, and ties are broken by
+    identifier. Listing still writes nothing.
+  - **The documented limits now say what they bound.** 512 characters of query, 100 results and
+    ~240 characters of snippet are ceilings on the question and on the answer; they never bounded
+    the size of a note, and search reads a note to its end because a word at the end has to be
+    findable. The cost of a large note is measured — a 2 MB note is searched correctly, accents
+    intact, writing nothing — rather than described as bounded.
 - The isolated test harness now isolates the **session bus** as well as the XDG directories.
   Note-it is a single-instance `GApplication`: with a daemon already running on the real bus, an
   "isolated" command was handed to that daemon over D-Bus and the real store did the writing, so
@@ -41,8 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `updated_at`, and none of it changes the Desktop/Overlay layer.
   - Results are addressed by `note_id`. The WebView cannot name a path, so it cannot ask for one.
   - Explicit limits: 512 characters of query, 100 results, ~240 characters of snippet. Typing is
-    debounced by 120 ms and every request is numbered, so a slow answer to `bio` can never replace
-    a newer answer to `biopsia`.
+    debounced by 120 ms and every request is numbered, so an answer to `bio` can never replace a
+    newer answer to `biopsia`.
   - Searching writes nothing: no flush, no save, no index file, no `state.json` entry.
 - Find and replace inside the current note:
   - `Ctrl+F` finds, with a live count, `Enter`/`Shift+Enter` to walk the occurrences and wrapping at

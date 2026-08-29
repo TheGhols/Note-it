@@ -49,13 +49,14 @@ export class SearchPalette {
   /**
    * Which request the palette is waiting for.
    *
-   * Every query carries a number and only the newest number is accepted. A
-   * slow answer to `bio` arriving after a fast answer to `biopsia` is dropped
-   * rather than replacing what the reader is looking at — the list must never
-   * go backwards.
+   * Every query carries a number, and the only answer allowed to change the
+   * list is the answer to the question currently being asked. That covers both
+   * ways an old reply can arrive: after the new one, and — the case a
+   * "never go backwards" rule misses — *before* it, while the newer request is
+   * still in flight. Once `biopsia` has been asked, the answer to `bio` is
+   * stale whenever it turns up.
    */
   private lastRequestId = 0;
-  private acceptedRequestId = 0;
   private debounce: number | null = null;
 
   public constructor(options: SearchPaletteOptions) {
@@ -136,8 +137,7 @@ export class SearchPalette {
    */
   public showResults(requestId: number, results: SearchResult[]): void {
     if (!this.open) return;
-    if (requestId < this.acceptedRequestId) return;
-    this.acceptedRequestId = requestId;
+    if (requestId !== this.lastRequestId) return;
     this.results = results;
     this.selected = 0;
     this.renderResults();

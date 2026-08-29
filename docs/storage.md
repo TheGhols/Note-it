@@ -90,9 +90,20 @@ fabricated date, and re-saving the note does not invent one either.
 ## Which Note a Summon Brings Back
 
 When every note is closed, the application reopens the most recently written
-one, ordered by the files' own `mtime`. Because an unchanged note is never
-rewritten, that ordering follows the last real **edit** rather than the last
-close: closing a note you did not type in does not move it to the front.
+one, ordered by each note's own `updated_at` — the front matter field that
+records the last change to its **text**. Closing a note you did not type in
+does not move it to the front, because an unchanged note is never rewritten;
+neither does changing its colour, paper, pattern intensity or font size, which
+rewrites the file but is not an edit. A note with no readable `updated_at` —
+one written before the field existed, one with no front matter, one whose
+header cannot be parsed — falls back to the file's own `mtime`, which is what
+every note used before there was a field to read. Ties are broken by
+identifier, so the same store always lists in the same order.
+
+The same ordering is what search and the quick switcher show, so "most recent"
+means one thing throughout the application. Reading it costs a bounded read of
+each note's head; nothing is written, and an unreadable header costs that note
+its timestamp rather than failing the listing.
 
 This is the intended reading of "the note used last" — the note actually
 written in. Reopening, summoning and single-instance dispatch are unaffected.

@@ -135,8 +135,14 @@ cargo test --release searching_a_thousand_notes -- --nocapture
 It builds a thousand notes in a temporary directory, runs four queries — one matching a few notes,
 one matching all of them, one matching none, one with accents — end to end through listing,
 reading, folding, matching and snippets, prints each timing and asserts the notes' modification
-times did not move. On the development machine the whole scan is around 18–20 ms per query in
-release and under 90 ms in debug.
+times did not move. On the development machine the whole scan is around 26–40 ms per query in
+release and under 200 ms in debug.
+
+Phase 3.8R roughly doubled that from the 18–20 ms it was, and the cause is not the removed scan
+ceiling: it is ordering by each note's own `updated_at`, which means opening every note's header
+and parsing it. About half the added time is the reads and half is the YAML. It buys "most recent"
+meaning the same thing everywhere — a repainted note is not a written-in note — and 40 ms is still
+well inside the 120 ms the palette waits before asking at all.
 
 That is the number ADR-027 rests on. If it stops being comfortable, the evidence for adding an
 index will be in the test output, which is where it should be — not in a hunch.

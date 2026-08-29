@@ -219,7 +219,7 @@
 - [x] Global search across every note, opened with `Ctrl+K` from any note. Case-insensitive and
       accent-insensitive, so `biopsia` finds `Biópsia` — the property Portuguese needs most.
 - [x] No persistent index. A thousand notes are listed, read, folded, matched and turned into
-      snippets in about 20 ms, which is faster than anything a person can notice and cheaper than
+      snippets in tens of milliseconds, which is faster than anything a person can notice and cheaper than
       an index that would have to be invalidated, rebuilt and kept honest. The measurement is a
       test, so the claim keeps being checked — see ADR-027.
 - [x] Search lives in `src/search.rs` and `StorageManager`, not in the window or the WebView: it
@@ -240,6 +240,33 @@
       leads, which is a security regression sold as tidiness. Recorded in ADR-027 rather than
       quietly skipped.
 
+### Phase 3.8R: Search Refinement (Completed)
+
+Four things Phase 3.8 said that were not quite what it did. No new feature, no fuzzy search, no
+index, no threads — the smallest correct change to each, and a test for each. See ADR-027.1.
+
+- [x] "Every note" now means every note. The scan stopped at 5 000, so the 5 001st note was
+      unfindable and nothing would have said so. The scan reads the whole store; the **result**
+      list is still capped at 100, because a hundred rows is what a person reads and the reader can
+      see there are a hundred. A test puts a note at position 5 001 and finds it.
+- [x] The empty-query listing keeps its cap: it shows at most a hundred notes, so reading past them
+      would answer no question.
+- [x] The search palette drops any answer to a question that is no longer being asked. Numbering
+      caught a slow reply arriving *after* a fast one and missed the opposite order — `bio`
+      answering while `biopsia` is still in flight. Only the outstanding request's answer may
+      change the list.
+- [x] The limits are described as what they are: ceilings on the query and on the answer, not on
+      the note. Search reads a note to its end, because a word at the end has to be findable. The
+      cost of a large note is measured — a 2 MB note is searched correctly, with its accents
+      intact and without writing — rather than claimed to be bounded. No asynchronous machinery was
+      introduced to make a sentence true; the sentence was corrected.
+- [x] "Most recent" is the note's own `updated_at`, not the file's `mtime`. Appearance — colour,
+      paper, pattern intensity, font size — rewrites the file without being an edit, so ordering by
+      `mtime` made repainting a note count as writing in it. A note with no readable `updated_at`
+      falls back to `mtime`, ties are broken by identifier, and listing still writes nothing.
+- [x] No regression in Search, Quick Switcher, Find, Replace, AutoPaste, the shared layer or the
+      lifecycle; `updated_at` and the undo history are untouched.
+
 ### Phase 3.9: Reliability (Planned)
 - [ ] Recoverable trash, so a deleted note is not gone.
 - [ ] Automatic backup.
@@ -255,10 +282,11 @@ Architectural evolution rather than more editor surface. Reserved, not started.
 - [ ] Filters over text, dates and tasks.
 - [ ] The foundation for AI / second-brain integration on top of that core.
 
-**Recency and the CLI.** Since Phase 3.4R, the file's `mtime` reflects the last real edit rather
-than the last close, and it is what decides which note a summon brings back when every note is
-closed. If a future phase needs "the note I last had open" as distinct from "the note I last wrote
-in", that belongs in `state.json` as explicit state, not in the filesystem's timestamps.
+**Recency and the CLI.** Since Phase 3.8R, "most recent" is the note's own `updated_at` — the last
+change to its text — with the file's `mtime` as the fallback for a note that has none. It is what
+decides which note a summon brings back when every note is closed, and what search and the quick
+switcher order by. If a future phase needs "the note I last had open" as distinct from "the note I
+last wrote in", that belongs in `state.json` as explicit state, not in the filesystem's timestamps.
 
 ## Phase 5: Packaging & Distribution (Planned)
 

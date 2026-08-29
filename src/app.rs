@@ -22,13 +22,6 @@ use uuid::Uuid;
 static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
 const LAYER_PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(180);
 
-/// How many notes one search reads at most.
-///
-/// Far above any store a person keeps, and a ceiling rather than a target: it
-/// exists so a notes directory that has somehow grown enormous costs a bounded
-/// amount instead of freezing the interface mid-keystroke.
-const SEARCH_SCAN_LIMIT: usize = 5_000;
-
 type LifecycleCallback = Box<dyn FnOnce(Result<(), String>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -817,24 +810,28 @@ impl NoteItAppClone {
     /// Answers a search, and writes nothing at all.
     ///
     /// The note bodies come off disk in the store's own recency order and go
-    /// straight into [`crate::search`]. No window is created, no note is
-    /// parsed beyond splitting its front matter, no timestamp moves and no
-    /// file is opened for writing — a thousand notes are searched with zero
-    /// additional WebViews, because a WebView is how a note is *edited* and
-    /// nobody is editing.
+    /// straight into [`crate::search`]. No window is created, no timestamp
+    /// moves and no file is opened for writing — a thousand notes are searched
+    /// with zero additional WebViews, because a WebView is how a note is
+    /// *edited* and nobody is editing.
+    ///
+    /// A query is asked of **every** note. The two paths differ only in how
+    /// much has to be read: a listing shows at most
+    /// [`search::MAX_RESULTS`](crate::search::MAX_RESULTS) notes, so reading
+    /// past that would answer no question, while a search cannot know which
+    /// note holds the word until it has looked.
     ///
     /// An empty query is not an empty answer: it lists the most recent notes,
     /// which is what makes the same control a way to move between them.
     pub fn answer_search(&self, requester: Uuid, request_id: u64, query: &str) {
         let ctx = self.context.borrow();
         let listing = query.trim().is_empty();
-        let limit = if listing {
-            search::MAX_RESULTS
-        } else {
-            SEARCH_SCAN_LIMIT
-        };
 
-        let bodies = ctx.storage.read_note_bodies_by_recency(limit);
+        let bodies = if listing {
+            ctx.storage.read_recent_note_bodies(search::MAX_RESULTS)
+        } else {
+            ctx.storage.read_note_bodies_by_recency()
+        };
         let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
         let results = if listing {
             search::recent_notes(notes)

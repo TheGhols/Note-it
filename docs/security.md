@@ -66,10 +66,21 @@ is no regex engine, so `.*`, `[a-z]` and `(foo|bar)` are those characters and co
 characters cost. Nothing is passed to a shell, to SQL or to any interpreter, because there is none
 to pass it to.
 
-The limits are explicit, so a hostile query or a pathological note costs a bounded amount: 512
-characters of query, 100 results, about 240 characters of snippet, and a scan that reads note
-bodies rather than loading a WebView for each one — searching a thousand notes creates zero
-additional WebViews.
+The limits are explicit, and they say exactly what they bound: 512 characters of query, 100
+results, about 240 characters of snippet. A query longer than the ceiling is refused rather than
+truncated, and a store of any size produces at most a hundred rows. The scan reads note bodies
+rather than loading a WebView for each one — searching a thousand notes creates zero additional
+WebViews.
+
+**What those limits do not bound is the note.** A note is a text file and anything can be pasted
+into one, and search reads all of it: finding a word at the end of a large note requires reading to
+the end of a large note, and cutting that short would mean text in the store that no search could
+ever return. So a single enormous note costs what its size costs. That cost is measured rather
+than capped — a thousand notes totalling about 1.1 MB are searched in roughly 40 ms, and a 2 MB
+single note is searched, with its accents intact and without writing anything, in
+`a_very_large_note_is_searched_correctly_and_never_written`. There is no formal guarantee that some
+arbitrarily large individual file cannot make one keystroke slow, and this document does not
+claim one.
 
 **A snippet is text.** Labels and snippets are written with `textContent`, never `innerHTML`. A
 note containing `<script>alert(1)</script>` or `<img onerror=...>` shows those characters in the

@@ -90,11 +90,14 @@ Tudo listado aqui já está implementado.
 - A busca ignora maiúsculas **e acentos**: `biopsia` encontra `Biópsia`, `coracao` encontra
   `Coração`.
 - Consulta vazia lista as notas escritas mais recentemente — o mesmo campo serve de troca rápida
-  entre notas.
+  entre notas. "Mais recente" é a última mudança de **conteúdo**: trocar a cor, o papel ou o
+  tamanho da fonte não faz uma nota subir na lista.
 - `Enter` abre o resultado: ativa a nota se já estiver aberta, abre se estiver fechada, expande se
   estiver recolhida, e leva até a ocorrência.
+- A busca olha **todas** as notas do store, sem teto de varredura; o limite de 100 é de resultados
+  exibidos, não de notas examinadas.
 - Pesquisar não escreve nada. Nenhum arquivo é salvo, nenhuma data de modificação se move, e nenhum
-  índice é criado em disco: mil notas são varridas em cerca de 20 ms.
+  índice é criado em disco: mil notas são varridas em cerca de 40 ms.
 - O que a busca encontra é o que está no arquivo. Um `4` que veio de `= 2 + 2` é decoração, não
   texto, e não aparece em busca alguma.
 

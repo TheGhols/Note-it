@@ -17,11 +17,17 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Ceilings, so a hostile or accidental input costs a fixed amount.
+/// Ceilings on the question and on the answer. None of them is a limit anybody
+/// writing a note will meet.
 ///
-/// A note is a text file and anything at all can be pasted into one, and a
-/// query arrives from a text field a person is typing into. None of these is a
-/// limit anybody writing a note will meet.
+/// What they bound is precisely this: how long a query may be, how many notes
+/// come back, and how much of a note is quoted around a match. They do **not**
+/// bound the note. A note is a text file and anything at all can be pasted
+/// into one, and every byte of it is folded and scanned — which is the
+/// contract: search finds text at the end of a large note, so it has to read
+/// to the end of a large note. A single note far beyond anything a person
+/// writes therefore costs what its size costs, and the honest statement is
+/// that this has been measured rather than that it is bounded. See ADR-027.
 pub const MAX_QUERY_CHARS: usize = 512;
 pub const MAX_RESULTS: usize = 100;
 /// How much of the note is shown around a match.
@@ -322,6 +328,10 @@ pub fn search_note(query: &Folded, note_id: Uuid, content: &str) -> Option<Searc
 }
 
 /// Every note the query occurs in, in the order they were handed over.
+///
+/// Every note is asked: the caller hands over the whole store, and what stops
+/// early here is the accumulation of *results*, never the scan of notes still
+/// unseen. Nothing else would let the interface say it searches every note.
 ///
 /// The caller decides the order, and today that is the store's own recency
 /// rule — the same one that decides which note a summon brings back, so a

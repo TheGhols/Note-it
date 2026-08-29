@@ -540,10 +540,17 @@ Neither is anything the editor merely draws. A `4` shown beside `= 2 + 2`, a `10
 | Query limit | 512 characters; longer is refused rather than truncated silently |
 | Results | 100 notes at most |
 | Snippet | About 240 characters, cut at a character boundary |
-| Order | Most recently written first |
+| Order | Most recently written in first |
+| Notes scanned | **All of them.** There is no scan ceiling — the cap is on results, not on how far the search looks |
 
 There is no stemming, no fuzzy matching and no semantic search. `biopsia` finds `biópsia`; it does
 not find `punção`. The rule is one a reader can predict, which is the point.
+
+**What the limits do not limit is the note.** They bound the query and the answer; the file is
+read to its end, because a word at the end of a long note has to be findable. A store of a thousand
+notes is searched in about 40 ms and a single 2 MB note is searched correctly and without writing
+anything — both measured by tests — but there is no formal guarantee about an arbitrarily large
+individual file, and none is claimed. See ADR-027.1.
 
 ### What a result looks like
 
@@ -563,8 +570,16 @@ Biópsia hepática                                    4
 
 ### An empty query lists recent notes
 
-Opening the palette without typing shows the most recently written notes, so the same control is
-also how you move between them. Appearing in that list is not editing: `updated_at` does not move.
+Opening the palette without typing shows the notes most recently **written in**, so the same
+control is also how you move between them. Appearing in that list is not editing: `updated_at` does
+not move.
+
+"Most recently written in" is the note's own `updated_at`, not the date on the file. Changing a
+note's colour, paper, pattern intensity or font size rewrites the file without being an edit, and
+does not move the note up this list — repainting a note is not writing in it. A note with no
+`updated_at` — written before the field existed, or with front matter that cannot be read — falls
+back to the file's own timestamp. The same rule decides which note a summon brings back, so there
+is one idea of "most recent" in the application rather than two that disagree.
 
 ### Opening a result
 
@@ -592,8 +607,10 @@ A result the store no longer has — deleted from outside between the search and
 | `Enter` | Open the selected result |
 | `Ctrl+Shift+Space` | Deliberately **not** claimed — the layer belongs to the application, and toggling it with the palette open neither closes it nor types a space |
 
-Typing is debounced by 120 ms and every request is numbered, so a slow answer to `bio` can never
-replace a newer answer to `biopsia`.
+Typing is debounced by 120 ms and every request is numbered. Only the answer to the request
+currently outstanding can change the list, so an answer to `bio` is discarded once `biopsia` has
+been asked — whether it arrives before or after the newer one, and whether or not anything has
+answered yet. An answer arriving after the palette has closed changes nothing.
 
 ### Searching writes nothing
 
@@ -604,7 +621,7 @@ result does change that note's `is_open`, because the reader really did open it.
 ### No index
 
 There is none, on purpose. A thousand notes are listed, read, folded, matched and turned into
-snippets in about 20 ms, so an index would buy nothing a person could perceive and would cost
+snippets in about 40 ms, so an index would buy nothing a person could perceive and would cost
 invalidation, rebuilding, a file format to migrate and a second implementation to keep honest. The
 measurement is a test, so the day it stops being true is a day something fails. See ADR-027.
 

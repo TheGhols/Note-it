@@ -1,8 +1,67 @@
 use crate::atomic_file::write_atomic;
-use crate::model::NoteDocument;
+use crate::model::{NoteDocument, NoteFrontMatterWrapper};
+use chrono::{DateTime, Utc};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+/// How much of a note is read to find out when it was last written in.
+///
+/// Front matter is a handful of short lines at the very top of the file, so
+/// reading the whole note to see them would make listing cost what searching
+/// costs. A note whose header does not fit in this falls back to the file's
+/// own timestamp, exactly as a note written before `updated_at` existed does.
+const FRONT_MATTER_PROBE_BYTES: u64 = 4096;
+
+/// One note as the ordering sees it: which note, and when it was last written
+/// in.
+struct Listed {
+    id: Uuid,
+    edited_at: SystemTime,
+}
+
+/// Newest first; ties fall back to the identifier, so the order is stable and
+/// never depends on the order the directory happened to hand the files over.
+fn newest_first(notes: &mut [Listed]) {
+    notes.sort_by(|left, right| {
+        right
+            .edited_at
+            .cmp(&left.edited_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+/// When the note's own front matter says its text last changed.
+///
+/// `None` for a file with no front matter, front matter that cannot be read,
+/// or a note written before the field existed. Every one of those is a note
+/// whose ordering falls back to the file's modification time — the rule every
+/// note followed before there was a field to read.
+fn recorded_edit_time(raw: &str) -> Option<DateTime<Utc>> {
+    let front_matter = NoteDocument::split_front_matter(raw).0?;
+    serde_yaml::from_str::<NoteFrontMatterWrapper>(front_matter)
+        .ok()?
+        .note_it
+        .updated_at
+}
+
+/// The opening of a file, as text, or `None` if it cannot be read.
+///
+/// Bounded, and lossy on purpose: the cut lands wherever
+/// [`FRONT_MATTER_PROBE_BYTES`] falls, which is deep in the body of any note
+/// long enough to reach it. Refusing the whole probe because a character was
+/// split far past the header would silently demote every accented note.
+fn read_head(path: &Path) -> Option<String> {
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(FRONT_MATTER_PROBE_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    Some(String::from_utf8_lossy(&head).into_owned())
+}
 
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -137,16 +196,14 @@ impl StorageManager {
         NoteDocument::parse(&content)
     }
 
-    /// Note identifiers ordered by last write, most recent first.
-    ///
-    /// Used to decide which note to bring back when every note has been
-    /// closed. The modification time comes from the file itself, so nothing
-    /// has to be parsed and the ordering still reflects the last save.
-    pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
+    /// Every `.md` in the store whose name is a note identifier, with the
+    /// file's own modification time. Nothing is opened here: this is the
+    /// directory and nothing more.
+    fn note_files(&self) -> Result<Vec<(Uuid, SystemTime)>, String> {
         let entries = fs::read_dir(&self.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;
 
-        let mut notes: Vec<(Uuid, std::time::SystemTime)> = Vec::new();
+        let mut files = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
@@ -162,31 +219,80 @@ impl StorageManager {
             let modified = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            notes.push((id, modified));
+                .unwrap_or(UNIX_EPOCH);
+            files.push((id, modified));
         }
-
-        // Newest first; ties fall back to the identifier so the order is stable.
-        notes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-        Ok(notes.into_iter().map(|(id, _)| id).collect())
+        Ok(files)
     }
 
-    /// Every note's own text, newest first, ready to be searched.
+    /// Note identifiers ordered by the last change to their **text**, most
+    /// recent first.
     ///
-    /// Reads the files and splits the front matter off; the YAML is never
-    /// parsed, because search wants what a reader wrote and nothing Note-it
-    /// records about it. That also keeps a scan of a thousand notes to a
-    /// thousand reads rather than a thousand reads and a thousand YAML parses.
+    /// Used to decide which note to bring back when every note has been
+    /// closed, and to order what search shows — one idea of "most recent"
+    /// everywhere rather than two that disagree.
     ///
-    /// The order is [`list_notes_by_recency`](Self::list_notes_by_recency) —
-    /// the store's existing rule, which since Phase 3.4R follows the last real
-    /// edit. Reusing it means a reader meets one idea of "most recent"
-    /// everywhere in the application rather than two that disagree.
+    /// The ordering key is the note's own `updated_at`, not the file's
+    /// modification time. Phase 3.4R defined `updated_at` as the last change
+    /// to the note's content, and appearance — colour, paper, pattern
+    /// intensity, font size — deliberately does not move it. But every one of
+    /// those rewrites the file, so ordering by `mtime` meant recolouring a
+    /// note counted as writing in it. Reading the field the contract is
+    /// already written in is what makes the two agree.
+    ///
+    /// A note whose front matter has no `updated_at`, cannot be parsed or
+    /// cannot be read falls back to the file's modification time: the best
+    /// evidence left, and the rule every note followed before there was a
+    /// field to read. Nothing here writes, and no failure here is fatal — an
+    /// unreadable header costs that note its timestamp, not the listing.
+    pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
+        let mut notes: Vec<Listed> = self
+            .note_files()?
+            .into_iter()
+            .map(|(id, modified)| Listed {
+                id,
+                edited_at: read_head(&self.note_path(&id))
+                    .as_deref()
+                    .and_then(recorded_edit_time)
+                    .map(SystemTime::from)
+                    .unwrap_or(modified),
+            })
+            .collect();
+
+        newest_first(&mut notes);
+        Ok(notes.into_iter().map(|note| note.id).collect())
+    }
+
+    /// **Every** note's own text, newest first, ready to be searched.
+    ///
+    /// All of them, with no ceiling. Search says it looks in every note, and a
+    /// scan limit would quietly make that untrue for whichever note fell past
+    /// it — the note nobody would ever be told was skipped. What is capped is
+    /// the *result* list ([`crate::search::MAX_RESULTS`]), because a hundred
+    /// rows is what a person can read, not what a machine can scan.
+    ///
+    /// Only the note's body is returned: the stored metadata is Note-it's
+    /// bookkeeping, not something anyone typed, and a search for `paper` must
+    /// not return every note in the store.
     ///
     /// A note that has vanished or cannot be read is skipped rather than
     /// failing the whole scan: one unreadable file must not stop search
     /// working. Nothing here writes, so searching never touches a note.
-    pub fn read_note_bodies_by_recency(&self, limit: usize) -> Vec<(Uuid, String)> {
+    pub fn read_note_bodies_by_recency(&self) -> Vec<(Uuid, String)> {
+        self.read_bodies(usize::MAX)
+    }
+
+    /// The text of the `limit` most recently written-in notes: what the empty
+    /// query lists.
+    ///
+    /// Capped because the listing itself is capped. Reading past what the
+    /// palette will show would be reading files nobody is going to see, and
+    /// unlike a search it would answer no question.
+    pub fn read_recent_note_bodies(&self, limit: usize) -> Vec<(Uuid, String)> {
+        self.read_bodies(limit)
+    }
+
+    fn read_bodies(&self, limit: usize) -> Vec<(Uuid, String)> {
         let ids = match self.list_notes_by_recency() {
             Ok(ids) => ids,
             Err(error) => {
@@ -310,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_are_listed_with_the_most_recently_saved_first() {
+    fn notes_are_listed_with_the_most_recently_edited_first() {
         let tmp = tempdir().expect("tempdir");
         let manager = StorageManager::with_custom_paths(
             tmp.path().join("notes"),
@@ -334,9 +440,10 @@ mod tests {
         assert_eq!(by_recency[0], ids[2], "the newest save must come first");
         assert_eq!(by_recency[2], ids[0]);
 
-        // Saving the oldest note again moves it to the front.
+        // Writing in the oldest note again moves it to the front.
         let mut refreshed = manager.load_note(&ids[0]).expect("load oldest");
         refreshed.content = "touched".to_string();
+        refreshed.touch_content_modified();
         std::thread::sleep(std::time::Duration::from_millis(20));
         manager.save_note_atomic(&refreshed).expect("resave");
 
@@ -432,7 +539,7 @@ mod tests {
         doc.content = "# Biópsia hepática\n\ncorpo da nota".to_string();
         manager.save_note_atomic(&doc).expect("save");
 
-        let bodies = manager.read_note_bodies_by_recency(10);
+        let bodies = manager.read_note_bodies_by_recency();
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0].0, doc.metadata.id);
         assert_eq!(bodies[0].1, "# Biópsia hepática\n\ncorpo da nota");
@@ -474,7 +581,7 @@ mod tests {
         let broken = Uuid::new_v4();
         fs::create_dir(manager.note_path(&broken)).expect("occupy a note path");
 
-        let bodies = manager.read_note_bodies_by_recency(10);
+        let bodies = manager.read_note_bodies_by_recency();
         let ids: Vec<Uuid> = bodies.iter().map(|(id, _)| *id).collect();
         assert!(ids.contains(&good.metadata.id));
         assert!(ids.contains(&orphan));
@@ -523,7 +630,7 @@ mod tests {
         let mut timings = Vec::new();
         for query in ["biopsia", "nota", "inexistente-xyz", "punção"] {
             let started = std::time::Instant::now();
-            let bodies = manager.read_note_bodies_by_recency(5_000);
+            let bodies = manager.read_note_bodies_by_recency();
             let results = crate::search::search_notes(
                 query,
                 bodies.iter().map(|(id, body)| (*id, body.as_str())),
@@ -563,6 +670,380 @@ mod tests {
         before_sorted.sort();
         after_sorted.sort();
         assert_eq!(before_sorted, after_sorted, "a search modified the store");
+    }
+
+    /// A fixed instant, so an ordering test never depends on the clock.
+    fn at(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(seconds, 0).expect("a valid instant")
+    }
+
+    /// Writes a note straight into the store, without the two fsyncs an
+    /// atomic save costs. Used where a test needs thousands of notes: five
+    /// thousand fsyncs measure the filesystem, not the code under test.
+    fn place(manager: &StorageManager, doc: &NoteDocument) {
+        fs::write(
+            manager.note_path(&doc.metadata.id),
+            doc.serialize().expect("serialize"),
+        )
+        .expect("write note");
+    }
+
+    /// Stamps a file's modification time, so a fallback ordering is decided by
+    /// the test rather than by how fast the test ran.
+    fn stamp(path: &Path, seconds: u64) {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open to stamp");
+        file.set_times(
+            fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+        )
+        .expect("stamp the file");
+    }
+
+    /// Name, size and modification time of everything in the store.
+    fn fingerprint(notes_dir: &Path) -> Vec<(std::ffi::OsString, u64, Option<SystemTime>)> {
+        let mut entries: Vec<_> = fs::read_dir(notes_dir)
+            .expect("read notes dir")
+            .flatten()
+            .map(|entry| {
+                let metadata = entry.metadata().ok();
+                (
+                    entry.file_name(),
+                    metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+                    metadata.and_then(|m| m.modified().ok()),
+                )
+            })
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    #[test]
+    fn a_note_past_the_old_scan_ceiling_is_still_searched() {
+        // 3.8R. Search said it looked in every note and read the first five
+        // thousand, so a store one note larger held a note nobody could ever
+        // find and nobody would ever be told had been skipped. The *result*
+        // list is still capped, because a hundred rows is what a person reads.
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        // `updated_at` is what the ordering reads, so setting it puts the
+        // needle exactly where the test needs it: dead last.
+        for index in 0..5_000 {
+            let mut doc = NoteDocument::new_empty();
+            doc.content = format!("# Nota {index}\n\nnada de interessante nesta");
+            doc.metadata.updated_at = Some(at(1_000_000 + index));
+            place(&manager, &doc);
+        }
+
+        let mut needle = NoteDocument::new_empty();
+        needle.content = "# Fim da fila\n\na agulha transjugular está aqui".to_string();
+        needle.metadata.updated_at = Some(at(1));
+        place(&manager, &needle);
+
+        let ids = manager.list_notes_by_recency().expect("list");
+        assert_eq!(ids.len(), 5_001);
+        assert_eq!(
+            *ids.last().expect("a last note"),
+            needle.metadata.id,
+            "the needle has to sit past the old ceiling for this test to mean anything",
+        );
+
+        let bodies = manager.read_note_bodies_by_recency();
+        assert_eq!(
+            bodies.len(),
+            5_001,
+            "every note is read, not the first 5 000"
+        );
+
+        let results = crate::search::search_notes(
+            "transjugular",
+            bodies.iter().map(|(id, body)| (*id, body.as_str())),
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].note_id, needle.metadata.id);
+        assert_eq!(results[0].matched_text, "transjugular");
+
+        // The listing an empty query shows is still capped: what grew is the
+        // search's reach, not every read in the application.
+        assert_eq!(
+            manager
+                .read_recent_note_bodies(crate::search::MAX_RESULTS)
+                .len(),
+            crate::search::MAX_RESULTS,
+        );
+    }
+
+    #[test]
+    fn changing_how_a_note_looks_does_not_make_it_the_most_recent() {
+        // 3.8R. `updated_at` is the last change to the note's *text*, and an
+        // appearance change deliberately never moves it — but it does rewrite
+        // the file. Ordering by the file's own timestamp therefore counted
+        // recolouring a note as writing in it, and the first row of the quick
+        // switcher was whichever note had last been repainted.
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut older = NoteDocument::new_empty();
+        older.content = "nota B, escrita primeiro".to_string();
+        older.metadata.updated_at = Some(at(1_000));
+        manager.save_note_atomic(&older).expect("save B");
+
+        let mut newer = NoteDocument::new_empty();
+        newer.content = "nota A, escrita depois".to_string();
+        newer.metadata.updated_at = Some(at(2_000));
+        manager.save_note_atomic(&newer).expect("save A");
+
+        assert_eq!(
+            manager.list_notes_by_recency().expect("list")[0],
+            newer.metadata.id,
+            "A had its content edited last",
+        );
+
+        // Now repaint B — colour, paper, pattern intensity and font size, all
+        // of it — long after A was written in. Nothing goes through
+        // `touch_content_modified`, because none of it is content.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut repainted = manager.load_note(&older.metadata.id).expect("load B");
+        let recorded_edit = repainted.metadata.updated_at;
+        repainted.metadata.color = "black".to_string();
+        repainted.metadata.paper_type = "grid-large".to_string();
+        repainted.metadata.paper_intensity = "strong".to_string();
+        repainted.metadata.font_size = 22;
+        manager.save_note_atomic(&repainted).expect("repaint B");
+
+        // The repaint really did land, and really did rewrite the file last...
+        let stored = manager.load_note(&older.metadata.id).expect("reload B");
+        assert_eq!(stored.metadata.color, "black");
+        assert_eq!(stored.metadata.paper_type, "grid-large");
+        assert_eq!(stored.metadata.updated_at, recorded_edit);
+        let repainted_file = fs::metadata(manager.note_path(&older.metadata.id))
+            .and_then(|m| m.modified())
+            .expect("B mtime");
+        let untouched_file = fs::metadata(manager.note_path(&newer.metadata.id))
+            .and_then(|m| m.modified())
+            .expect("A mtime");
+        assert!(
+            repainted_file >= untouched_file,
+            "the repaint has to be the newest write for this test to mean anything",
+        );
+
+        // ...and the ordering did not move, because nobody wrote in B.
+        let ordering = manager.list_notes_by_recency().expect("list again");
+        assert_eq!(ordering[0], newer.metadata.id, "a repaint is not an edit");
+        assert_eq!(ordering[1], older.metadata.id);
+    }
+
+    #[test]
+    fn a_note_with_no_readable_edit_time_falls_back_to_the_file() {
+        // Three kinds of note have no `updated_at` to read: one written before
+        // the field existed, one with no front matter at all, and one whose
+        // front matter cannot be parsed. Each falls back to the file's own
+        // timestamp, which is the rule every note followed before there was a
+        // field to read. None of them panics, and none of them is dropped.
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut modern = NoteDocument::new_empty();
+        modern.content = "nota atual".to_string();
+        modern.metadata.updated_at = Some(at(3_000));
+        place(&manager, &modern);
+        stamp(&manager.note_path(&modern.metadata.id), 1);
+
+        let legacy = Uuid::from_bytes([0xA1; 16]);
+        fs::write(
+            manager.note_path(&legacy),
+            concat!(
+                "---\n",
+                "note_it:\n",
+                "  version: 1\n",
+                "  id: a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1\n",
+                "  color: blue\n",
+                "  font_size: 15\n",
+                "---\n\n",
+                "nota anterior ao campo\n",
+            ),
+        )
+        .expect("write legacy");
+        stamp(&manager.note_path(&legacy), 2_000);
+
+        let bare = Uuid::from_bytes([0xB2; 16]);
+        fs::write(manager.note_path(&bare), "sem front matter nenhum\n").expect("write bare");
+        stamp(&manager.note_path(&bare), 1_000);
+
+        let broken = Uuid::from_bytes([0xC3; 16]);
+        fs::write(
+            manager.note_path(&broken),
+            "---\nnote_it: [isto não é o formato]\n---\n\ncorpo mesmo assim\n",
+        )
+        .expect("write broken");
+        stamp(&manager.note_path(&broken), 4_000);
+
+        // The modern note is placed by its own `updated_at` (3 000), the other
+        // three by their files (4 000, 2 000, 1 000). One total order, and the
+        // same one every time.
+        let ordering = manager.list_notes_by_recency().expect("list");
+        assert_eq!(ordering, vec![broken, modern.metadata.id, legacy, bare]);
+        assert_eq!(
+            manager.list_notes_by_recency().expect("list again"),
+            ordering
+        );
+
+        // ...and every one of them is still searchable.
+        let bodies = manager.read_note_bodies_by_recency();
+        assert_eq!(bodies.len(), 4);
+        assert!(bodies
+            .iter()
+            .any(|(_, body)| body == "sem front matter nenhum"));
+        assert!(bodies.iter().any(|(_, body)| body == "corpo mesmo assim"));
+    }
+
+    #[test]
+    fn notes_edited_at_the_same_instant_keep_a_stable_order() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        // Same instant for all three, so only the tie-break decides.
+        let ids = [
+            Uuid::from_bytes([0x03; 16]),
+            Uuid::from_bytes([0x01; 16]),
+            Uuid::from_bytes([0x02; 16]),
+        ];
+        for id in ids {
+            let mut doc = NoteDocument::new_with_id(id);
+            doc.content = format!("nota {id}");
+            doc.metadata.updated_at = Some(at(7_777));
+            place(&manager, &doc);
+        }
+
+        let mut expected = ids;
+        expected.sort();
+        for _ in 0..5 {
+            assert_eq!(
+                manager.list_notes_by_recency().expect("list"),
+                expected.to_vec(),
+                "a tie must resolve the same way every time",
+            );
+        }
+    }
+
+    #[test]
+    fn listing_and_searching_never_write_to_the_store() {
+        // Reading a note's header to find out when it was last written in is
+        // still reading. Neither listing nor searching may leave a mark.
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        for index in 0..20 {
+            let mut doc = NoteDocument::new_empty();
+            doc.content = format!("# Nota {index}\n\ncom biópsia dentro");
+            manager.save_note_atomic(&doc).expect("save");
+        }
+
+        let before = fingerprint(&notes_dir);
+        for _ in 0..3 {
+            manager.list_notes_by_recency().expect("list");
+            let bodies = manager.read_note_bodies_by_recency();
+            crate::search::search_notes(
+                "biopsia",
+                bodies.iter().map(|(id, body)| (*id, body.as_str())),
+            );
+            manager.read_recent_note_bodies(crate::search::MAX_RESULTS);
+        }
+
+        assert_eq!(fingerprint(&notes_dir), before, "a read modified the store");
+        assert!(temp_debris_in(&notes_dir).is_empty());
+    }
+
+    #[test]
+    fn a_very_large_note_is_searched_correctly_and_never_written() {
+        // 3.8R. The query, the result list and the snippet are all capped; the
+        // *note* is not, and nothing here pretends otherwise. What is claimed
+        // is what this asserts: a note far larger than anyone writes is
+        // searched to its end, comes back with its accents intact, does not
+        // panic and is not touched.
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        // ~2 MB, accented throughout, with the word only at the very end — so
+        // a scan that stopped early would find nothing.
+        let filler = "Coração, fígado, pulmão e rins. ".repeat(64_000);
+        let mut huge = NoteDocument::new_empty();
+        huge.content = format!("# Nota enorme\n\n{filler}\nbiópsia transjugular ao fim\n");
+        manager
+            .save_note_atomic(&huge)
+            .expect("save the large note");
+        assert!(huge.content.len() > 2_000_000);
+
+        let before = fingerprint(&notes_dir);
+        let bodies = manager.read_note_bodies_by_recency();
+        let results = crate::search::search_notes(
+            "transjugular",
+            bodies.iter().map(|(id, body)| (*id, body.as_str())),
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].note_id, huge.metadata.id);
+        assert_eq!(results[0].match_count, 1);
+        // Folded to find, original to show: the accents survived the round trip
+        // through the fold and back to a source offset.
+        assert!(results[0].snippet.contains("biópsia transjugular"));
+        assert!(results[0].snippet.contains("Coração"));
+        assert_eq!(results[0].matched_text, "transjugular");
+        assert!(results[0].snippet.chars().count() <= crate::search::MAX_SNIPPET_CHARS + 2);
+
+        // Accent-folded queries reach the end of it too...
+        let found = crate::search::search_notes(
+            "biopsia",
+            bodies.iter().map(|(id, body)| (*id, body.as_str())),
+        );
+        assert_eq!(found[0].matched_text, "biópsia");
+
+        assert_eq!(
+            fingerprint(&notes_dir),
+            before,
+            "a search modified the store"
+        );
     }
 
     #[test]

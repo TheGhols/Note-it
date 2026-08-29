@@ -109,7 +109,9 @@
   so once the last note was closed it became unreachable and the application answered with an empty
   note. Nothing was lost on disk; there was simply no route back to it.
 - **Ordering:** recency comes from the note file's modification time, so no note has to be parsed
-  to decide which one to reopen, and the order still reflects the last save.
+  to decide which one to reopen, and the order still reflects the last save. *(Superseded by
+  ADR-027.1: the ordering key is now the note's own `updated_at`, with `mtime` as the fallback,
+  because an appearance change rewrites the file without being an edit.)*
 - **Consequence:** restoring also records the notes as open again, so a reopened note is not left
   contradicting its own state file.
 
@@ -244,6 +246,8 @@
 - **Consequence for recency:** the file's `mtime` decides which note a summon brings back when
   every note is closed. It now tracks the last real edit rather than the last close. That is the
   better reading of "the note used last", and it is covered by a test rather than left to chance.
+  *(Superseded by ADR-027.1: `mtime` was only a proxy for it, and an appearance change moved the
+  proxy without being an edit. The ordering now reads `updated_at` directly.)*
   Introducing a `last_active_note` in `state.json` was deliberately not done here: nothing approved
   depends on the old meaning, and inventing state for it would have been a larger change than the
   defect warranted.
@@ -660,7 +664,8 @@ about what the notes contain. Four decisions did that.
 
 **No index, because the scan is already fast enough to be invisible.** A
 thousand notes are listed, read, accent-folded, matched and turned into snippets
-in about 20 ms on this machine; a query that matches nothing costs the same, and
+in about 40 ms on this machine (about 20 ms before Phase 3.8R made the ordering
+read each note's own `updated_at`); a query that matches nothing costs the same, and
 one that matches everything costs less because the result list is capped. That
 is well under the threshold where a person perceives a delay, and it is the
 whole budget — there is no warm cache and no first-run penalty, because there is
@@ -730,3 +735,71 @@ effect is to hide part of a destination, and the reader who most needs to see
 Note-it already renders a link's text and keeps its target in the Markdown,
 which is the honest version of the same idea. The roadmap asked for it "only
 where it fits the architecture"; it does not, and saying so is the deliverable.
+
+
+### ADR-027.1: Making the Promises Match the Behaviour (Phase 3.8R)
+
+Phase 3.8 shipped a search that worked. Four things it *said* were not quite
+what it did, and 3.8R corrected the four rather than growing the feature.
+
+**"Every note" now means every note.** The scan stopped at 5 000 notes. It was
+a ceiling nobody would meet and a promise nobody could check: the 5 001st note
+was unfindable, and nothing anywhere would have said so. A cap on results is a
+different thing from a cap on the scan — a hundred rows is what a person can
+read, and the reader can see there are a hundred of them. A note that is never
+examined leaves no trace of having been skipped. So the scan reads the whole
+store and `MAX_RESULTS` still caps the answer, with
+`a_note_past_the_old_scan_ceiling_is_still_searched` putting a note at position
+5 001 and finding it. The empty-query listing keeps a limit, because it shows
+at most a hundred notes and reading past them would answer no question.
+
+**A stale answer is any answer to a question that is no longer being asked.**
+The palette numbered every request and refused any answer older than the last
+one it had *accepted*. That covers a slow reply arriving after a fast one, and
+misses the opposite order: ask `bio`, then ask `biopsia`, and the reply to
+`bio` arrives while `biopsia` is still in flight — older than the current
+question, but newer than anything accepted, so it was shown. The rule is now
+the simpler one it should always have been: only the answer to the request
+currently outstanding may change the list.
+
+**The limits bound the query and the answer, not the note.** `MAX_QUERY_CHARS`,
+`MAX_RESULTS` and `MAX_SNIPPET_CHARS` were described as making a pathological
+*note* cost a bounded amount. They do not, and they must not: search finds text
+at the end of a large note, which means reading to the end of a large note, and
+a silent cut on how much of a file is searchable would put text in the store
+that no search could ever return. The documentation now says what is true —
+these are ceilings on the question and on the answer, the cost of a large note
+is measured rather than capped, and no formal guarantee is claimed for an
+arbitrarily large single file. Nothing was made asynchronous to satisfy a
+sentence; the sentence was corrected.
+
+**"Most recent" means most recently written in.** Phase 3.4R defined
+`updated_at` as the last change to a note's *text*, and appearance — colour,
+paper, pattern intensity, font size — deliberately does not move it. But
+appearance is stored in the note file, so changing it rewrites the file, and
+the ordering read the file's `mtime`. Recolouring a note therefore made it the
+most recently "edited" note in the quick switcher, and the note a summon
+brought back. The ordering now reads `updated_at`, the field the contract is
+already written in, and falls back to `mtime` for a note that has none — one
+written before the field existed, one with no front matter, one whose header
+cannot be parsed. That fallback is the rule every note followed before there
+was a field to read, so nothing about an old store changes.
+
+It costs a bounded read of each note's head — 4 KB, enough for a front matter
+of a handful of short lines — where listing previously cost only a `readdir`.
+Measured, that is what took a search of a thousand notes from about 20 ms to
+about 40 ms in release, roughly half in the reads and half in the YAML; the
+removed scan ceiling accounts for none of it, because no store in the
+measurement reached 5 000. Forty milliseconds is a third of the 120 ms the
+palette waits before asking at all, so it is a price worth paying to have "most
+recent" mean the same thing in the quick switcher, in search and in a summon.
+An unreadable header costs that note its timestamp, never the listing: nothing
+here writes, nothing here panics, and a tie is broken by identifier so the same
+store always lists in the same order.
+
+The head is read once per note to decide the order, and the notes that will
+actually be shown are then read in full. That is deliberately not merged into a
+single full read of every note: opening the palette on an empty query shows a
+hundred notes, and a store holding a few enormous ones must not pay to read all
+of them to list a hundred. Searching does read every note in full, because a
+search cannot know which note holds the word until it has looked.

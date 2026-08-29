@@ -57,6 +57,18 @@ function type(text: string): void {
   input().dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/**
+ * The request the palette is currently waiting for.
+ *
+ * Answers are addressed to a question, so a test that wants one accepted has
+ * to answer the question that was actually asked. Making that up would test a
+ * situation the host cannot produce.
+ */
+function pendingRequestId(): number {
+  const calls = handlers.onQuery.mock.calls;
+  return calls[calls.length - 1][0] as number;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   handlers.onQuery.mockClear();
@@ -138,15 +150,20 @@ describe('typing', () => {
 });
 
 describe('an answer to an older question is dropped', () => {
-  it('never lets a slow reply overwrite a newer one', () => {
-    const p = mountPalette();
+  /** Types two queries and reports the two request numbers they produced. */
+  function askTwice(p: SearchPalette): [number, number] {
     p.openPalette();
     type('bio');
     vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
     type('biopsia');
     vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
-
     const [first, second] = handlers.onQuery.mock.calls.slice(-2).map((call) => call[0] as number);
+    return [first, second];
+  }
+
+  it('never lets a slow reply overwrite a newer one', () => {
+    const p = mountPalette();
+    const [first, second] = askTwice(p);
 
     // The newer answer arrives first...
     p.showResults(second, [result('n-2', 'resposta nova')]);
@@ -158,15 +175,52 @@ describe('an answer to an older question is dropped', () => {
     expect(rows()[0].textContent).toContain('resposta nova');
   });
 
+  it('never shows an answer to a question already replaced, even arriving first', () => {
+    // 3.8R. The other order, and the one a "never go backwards" rule misses:
+    // `biopsia` has been asked and nothing has answered it yet, so the reply
+    // to `bio` is stale on arrival. Showing it would put results for a query
+    // the reader has finished typing under the query they are looking at.
+    const p = mountPalette();
+    const [first, second] = askTwice(p);
+
+    p.showResults(first, [result('n-1', 'resposta antiga')]);
+    expect(rows()).toHaveLength(0);
+
+    // ...and the answer that was actually asked for still lands.
+    p.showResults(second, [result('n-2', 'resposta nova')]);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('resposta nova');
+  });
+
   it('accepts results while it is open and ignores them once closed', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [result('n-1', 'alguma nota')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'alguma nota')]);
     expect(rows()).toHaveLength(1);
 
+    // The answer to the question the palette really was waiting for, arriving
+    // after it closed: still nothing happens, and nothing throws.
+    const pending = pendingRequestId();
     p.close();
-    p.showResults(2, [result('n-2', 'tarde demais')]);
+    p.showResults(pending, [result('n-2', 'tarde demais')]);
     expect(rows()).toHaveLength(0);
+    expect(p.element().hidden).toBe(true);
+  });
+
+  it('lets the reader come back to an answer that was in flight', () => {
+    // Closing and reopening asks again, so the reply still owed to the closed
+    // palette answers nothing the reopened one asked.
+    const p = mountPalette();
+    p.openPalette();
+    const abandoned = pendingRequestId();
+    p.close();
+    p.openPalette();
+
+    p.showResults(abandoned, [result('n-1', 'da sessão anterior')]);
+    expect(rows()).toHaveLength(0);
+
+    p.showResults(pendingRequestId(), [result('n-2', 'desta vez')]);
+    expect(rows()[0].textContent).toContain('desta vez');
   });
 });
 
@@ -174,7 +228,7 @@ describe('moving through the results', () => {
   beforeEach(() => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [
+    p.showResults(pendingRequestId(), [
       result('n-1', 'primeira'),
       result('n-2', 'segunda'),
       result('n-3', 'terceira'),
@@ -211,21 +265,21 @@ describe('moving through the results', () => {
   it('asks the note to look for the spelling that matched, not what was typed', () => {
     // `biopsia` found `Biópsia`; the editor's own find does not fold accents,
     // so the note is told the spelling it actually contains.
-    palette!.showResults(2, [result('n-9', 'Biópsia hepática', '', 2, 'Biópsia')]);
+    palette!.showResults(pendingRequestId(), [result('n-9', 'Biópsia hepática', '', 2, 'Biópsia')]);
     input().value = 'biopsia';
     press('Enter');
     expect(handlers.onOpen).toHaveBeenCalledWith('n-9', 'Biópsia');
   });
 
   it('falls back to what was typed when nothing was matched', () => {
-    palette!.showResults(2, [result('n-9', 'recente', '', 0, '')]);
+    palette!.showResults(pendingRequestId(), [result('n-9', 'recente', '', 0, '')]);
     input().value = 'algo';
     press('Enter');
     expect(handlers.onOpen).toHaveBeenCalledWith('n-9', 'algo');
   });
 
   it('tells two notes with the same first line apart', () => {
-    palette!.showResults(2, [result('n-a', 'Compras'), result('n-b', 'Compras')]);
+    palette!.showResults(pendingRequestId(), [result('n-a', 'Compras'), result('n-b', 'Compras')]);
     press('ArrowDown');
     press('Enter');
     expect(handlers.onOpen).toHaveBeenCalledWith('n-b', '');
@@ -236,7 +290,7 @@ describe('keys never reach the note behind it', () => {
   it('claims the keys it handles', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [result('n-1', 'uma nota')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'uma nota')]);
 
     for (const key of ['ArrowDown', 'ArrowUp', 'Enter', 'Escape']) {
       p.openPalette();
@@ -257,7 +311,7 @@ describe('keys never reach the note behind it', () => {
   it('ignores keys arriving mid-composition, so pt-BR dead keys survive', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [result('n-1', 'uma nota'), result('n-2', 'outra')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'uma nota'), result('n-2', 'outra')]);
     expect(press('ArrowDown', { isComposing: true } as KeyboardEventInit)).toBe(true);
     expect(selectedRow()?.dataset.noteId).toBe('n-1');
   });
@@ -267,7 +321,7 @@ describe('what a result looks like', () => {
   it('shows the label, the snippet and a count only when there are several', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [
+    p.showResults(pendingRequestId(), [
       result('n-1', 'Biópsia hepática', '…a biópsia transjugular…', 4),
       result('n-2', 'Uma vez só', 'trecho', 1),
     ]);
@@ -283,7 +337,7 @@ describe('what a result looks like', () => {
   it('renders a note as text, never as markup', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [
+    p.showResults(pendingRequestId(), [
       result('n-1', '<script>alert(1)</script>', '<img src=x onerror=alert(1)> e <b>negrito</b>'),
     ]);
 
@@ -302,14 +356,14 @@ describe('what a result looks like', () => {
     p.openPalette();
     const status = () => mount.querySelector('.note-search-status')?.textContent;
 
-    p.showResults(1, [result('n-1', 'recente')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'recente')]);
     expect(status()).toBe('notas recentes');
 
     input().value = 'alvo';
-    p.showResults(2, [result('n-1', 'uma'), result('n-2', 'duas')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'uma'), result('n-2', 'duas')]);
     expect(status()).toBe('2 nota(s)');
 
-    p.showResults(3, []);
+    p.showResults(pendingRequestId(), []);
     expect(status()).toBe('nenhum resultado');
   });
 });
@@ -318,7 +372,8 @@ describe('a note that disappeared between the search and the choice', () => {
   it('says so, drops the row and asks again instead of crashing', () => {
     const p = mountPalette();
     p.openPalette();
-    p.showResults(1, [result('n-1', 'ainda existe'), result('n-2', 'apagada')]);
+    p.showResults(pendingRequestId(), [result('n-1', 'ainda existe'), result('n-2', 'apagada')]);
+    const stale = pendingRequestId();
     handlers.onQuery.mockClear();
 
     p.reportMissing('n-2');
@@ -327,6 +382,14 @@ describe('a note that disappeared between the search and the choice', () => {
     expect(rows()[0].dataset.noteId).toBe('n-1');
     expect(mount.querySelector('.note-search-status')?.textContent).toBe('nota não encontrada');
     expect(handlers.onQuery).toHaveBeenCalledTimes(1);
+
+    // Asking again is a new question, so the answer to the old one — the list
+    // that still had the deleted note in it — can no longer come back.
+    p.showResults(stale, [result('n-1', 'ainda existe'), result('n-2', 'apagada')]);
+    expect(rows()).toHaveLength(1);
+    p.showResults(pendingRequestId(), [result('n-1', 'ainda existe')]);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].dataset.noteId).toBe('n-1');
   });
 
   it('does nothing when it is not open', () => {
