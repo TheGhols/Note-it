@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Recoverable trash.** Deleting a note now exists, and it can be undone.
+  - *☰ › Dados › Mover esta nota para a lixeira* asks first, and the question says the deletion is
+    recoverable rather than just "Excluir?". Cancel is what the panel focuses. The `×` button and
+    `Ctrl+W` still mean **close the window**, exactly as they always have.
+  - The order is flush → move → state → surface, and the move of the file is the commit point.
+    A note whose latest text could not be written is **not** moved: it stays open, the failure is
+    reported, and the reader can try again. Past the move the note is in the trash, so neither the
+    window-state write nor the surface teardown may report otherwise.
+  - `notes/<uuid>.md` becomes `trash/<uuid>.md`, byte for byte — front matter, colour, paper, tasks,
+    links, calculations and comments all travel with it. Nothing reads, parses or rewrites the note,
+    so a note whose front matter is damaged is deleted and recovered unchanged too.
+  - A note in the trash is not a note: `Ctrl+K` does not find it, the empty-query list does not offer
+    it, a summon does not bring it back, and a restart does not reopen it — because all of those read
+    `notes/`, and the file is no longer there.
+  - *Dados › Lixeira* lists what can be recovered, newest first, with each note's first line, a
+    preview and when it was deleted. Arrows walk the list, `Enter` restores, `Esc` closes; every row
+    also has a named **Restaurar** button.
+  - Restoring returns the same file with the same identifier, and **never overwrites a live note**:
+    the name is created with `hard_link`, which refuses an existing one atomically, so a clash leaves
+    both files untouched and says so.
+  - Neither deleting nor restoring is an edit. `updated_at` does not move, so a recovered note
+    returns to its place in the quick switcher instead of jumping to the top; its geometry comes back
+    too.
+  - The deletion date is a `<uuid>.json` sidecar beside the note, never written into the Markdown. A
+    missing or unreadable one costs that entry its exact date and nothing else.
+- **Local automatic backup.** Snapshots of everything recoverable, on the same machine and nowhere
+  else.
+  - `~/.local/share/note-it/backups/<data-e-hora>/` holding `notes/`, `trash/`, `config.toml`,
+    `state.json` and a `manifest.json`. Ordinary directories of ordinary files: readable with `ls`,
+    recoverable with `cp`, with no archive format and no database in the way.
+  - At most one automatic snapshot per 24 hours, taken **before** the first eligible change after
+    that window rather than after it — the state worth being able to return to is the one before the
+    edit. There is no timer and no thread: an idle daemon does no work at all, and one left open for
+    days takes its snapshot the moment its owner starts typing again. "When was the last backup" is
+    read from the newest snapshot's own manifest, so there is no bookkeeping file to go stale.
+  - *Dados › Fazer backup agora* takes one immediately and reports success or failure in a line at
+    the foot of the note rather than a dialog over it.
+  - A snapshot is built in `backups/.tmp.…` and renamed into place: the rename is the commit point,
+    so a half-written backup can never be listed as a valid one. Scratch left by a crash is swept by
+    the next backup, and only directories carrying that prefix are ever removed — never a snapshot,
+    never a file someone put there.
+  - Seven snapshots are kept, and retention runs **only after** a new one has been committed, so a
+    backup that fails never costs the protection already on disk.
+  - A snapshot never contains previous snapshots, temporary files, or anything reached through a
+    symbolic link — only regular files from the directories it was asked to copy.
+  - A backup that fails never blocks a save. The error is reported and the note is written normally.
+  - Recovery is proved rather than promised: `a_snapshot_round_trips_into_a_fresh_isolated_store`
+    copies a snapshot into a second, empty XDG tree and opens it. The manual procedure, including
+    recovering a single note, is in `docs/storage.md`.
+  - **A local backup is not disaster recovery.** These snapshots sit on the same disk as the notes
+    and are not encrypted. They protect against an accidental deletion, a logical corruption, an edit
+    to undo or a version to go back to — and against none of a dead drive, a lost machine or a stolen
+    one.
+
+### Changed
+- What Phase 3.8 shipped as "AutoPaste" is now called **Paste URL on Selection**
+  (`ui/src/editor/linkPaste.ts`, `handleLinkPaste`, `ui/tests/link_paste.test.ts`). The behaviour is
+  byte-for-byte the same; only the name changed, so "Clipboard AutoPaste" is free for the clipboard
+  capture mode planned for Phase 3.11, which is a different feature entirely.
+
 ### Fixed
 - Search now does what it says it does. Four corrections, no new behaviour:
   - **Every note is searched.** The scan stopped at 5 000 notes, so a store one note larger held a

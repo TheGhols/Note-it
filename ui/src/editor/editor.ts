@@ -1,5 +1,5 @@
 import { Editor } from '@tiptap/core';
-import { handleAutoPaste } from './autoPaste.ts';
+import { handleLinkPaste } from './linkPaste.ts';
 import { editorExtensions } from './extensions.ts';
 import { CalloutType, calloutType } from './callout.ts';
 import { sanitizeHtml, sanitizeMarkdown } from '../markdown/sanitizer.ts';
@@ -35,7 +35,7 @@ export class NoteEditor {
         transformPastedHTML: sanitizeHtml,
         // A URL pasted over selected text links that text instead of replacing
         // it. Everything else pastes exactly as it did.
-        handlePaste: (view, event) => handleAutoPaste(view, event),
+        handlePaste: (view, event) => handleLinkPaste(view, event),
       },
       onUpdate: () => {
         if (this.debounceTimer !== null) {

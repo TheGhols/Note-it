@@ -33,6 +33,22 @@ pub fn write_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<(), String>
     write_atomic_inner(path, bytes, what, false)
 }
 
+/// Makes a directory entry that has already changed — a rename, a link, a
+/// removal — durable.
+///
+/// Post-commit by nature, and reported the same way [`write_atomic`] reports
+/// its own sync: as a warning, never as a failure. The change is already
+/// visible to every reader, so calling this a failed operation would have the
+/// caller roll back something the filesystem has already done.
+pub fn sync_directory_after_commit(directory: &Path, what: &str) {
+    if let Err(error) = sync_directory(directory, false) {
+        eprintln!(
+            "{what} was changed, but could not be synced, \
+             so the change may not survive a power loss: {error}"
+        );
+    }
+}
+
 /// The same write, with the post-commit directory sync forced to fail.
 ///
 /// That failure cannot be provoked from outside the process: once the rename

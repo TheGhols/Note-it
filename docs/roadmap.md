@@ -234,8 +234,9 @@
       `Ctrl+Z` puts all of it back.
 - [x] Neither search nor find can find what is not in the file: a calculation's `4` and a
       conversion's `10000 m` are decorations, and searching for them finds nothing.
-- [x] AutoPaste: pasting a URL over selected text makes that text the link, judged by the link
-      allowlist the application already had, with no network, no metadata lookup and one undo step.
+- [x] Paste URL on Selection: pasting a URL over selected text makes that text the link, judged by
+      the link allowlist the application already had, with no network, no metadata lookup and one
+      undo step.
 - [x] Compact link rendering evaluated and deliberately deferred: shortening a URL hides where it
       leads, which is a security regression sold as tidiness. Recorded in ADR-027 rather than
       quietly skipped.
@@ -264,15 +265,90 @@ index, no threads — the smallest correct change to each, and a test for each. 
       paper, pattern intensity, font size — rewrites the file without being an edit, so ordering by
       `mtime` made repainting a note count as writing in it. A note with no readable `updated_at`
       falls back to `mtime`, ties are broken by identifier, and listing still writes nothing.
-- [x] No regression in Search, Quick Switcher, Find, Replace, AutoPaste, the shared layer or the
-      lifecycle; `updated_at` and the undo history are untouched.
+- [x] No regression in Search, Quick Switcher, Find, Replace, Paste URL on Selection, the shared
+      layer or the lifecycle; `updated_at` and the undo history are untouched.
 
-### Phase 3.9: Reliability (Planned)
-- [ ] Recoverable trash, so a deleted note is not gone.
-- [ ] Automatic backup.
-- [ ] Note reliability work generally.
+### Phase 3.9: Reliability (Completed)
 
-## Phase 4: Core, CLI & Second Brain (Planned)
+No new productivity surface. One question only: can any action Note-it offers turn a recoverable
+mistake into lost text? See ADR-028 and ADR-029.
+
+- [x] **Recoverable trash.** *Dados › Mover esta nota para a lixeira* moves `notes/<uuid>.md` to
+      `trash/<uuid>.md`, with a confirmation that says the deletion can be undone. `×` and `Ctrl+W`
+      still mean close, as they always have.
+- [x] The order is flush → move → state → surface, and the move is the commit point. A note whose
+      latest text could not be written is never moved and never disappears; past the move the note
+      *is* in the trash, and neither the state write nor the window teardown may report otherwise.
+- [x] A note in the trash is not a note: not searched, not in the quick switcher, not summoned, not
+      reopened on restart — because all of those read `notes/`, and the file is not there.
+- [x] Restoring puts the file back with the same identifier and the same bytes. `hard_link` refuses
+      an existing name, so a live note carrying that identifier is never overwritten — a property of
+      the syscall, not of a check that could be raced.
+- [x] Neither deleting nor restoring is an edit: `updated_at` does not move, so a recovered note
+      returns to its place in the quick switcher instead of jumping to the top. Its geometry comes
+      back too.
+- [x] The deletion date lives in a `<uuid>.json` sidecar, never in the Markdown, so a note whose
+      front matter is damaged still goes to the trash and still comes back byte for byte.
+- [x] **Local automatic backup.** `backups/<timestamp>/` holding `notes/`, `trash/`, `config.toml`,
+      `state.json` and a manifest — ordinary directories of ordinary files, recoverable with `cp`.
+- [x] At most one automatic snapshot per 24 hours, taken **before** the first eligible change after
+      that window rather than after it, so the state captured is the one worth going back to. No
+      timer, no thread, no polling: an idle daemon does no work at all.
+- [x] *Dados › Fazer backup agora* for a snapshot on demand, reported in a line at the foot of the
+      note rather than a dialog over it.
+- [x] Built in `.tmp.…` and renamed into place: a snapshot is valid or it does not exist. Scratch
+      left by a crash is swept by the next backup, and only directories carrying that prefix are
+      ever removed.
+- [x] Seven kept, pruned **only after** a new snapshot has been committed. A backup that fails never
+      costs the protection already on disk, and never blocks a note save.
+- [x] Snapshots never contain snapshots, temp files, or anything reached through a symlink.
+- [x] Recovery is proved rather than promised: a snapshot is copied into a second, empty XDG tree
+      and opened, and the notes, identifiers, Markdown, trash, configuration and window state all
+      come back. The manual procedure is in `docs/storage.md`.
+- [x] Reliability audit over fifteen failure cases — a note that vanished, one that cannot be read,
+      a trash entry removed externally, a restore onto a live identifier, a backups directory that
+      cannot be created, a store that cannot be read, a commit that cannot land, scratch left by a
+      crash, stale state, missing state, damaged front matter, an absent configuration, and a flush
+      that fails with several notes open.
+- [x] Terminology: what Phase 3.8 called "AutoPaste" is **Paste URL on Selection**
+      (`ui/src/editor/linkPaste.ts`). Behaviour unchanged; the name is freed for the real Clipboard
+      AutoPaste in Phase 3.11.
+
+**Deliberately not in this phase:** permanent delete, empty-the-trash, and a one-click restore of a
+whole store. The first two are irreversible controls in the phase whose subject is reversibility;
+the third is a multi-file transaction that deserves its own design rather than a menu entry.
+
+### Phase 3.10: Timer & Pomodoro (Planned)
+
+- [ ] Stopwatch.
+- [ ] Countdown.
+- [ ] Named timers.
+- [ ] Pause and resume.
+- [ ] Restart and stop.
+- [ ] Pomodoro 25/5.
+- [ ] Appropriate local notifications — local, like everything else here.
+
+### Phase 3.11: Clipboard AutoPaste (Planned)
+
+The real one, in the sense Antinote uses the word: a capture mode, not the URL-over-selection paste
+Phase 3.8 shipped under that name.
+
+- [ ] An explicit capture mode, off by default.
+- [ ] Watching the clipboard only while that mode is on.
+- [ ] New copies appended to the note automatically.
+- [ ] Configurable delimiters between captures.
+- [ ] Loop protection, so the note's own content cannot feed itself back in.
+- [ ] Nothing captured, and nothing observed, while the mode is off.
+
+### Phase 3.12: Capture & Export (Planned)
+
+- [ ] Text export.
+- [ ] PDF export.
+- [ ] Evaluate offline OCR on Linux.
+- [ ] OCR ships only if there is a local, safe and architecturally acceptable solution. A cloud OCR
+      is not one.
+
+## Phase 4.0: Core & CLI (Planned)
 
 Architectural evolution rather than more editor surface. Reserved, not started.
 

@@ -20,6 +20,14 @@ use std::time::Duration;
 use uuid::Uuid;
 
 static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
+
+/// What the reader is told when a note could not be moved to the trash.
+///
+/// One sentence for every reason, because every reason has the same
+/// consequence and the reader needs to know that one: the note is still here.
+/// The detail goes to `stderr`, where a diagnosis belongs.
+const TRASH_FAILED_MESSAGE: &str =
+    "Não foi possível mover a nota para a lixeira. A nota continua aberta e salva.";
 const LAYER_PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(180);
 
 type LifecycleCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -910,6 +918,137 @@ impl NoteItAppClone {
         }
     }
 
+    /// Moves a note to the trash, in the one order that cannot lose text.
+    ///
+    /// Flush, move, state, surface — and every failure before the move leaves
+    /// the note open, live and editable. A note whose latest text could not be
+    /// written must never disappear from the screen as though it had been
+    /// deleted: the reader would have been shown a deletion and charged an
+    /// edit for it.
+    ///
+    /// The move is the commit point. Past it the note **is** in the trash, so
+    /// nothing that fails afterwards is allowed to report otherwise: the
+    /// window state is best-effort and the surface goes either way, because a
+    /// window still showing a note whose file has moved is a window showing
+    /// something that is not there.
+    pub fn trash_note(&self, id: Uuid) {
+        if let Err(error) = self.ensure_structural_action_allowed("moving a note to the trash") {
+            eprintln!("Move to trash rejected: {error}");
+            self.report_data_result(id, "trash", false, TRASH_FAILED_MESSAGE);
+            return;
+        }
+
+        let window = self.context.borrow().windows.get(&id).cloned();
+        let Some(window) = window else {
+            eprintln!("Move to trash rejected: note {id} has no window");
+            return;
+        };
+
+        let request_id = NEXT_FLUSH_ID.fetch_add(1, Ordering::SeqCst);
+        let app = self.clone();
+        window.request_flush(request_id, move |flush| {
+            let outcome = commit_trash(
+                flush,
+                || app.context.borrow().storage.move_note_to_trash(&id),
+                || {
+                    let mut ctx = app.context.borrow_mut();
+                    // Closed rather than forgotten: the geometry stays, so a
+                    // note that comes back out of the trash comes back the
+                    // size and place it was.
+                    ctx.state.notes.entry(id).or_default().is_open = false;
+                    persist_state_now(&mut ctx, "trash-note")
+                },
+                || {
+                    let window = app.context.borrow_mut().windows.remove(&id);
+                    if let Some(window) = window {
+                        window.close_after_save();
+                    }
+                },
+            );
+
+            if let Err(error) = outcome {
+                eprintln!("Move to trash failed for note {id}: {error}");
+                app.report_data_result(id, "trash", false, TRASH_FAILED_MESSAGE);
+            }
+        });
+    }
+
+    /// Answers a request for the contents of the trash. Reading only: no file
+    /// is opened for writing, no timestamp moves and no window is created.
+    pub fn answer_trash_list(&self, requester: Uuid, request_id: u64) {
+        let ctx = self.context.borrow();
+        let entries = ctx.storage.list_trash();
+        if let Some(window) = ctx.windows.get(&requester) {
+            window.send_trash_entries(request_id, entries);
+        }
+    }
+
+    /// Brings a note back out of the trash.
+    ///
+    /// Nothing is opened and nothing is parsed: the file moves back and
+    /// becomes a note again, with the same identifier, the same bytes and the
+    /// same `updated_at` — restoring is not editing. An identifier already
+    /// taken by a live note is refused rather than overwritten, and the reader
+    /// is told which of the two it was.
+    pub fn restore_note(&self, requester: Uuid, target: Uuid) {
+        let result = self
+            .context
+            .borrow()
+            .storage
+            .restore_note_from_trash(&target);
+        match result {
+            Ok(()) => {
+                diagnostics::log(format_args!("event=note-restored note={target}"));
+                self.report_data_result(requester, "restore", true, "Nota restaurada.");
+            }
+            Err(error) => {
+                eprintln!("Restore failed for note {target}: {error}");
+                let message = match error {
+                    crate::trash::RestoreError::Occupied => {
+                        "Já existe uma nota ativa com esse identificador. Nada foi alterado."
+                    }
+                    crate::trash::RestoreError::Missing => "Essa nota não está mais na lixeira.",
+                    crate::trash::RestoreError::Failed(_) => {
+                        "Não foi possível restaurar a nota. Nada foi alterado."
+                    }
+                };
+                self.report_data_result(requester, "restore", false, message);
+            }
+        }
+    }
+
+    /// Takes a snapshot because the reader asked for one, and says what
+    /// happened. Unlike the automatic backup this is never silent: someone is
+    /// waiting to know whether they have a safety point.
+    pub fn create_backup(&self, requester: Uuid) {
+        let result = self.context.borrow().storage.create_backup_now();
+        match result {
+            Ok(path) => {
+                diagnostics::log(format_args!(
+                    "event=backup-created kind=manual path={}",
+                    path.display()
+                ));
+                self.report_data_result(requester, "backup", true, "Backup concluído.");
+            }
+            Err(error) => {
+                eprintln!("Manual backup failed: {error}");
+                self.report_data_result(
+                    requester,
+                    "backup",
+                    false,
+                    "Não foi possível criar o backup. Nada foi alterado.",
+                );
+            }
+        }
+    }
+
+    fn report_data_result(&self, requester: Uuid, action: &str, ok: bool, message: &str) {
+        let ctx = self.context.borrow();
+        if let Some(window) = ctx.windows.get(&requester) {
+            window.send_data_result(action, ok, message);
+        }
+    }
+
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
         if self.context.borrow().windows.contains_key(&id) {
             return;
@@ -972,6 +1111,45 @@ where
     persist(&next_state)?;
     close_windows();
     *current_state = next_state;
+    Ok(())
+}
+
+/// Deleting a note, in order, with what each failure means written down.
+///
+/// Everything before the move can fail with the note still live: the flush
+/// that could not write the latest text, and the move that could not happen.
+/// In both cases nothing has changed and the caller keeps the note open.
+///
+/// The move is the commit point. From it onwards the note is in the trash, so
+/// neither of the two steps that follow may turn into a failure of the
+/// deletion. The window state is written best-effort — a stale entry for a
+/// note that is no longer in `notes/` costs nothing, because what is restored
+/// on startup comes from the files on disk — and the surface is destroyed
+/// either way, because the note it was showing is not there any more.
+fn commit_trash<M, S, D>(
+    flush: Result<(), String>,
+    move_to_trash: M,
+    persist_state: S,
+    destroy_surface: D,
+) -> Result<(), String>
+where
+    M: FnOnce() -> Result<(), String>,
+    S: FnOnce() -> Result<(), String>,
+    D: FnOnce(),
+{
+    flush.map_err(|error| {
+        format!("the note could not be saved, so it was not moved to the trash: {error}")
+    })?;
+    move_to_trash()?;
+
+    // Past the commit point.
+    if let Err(error) = persist_state() {
+        eprintln!(
+            "The note was moved to the trash, but the window state could not be \
+             persisted: {error}"
+        );
+    }
+    destroy_surface();
     Ok(())
 }
 
@@ -1125,6 +1303,26 @@ fn instantiate_note_window(
         app_clone7.open_search_result(requester, target, query);
     });
 
+    let app_clone8 = app_controller.clone();
+    let on_trash_note = Rc::new(move |id| {
+        app_clone8.trash_note(id);
+    });
+
+    let app_clone9 = app_controller.clone();
+    let on_list_trash = Rc::new(move |requester, request_id| {
+        app_clone9.answer_trash_list(requester, request_id);
+    });
+
+    let app_clone10 = app_controller.clone();
+    let on_restore_note = Rc::new(move |requester, target| {
+        app_clone10.restore_note(requester, target);
+    });
+
+    let app_clone11 = app_controller.clone();
+    let on_backup = Rc::new(move |requester| {
+        app_clone11.create_backup(requester);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1152,6 +1350,10 @@ fn instantiate_note_window(
         on_theme_changed,
         on_search,
         on_open_search_result,
+        on_trash_note,
+        on_list_trash,
+        on_restore_note,
+        on_backup,
     })
 }
 
@@ -1188,10 +1390,10 @@ fn find_ui_dist_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_shared_layer_transition, commit_hidden_transition, commit_quit, effective_layer_mode,
-        is_live_layer_noop, plan_startup, plan_summon_layer, preferred_layer_after_new_note,
-        prepare_new_note, FlushBatch, LifecycleCoordinator, LifecycleOperation, StartupPlan,
-        StatePersistenceDebouncer, SummonLayerPlan,
+        apply_shared_layer_transition, commit_hidden_transition, commit_quit, commit_trash,
+        effective_layer_mode, is_live_layer_noop, plan_startup, plan_summon_layer,
+        preferred_layer_after_new_note, prepare_new_note, FlushBatch, LifecycleCoordinator,
+        LifecycleOperation, StartupPlan, StatePersistenceDebouncer, SummonLayerPlan,
     };
     use crate::settings::AppConfig;
     use crate::state::{AppState, LayerMode};
@@ -1636,6 +1838,207 @@ mod tests {
                 plan_summon_layer(LayerMode::Hidden, already_running),
                 SummonLayerPlan::Persisted(LayerMode::Overlay)
             );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3.9 — deleting a note, and what each failure along the way means.
+    // ------------------------------------------------------------------
+
+    /// What the three steps after the flush actually did.
+    #[derive(Debug, Default)]
+    struct TrashRun {
+        moved: Cell<bool>,
+        persisted: Cell<bool>,
+        destroyed: Cell<bool>,
+    }
+
+    fn run_trash(
+        run: &TrashRun,
+        flush: Result<(), String>,
+        move_result: Result<(), String>,
+        persist_result: Result<(), String>,
+    ) -> Result<(), String> {
+        commit_trash(
+            flush,
+            || {
+                run.moved.set(true);
+                move_result
+            },
+            || {
+                run.persisted.set(true);
+                persist_result
+            },
+            || run.destroyed.set(true),
+        )
+    }
+
+    #[test]
+    fn failed_flush_does_not_trash_the_note() {
+        let run = TrashRun::default();
+        let error = run_trash(
+            &run,
+            Err("timed out waiting for latest WebView content".to_string()),
+            Ok(()),
+            Ok(()),
+        )
+        .expect_err("a note whose text could not be saved must not be deleted");
+
+        assert!(error.contains("could not be saved"), "{error}");
+        assert!(
+            !run.moved.get(),
+            "nothing may be moved before the text is safe"
+        );
+        assert!(!run.persisted.get());
+        assert!(
+            !run.destroyed.get(),
+            "the note has to stay open so the reader can try again"
+        );
+    }
+
+    #[test]
+    fn failed_move_does_not_close_or_forget_the_note() {
+        let run = TrashRun::default();
+        let error = run_trash(
+            &run,
+            Ok(()),
+            Err("Failed to move note to the trash: permission denied".to_string()),
+            Ok(()),
+        )
+        .expect_err("a move that did not happen is not a deletion");
+
+        assert!(error.contains("permission denied"), "{error}");
+        assert!(run.moved.get(), "the move was attempted");
+        assert!(
+            !run.persisted.get(),
+            "a note still in the store must not be recorded as closed"
+        );
+        assert!(!run.destroyed.get(), "its window must stay open");
+    }
+
+    #[test]
+    fn a_state_write_that_fails_after_the_move_still_completes_the_deletion() {
+        // Phase 3.4R.2's rule, applied to the trash: the move is the commit
+        // point, so past it nothing may claim the deletion did not happen. The
+        // window goes, because the note it was showing is not there any more.
+        let run = TrashRun::default();
+        run_trash(
+            &run,
+            Ok(()),
+            Ok(()),
+            Err("Failed to write the window state".to_string()),
+        )
+        .expect("past the commit point the deletion has happened");
+
+        assert!(run.moved.get());
+        assert!(run.persisted.get());
+        assert!(run.destroyed.get());
+    }
+
+    #[test]
+    fn a_successful_deletion_runs_flush_move_state_and_surface_in_that_order() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let move_order = Rc::clone(&order);
+        let persist_order = Rc::clone(&order);
+        let destroy_order = Rc::clone(&order);
+
+        commit_trash(
+            Ok(()),
+            move || {
+                move_order.borrow_mut().push("move");
+                Ok(())
+            },
+            move || {
+                persist_order.borrow_mut().push("state");
+                Ok(())
+            },
+            move || destroy_order.borrow_mut().push("surface"),
+        )
+        .expect("deletion");
+
+        assert_eq!(&*order.borrow(), &["move", "state", "surface"]);
+    }
+
+    #[test]
+    fn stale_state_for_a_trashed_note_does_not_recreate_it() {
+        // A note moved to the trash leaves its entry in `state.json`, closed.
+        // What is restored comes from the files on disk, so an entry naming a
+        // note that is no longer in `notes/` can never bring one back — and it
+        // must not be mistaken for a note to create either.
+        let trashed = Uuid::new_v4();
+        let live = Uuid::new_v4();
+
+        let mut state = AppState::default();
+        state.notes.insert(
+            trashed,
+            crate::state::NoteWindowState {
+                is_open: false,
+                ..Default::default()
+            },
+        );
+        state.notes.insert(
+            live,
+            crate::state::NoteWindowState {
+                is_open: true,
+                ..Default::default()
+            },
+        );
+
+        match plan_startup(false, vec![live], &state) {
+            StartupPlan::Restore { note_ids, .. } => assert_eq!(note_ids, vec![live]),
+            other => panic!("unexpected plan: {other:?}"),
+        }
+
+        // And a state file left claiming the deleted note is still open — a
+        // write that failed after the move — cannot resurrect it either.
+        state.notes.get_mut(&trashed).expect("entry").is_open = true;
+        match plan_startup(false, vec![live], &state) {
+            StartupPlan::Restore { note_ids, .. } => {
+                assert_eq!(note_ids, vec![live]);
+                assert!(!note_ids.contains(&trashed));
+            }
+            other => panic!("unexpected plan: {other:?}"),
+        }
+
+        // With every live note gone too, the fallback offers a new note rather
+        // than a note that is in the trash.
+        let mut only_trashed = AppState::default();
+        only_trashed.notes.insert(
+            trashed,
+            crate::state::NoteWindowState {
+                is_open: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            plan_startup(false, Vec::new(), &only_trashed),
+            StartupPlan::CreateNew
+        );
+    }
+
+    #[test]
+    fn a_note_with_no_state_entry_at_all_is_still_restored() {
+        // Reliability audit, case J. A note file with nothing said about it in
+        // `state.json` — one copied in by hand, or one whose state write was
+        // lost — is treated as open, which is the reading that never hides a
+        // note the user still has.
+        let known = Uuid::new_v4();
+        let unknown = Uuid::new_v4();
+
+        let mut state = AppState::default();
+        state.notes.insert(
+            known,
+            crate::state::NoteWindowState {
+                is_open: true,
+                ..Default::default()
+            },
+        );
+
+        match plan_startup(false, vec![unknown, known], &state) {
+            StartupPlan::Restore { note_ids, .. } => {
+                assert_eq!(note_ids, vec![unknown, known]);
+            }
+            other => panic!("unexpected plan: {other:?}"),
         }
     }
 }

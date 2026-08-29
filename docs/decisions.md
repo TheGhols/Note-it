@@ -719,7 +719,10 @@ document; a search over the document therefore cannot find them, with no rule
 needed to exclude them. `Ctrl+F` for `4` in a note whose only `4` is a result
 finds nothing, which is exactly right: that character is not in the file.
 
-**AutoPaste is one behaviour with one gate; compact links are none.** Pasting a
+**Pasting a URL on a selection is one behaviour with one gate; compact links
+are none.** (Phase 3.8 called this "AutoPaste"; Phase 3.9 renamed it, without
+changing it, so the word is free for the clipboard capture mode Phase 3.11 will
+bring — see Phase 3.9 in the roadmap.) Pasting a
 URL over selected text is the one paste where the reader's intent is
 unambiguous — they chose the words first — and where the default behaviour
 throws away the thing they chose. It reuses `safeLinkUrl`, the allowlist the
@@ -803,3 +806,155 @@ single full read of every note: opening the palette on an empty query shows a
 hundred notes, and a store holding a few enormous ones must not pay to read all
 of them to list a hundred. Searching does read every note in full, because a
 search cannot know which note holds the word until it has looked.
+
+## ADR-028: Deleting a Note Means Moving Its File, and the Move Is the Commit Point
+
+Phase 3.9 gave Note-it a deletion. Until then closing a note left it on disk,
+which was safe and also meant there was no way to get rid of one from inside
+the application. The version added is deliberately the smallest one that cannot
+lose text.
+
+**A deleted note leaves the active store.** `notes/<uuid>.md` becomes
+`trash/<uuid>.md`, in a sibling directory of the same `note-it` data directory.
+The alternative — a `deleted: true` flag in the front matter, with the file
+staying where it is — was rejected: every reader of the store would then have
+to know about the flag, and the one that forgot would list, search, summon or
+restore a note the user had deleted. Listing, search, recency and startup all
+read the notes directory, so taking the file out of it is what makes a deleted
+note stop being a note everywhere at once, with no rule added anywhere.
+
+**The move is the commit point**, the same rule ADR-020 established for a save.
+The order is flush, move, state, surface, and every failure before the move
+leaves the note open, live and editable. That order is the whole feature: a
+note whose latest text could not be written must never disappear from the
+screen as though it had been deleted, because the reader would have been shown
+a deletion and charged an edit for it. Past the move the note *is* in the trash,
+so neither the window-state write nor the surface teardown may report otherwise
+— the state write is best-effort, and the window goes either way, because a
+window still showing a note whose file has moved is showing something that is
+not there. `commit_trash` is a free function over three closures precisely so
+each of those failures is a test rather than a claim.
+
+**Two directions, two tools, for two different risks.** Moving *to* the trash
+is `rename`: one syscall, so there is no instant in which the note is both live
+and deleted. Moving *back* is `hard_link` followed by `remove_file`, because
+`rename` would silently replace a live note carrying the same identifier, and
+checking first only narrows the race rather than closing it. `hard_link`
+refuses an existing name atomically, so "restore never overwrites a live note"
+is a property of the syscall rather than of a check. It is also the strictest
+possible preservation of the file: the restored name is the same inode, not a
+copy of it. The asymmetry is the point — each direction uses the primitive that
+makes its own dangerous failure impossible, and the leftover a failed unlink
+could produce (a note both live and listed in the trash) is visible and
+harmless, where a silent overwrite would not be.
+
+**Nothing is written into the note.** The date it was deleted goes in a
+`<uuid>.json` sidecar beside the file. Writing it into the front matter would
+mean the file that comes back is not the file that went in, and would make the
+trash a second opinion about the note's content. A missing or unreadable
+sidecar costs that entry its exact date and nothing else: the file's own
+modification time answers instead, and nothing is written to repair it. The
+consequence worth stating is that a note Note-it cannot even parse — damaged
+front matter, hand-edited YAML — still goes to the trash and still comes back
+byte for byte, because the trash moves files and never reads them.
+
+**Trashing and restoring are not edits.** Neither one opens, parses or
+serialises the note, so `updated_at` cannot move: a restored note returns to
+exactly the position in the quick switcher it had, rather than pretending to
+have just been written in. The window state entry is set to closed rather than
+removed, so a note that comes back comes back the size and place it was — and a
+stale entry naming a note that is no longer in `notes/` is inert, because what
+startup restores comes from the files on disk.
+
+**No permanent delete, and no empty-the-trash.** Both were deliberately left
+out of this phase. The phase is about recovery, and an interface offering
+irreversible destruction beside a restore button is one where the wrong click
+cannot be undone. The trash is therefore unbounded, which is a real limitation
+and is written down as one; a person who wants the space back can delete files
+from `trash/` with any file manager, which is a property of storing notes as
+ordinary files.
+
+**The panel is a panel.** The trash reuses the search palette's shape — an
+element in the page, not a second layer-shell surface to place, focus, stack and
+tear down. Labels and snippets are written with `textContent`, exactly as search
+results are, and every action addresses a `Uuid`: there is no message in the
+bridge that carries a path, so `../../etc/passwd` is not a request that can be
+spelled.
+
+## ADR-029: A Backup Is a Directory of Files, Taken Before the Change It Protects Against
+
+Phase 3.9's second half is a local snapshot of everything recoverable: `notes/`,
+`trash/`, `config.toml` and `state.json`, copied into
+`backups/<timestamp>/`.
+
+**A plain directory, not an archive.** No tar, no zip, no database, no format
+of Note-it's own. Whatever has gone wrong, a snapshot can be read with `ls` and
+put back with `cp`, and recovering it requires nothing that could itself be
+broken. Compressing it would buy space on a store measured in kilobytes and cost
+the one property that matters when a backup is finally needed.
+
+**Nothing leaves the machine.** No server, no cloud, no WebDAV, no Git remote,
+no HTTP client — and none was added, so there is no network surface to audit
+here at all. The honest consequence is written down rather than implied: a local
+snapshot protects against an accidental deletion, a logical corruption, an edit
+to undo, a version to go back to. It sits on the same disk as the notes, so it
+protects against **none** of a dead drive, a lost machine or a stolen one, and
+it is not encrypted. Selling local backup as disaster recovery would be the kind
+of promise this project does not make.
+
+**Taken before the first eligible change, not after it, and not on a timer.**
+The check runs at the start of a persistent mutation — a note save, a move to
+the trash — and nowhere else. A timer waking the process to ask whether a day
+has passed would be continuous work in an application whose idle cost is a
+feature; and a snapshot taken *after* an edit is a snapshot of the state you
+wanted to get away from. So a daemon nobody is using does nothing at all, and a
+daemon left open for a week takes its snapshot the moment its owner starts
+typing again.
+
+**The store is its own record of when it was last backed up.** The newest valid
+snapshot's manifest answers "when", so there is no bookkeeping file to write, to
+lose, to version or to keep honest — and no state that can disagree with what is
+on disk. It is read once per session and remembered, because the question is
+asked before every autosave and has to be free when the answer is "not yet",
+which it is for all but one save a day. A failed attempt is not retried for
+fifteen minutes, so a store whose backups cannot be written does not try again
+on every keystroke.
+
+**A failed backup is never a failed save.** A snapshot is an extra layer of
+safety; turning its failure into a refusal to write would cost the reader the
+edit the backup exists to protect. The failure is reported to `stderr` and the
+save goes through. A backup the reader *asked* for is the opposite: someone is
+waiting to know whether they have a safety point, so it always says which it
+was, in a line at the foot of the note rather than a dialog over it.
+
+**The rename is the commit point here too.** A snapshot is built in
+`backups/.tmp.…` and renamed into place whole. A process killed halfway leaves a
+`.tmp.…` directory, which can never be mistaken for a snapshot: it does not have
+a snapshot's name and it has no manifest, and both are required. The next backup
+sweeps it — and sweeps only directories carrying that prefix, because mistaking
+a person's own file for debris would be a worse failure than the debris.
+
+**Retention runs only after a new snapshot has been committed.** Seven are kept,
+in one pool whatever made them. Deleting an old backup to make room for one that
+then fails would trade real protection for none, so the order is create, commit,
+prune — and a snapshot that cannot be pruned is reported rather than allowed to
+fail a backup that already exists. Daily/weekly/monthly tiers were not built:
+seven snapshots and one rule is something a person can hold in their head, and
+nothing yet says the tiers would be used.
+
+**A backup never follows a symlink.** Only regular files in the known
+directories are copied, and a name beginning with `.` is skipped — which is
+also what keeps a `.tmp.…` left by an interrupted save out of a snapshot. A
+single crafted entry in the store must not be able to make the backup copy
+`/etc`, a home directory, or anything else outside the two directories it was
+asked to copy. `backups/` is never a source, so a snapshot can never contain
+snapshots.
+
+**Restoring a whole store is deliberately not a button.** Putting a snapshot
+back over a live store is a multi-file transaction, and a one-click version of
+it beside a normal menu entry is the most destructive control the application
+could offer. What this phase owes instead is proof that the snapshot *is*
+restorable, and that is a test: a snapshot is copied into a second, empty XDG
+tree and opened, and the notes, identifiers, Markdown, trash, configuration and
+window state all come back. The manual procedure is written down in
+`docs/storage.md`, and it is `cp` with the application closed.

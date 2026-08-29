@@ -40,6 +40,12 @@ Note-it separates native system integration from document editing through a clea
 - `search.rs`: the search core. Accent folding, matching, snippets, labels and ordering — pure
   functions over `(Uuid, &str)`, with no GTK, no WebKit and no display, so it is testable without
   starting the application and reusable by the future CLI without moving anything. See ADR-027.
+- `trash.rs`: recoverable deletion. Moves a note file between `notes/` and `trash/` and lists what
+  is in there; it never reads, parses or rewrites a note, which is why a note with damaged front
+  matter can still be deleted and recovered. See ADR-028.
+- `backup.rs`: local snapshots. Copies `notes/`, `trash/`, `config.toml` and `state.json` into
+  `backups/<timestamp>/`, atomically, with retention. Pure functions decide when one is owed, so
+  the 24-hour rule is tested without waiting a day. See ADR-029.
 - `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`).
 - `settings.rs`: Application configuration (`$XDG_CONFIG_HOME/note-it/config.toml`).
 - `layer_shell.rs`: Wayland Layer Shell initialization, anchors, layers, and focus management.
@@ -62,10 +68,12 @@ Note-it separates native system integration from document editing through a clea
   boundary a future currency source must sit behind — see ADR-025.
 - `ui/src/editor/find.ts`: find and replace over the live document — matching per textblock,
   highlight decorations, and `Replace All` as one ProseMirror transaction.
-  `ui/src/editor/autoPaste.ts` is the URL-over-selection paste, gated by the application's own
+  `ui/src/editor/linkPaste.ts` is the URL-over-selection paste, gated by the application's own
   link allowlist.
-- `ui/src/ui/searchPalette.ts` and `ui/src/ui/findBar.ts`: the two panels. Both live in the page
-  rather than in a second window, own their keys, and are not part of the document.
+- `ui/src/ui/searchPalette.ts`, `ui/src/ui/findBar.ts` and `ui/src/ui/trashPanel.ts`: the three
+  panels. All live in the page rather than in a second window, own their keys, and are not part of
+  the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
+  action did; it is not a dialog and takes nothing from the reader.
 - `ui/src/bridge/`: Native message handlers for load, save, theme, and font changes.
 - `ui/src/styles/`: Minimalist themes, paper color definitions, and layout styling.
 

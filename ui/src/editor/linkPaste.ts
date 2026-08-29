@@ -20,7 +20,7 @@ import { safeLinkUrl } from '../markdown/sanitizer.ts';
  * autolink policy uses. A `javascript:` or `data:` clipboard is not a link
  * here; it is text, and pasting it does what pasting text does.
  */
-export function handleAutoPaste(view: EditorView, event: ClipboardEvent): boolean {
+export function handleLinkPaste(view: EditorView, event: ClipboardEvent): boolean {
   const clipboard = event.clipboardData?.getData('text/plain') ?? '';
   const href = safeLinkUrl(clipboard);
   if (!href) return false;

@@ -332,6 +332,21 @@ body[data-collapsed="true"] .note-header {
   color: var(--ui-text-muted);
 }
 
+/* The one row in the menu that removes something. Coloured, never a button
+   that looks like a primary action: it is confirming a deletion, not inviting
+   one. */
+.note-menu-destructive {
+  color: var(--callout-caution);
+}
+
+/* The confirmation panel wraps its question instead of eliding it: a reader
+   deciding whether to delete a note has to be able to read the whole sentence. */
+.note-menu-confirm .note-menu-hint {
+  max-width: 220px;
+  font-style: normal;
+  white-space: normal;
+}
+
 .note-menu-value {
   margin-left: auto;
   color: var(--ui-text-muted);
@@ -1218,4 +1233,153 @@ body[data-collapsed="true"] .resize-handle {
   border-right: 2px solid var(--paper-muted);
   border-bottom: 2px solid var(--paper-muted);
   border-radius: 1px;
+}
+
+
+/* The trash, and the line that says what just happened. Both are chrome rather
+   than paper: they wear the interface theme, exactly as the note's menu and the
+   search palette do, so they read the same over a yellow note and a black one. */
+.note-trash {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
+  top: calc(var(--note-header-height) + 4px);
+  left: 8px;
+  right: 8px;
+  max-height: calc(100% - var(--note-header-height) - 16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--ui-surface);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  box-shadow: var(--ui-shadow);
+  font-family: var(--note-font-family);
+  /* Fixed in pixels: the application's own furniture, so a note's zoom scales
+     the note and leaves the control alone. */
+  font-size: 12px;
+}
+
+.note-trash[hidden] {
+  display: none;
+}
+
+.note-trash-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.note-trash-title {
+  font-weight: 600;
+}
+
+.note-trash-status {
+  flex: none;
+  margin-left: auto;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-trash-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.note-trash-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  padding: 5px 7px;
+  border-radius: 5px;
+}
+
+.note-trash-row.selected {
+  background-color: var(--ui-surface-hover);
+}
+
+.note-trash-label {
+  grid-column: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-trash-snippet,
+.note-trash-date {
+  grid-column: 1;
+  color: var(--ui-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-trash-date {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Named, never an icon: a control that undoes a deletion is not a place for a
+   glyph the reader has to guess at. */
+.note-trash-restore {
+  grid-row: 1 / span 3;
+  grid-column: 2;
+  align-self: center;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 5px;
+  color: var(--ui-text);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.note-trash-restore:hover,
+.note-trash-restore:focus-visible {
+  background-color: var(--ui-surface-hover);
+}
+
+.note-trash-restore:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
+/* One line at the foot of the note. It reports and disappears; it never takes
+   the keyboard and there is nothing to dismiss. */
+.note-status {
+  position: absolute;
+  z-index: 31;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  background-color: var(--ui-surface);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  box-shadow: var(--ui-shadow);
+  font-family: var(--note-font-family);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.note-status[hidden] {
+  display: none;
+}
+
+.note-status[data-ok="false"] {
+  border-color: var(--callout-caution);
+  color: var(--callout-caution);
 }

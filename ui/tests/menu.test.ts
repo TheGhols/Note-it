@@ -45,6 +45,9 @@ function mountMenu() {
   onOpenGlobalSearch: vi.fn(),
   onOpenFind: vi.fn(),
   onOpenReplace: vi.fn(),
+  onTrashNote: vi.fn(),
+  onOpenTrash: vi.fn(),
+  onCreateBackup: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };
@@ -274,7 +277,9 @@ describe('NoteMenu', () => {
     // inline formatting they belong beside, and the theme sits with the other
     // application-wide switch rather than among the note's own settings.
     // Searching comes after the things a note is made of and before the ones
-    // that describe how it is shown: it is what you do *with* a note.
+    // that describe how it is shown: it is what you do *with* a note. Dados
+    // sits beside it, because moving a note to the trash, opening the trash and
+    // taking a backup are the other things you do with one rather than to it.
     expect(panels).toEqual([
       'paper',
       'paperType',
@@ -284,6 +289,7 @@ describe('NoteMenu', () => {
       'highlight',
       'blocks',
       'search',
+      'data',
       'zoom',
       'theme',
       'layer',

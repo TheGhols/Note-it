@@ -1,4 +1,5 @@
 use crate::search::SearchResult;
+use crate::trash::TrashEntry;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -85,6 +86,21 @@ pub enum HostToWebviewMessage {
     RevealMatch {
         query: String,
     },
+    /// The answer to one `TrashListRequested`, numbered the same way a search
+    /// answer is so a stale reply can be dropped rather than shown.
+    TrashEntries {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        entries: Vec<TrashEntry>,
+    },
+    /// What became of a data action the page asked for: moving a note to the
+    /// trash, restoring one, or taking a backup. The message is already the
+    /// sentence to show; the page never composes one from an error code.
+    DataResult {
+        action: String,
+        ok: bool,
+        message: String,
+    },
     RequestContent,
     RequestSaveAndClose,
     RequestFlush {
@@ -157,6 +173,26 @@ pub enum WebviewToHostMessage {
         note_id: Uuid,
         query: String,
     },
+    /// Asks the host to move **this** note to the trash. The page has already
+    /// asked the reader to confirm; the host still flushes the note and only
+    /// moves the file once that has succeeded.
+    TrashNoteRequested {
+        id: Uuid,
+    },
+    /// Asks for the contents of the trash. Reading only.
+    TrashListRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+    },
+    /// Asks the host to bring one note back out of the trash. Named by
+    /// identifier, which `serde` will only accept as a UUID, so no path can be
+    /// spelled here at all.
+    RestoreNoteRequested {
+        #[serde(rename = "noteId")]
+        note_id: Uuid,
+    },
+    /// Asks for a snapshot right now.
+    BackupRequested,
     OpenExternalUrl {
         url: String,
     },
@@ -520,5 +556,148 @@ mod tests {
             parse_webview_message(&raw).expect("layer toggle"),
             WebviewToHostMessage::ToggleLayerMode
         ));
+    }
+
+    #[test]
+    fn parses_the_data_requests_the_menu_can_make() {
+        let id = Uuid::new_v4();
+
+        let raw = serde_json::json!({
+            "type": "trash_note_requested",
+            "payload": { "id": id }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("trash request") {
+            WebviewToHostMessage::TrashNoteRequested { id: parsed } => assert_eq!(parsed, id),
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let raw = serde_json::json!({
+            "type": "trash_list_requested",
+            "payload": { "requestId": 7 }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("trash list request") {
+            WebviewToHostMessage::TrashListRequested { request_id } => assert_eq!(request_id, 7),
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let raw = serde_json::json!({
+            "type": "restore_note_requested",
+            "payload": { "noteId": id }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("restore request") {
+            WebviewToHostMessage::RestoreNoteRequested { note_id } => assert_eq!(note_id, id),
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let raw = serde_json::json!({ "type": "backup_requested" }).to_string();
+        assert!(matches!(
+            parse_webview_message(&raw).expect("backup request"),
+            WebviewToHostMessage::BackupRequested
+        ));
+    }
+
+    #[test]
+    fn a_data_request_cannot_name_a_file() {
+        // The trash and the backup both live on disk, and neither is reachable
+        // by name from the page: every note in these messages is a `Uuid`, so
+        // a path is not a value that can be spelled in one.
+        for payload in [
+            serde_json::json!({ "noteId": "../../etc/passwd" }),
+            serde_json::json!({ "noteId": "/home/alguem/.local/share/note-it/notes/a.md" }),
+            serde_json::json!({ "noteId": "a.md" }),
+            serde_json::json!({ "noteId": "" }),
+            serde_json::json!({ "noteId": 42 }),
+        ] {
+            let raw = serde_json::json!({
+                "type": "restore_note_requested",
+                "payload": payload,
+            })
+            .to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+
+        for payload in [
+            serde_json::json!({ "id": "../../../notes" }),
+            serde_json::json!({ "id": "trash/../notes/a.md" }),
+        ] {
+            let raw = serde_json::json!({
+                "type": "trash_note_requested",
+                "payload": payload,
+            })
+            .to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn the_trash_travels_to_the_page_as_identifiers_and_text() {
+        let note_id = Uuid::new_v4();
+        let deleted_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T09:30:00Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+
+        let encoded = serde_json::to_value(super::HostToWebviewMessage::TrashEntries {
+            request_id: 3,
+            entries: vec![
+                crate::trash::TrashEntry {
+                    note_id,
+                    label: "Uma nota".to_string(),
+                    snippet: "<script>alert(1)</script>".to_string(),
+                    deleted_at: Some(deleted_at),
+                },
+                crate::trash::TrashEntry {
+                    note_id: Uuid::new_v4(),
+                    label: "Sem data".to_string(),
+                    snippet: String::new(),
+                    deleted_at: None,
+                },
+            ],
+        })
+        .expect("serialize trash entries");
+
+        assert_eq!(encoded["type"], "trash_entries");
+        assert_eq!(encoded["payload"]["requestId"], 3);
+        let entries = &encoded["payload"]["entries"];
+        assert_eq!(entries[0]["noteId"], note_id.to_string());
+        assert_eq!(entries[0]["deletedAt"], "2026-08-29T09:30:00Z");
+        // A snippet is text on the wire too; nothing escapes it into markup,
+        // and the page renders it with `textContent`.
+        assert_eq!(entries[0]["snippet"], "<script>alert(1)</script>");
+        // An unknown date travels as null rather than as an invented one.
+        assert!(entries[1]["deletedAt"].is_null());
+        // No path of any kind reaches the page.
+        assert!(!encoded.to_string().contains(".md"));
+    }
+
+    #[test]
+    fn a_data_result_carries_the_sentence_to_show() {
+        for (action, ok, message) in [
+            ("backup", true, "Backup concluído."),
+            (
+                "backup",
+                false,
+                "Não foi possível criar o backup. Nada foi alterado.",
+            ),
+            ("restore", true, "Nota restaurada."),
+            (
+                "trash",
+                false,
+                "Não foi possível mover a nota para a lixeira.",
+            ),
+        ] {
+            let encoded = serde_json::to_value(super::HostToWebviewMessage::DataResult {
+                action: action.to_string(),
+                ok,
+                message: message.to_string(),
+            })
+            .expect("serialize data result");
+            assert_eq!(encoded["type"], "data_result");
+            assert_eq!(encoded["payload"]["action"], action);
+            assert_eq!(encoded["payload"]["ok"], ok);
+            assert_eq!(encoded["payload"]["message"], message);
+        }
     }
 }

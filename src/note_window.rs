@@ -48,6 +48,17 @@ pub struct NoteWindowOptions<'a> {
     /// Asks the host to bring a search result to the front: the note that
     /// asked, the note to reveal, and what was being looked for.
     pub on_open_search_result: Rc<dyn Fn(Uuid, Uuid, String)>,
+    /// Asks the host to move this note to the trash. The reader has already
+    /// confirmed; the host still flushes before anything is moved.
+    pub on_trash_note: Rc<dyn Fn(Uuid)>,
+    /// Asks the host for the contents of the trash: the note that asked and
+    /// the number the answer must carry back.
+    pub on_list_trash: Rc<dyn Fn(Uuid, u64)>,
+    /// Asks the host to restore one note: the note that asked, and the note to
+    /// bring back.
+    pub on_restore_note: Rc<dyn Fn(Uuid, Uuid)>,
+    /// Asks the host for a snapshot now, and to answer the note that asked.
+    pub on_backup: Rc<dyn Fn(Uuid)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -220,6 +231,10 @@ impl NoteWindow {
         let on_theme_changed_clone = Rc::clone(&options.on_theme_changed);
         let on_search_clone = Rc::clone(&options.on_search);
         let on_open_search_result_clone = Rc::clone(&options.on_open_search_result);
+        let on_trash_note_clone = Rc::clone(&options.on_trash_note);
+        let on_list_trash_clone = Rc::clone(&options.on_list_trash);
+        let on_restore_note_clone = Rc::clone(&options.on_restore_note);
+        let on_backup_clone = Rc::clone(&options.on_backup);
         let loaded = Rc::new(Cell::new(false));
         let pending_reveal: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let loaded_clone = Rc::clone(&loaded);
@@ -426,6 +441,26 @@ impl NoteWindow {
                         }
                         WebviewToHostMessage::OpenSearchResult { note_id, query } => {
                             on_open_search_result_clone(id, note_id, query);
+                        }
+                        WebviewToHostMessage::TrashNoteRequested { id: message_id } => {
+                            // A note can only ask for its own deletion. The
+                            // page has no way to name another one here, and a
+                            // mismatched identifier is a message this window
+                            // will not act on.
+                            if message_id != id {
+                                eprintln!("Trash request rejected a mismatched note identifier");
+                                return;
+                            }
+                            on_trash_note_clone(id);
+                        }
+                        WebviewToHostMessage::TrashListRequested { request_id } => {
+                            on_list_trash_clone(id, request_id);
+                        }
+                        WebviewToHostMessage::RestoreNoteRequested { note_id } => {
+                            on_restore_note_clone(id, note_id);
+                        }
+                        WebviewToHostMessage::BackupRequested => {
+                            on_backup_clone(id);
                         }
                         WebviewToHostMessage::NewNoteRequested => {
                             on_new_note_clone();
@@ -704,6 +739,33 @@ impl NoteWindow {
             &HostToWebviewMessage::SearchResults {
                 request_id,
                 results,
+            },
+        );
+    }
+
+    /// Hands the page the contents of the trash it asked for.
+    pub fn send_trash_entries(&self, request_id: u64, entries: Vec<crate::trash::TrashEntry>) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::TrashEntries {
+                request_id,
+                entries,
+            },
+        );
+    }
+
+    /// Tells the page what became of a data action it asked for.
+    ///
+    /// The sentence travels ready to be shown. A page that composed its own
+    /// from a code would end up with two places deciding what a failure means,
+    /// and the one nearer the filesystem is the one that knows.
+    pub fn send_data_result(&self, action: &str, ok: bool, message: &str) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::DataResult {
+                action: action.to_string(),
+                ok,
+                message: message.to_string(),
             },
         );
     }

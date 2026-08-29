@@ -140,6 +140,9 @@ describe('the Blocos menu section', () => {
   onOpenGlobalSearch: vi.fn(),
   onOpenFind: vi.fn(),
   onOpenReplace: vi.fn(),
+  onTrashNote: vi.fn(),
+  onOpenTrash: vi.fn(),
+  onCreateBackup: vi.fn(),
     };
     const menu = new NoteMenu({ trigger, mount: mountPoint, colors: COLORS, handlers });
     active = menu;

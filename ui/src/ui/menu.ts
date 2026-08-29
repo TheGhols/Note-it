@@ -36,6 +36,10 @@ export interface NoteMenuHandlers {
   onOpenGlobalSearch(): void;
   onOpenFind(): void;
   onOpenReplace(): void;
+  /** The reader confirmed: move this note to the trash. */
+  onTrashNote(): void;
+  onOpenTrash(): void;
+  onCreateBackup(): void;
   onOpen?(): void;
   onClose?(): void;
 }
@@ -64,7 +68,9 @@ type MenuPanel =
   | 'blocks'
   | 'codeLanguage'
   | 'callout'
-  | 'search';
+  | 'search'
+  | 'data'
+  | 'trashConfirm';
 
 export interface NoteMenuOptions {
   /** Button that toggles the menu; it stays outside the drag region. */
@@ -177,6 +183,7 @@ export class NoteMenu {
 
     const blocksItem = this.createSubmenuItem('Blocos', 'blocks');
     const searchItem = this.createSubmenuItem('Buscar', 'search');
+    const dataItem = this.createSubmenuItem('Dados', 'data');
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
     this.layerValue = this.doc.createElement('span');
@@ -205,6 +212,7 @@ export class NoteMenu {
       highlightItem,
       blocksItem,
       searchItem,
+      dataItem,
       zoomItem,
       themeItem,
       layerItem,
@@ -234,6 +242,8 @@ export class NoteMenu {
       ),
     );
     this.panels.set('search', this.buildSearchPanel());
+    this.panels.set('data', this.buildDataPanel());
+    this.panels.set('trashConfirm', this.buildTrashConfirmPanel());
     this.panels.set('textSize', this.buildTextSizePanel());
     this.panels.set('textColor', this.buildSwatchPanel(
       'Cor do texto',
@@ -787,6 +797,69 @@ export class NoteMenu {
     return { element: panel };
   }
 
+  /**
+   * Everything that acts on the store rather than on the text.
+   *
+   * One section, three rows, and no second toolbar. Deleting a note lives here
+   * rather than beside the close button on purpose: `×` closes a window and
+   * has always closed a window, and putting a deletion next to it would make
+   * the difference a matter of aim.
+   */
+  private buildDataPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Dados', 'note-menu-data');
+
+    // The one destructive row, and it does not act — it asks.
+    const trash = this.createItem('Mover esta nota para a lixeira', 'note-menu-item');
+    trash.addEventListener('click', () => this.showPanel('trashConfirm'));
+
+    const openTrash = this.createItem('Lixeira', 'note-menu-item');
+    openTrash.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onOpenTrash();
+    });
+
+    const backup = this.createItem('Fazer backup agora', 'note-menu-item');
+    backup.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onCreateBackup();
+    });
+
+    body.append(trash, openTrash, backup);
+    return { element: panel };
+  }
+
+  /**
+   * The confirmation, in the menu that asked for it.
+   *
+   * Not a dialog and not a second surface: the popover already owns the
+   * keyboard, already closes on Escape and already closes on a click outside,
+   * and all three of those mean "no" here. The wording says the deletion is
+   * recoverable, because it is, and a reader who is told only "Excluir?" will
+   * make a different decision than the one the software actually offers.
+   *
+   * Cancel is first, so it is what the panel focuses and what Enter takes.
+   */
+  private buildTrashConfirmPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Mover para a lixeira', 'note-menu-confirm');
+
+    const question = this.doc.createElement('p');
+    question.className = 'note-menu-hint';
+    question.textContent =
+      'Mover esta nota para a lixeira? Você poderá restaurá-la depois em Dados › Lixeira.';
+
+    const cancel = this.createItem('Cancelar', 'note-menu-item');
+    cancel.addEventListener('click', () => this.showPanel('data'));
+
+    const confirm = this.createItem('Mover', 'note-menu-item note-menu-destructive');
+    confirm.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onTrashNote();
+    });
+
+    body.append(question, cancel, confirm);
+    return { element: panel };
+  }
+
   private createSubmenuItem(label: string, target: MenuPanel): HTMLButtonElement {
     const item = this.createItem(label, 'note-menu-item note-menu-submenu');
     item.dataset.panel = target;
@@ -858,7 +931,9 @@ export class NoteMenu {
 
     if (event.key === 'ArrowLeft' && this.panel !== 'root') {
       event.preventDefault();
-      this.showPanel('root');
+      // The confirmation was reached from Dados, so back is Dados. Everything
+      // else is one level down from the root panel.
+      this.showPanel(this.panel === 'trashConfirm' ? 'data' : 'root');
       return;
     }
 

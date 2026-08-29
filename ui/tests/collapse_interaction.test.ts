@@ -56,6 +56,9 @@ function buildNote() {
   onOpenGlobalSearch: vi.fn(),
   onOpenFind: vi.fn(),
   onOpenReplace: vi.fn(),
+  onTrashNote: vi.fn(),
+  onOpenTrash: vi.fn(),
+  onCreateBackup: vi.fn(),
   };
   const menu = new NoteMenu({ trigger: btnMenu, mount: left, colors: COLORS, handlers });
 

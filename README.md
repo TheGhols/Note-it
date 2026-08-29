@@ -112,6 +112,35 @@ Tudo listado aqui já está implementado.
 - Diferente da busca global, localizar e substituir **respeita acentos** — substituir é destrutivo,
   e `saude` não deve reescrever `saúde`.
 
+**Lixeira e backup**
+
+- Apagar uma nota significa mandá-la para a lixeira, com confirmação que diz, em palavras, que dá
+  para desfazer. O `×` continua sendo apenas fechar a janela — nunca apagou nada e continua sem
+  apagar.
+- A nota é salva antes de sair do lugar. Se o texto mais recente não puder ser gravado, nada é
+  movido: a nota continua aberta e o erro aparece.
+- Uma nota na lixeira some da busca, do `Ctrl+K`, do summon e da reabertura ao reiniciar — porque o
+  arquivo saiu de `notes/`, não porque cada um deles a filtra.
+- Restaurar devolve o mesmo arquivo, byte a byte, com o mesmo identificador. Restaurar não é editar:
+  a data de modificação não muda, então a nota volta para o lugar que tinha na lista de recentes em
+  vez de fingir que acabou de ser escrita.
+- Restaurar nunca escreve por cima de uma nota viva com o mesmo identificador. Se houver, a operação
+  é recusada e nenhum dos dois arquivos é tocado.
+- Backup local automático: no máximo um a cada 24 h, tirado **antes** da primeira alteração depois
+  desse intervalo — o estado que interessa guardar é o de antes da edição. Sem timer, sem thread:
+  parado, o daemon não faz nada.
+- Um snapshot é uma pasta comum com `notes/`, `trash/`, `config.toml` e `state.json`. Dá para ler
+  com `ls` e recuperar com `cp`, sem depender de nada que também possa quebrar.
+- *Dados › Fazer backup agora* tira um na hora e diz se deu certo, numa linha no rodapé da nota.
+- Ficam os sete mais recentes, e os antigos só são removidos **depois** que o novo está pronto. Um
+  backup que falha nunca custa a proteção que já existia, e nunca impede um salvamento normal.
+- Tudo local. Nenhum servidor, nenhuma nuvem, nenhuma requisição de rede.
+
+> **Backup local não é proteção contra desastre.** Os snapshots ficam no mesmo disco das notas.
+> Protegem contra exclusão acidental, corrupção lógica, uma edição para desfazer e uma versão para
+> voltar. **Não** protegem contra HD/SSD morto, máquina perdida ou roubada, e não são
+> criptografados.
+
 **Colar link**
 
 - Com um trecho selecionado, colar uma URL transforma o trecho em link: selecione `site oficial`,
@@ -125,7 +154,9 @@ Tudo listado aqui já está implementado.
 - Salvamento automático com escrita atômica em disco: ou a nota nova está gravada, ou a anterior
   continua intacta, nunca um arquivo pela metade.
 - A data de modificação muda apenas quando o conteúdo realmente muda — abrir e fechar uma nota não
-  conta como editá-la.
+  conta como editá-la, e mandar para a lixeira ou restaurar também não.
+- Apagar é reversível, e o arquivo só sai do lugar depois que o texto está salvo.
+- Backup local automático dos arquivos recuperáveis, em pastas comuns no próprio disco.
 - Sanitização de HTML e de URLs em tudo que entra na nota, inclusive ao colar.
 - Zero telemetria, zero analytics, zero requisições de rede, zero contas.
 

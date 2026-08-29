@@ -691,6 +691,89 @@ The words you chose are kept and become the link, instead of being replaced by t
 leads, and the reader who most needs to see `https://evil.example.com/path` in full is exactly the
 one an abbreviation would fool. See ADR-027.
 
+## Trash
+
+Deleting a note is an explicit action, and it is recoverable.
+
+**Moving a note to the trash.** *☰ › Dados › Mover esta nota para a lixeira*. It asks first:
+
+```text
+Mover esta nota para a lixeira? Você poderá restaurá-la depois em Dados › Lixeira.
+[Cancelar] [Mover]
+```
+
+Cancel is focused, so the key already under your finger is the one that does nothing. Escape and a
+click outside are also "no".
+
+- The `×` button and `Ctrl+W` still mean **close the window**. Closing a note has never deleted it
+  and still does not.
+- The note is saved first. If its latest text cannot be written, nothing is moved: the note stays
+  open, the failure is reported, and you can try again.
+- The file leaves `notes/` for `trash/`, byte for byte. Front matter, colour, paper, tasks, links,
+  calculations and comments all travel with it.
+- Moving a note to the trash is not an edit, so its modification date does not change.
+
+**A note in the trash is not a note.** `Ctrl+K` does not find it, the empty-query list does not
+offer it, a summon does not bring it back, and restarting does not reopen it.
+
+**Getting one back.** *☰ › Dados › Lixeira* lists what can be recovered — each note's first line, a
+preview of its opening, and when it was deleted — newest first. Arrow keys walk the list, `Enter`
+restores the selected one, `Esc` closes the panel. Every row also has a named **Restaurar** button.
+
+Restoring puts the file back in `notes/` with the same identifier and the same bytes, and the note
+becomes findable again immediately. It keeps its original modification date: a recovered note goes
+back to where it was in the quick switcher rather than jumping to the top as though it had just
+been written in. It also comes back the size and place it was.
+
+**Restoring never overwrites a live note.** If a note carrying the same identifier is already in
+the store, the restore is refused, neither file is changed, and the panel says so.
+
+**There is no permanent delete and no "empty the trash"** in this version. That is deliberate: this
+is the phase that makes deletion recoverable, and an irreversible button beside a restore button is
+one wrong click away from the thing it exists to prevent. The trash therefore grows until you clear
+it yourself, which you can do with any file manager — a note in the trash is an ordinary `.md` in
+`~/.local/share/note-it/trash/`.
+
+## Backups
+
+Note-it keeps local snapshots of everything that can be recovered.
+
+**Where.** `~/.local/share/note-it/backups/<data-e-hora>/`, holding `notes/`, `trash/`,
+`config.toml`, `state.json` and a `manifest.json` describing the snapshot. Ordinary directories and
+ordinary files — no archive, no database, no format of Note-it's own.
+
+**When.** At most one automatic snapshot per 24 hours, taken **before** the first change after that
+window has passed. Taking it first is the point: the state worth being able to go back to is the one
+before the edit. There is no timer — an idle daemon does no work at all, and one left open for days
+takes its snapshot the moment you start typing again.
+
+**Now, if you want one.** *☰ › Dados › Fazer backup agora* takes a snapshot immediately and says
+whether it worked, in a line at the foot of the note rather than a dialog over it. Useful before
+doing something you are not sure about.
+
+**How many.** The seven most recent are kept. Old ones are removed only **after** a new one has been
+completely written, so a backup that fails never costs you the protection you already had.
+
+**What is never in a snapshot:** previous snapshots, temporary files, and anything reached through a
+symbolic link. A backup copies regular files from the two directories it was asked to copy and
+follows nothing out of them.
+
+**If a backup fails,** the note is still saved. A snapshot is an extra layer of safety; its failure
+is written to the diagnostic output and retried later, never turned into a refusal to write your
+text.
+
+**Getting a snapshot back** is `cp`, with the application closed — see
+[docs/storage.md](storage.md#recovering-from-a-snapshot) for the exact procedure, including how to
+recover a single note rather than the whole store. There is deliberately no one-click "restore
+everything": that is a multi-file transaction, and it deserves its own design rather than a menu
+entry.
+
+> **A local backup is not disaster recovery.** These snapshots sit on the same disk as the notes.
+> They protect against an accidental deletion, a logical corruption, an edit you want to undo or a
+> version you want to go back to. They protect against **none** of a dead drive, a lost machine or a
+> stolen one, and they are not encrypted. Protection from hardware failure needs a copy on other
+> hardware, and Note-it does not make one.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
@@ -740,6 +823,13 @@ one an abbreviation would fool. See ADR-027.
 
 ## Storage & Reliability
 
+- **Recoverable Deletion:**
+  - Deleting a note moves its file to `trash/`, from where it can be restored with its identifier,
+    its bytes and its modification date intact. The save comes first: a note whose text could not be
+    written is never moved.
+- **Local Snapshots:**
+  - At most one automatic backup per 24 hours, taken before the first change after that window, plus
+    a manual one on request. Seven are kept, old ones removed only after a new one is complete.
 - **Atomic Autosave:**
   - Debounced write (300 ms) via temporary file replacement and directory sync to prevent data corruption.
   - Close and `Ctrl+W` send the latest editor content in one save-and-close request; the window closes only after persistence succeeds.

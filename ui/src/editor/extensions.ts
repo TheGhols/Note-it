@@ -263,7 +263,7 @@ export const editorExtensions = [
       // second opinion about what a URL is: it accepts schemes Note-it does
       // not allow, and it links a selection that spans two blocks. Note-it's
       // own handler does this job against the application's allowlist — see
-      // `editor/autoPaste.ts` — and two handlers competing for one paste is
+      // `editor/linkPaste.ts` — and two handlers competing for one paste is
       // exactly how an allowlist stops meaning anything.
       linkOnPaste: false,
     },

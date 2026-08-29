@@ -1,5 +1,6 @@
 mod app;
 mod atomic_file;
+mod backup;
 mod cli;
 mod diagnostics;
 mod layer_shell;
@@ -9,6 +10,7 @@ mod search;
 mod settings;
 mod state;
 mod storage;
+mod trash;
 mod webview_bridge;
 
 use app::NoteItApp;

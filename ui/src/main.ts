@@ -20,6 +20,8 @@ import {
 import { FindBar } from './ui/findBar.ts';
 import { NoteMenu } from './ui/menu.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
+import { NoteStatus } from './ui/status.ts';
+import { TrashPanel } from './ui/trashPanel.ts';
 import {
   applyPaper,
   DEFAULT_PAPER_INTENSITY,
@@ -57,6 +59,8 @@ let noteMenu: NoteMenu | null = null;
 let infoTooltip: NoteInfoTooltip | null = null;
 let searchPalette: SearchPalette | null = null;
 let findBar: FindBar | null = null;
+let trashPanel: TrashPanel | null = null;
+let noteStatus: NoteStatus | null = null;
 
 /**
  * Opens the global search palette, or brings the caret back to it.
@@ -67,12 +71,27 @@ let findBar: FindBar | null = null;
  */
 function openGlobalSearch(): void {
   findBar?.close();
+  trashPanel?.close();
   searchPalette?.openPalette();
+}
+
+/**
+ * Opens the trash.
+ *
+ * Everything else that wants the keyboard closes first, for the same reason
+ * the find bar closes when global search opens: only one of them can be where
+ * the reader is typing, and it is the one they just asked for.
+ */
+function openTrash(): void {
+  searchPalette?.close();
+  findBar?.close();
+  trashPanel?.openPanel();
 }
 
 /** Opens Find, or Find with the replace row, seeded with the selection. */
 function openFindBar(replace: boolean): void {
   searchPalette?.close();
+  trashPanel?.close();
   findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
 }
 
@@ -196,6 +215,8 @@ function setCollapsed(collapsed: boolean): void {
   if (collapsed) {
     searchPalette?.close();
     findBar?.close();
+    trashPanel?.close();
+    noteStatus?.hide();
   }
 }
 
@@ -386,6 +407,19 @@ function initUI(): void {
         onOpenGlobalSearch: openGlobalSearch,
         onOpenFind: () => openFindBar(false),
         onOpenReplace: () => openFindBar(true),
+        onTrashNote: () => {
+          // The reader has confirmed. The host still flushes this note and
+          // only moves the file once that has succeeded, so nothing here has
+          // to be undone if the save fails: the note simply stays.
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'trash_note_requested',
+              payload: { id: activeNoteId },
+            });
+          }
+        },
+        onOpenTrash: openTrash,
+        onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
       },
     });
   }
@@ -409,6 +443,22 @@ function initUI(): void {
         onClose: () => noteEditor?.focus(),
       },
     });
+
+    trashPanel = new TrashPanel({
+      mount: appRoot,
+      handlers: {
+        onList: (requestId) => {
+          // Reading only. Opening the trash saves nothing and moves no date.
+          bridge.sendMessage({ type: 'trash_list_requested', payload: { requestId } });
+        },
+        onRestore: (noteId) => {
+          bridge.sendMessage({ type: 'restore_note_requested', payload: { noteId } });
+        },
+        onClose: () => noteEditor?.focus(),
+      },
+    });
+
+    noteStatus = new NoteStatus({ mount: appRoot });
 
     findBar = new FindBar({
       mount: appRoot,
@@ -576,6 +626,8 @@ function initUI(): void {
       // belonged to whatever was there before.
       searchPalette?.close();
       findBar?.close();
+      trashPanel?.close();
+      noteStatus?.hide();
       noteEditor?.setMarkdown(msg.payload.content || '');
       noteEditor?.focus();
       syncInlineFormatting();
@@ -598,6 +650,16 @@ function initUI(): void {
       setFontSize(msg.payload.fontSize);
     } else if (msg.type === 'search_results') {
       searchPalette?.showResults(msg.payload.requestId, msg.payload.results);
+    } else if (msg.type === 'trash_entries') {
+      trashPanel?.showEntries(msg.payload.requestId, msg.payload.entries);
+    } else if (msg.type === 'data_result') {
+      // The sentence arrives ready to show; the page never composes one.
+      noteStatus?.show(msg.payload.message, msg.payload.ok);
+      if (msg.payload.action === 'restore') {
+        trashPanel?.setStatus(msg.payload.message);
+        // A note that came back is not in the trash any more.
+        if (msg.payload.ok) trashPanel?.refresh();
+      }
     } else if (msg.type === 'search_result_missing') {
       searchPalette?.reportMissing(msg.payload.noteId);
     } else if (msg.type === 'reveal_match') {
@@ -610,6 +672,7 @@ function initUI(): void {
       // editing where they landed rather than having to dismiss something
       // first.
       searchPalette?.close();
+      trashPanel?.close();
       findBar?.openBar({ replace: false, seed: msg.payload.query, focus: false });
       syncFindStatus();
       noteEditor?.focus();

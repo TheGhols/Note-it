@@ -5,6 +5,8 @@ Note-it adheres to the XDG Base Directory Specification:
 | Path | Purpose | Example Fallback |
 | --- | --- | --- |
 | `$XDG_DATA_HOME/note-it/notes/` | Persisted Markdown note files (`<uuid>.md`) | `~/.local/share/note-it/notes/` |
+| `$XDG_DATA_HOME/note-it/trash/` | Deleted notes, waiting to be restored | `~/.local/share/note-it/trash/` |
+| `$XDG_DATA_HOME/note-it/backups/` | Local snapshots of the recoverable store | `~/.local/share/note-it/backups/` |
 | `$XDG_CONFIG_HOME/note-it/config.toml` | User configuration options | `~/.config/note-it/config.toml` |
 | `$XDG_STATE_HOME/note-it/state.json` | Window geometry, active mode, and transient UI state | `~/.local/state/note-it/state.json` |
 | `$XDG_RUNTIME_DIR/note-it/` | Unix domain sockets / IPC runtime files | `/run/user/<uid>/note-it/` |
@@ -144,6 +146,157 @@ corresponding whitelist — anything else is dropped when the note is loaded.
 
 None of these are ever visible as markup in the editor. The task metadata comment is the only HTML
 comment the sanitizer preserves; every other comment is still removed.
+
+## The Trash
+
+Deleting a note moves its file out of the active store:
+
+```text
+notes/<uuid>.md   →   trash/<uuid>.md
+                      trash/<uuid>.json   (when it was deleted)
+```
+
+A note in `trash/` is not a note. It is not listed, not searched, not offered by
+the quick switcher, not restored on startup and not brought back by a summon —
+not because each of those excludes it, but because every one of them reads
+`notes/`, and the file is not there any more.
+
+**The move is the commit point.** The sequence is:
+
+```text
+flush the note   →   move the file   →   update the window state   →   close the window
+```
+
+Everything before the move can fail with the note still open, live and
+editable — including, in particular, a flush that could not write the latest
+text. A note whose text is not safe is never made to disappear. From the move
+onwards the note *is* in the trash, so nothing afterwards reports otherwise: the
+window state write is best effort, and the window closes either way.
+
+**The file is not read, parsed or rewritten.** Moving to the trash is a
+`rename`, and restoring is a `hard_link` plus a `remove_file`; both preserve the
+note byte for byte, front matter, appearance, tasks, links and calculations
+included. A note whose front matter is damaged — one Note-it cannot even open —
+still goes to the trash and still comes back unchanged.
+
+**Restoring never overwrites a live note.** The restore creates the name in
+`notes/` with `hard_link`, which fails if the name already exists. That is a
+property of the syscall, not a check that could be raced: if a note carrying the
+same identifier is already live, neither file is touched and the reader is told
+so.
+
+**Neither is an edit.** `updated_at` does not move when a note is deleted or
+restored, so a recovered note returns to the position in the quick switcher it
+had rather than pretending to have just been written in. Its window state entry
+is kept and marked closed, so it also comes back the size and place it was.
+
+**When it was deleted lives beside the note, never inside it.** The
+`<uuid>.json` sidecar holds `deleted_at` and nothing else. If it is missing or
+unreadable, the trash listing falls back to the file's own modification time;
+nothing is written to repair it. Anything in `trash/` that is not a `<uuid>.md`
+is ignored by the listing.
+
+**There is no permanent delete and no "empty the trash".** The trash grows until
+you remove files from it yourself, which is a deliberate choice for a phase
+about recovery — and possible with any file manager, because a note in the trash
+is an ordinary `.md` on disk.
+
+## Local Backups
+
+A snapshot is a directory of ordinary files:
+
+```text
+backups/2026-08-29T09-30-00Z/
+  manifest.json
+  notes/<uuid>.md …
+  trash/<uuid>.md, <uuid>.json …
+  config.toml
+  state.json
+```
+
+`manifest.json` records the version, when the snapshot was taken, whether it was
+automatic or manual, how many notes and trash entries it holds, and whether the
+configuration and window state were present. A directory in `backups/` counts as
+a snapshot only if it is a real directory, its name does not begin with `.`, and
+it holds a readable manifest.
+
+**What goes in:** `notes/`, `trash/`, `config.toml`, `state.json`.
+
+**What never goes in:** `backups/` itself, so a snapshot can never contain
+snapshots; anything whose name begins with `.`, which is what keeps a `.tmp.…`
+from an interrupted save out of a snapshot; anything that is not a regular file;
+and anything reached through a symbolic link, which is never followed — a
+crafted entry in the store cannot make the backup copy `/etc` or a home
+directory.
+
+**When it happens.** At most one automatic snapshot per 24 hours, taken **before
+the first eligible change** after that window has passed — a note save or a move
+to the trash. Taking it first is the point: what a backup is for is going back to
+how things were, so the moment worth capturing is the one before an edit. There
+is no timer and no thread; a daemon nobody is using does no work at all, and a
+daemon left open for days takes its snapshot the moment its owner starts typing
+again. "When was the last backup" is answered by the newest snapshot's own
+manifest, so there is no bookkeeping file that could disagree with the disk.
+
+**Manual backup.** *Dados › Fazer backup agora* takes one immediately, is never
+skipped, and always reports success or failure. It satisfies the 24-hour rule
+like any other snapshot.
+
+**Atomicity.** A snapshot is built in `backups/.tmp.<pid>.<n>/` and renamed into
+place whole; the rename is the commit point. A process killed halfway leaves a
+`.tmp.…` directory, which is not a snapshot — wrong name, no manifest — and the
+next backup removes it. Only directories carrying that prefix are ever swept.
+
+**Retention.** Seven snapshots are kept, in one pool whatever made them, and
+retention runs **only after a new snapshot has been committed**. An old backup is
+never deleted to make room for one that might then fail. A snapshot that cannot
+be removed is reported and the new backup still stands.
+
+**Failure.** A snapshot that cannot be made never blocks a save: the error goes
+to `stderr` and the note is written normally, and the attempt is retried at the
+next eligible change rather than on every keystroke.
+
+### Recovering From a Snapshot
+
+There is deliberately no one-click "restore everything" in the application:
+putting a snapshot back over a live store is a multi-file transaction, and a
+button for it would be the most destructive control Note-it has. The manual
+procedure, with the application closed, is:
+
+```bash
+note-it quit                       # nothing may be running
+
+SNAP=~/.local/share/note-it/backups/2026-08-29T09-30-00Z
+cat "$SNAP/manifest.json"          # check it is the snapshot you want
+
+# Keep what is there now, so this step is itself reversible.
+mv ~/.local/share/note-it/notes ~/.local/share/note-it/notes.antes
+mv ~/.local/share/note-it/trash ~/.local/share/note-it/trash.antes
+
+cp -a "$SNAP/notes" ~/.local/share/note-it/notes
+cp -a "$SNAP/trash" ~/.local/share/note-it/trash
+cp -a "$SNAP/config.toml" ~/.config/note-it/config.toml     # if present
+cp -a "$SNAP/state.json"  ~/.local/state/note-it/state.json # if present
+```
+
+To recover a **single** note, copy just that `<uuid>.md` out of the snapshot's
+`notes/` directory — there is no reason to move the whole store to get one file
+back.
+
+That the result is readable is not a hope: `a_snapshot_round_trips_into_a_fresh_isolated_store`
+copies a snapshot into an empty XDG tree exactly this way, opens it, and checks
+the notes, identifiers, Markdown, trash, configuration and window state all came
+back.
+
+### What a Local Backup Does and Does Not Protect Against
+
+It protects against: an accidental deletion, a logical corruption, an edit you
+want to undo, a version you want to go back to.
+
+It does **not** protect against a dead disk, a lost or stolen machine, or a
+filesystem that fails as a whole — the snapshots are on the same disk as the
+notes. It is not encrypted. Anyone who needs protection from hardware failure
+needs a copy on other hardware, and Note-it does not make one.
 
 ## Atomic File Writing
 

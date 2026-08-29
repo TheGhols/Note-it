@@ -96,6 +96,36 @@ rules everything else uses and reports a missing note rather than creating one.
 `updated_at` moves, and there is no index file, so there is no second copy of the user's notes on
 disk to protect, back up or leak.
 
+## The trash and the backup never take a path from the page
+
+Every data action the interface can ask for names a note by identifier. The bridge messages carry a
+`Uuid`, which `serde` will only accept as one, so `../../etc/passwd`, `notes/a.md` and
+`/home/…/state.json` are not requests that exist — they fail to parse before any code sees them. The
+host builds every path itself, from the store's own directories, exactly as it does for opening a
+search result.
+
+**A trash listing is text.** Labels and previews are written with `textContent`, never `innerHTML`,
+the same rule search results follow. A note containing `<script>alert(1)</script>` or
+`<img onerror=…>` shows those characters in the list; no element is created from them and nothing
+runs. Nothing from a note in the trash is ever parsed as Markdown or as HTML, and nothing in a
+backup is ever executed, opened or interpreted — a snapshot is copied and listed, never run.
+
+**A backup never follows a symbolic link, and never leaves the two directories it was asked to
+copy.** Every candidate is checked with `symlink_metadata`, and only regular files are copied;
+symlinks are skipped and reported, directories are not descended into, and names beginning with `.`
+are skipped — which is also what keeps a `.tmp.…` from an interrupted save out of a snapshot. A
+crafted entry inside the store therefore cannot make the backup copy `/etc`, `/home`, a mount point
+or anything else outside `notes/` and `trash/`. `config.toml` and `state.json` are checked the same
+way, so a configuration file replaced by a link to something else is skipped rather than copied.
+
+**The scratch sweep removes only its own scratch.** Cleaning up after an interrupted backup deletes
+directories in `backups/` whose name begins with `.tmp.`, and nothing else — not a snapshot, not a
+file, not anything a person put there. Mistaking a user's file for debris would be a worse failure
+than the debris.
+
+**Zero network, still.** The trash and the backup added no HTTP client, no socket and no service.
+Nothing in either reaches outside the machine, and nothing in either uses `eval` or `Function`.
+
 ## Pasting a URL creates a link through one gate
 
 Pasting a URL over selected text makes that text a link, and the URL is judged by `safeLinkUrl` —

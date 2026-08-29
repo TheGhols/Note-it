@@ -42,6 +42,19 @@ export interface SearchResult {
   matchedText: string;
 }
 
+/** One note in the trash, exactly as the host sends it. */
+export interface TrashEntry {
+  /** What every action addresses. Never a path, never the label. */
+  noteId: string;
+  label: string;
+  snippet: string;
+  /** When it was moved to the trash, or `null` when nothing readable says. */
+  deletedAt: string | null;
+}
+
+/** Which data action a `data_result` is about. */
+export type DataAction = 'trash' | 'restore' | 'backup';
+
 export type HostToWebviewMessage =
   | { type: 'load_note'; payload: NoteData }
   | { type: 'set_timestamps'; payload: { createdAt: string | null; updatedAt: string | null } }
@@ -53,6 +66,8 @@ export type HostToWebviewMessage =
   | { type: 'search_results'; payload: { requestId: number; results: SearchResult[] } }
   | { type: 'search_result_missing'; payload: { noteId: string } }
   | { type: 'reveal_match'; payload: { query: string } }
+  | { type: 'trash_entries'; payload: { requestId: number; entries: TrashEntry[] } }
+  | { type: 'data_result'; payload: { action: DataAction; ok: boolean; message: string } }
   | { type: 'request_content' }
   | { type: 'request_save_and_close' }
   | { type: 'request_flush'; payload: { requestId: number } };
@@ -74,6 +89,10 @@ export type WebviewToHostMessage =
   | { type: 'toggle_layer_mode' }
   | { type: 'search_requested'; payload: { requestId: number; query: string } }
   | { type: 'open_search_result'; payload: { noteId: string; query: string } }
+  | { type: 'trash_note_requested'; payload: { id: string } }
+  | { type: 'trash_list_requested'; payload: { requestId: number } }
+  | { type: 'restore_note_requested'; payload: { noteId: string } }
+  | { type: 'backup_requested' }
   | { type: 'open_external_url'; payload: { url: string } }
   | { type: 'drag_start' }
   | { type: 'drag_update'; payload: { dx: number; dy: number } }

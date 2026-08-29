@@ -1,9 +1,14 @@
 use crate::atomic_file::write_atomic;
+use crate::backup::{self, BackupSources, SnapshotKind};
+use crate::diagnostics;
 use crate::model::{NoteDocument, NoteFrontMatterWrapper};
-use chrono::{DateTime, Utc};
+use crate::trash::{self, TrashEntry};
+use chrono::{DateTime, Duration, Utc};
+use std::cell::RefCell;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -63,12 +68,40 @@ fn read_head(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&head).into_owned())
 }
 
+/// When the last automatic snapshot happened, as this process knows it.
+///
+/// Read from the backups directory once and kept in memory afterwards, so the
+/// twenty-four hour question costs nothing to ask again. That matters because
+/// it is asked before every persistent mutation, and an autosave happens every
+/// few hundred milliseconds while someone is typing: the check has to be free
+/// when the answer is "not yet", which it is for all but one save a day.
+///
+/// Nothing here wakes up on its own. There is no timer and no thread; a
+/// backup only ever happens because something was about to be written.
+#[derive(Debug, Default)]
+struct BackupSchedule {
+    /// False until the backups directory has been read this session.
+    loaded: bool,
+    last_success: Option<DateTime<Utc>>,
+    /// The last attempt of any outcome, so a store whose backups cannot be
+    /// written is not retried on every keystroke.
+    last_attempt: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StorageManager {
     notes_dir: PathBuf,
+    /// Deleted notes, waiting to be restored. A sibling of `notes_dir`, so the
+    /// move between them is always within one filesystem.
+    trash_dir: PathBuf,
+    /// Local snapshots. Never a backup source: see [`crate::backup`].
+    backups_dir: PathBuf,
     config_dir: PathBuf,
     state_dir: PathBuf,
     runtime_dir: PathBuf,
+    /// Shared by every clone of this handle, because the windows each hold one
+    /// and there is only one store between them.
+    backup_schedule: Rc<RefCell<BackupSchedule>>,
     /// Makes the post-commit directory sync fail, so the one failure that
     /// happens *after* the rename can be exercised. It cannot be provoked from
     /// outside the process: once the rename has returned, nothing a test can do
@@ -97,15 +130,7 @@ impl StorageManager {
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("note-it");
 
-        let manager = Self {
-            notes_dir,
-            config_dir,
-            state_dir,
-            runtime_dir,
-            #[cfg(test)]
-            fail_directory_sync: false,
-        };
-
+        let manager = Self::assemble(notes_dir, config_dir, state_dir, runtime_dir);
         manager.ensure_directories()?;
         Ok(manager)
     }
@@ -117,16 +142,40 @@ impl StorageManager {
         state_dir: PathBuf,
         runtime_dir: PathBuf,
     ) -> Result<Self, String> {
-        let manager = Self {
+        let manager = Self::assemble(notes_dir, config_dir, state_dir, runtime_dir);
+        manager.ensure_directories()?;
+        Ok(manager)
+    }
+
+    /// The trash and the backups are siblings of the notes directory, which is
+    /// what the layout on disk already is: one `note-it` data directory holding
+    /// `notes/`, `trash/` and `backups/`. Deriving them rather than passing
+    /// them keeps the three from ever being configured apart, and keeps
+    /// `notes/` and `trash/` on one filesystem, which the move between them
+    /// depends on.
+    fn assemble(
+        notes_dir: PathBuf,
+        config_dir: PathBuf,
+        state_dir: PathBuf,
+        runtime_dir: PathBuf,
+    ) -> Self {
+        let data_dir = notes_dir
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        Self {
+            trash_dir: data_dir.join("trash"),
+            backups_dir: data_dir.join("backups"),
             notes_dir,
             config_dir,
             state_dir,
             runtime_dir,
+            backup_schedule: Rc::new(RefCell::new(BackupSchedule::default())),
             #[cfg(test)]
             fail_directory_sync: false,
-        };
-        manager.ensure_directories()?;
-        Ok(manager)
+        }
     }
 
     /// The same store, reached through a handle whose post-commit directory
@@ -140,6 +189,10 @@ impl StorageManager {
     pub fn ensure_directories(&self) -> Result<(), String> {
         fs::create_dir_all(&self.notes_dir)
             .map_err(|e| format!("Failed to create notes directory: {e}"))?;
+        fs::create_dir_all(&self.trash_dir)
+            .map_err(|e| format!("Failed to create trash directory: {e}"))?;
+        fs::create_dir_all(&self.backups_dir)
+            .map_err(|e| format!("Failed to create backups directory: {e}"))?;
         fs::create_dir_all(&self.config_dir)
             .map_err(|e| format!("Failed to create config directory: {e}"))?;
         fs::create_dir_all(&self.state_dir)
@@ -152,6 +205,16 @@ impl StorageManager {
     #[allow(dead_code)]
     pub fn notes_dir(&self) -> &Path {
         &self.notes_dir
+    }
+
+    #[allow(dead_code)]
+    pub fn trash_dir(&self) -> &Path {
+        &self.trash_dir
+    }
+
+    #[allow(dead_code)]
+    pub fn backups_dir(&self) -> &Path {
+        &self.backups_dir
     }
 
     pub fn state_file_path(&self) -> PathBuf {
@@ -170,7 +233,17 @@ impl StorageManager {
     ///
     /// The commit point is the rename: see [`crate::atomic_file::write_atomic`]
     /// for the rule this, the window state and the configuration all share.
+    ///
+    /// This is also where a day's first persistent change asks whether the
+    /// store has been backed up recently, so the snapshot is taken *before* the
+    /// change rather than after it: what a backup is for is going back to how
+    /// things were, and the moment worth being able to go back to is the one
+    /// before an edit. A backup that cannot be made is reported and the save
+    /// goes ahead — a snapshot is an extra layer of safety, and turning its
+    /// failure into a failed save would cost the edit the backup exists to
+    /// protect.
     pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
+        self.back_up_before_mutation();
         let serialized = doc.serialize()?;
         let target_path = self.note_path(&doc.metadata.id);
         let what = format!("note {}", doc.metadata.id);
@@ -187,6 +260,125 @@ impl StorageManager {
 
         write_atomic(&target_path, serialized.as_bytes(), &what)?;
         Ok(target_path)
+    }
+
+    /// Moves a note into the trash, where it can be restored from.
+    ///
+    /// See [`crate::trash`] for the move itself. Everything the application
+    /// does about a deleted note goes through here, so there is exactly one
+    /// place that knows the trash is a directory next to `notes/`.
+    pub fn move_note_to_trash(&self, id: &Uuid) -> Result<(), String> {
+        // A deletion is the change most worth having a way back from.
+        self.back_up_before_mutation();
+        trash::move_to_trash(&self.notes_dir, &self.trash_dir, id, Utc::now())
+    }
+
+    /// Brings a note back out of the trash. Never over a live note: see
+    /// [`crate::trash::restore_from_trash`].
+    pub fn restore_note_from_trash(&self, id: &Uuid) -> Result<(), trash::RestoreError> {
+        trash::restore_from_trash(&self.notes_dir, &self.trash_dir, id)
+    }
+
+    /// Everything in the trash, most recently deleted first. Reading only.
+    pub fn list_trash(&self) -> Vec<TrashEntry> {
+        trash::list_trash(&self.trash_dir)
+    }
+
+    /// Whether a note identifier is currently in the trash.
+    #[allow(dead_code)]
+    pub fn is_trashed(&self, id: &Uuid) -> bool {
+        trash::holds(&self.trash_dir, id)
+    }
+
+    /// A snapshot the user asked for, right now.
+    ///
+    /// Unlike the automatic one this is never skipped and never throttled: a
+    /// person asking for a safety point before doing something is asking for
+    /// one now. It satisfies the twenty-four hour rule too, because it is a
+    /// backup — nothing distinguishes it from an automatic snapshot except the
+    /// word in its manifest.
+    pub fn create_backup_now(&self) -> Result<PathBuf, String> {
+        let now = Utc::now();
+        let result = backup::create_snapshot(
+            &self.backups_dir,
+            &self.backup_sources(),
+            SnapshotKind::Manual,
+            now,
+            backup::SNAPSHOT_RETENTION,
+        );
+        self.record_backup_attempt(now, result.is_ok());
+        result
+    }
+
+    fn backup_sources(&self) -> BackupSources {
+        BackupSources {
+            notes_dir: self.notes_dir.clone(),
+            trash_dir: self.trash_dir.clone(),
+            config_file: self.config_file_path(),
+            state_file: self.state_file_path(),
+        }
+    }
+
+    /// Takes the day's first snapshot, if one is owed.
+    ///
+    /// Called at the start of a persistent mutation and nowhere else, so a
+    /// daemon nobody is using does no work at all, and a daemon left open for
+    /// a week still produces a snapshot the moment its owner starts typing
+    /// again. A failure is written to the diagnostic log and to `stderr`; the
+    /// mutation that asked carries on regardless.
+    fn back_up_before_mutation(&self) {
+        let now = Utc::now();
+        if !self.automatic_backup_owed(now) {
+            return;
+        }
+
+        let result = backup::create_snapshot(
+            &self.backups_dir,
+            &self.backup_sources(),
+            SnapshotKind::Automatic,
+            now,
+            backup::SNAPSHOT_RETENTION,
+        );
+        self.record_backup_attempt(now, result.is_ok());
+        match result {
+            Ok(path) => diagnostics::log(format_args!(
+                "event=backup-created kind=automatic path={}",
+                path.display()
+            )),
+            Err(error) => eprintln!(
+                "The automatic backup could not be created, so the store is still \
+                 protected only by the snapshots already on disk. The note is saved \
+                 normally and the backup will be attempted again: {error}"
+            ),
+        }
+    }
+
+    /// Whether an automatic snapshot is owed, reading the backups directory at
+    /// most once per session.
+    fn automatic_backup_owed(&self, now: DateTime<Utc>) -> bool {
+        let mut schedule = self.backup_schedule.borrow_mut();
+        if !schedule.loaded {
+            schedule.last_success = backup::last_snapshot_time(&self.backups_dir);
+            schedule.loaded = true;
+        }
+        backup::automatic_backup_due(
+            schedule.last_success,
+            now,
+            Duration::hours(backup::AUTOMATIC_BACKUP_INTERVAL_HOURS),
+        ) && backup::retry_allowed(
+            schedule.last_attempt,
+            now,
+            Duration::minutes(backup::AUTOMATIC_BACKUP_RETRY_MINUTES),
+        )
+    }
+
+    fn record_backup_attempt(&self, now: DateTime<Utc>, succeeded: bool) {
+        let mut schedule = self.backup_schedule.borrow_mut();
+        schedule.loaded = true;
+        schedule.last_attempt = Some(now);
+        if succeeded {
+            schedule.last_success = Some(now);
+        }
     }
 
     pub fn load_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
@@ -1066,6 +1258,320 @@ mod tests {
         assert_eq!(
             manager.list_notes_by_recency().expect("list"),
             vec![doc.metadata.id]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3.9 — a note in the trash is not a note.
+    // ------------------------------------------------------------------
+
+    /// A store with one note in it, and the note's identifier.
+    fn store_with_one_note(tmp: &tempfile::TempDir, body: &str) -> (StorageManager, Uuid) {
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = body.to_string();
+        manager.save_note_atomic(&doc).expect("save note");
+        (manager, doc.metadata.id)
+    }
+
+    fn search_finds(manager: &StorageManager, query: &str) -> Vec<Uuid> {
+        let bodies = manager.read_note_bodies_by_recency();
+        crate::search::search_notes(query, bodies.iter().map(|(id, body)| (*id, body.as_str())))
+            .into_iter()
+            .map(|result| result.note_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_trashed_note_is_not_searchable() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "MARCADOR-LIXEIRA-8391 no corpo");
+
+        assert_eq!(search_finds(&manager, "MARCADOR-LIXEIRA-8391"), vec![id]);
+
+        manager.move_note_to_trash(&id).expect("move to trash");
+
+        assert!(
+            search_finds(&manager, "MARCADOR-LIXEIRA-8391").is_empty(),
+            "a note in the trash must not be findable"
+        );
+        assert!(manager.is_trashed(&id));
+    }
+
+    #[test]
+    fn a_trashed_note_is_not_in_recent_notes() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "MARCADOR-LIXEIRA-8391");
+
+        assert_eq!(manager.list_notes_by_recency().expect("list"), vec![id]);
+
+        manager.move_note_to_trash(&id).expect("move to trash");
+
+        assert!(
+            manager.list_notes_by_recency().expect("list").is_empty(),
+            "the quick switcher lists live notes only"
+        );
+        assert!(
+            manager
+                .read_recent_note_bodies(crate::search::MAX_RESULTS)
+                .is_empty(),
+            "an empty query must not offer a deleted note"
+        );
+    }
+
+    #[test]
+    fn restored_note_becomes_searchable_again() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "MARCADOR-LIXEIRA-8391 no corpo");
+        let before = fs::read(manager.note_path(&id)).expect("read before");
+        let updated_at = manager.load_note(&id).expect("load").metadata.updated_at;
+
+        manager.move_note_to_trash(&id).expect("move to trash");
+        assert!(search_finds(&manager, "MARCADOR-LIXEIRA-8391").is_empty());
+
+        manager.restore_note_from_trash(&id).expect("restore");
+
+        assert_eq!(search_finds(&manager, "MARCADOR-LIXEIRA-8391"), vec![id]);
+        assert_eq!(manager.list_notes_by_recency().expect("list"), vec![id]);
+        assert_eq!(
+            fs::read(manager.note_path(&id)).expect("read after"),
+            before
+        );
+        // Restoring is not editing: the quick switcher must not treat a
+        // recovered note as one that was just written in.
+        assert_eq!(
+            manager.load_note(&id).expect("load").metadata.updated_at,
+            updated_at
+        );
+        assert!(!manager.is_trashed(&id));
+        assert!(manager.list_trash().is_empty());
+    }
+
+    #[test]
+    fn the_trash_listing_is_what_the_interface_receives() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "# Título\n\nMARCADOR-LIXEIRA-8391");
+        manager.move_note_to_trash(&id).expect("move to trash");
+
+        let entries = manager.list_trash();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].note_id, id);
+        assert_eq!(entries[0].label, "Título");
+        assert!(entries[0].snippet.contains("MARCADOR-LIXEIRA-8391"));
+        assert!(entries[0].deleted_at.is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3.9 — when the store is backed up, and what a failure costs.
+    // ------------------------------------------------------------------
+
+    fn snapshot_count(manager: &StorageManager) -> usize {
+        crate::backup::list_snapshots(manager.backups_dir()).len()
+    }
+
+    /// Replaces the trash directory with a file, so reading it as a directory
+    /// fails on path resolution — which fails for every user, root included —
+    /// and the backup cannot be built.
+    fn break_the_backup(manager: &StorageManager) {
+        fs::remove_dir_all(manager.trash_dir()).expect("remove the trash directory");
+        fs::write(manager.trash_dir(), "não é um diretório").expect("occupy the trash path");
+    }
+
+    #[test]
+    fn the_first_change_of_the_day_is_backed_up_before_it_is_written() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "primeiro conteúdo");
+
+        // The snapshot was taken before that first save, so it holds the store
+        // as it was: empty. That is the point of taking it first.
+        let snapshots = crate::backup::list_snapshots(manager.backups_dir());
+        assert_eq!(snapshots.len(), 1);
+        assert!(
+            !snapshots[0].path.join(format!("notes/{id}.md")).exists(),
+            "the snapshot must predate the change it protects against"
+        );
+
+        // And the save itself went through.
+        assert_eq!(
+            manager.load_note(&id).expect("load").content,
+            "primeiro conteúdo"
+        );
+    }
+
+    #[test]
+    fn an_automatic_backup_is_not_repeated_inside_the_24h_window() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "conteúdo");
+        assert_eq!(snapshot_count(&manager), 1);
+
+        for round in 0..5 {
+            let mut doc = manager.load_note(&id).expect("load");
+            doc.content = format!("conteúdo {round}");
+            doc.touch_content_modified();
+            manager.save_note_atomic(&doc).expect("save");
+        }
+
+        assert_eq!(
+            snapshot_count(&manager),
+            1,
+            "an autosave is not a reason to take another snapshot"
+        );
+    }
+
+    #[test]
+    fn a_new_backup_can_be_created_after_the_interval() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "conteúdo");
+        // Only the one taken before the first save.
+        assert_eq!(snapshot_count(&manager), 1);
+
+        // Age it: the store's own record of when it was last backed up is the
+        // newest snapshot, so a snapshot dated more than a day ago is exactly
+        // the situation a returning user is in. Nothing here waits.
+        for snapshot in crate::backup::list_snapshots(manager.backups_dir()) {
+            fs::remove_dir_all(&snapshot.path).expect("remove");
+        }
+        crate::backup::create_snapshot(
+            manager.backups_dir(),
+            &manager.backup_sources(),
+            crate::backup::SnapshotKind::Automatic,
+            Utc::now() - Duration::hours(25),
+            crate::backup::SNAPSHOT_RETENTION,
+        )
+        .expect("seed an old snapshot");
+
+        // A new session reads that record from disk.
+        let returning = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("reopen the store");
+
+        let mut doc = returning.load_note(&id).expect("load");
+        doc.content = "conteúdo de hoje".to_string();
+        doc.touch_content_modified();
+        returning.save_note_atomic(&doc).expect("save");
+
+        assert_eq!(snapshot_count(&returning), 2);
+        // And the new one holds the note as it was before today's edit.
+        let snapshots = crate::backup::list_snapshots(returning.backups_dir());
+        let newest = snapshots.last().expect("newest snapshot");
+        assert!(
+            !fs::read_to_string(newest.path.join(format!("notes/{id}.md")))
+                .expect("the note inside the snapshot")
+                .contains("conteúdo de hoje"),
+            "the snapshot has to hold the note as it was before today's edit"
+        );
+    }
+
+    #[test]
+    fn a_recent_snapshot_leaves_the_returning_session_alone() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "conteúdo");
+        for snapshot in crate::backup::list_snapshots(manager.backups_dir()) {
+            fs::remove_dir_all(&snapshot.path).expect("remove");
+        }
+        crate::backup::create_snapshot(
+            manager.backups_dir(),
+            &manager.backup_sources(),
+            crate::backup::SnapshotKind::Automatic,
+            Utc::now() - Duration::hours(1),
+            crate::backup::SNAPSHOT_RETENTION,
+        )
+        .expect("seed a recent snapshot");
+
+        let returning = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("reopen the store");
+
+        let mut doc = returning.load_note(&id).expect("load");
+        doc.content = "editado".to_string();
+        doc.touch_content_modified();
+        returning.save_note_atomic(&doc).expect("save");
+
+        assert_eq!(snapshot_count(&returning), 1);
+    }
+
+    #[test]
+    fn failed_backup_does_not_block_a_normal_note_save() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "conteúdo");
+        break_the_backup(&manager);
+        // Owed again, and impossible: the next save asks for a snapshot, and
+        // the snapshot cannot be built.
+        for snapshot in crate::backup::list_snapshots(manager.backups_dir()) {
+            fs::remove_dir_all(&snapshot.path).expect("remove");
+        }
+        manager.backup_schedule.borrow_mut().last_success = None;
+        manager.backup_schedule.borrow_mut().last_attempt = None;
+
+        let mut doc = manager.load_note(&id).expect("load");
+        doc.content = "editado apesar do backup".to_string();
+        doc.touch_content_modified();
+
+        manager
+            .save_note_atomic(&doc)
+            .expect("a snapshot that cannot be made must never cost the edit");
+
+        assert_eq!(
+            manager.load_note(&id).expect("reload").content,
+            "editado apesar do backup"
+        );
+        assert_eq!(snapshot_count(&manager), 0);
+    }
+
+    #[test]
+    fn a_manual_backup_reports_what_happened() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, _) = store_with_one_note(&tmp, "conteúdo");
+
+        let path = manager.create_backup_now().expect("manual backup");
+        assert!(path.join("manifest.json").is_file());
+        assert_eq!(snapshot_count(&manager), 2);
+
+        break_the_backup(&manager);
+        manager
+            .create_backup_now()
+            .expect_err("a manual backup says so when it cannot be made");
+        assert_eq!(snapshot_count(&manager), 2);
+    }
+
+    #[test]
+    fn a_note_moved_to_the_trash_is_backed_up_first() {
+        let tmp = tempdir().expect("tempdir");
+        let (manager, id) = store_with_one_note(&tmp, "MARCADOR-LIXEIRA-8391");
+        // Clear the snapshot the first save took, and make one owed again.
+        for snapshot in crate::backup::list_snapshots(manager.backups_dir()) {
+            fs::remove_dir_all(&snapshot.path).expect("remove");
+        }
+        let returning = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("reopen the store");
+
+        returning.move_note_to_trash(&id).expect("move to trash");
+
+        let snapshots = crate::backup::list_snapshots(returning.backups_dir());
+        assert_eq!(snapshots.len(), 1);
+        assert!(
+            snapshots[0].path.join(format!("notes/{id}.md")).is_file(),
+            "the snapshot taken before a deletion must still hold the note"
         );
     }
 }

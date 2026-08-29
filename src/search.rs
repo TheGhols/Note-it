@@ -290,6 +290,14 @@ fn snippet_around(content: &str, from: usize) -> String {
     snippet.trim().to_string()
 }
 
+/// The opening of a note, as a list that has nothing to match on shows it.
+///
+/// The same window an empty query gives a result, so a note looks the same
+/// wherever it is listed — the search palette and the trash included.
+pub fn opening_of(content: &str) -> String {
+    snippet_around(content, 0)
+}
+
 /// Counts every occurrence and returns where the first one starts.
 fn locate(haystack: &Folded, needle: &str) -> Option<(usize, usize)> {
     let mut count = 0;

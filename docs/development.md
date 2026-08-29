@@ -147,6 +147,33 @@ well inside the 120 ms the palette waits before asking at all.
 That is the number ADR-027 rests on. If it stops being comfortable, the evidence for adding an
 index will be in the test output, which is where it should be — not in a hunch.
 
+### Inspecting a backup
+
+A snapshot is a directory of ordinary files, which is the whole reason it is one:
+
+```bash
+ls ~/.local/share/note-it/backups/
+cat ~/.local/share/note-it/backups/*/manifest.json
+diff -r ~/.local/share/note-it/backups/<data>/notes ~/.local/share/note-it/notes
+```
+
+The recovery procedure — including recovering a single note rather than the whole store — is in
+[docs/storage.md](storage.md#recovering-from-a-snapshot). It is `cp`, with the application closed.
+There is no one-click restore in the application, and
+`a_snapshot_round_trips_into_a_fresh_isolated_store` is what proves the procedure works: it copies a
+snapshot into an empty XDG tree exactly that way and opens the result.
+
+To exercise the twenty-four hour rule against a running daemon without waiting a day, age the newest
+snapshot — the store's own record of when it was last backed up is that snapshot's manifest — and
+restart:
+
+```bash
+scripts/note-it-isolated --root /tmp/t --stop
+# rename the snapshot directory and set created_at in its manifest.json to > 24 h ago
+scripts/note-it-isolated --root /tmp/t -- --background &
+scripts/note-it-isolated --root /tmp/t -- new     # the next change takes a fresh snapshot
+```
+
 ### GTK's compose table
 
 A cold `XDG_CACHE_HOME` makes GTK rebuild its compose table, which produces the one-off
