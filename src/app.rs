@@ -6,6 +6,7 @@ use crate::layer_shell::{
 };
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
+use crate::search;
 use crate::settings::{theme_name, AppConfig};
 use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
@@ -20,6 +21,13 @@ use uuid::Uuid;
 
 static NEXT_FLUSH_ID: AtomicU64 = AtomicU64::new(1);
 const LAYER_PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(180);
+
+/// How many notes one search reads at most.
+///
+/// Far above any store a person keeps, and a ceiling rather than a target: it
+/// exists so a notes directory that has somehow grown enormous costs a bounded
+/// amount instead of freezing the interface mid-keystroke.
+const SEARCH_SCAN_LIMIT: usize = 5_000;
 
 type LifecycleCallback = Box<dyn FnOnce(Result<(), String>)>;
 
@@ -806,6 +814,105 @@ impl NoteItAppClone {
         }
     }
 
+    /// Answers a search, and writes nothing at all.
+    ///
+    /// The note bodies come off disk in the store's own recency order and go
+    /// straight into [`crate::search`]. No window is created, no note is
+    /// parsed beyond splitting its front matter, no timestamp moves and no
+    /// file is opened for writing — a thousand notes are searched with zero
+    /// additional WebViews, because a WebView is how a note is *edited* and
+    /// nobody is editing.
+    ///
+    /// An empty query is not an empty answer: it lists the most recent notes,
+    /// which is what makes the same control a way to move between them.
+    pub fn answer_search(&self, requester: Uuid, request_id: u64, query: &str) {
+        let ctx = self.context.borrow();
+        let listing = query.trim().is_empty();
+        let limit = if listing {
+            search::MAX_RESULTS
+        } else {
+            SEARCH_SCAN_LIMIT
+        };
+
+        let bodies = ctx.storage.read_note_bodies_by_recency(limit);
+        let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
+        let results = if listing {
+            search::recent_notes(notes)
+        } else {
+            search::search_notes(query, notes)
+        };
+
+        if let Some(window) = ctx.windows.get(&requester) {
+            window.send_search_results(request_id, results);
+        }
+    }
+
+    /// Brings the note a reader chose in the search palette to the front.
+    ///
+    /// Three cases, and the difference between them is only how much has to
+    /// happen first: an open note is presented, a collapsed one is expanded
+    /// before that, and a closed one is instantiated through exactly the path
+    /// a restore uses. In all three the note is then told what to look for so
+    /// the editor can reveal it.
+    ///
+    /// The shared layer is not touched. Opening a note is not a reason to
+    /// restack every other one, and Phase 3.5R.1 established where layer
+    /// changes are decided; this is not that place.
+    ///
+    /// Nothing here writes to the note. A note that is opened becomes open in
+    /// `state.json`, because it *is* open — that is window state, not content,
+    /// and `updated_at` is untouched either way.
+    pub fn open_search_result(&self, requester: Uuid, target: Uuid, query: String) {
+        // The file may have been removed between the search and the choice.
+        let exists = {
+            let ctx = self.context.borrow();
+            ctx.storage.note_path(&target).is_file()
+        };
+        if !exists {
+            let ctx = self.context.borrow();
+            if let Some(window) = ctx.windows.get(&requester) {
+                window.report_missing_note(target);
+            }
+            return;
+        }
+
+        let mode = self.effective_layer_mode();
+        let already_open = self.context.borrow().windows.contains_key(&target);
+        if !already_open {
+            self.instantiate_note_by_id(target, mode);
+            if self.context.borrow().windows.contains_key(&target) {
+                self.mark_notes_open(&[target], mode);
+            } else {
+                let ctx = self.context.borrow();
+                if let Some(window) = ctx.windows.get(&requester) {
+                    window.report_missing_note(target);
+                }
+                return;
+            }
+        }
+
+        // Expanding is a geometry change like any other, so it goes through
+        // the window's own collapse path and is persisted the same way.
+        let expanded = {
+            let ctx = self.context.borrow();
+            ctx.windows
+                .get(&target)
+                .filter(|window| window.is_collapsed())
+                .and_then(|window| window.set_collapsed(false))
+        };
+        if let Some(geometry) = expanded {
+            self.update_geometry(target, geometry);
+        }
+
+        let ctx = self.context.borrow();
+        if let Some(window) = ctx.windows.get(&target) {
+            window.reveal();
+            if !query.trim().is_empty() {
+                window.reveal_match(query);
+            }
+        }
+    }
+
     fn instantiate_note_by_id(&self, id: Uuid, mode: LayerMode) {
         if self.context.borrow().windows.contains_key(&id) {
             return;
@@ -1011,6 +1118,16 @@ fn instantiate_note_window(
         app_clone5.set_theme(&theme);
     });
 
+    let app_clone6 = app_controller.clone();
+    let on_search = Rc::new(move |requester, request_id, query: String| {
+        app_clone6.answer_search(requester, request_id, &query);
+    });
+
+    let app_clone7 = app_controller.clone();
+    let on_open_search_result = Rc::new(move |requester, target, query: String| {
+        app_clone7.open_search_result(requester, target, query);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1036,6 +1153,8 @@ fn instantiate_note_window(
         on_toggle_layer_mode,
         theme: ctx.config.theme.clone(),
         on_theme_changed,
+        on_search,
+        on_open_search_result,
     })
 }
 

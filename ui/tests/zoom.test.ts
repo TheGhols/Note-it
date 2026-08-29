@@ -23,6 +23,9 @@ function actions(): NoteKeyboardActions {
     toggleLayerMode: vi.fn(),
     increaseTextSize: vi.fn(),
     decreaseTextSize: vi.fn(),
+    openGlobalSearch: vi.fn(),
+    openFind: vi.fn(),
+    openReplace: vi.fn(),
   };
 }
 

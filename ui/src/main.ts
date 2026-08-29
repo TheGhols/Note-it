@@ -10,7 +10,16 @@ import {
   ThemePreference,
 } from './bridge/types.ts';
 import { PointerGestureController } from './geometry/gesture.ts';
+import {
+  findStatus,
+  replaceActive,
+  replaceAll,
+  setFindQuery,
+  stepFind,
+} from './editor/find.ts';
+import { FindBar } from './ui/findBar.ts';
 import { NoteMenu } from './ui/menu.ts';
+import { SearchPalette } from './ui/searchPalette.ts';
 import {
   applyPaper,
   DEFAULT_PAPER_INTENSITY,
@@ -46,6 +55,32 @@ let isCollapsed = false;
 let noteEditor: NoteEditor | null = null;
 let noteMenu: NoteMenu | null = null;
 let infoTooltip: NoteInfoTooltip | null = null;
+let searchPalette: SearchPalette | null = null;
+let findBar: FindBar | null = null;
+
+/**
+ * Opens the global search palette, or brings the caret back to it.
+ *
+ * The find bar is closed first: two search fields open at once is two places
+ * the keyboard could be, and only one of them is the one the reader just asked
+ * for.
+ */
+function openGlobalSearch(): void {
+  findBar?.close();
+  searchPalette?.openPalette();
+}
+
+/** Opens Find, or Find with the replace row, seeded with the selection. */
+function openFindBar(replace: boolean): void {
+  searchPalette?.close();
+  findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
+}
+
+/** Mirrors how many occurrences there are into the bar. */
+function syncFindStatus(): void {
+  if (!noteEditor || !findBar) return;
+  findBar.setStatus(findStatus(noteEditor.getRawEditor().state));
+}
 
 function setPaperColor(color: PaperColor): void {
   document.body.setAttribute('data-color', color);
@@ -155,6 +190,13 @@ function setCollapsed(collapsed: boolean): void {
   isCollapsed = collapsed;
   document.body.setAttribute('data-collapsed', String(collapsed));
   noteMenu?.setCollapsed(collapsed);
+  // A collapsed note is a header bar. Nothing that needs room to be typed into
+  // may survive that, or it would be left hanging over a surface that no
+  // longer exists.
+  if (collapsed) {
+    searchPalette?.close();
+    findBar?.close();
+  }
 }
 
 /**
@@ -341,6 +383,57 @@ function initUI(): void {
           noteEditor?.insertComment();
           syncInlineFormatting();
         },
+        onOpenGlobalSearch: openGlobalSearch,
+        onOpenFind: () => openFindBar(false),
+        onOpenReplace: () => openFindBar(true),
+      },
+    });
+  }
+
+  // Search across every note, and search inside this one. Both live in the
+  // page rather than in a second window: a window would be another layer-shell
+  // surface to place, stack and tear down for something that disappears when
+  // it is closed.
+  const appRoot = document.getElementById('app');
+  if (appRoot) {
+    searchPalette = new SearchPalette({
+      mount: appRoot,
+      handlers: {
+        onQuery: (requestId, query) => {
+          // Reading only. Nothing here saves, flushes or touches a timestamp.
+          bridge.sendMessage({ type: 'search_requested', payload: { requestId, query } });
+        },
+        onOpen: (noteId, query) => {
+          bridge.sendMessage({ type: 'open_search_result', payload: { noteId, query } });
+        },
+        onClose: () => noteEditor?.focus(),
+      },
+    });
+
+    findBar = new FindBar({
+      mount: appRoot,
+      handlers: {
+        onQuery: (query, caseSensitive) => {
+          const view = noteEditor?.getView();
+          if (view) setFindQuery(view, query, caseSensitive);
+          syncFindStatus();
+        },
+        onStep: (step) => {
+          const view = noteEditor?.getView();
+          if (view) stepFind(view, step);
+          syncFindStatus();
+        },
+        onReplaceOne: (replacement) => {
+          const view = noteEditor?.getView();
+          if (view) replaceActive(view, replacement);
+          syncFindStatus();
+        },
+        onReplaceAll: (replacement) => {
+          const view = noteEditor?.getView();
+          if (view) replaceAll(view, replacement);
+          syncFindStatus();
+        },
+        onClose: () => noteEditor?.focus(),
       },
     });
   }
@@ -436,6 +529,9 @@ function initUI(): void {
       noteEditor?.decreaseTextSize();
       syncInlineFormatting();
     },
+    openGlobalSearch,
+    openFind: () => openFindBar(false),
+    openReplace: () => openFindBar(true),
   });
 
   // Flush save on blur / beforeunload
@@ -476,6 +572,10 @@ function initUI(): void {
         createdAt: msg.payload.createdAt ?? null,
         updatedAt: msg.payload.updatedAt ?? null,
       });
+      // A note that has just been loaded is not mid-search: whatever was open
+      // belonged to whatever was there before.
+      searchPalette?.close();
+      findBar?.close();
       noteEditor?.setMarkdown(msg.payload.content || '');
       noteEditor?.focus();
       syncInlineFormatting();
@@ -496,6 +596,23 @@ function initUI(): void {
       setTheme(normalizeTheme(msg.payload.theme), false);
     } else if (msg.type === 'set_font_size') {
       setFontSize(msg.payload.fontSize);
+    } else if (msg.type === 'search_results') {
+      searchPalette?.showResults(msg.payload.requestId, msg.payload.results);
+    } else if (msg.type === 'search_result_missing') {
+      searchPalette?.reportMissing(msg.payload.noteId);
+    } else if (msg.type === 'reveal_match') {
+      // The host has brought this note to the front and is saying what was
+      // being looked for. Only the editor can turn a query into a position in
+      // its own document, which is why the query travelled and not an offset.
+      //
+      // The bar opens without taking the keyboard: the occurrences are
+      // highlighted and the first one is revealed, and the reader carries on
+      // editing where they landed rather than having to dismiss something
+      // first.
+      searchPalette?.close();
+      findBar?.openBar({ replace: false, seed: msg.payload.query, focus: false });
+      syncFindStatus();
+      noteEditor?.focus();
     } else if (msg.type === 'request_content') {
       if (activeNoteId && noteEditor) {
         bridge.sendMessage({

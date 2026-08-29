@@ -84,6 +84,39 @@ Tudo listado aqui já está implementado.
 - Tudo local, offline e determinístico. Moedas ainda não existem — e nenhuma cotação foi chumbada
   no código, justamente porque estaria errada no minuto seguinte.
 
+**Busca e navegação**
+
+- `Ctrl+K` busca em todas as notas, abertas ou fechadas, sem sair da nota em que se está.
+- A busca ignora maiúsculas **e acentos**: `biopsia` encontra `Biópsia`, `coracao` encontra
+  `Coração`.
+- Consulta vazia lista as notas escritas mais recentemente — o mesmo campo serve de troca rápida
+  entre notas.
+- `Enter` abre o resultado: ativa a nota se já estiver aberta, abre se estiver fechada, expande se
+  estiver recolhida, e leva até a ocorrência.
+- Pesquisar não escreve nada. Nenhum arquivo é salvo, nenhuma data de modificação se move, e nenhum
+  índice é criado em disco: mil notas são varridas em cerca de 20 ms.
+- O que a busca encontra é o que está no arquivo. Um `4` que veio de `= 2 + 2` é decoração, não
+  texto, e não aparece em busca alguma.
+
+**Localizar e substituir**
+
+- `Ctrl+F` localiza dentro da nota atual, com contador de ocorrências; `Enter` e `Shift+Enter`
+  percorrem para frente e para trás, dando a volta nas duas pontas.
+- `Ctrl+H` abre a substituição: uma ocorrência por vez ou todas de uma vez.
+- `Substituir todas` é uma edição só: um `Ctrl+Z` desfaz as vinte substituições juntas.
+- Marcas, listas, títulos e estrutura sobrevivem à substituição, porque ela acontece sobre o
+  documento e não sobre o texto do arquivo.
+- Diferente da busca global, localizar e substituir **respeita acentos** — substituir é destrutivo,
+  e `saude` não deve reescrever `saúde`.
+
+**Colar link**
+
+- Com um trecho selecionado, colar uma URL transforma o trecho em link: selecione `site oficial`,
+  cole `https://example.com`, e a nota guarda `[site oficial](https://example.com)`.
+- Passa pela mesma lista de esquemas permitidos do resto do aplicativo. `javascript:` e companhia
+  são colados como texto, nunca como link.
+- Nada é buscado na internet: sem título remoto, sem favicon, sem prévia. E um `Ctrl+Z` desfaz.
+
 **Confiabilidade e privacidade**
 
 - Salvamento automático com escrita atômica em disco: ou a nota nova está gravada, ou a anterior
@@ -155,7 +188,8 @@ note-it quit                  # salva tudo e encerra o aplicativo
 Os mesmos comandos funcionam com `./scripts/run-note-it <comando>` durante o desenvolvimento.
 
 Atalhos dentro de uma nota: `Ctrl+N` cria outra nota, `Ctrl+W` fecha a atual, `Ctrl+=` / `Ctrl+-` /
-`Ctrl+0` controlam o zoom e `Ctrl+Shift+M` recolhe ou expande. A nota também aceita
+`Ctrl+0` controlam o zoom, `Ctrl+Shift+M` recolhe ou expande, `Ctrl+K` busca em todas as notas,
+`Ctrl+F` localiza dentro da nota e `Ctrl+H` localiza e substitui. A nota também aceita
 `Ctrl+Shift+Espaço` localmente quando já está focada; o caminho global e autoritativo para alternar
 a camada é a ligação do Niri abaixo.
 

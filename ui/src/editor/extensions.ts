@@ -11,6 +11,7 @@ import { HIGHLIGHT_TEXT_COLOR } from '../ui/palettes.ts';
 import { NoteItBlockquote } from './callout.ts';
 import { NoteItCodeBlock } from './codeBlock.ts';
 import { NoteItComment } from './comment.ts';
+import { NoteItFind } from './find.ts';
 import { NoteItMath } from './math.ts';
 import { NoteItTaskItem } from './taskItem.ts';
 import { NoteItTypography } from './typography.ts';
@@ -257,6 +258,15 @@ export const editorExtensions = [
     // highlighting, and the blockquote gains the callout marker.
     blockquote: false,
     codeBlock: false,
+    link: {
+      // Upstream turns a pasted URL into a link using `linkifyjs`, which is a
+      // second opinion about what a URL is: it accepts schemes Note-it does
+      // not allow, and it links a selection that spans two blocks. Note-it's
+      // own handler does this job against the application's allowlist — see
+      // `editor/autoPaste.ts` — and two handlers competing for one paste is
+      // exactly how an allowlist stops meaning anything.
+      linkOnPaste: false,
+    },
   }),
   NoteItBlockquote,
   NoteItCodeBlock,
@@ -274,6 +284,7 @@ export const editorExtensions = [
   }),
   NoteItTypography,
   NoteItMath,
+  NoteItFind,
   Placeholder.configure({
     placeholder: 'Type your note here...',
   }),

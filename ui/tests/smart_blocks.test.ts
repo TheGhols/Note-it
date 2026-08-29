@@ -137,6 +137,9 @@ describe('the Blocos menu section', () => {
       onToggleBlockquote: vi.fn(),
       onSelectCallout: vi.fn(),
       onInsertComment: vi.fn(),
+  onOpenGlobalSearch: vi.fn(),
+  onOpenFind: vi.fn(),
+  onOpenReplace: vi.fn(),
     };
     const menu = new NoteMenu({ trigger, mount: mountPoint, colors: COLORS, handlers });
     active = menu;

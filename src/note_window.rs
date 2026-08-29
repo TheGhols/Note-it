@@ -42,6 +42,12 @@ pub struct NoteWindowOptions<'a> {
     /// the window is told about it rather than reading it back from the store.
     pub theme: String,
     pub on_theme_changed: Rc<dyn Fn(String)>,
+    /// Asks the host to search every note. Carries the identifier of the note
+    /// that asked, so the answer goes back to the page that is waiting for it.
+    pub on_search: Rc<dyn Fn(Uuid, u64, String)>,
+    /// Asks the host to bring a search result to the front: the note that
+    /// asked, the note to reveal, and what was being looked for.
+    pub on_open_search_result: Rc<dyn Fn(Uuid, Uuid, String)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -89,6 +95,14 @@ pub struct NoteWindow {
     theme: Rc<RefCell<String>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
+    /// False until the page has said `Ready` and been handed its note. A
+    /// message that assumes a loaded document has to wait for this.
+    loaded: Rc<Cell<bool>>,
+    /// A match to reveal once the page is loaded. A note opened *by* a search
+    /// is told what to look for before it exists, so the request waits here
+    /// rather than being sent into a page that is about to replace its
+    /// content.
+    pending_reveal: Rc<RefCell<Option<String>>>,
 }
 
 impl NoteWindow {
@@ -204,6 +218,12 @@ impl NoteWindow {
         let layer_mode_clone = Rc::clone(&layer_mode_cell);
         let theme_clone = Rc::clone(&theme_cell);
         let on_theme_changed_clone = Rc::clone(&options.on_theme_changed);
+        let on_search_clone = Rc::clone(&options.on_search);
+        let on_open_search_result_clone = Rc::clone(&options.on_open_search_result);
+        let loaded = Rc::new(Cell::new(false));
+        let pending_reveal: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let loaded_clone = Rc::clone(&loaded);
+        let pending_reveal_clone = Rc::clone(&pending_reveal);
         let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
         let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
@@ -237,6 +257,16 @@ impl NoteWindow {
                                         theme: theme_clone.borrow().clone(),
                                     },
                                 );
+                                loaded_clone.set(true);
+                                // A note opened by a search was told what to
+                                // look for before it had a document. Now it
+                                // has one.
+                                if let Some(query) = pending_reveal_clone.borrow_mut().take() {
+                                    send_to_webview(
+                                        &wv,
+                                        &HostToWebviewMessage::RevealMatch { query },
+                                    );
+                                }
                             }
                         }
                         WebviewToHostMessage::ContentChanged {
@@ -390,6 +420,12 @@ impl NoteWindow {
                         }
                         WebviewToHostMessage::ToggleLayerMode => {
                             on_toggle_layer_clone();
+                        }
+                        WebviewToHostMessage::SearchRequested { request_id, query } => {
+                            on_search_clone(id, request_id, query);
+                        }
+                        WebviewToHostMessage::OpenSearchResult { note_id, query } => {
+                            on_open_search_result_clone(id, note_id, query);
                         }
                         WebviewToHostMessage::NewNoteRequested => {
                             on_new_note_clone();
@@ -619,7 +655,57 @@ impl NoteWindow {
             theme: theme_cell,
             allow_close,
             pending_flushes,
+            loaded,
+            pending_reveal,
         }
+    }
+
+    /// Brings this note to the reader, without touching the shared layer.
+    ///
+    /// Search says "show me that note", not "change how every note is
+    /// stacked", so `present` is the whole of it: no `set_layer`, no keyboard
+    /// mode change, no visibility flag. Desktop stays Desktop and Overlay
+    /// stays Overlay, and the focus that follows is the one ADR-023 already
+    /// installed — the WebView takes it when the window becomes active.
+    ///
+    /// A note on the Desktop layer is revealed *on that layer*, which means a
+    /// window sitting over it still sits over it. That is what the layer means,
+    /// and quietly promoting the note to Overlay would change a shared setting
+    /// the reader did not ask about.
+    pub fn reveal(&self) {
+        self.window.present();
+    }
+
+    /// Tells the page to find `query` in its own document and show it.
+    ///
+    /// Sent now if the page has a document, and remembered until it does if
+    /// not: a note that search has just opened is told what to look for before
+    /// it has been loaded.
+    pub fn reveal_match(&self, query: String) {
+        if self.loaded.get() {
+            send_to_webview(&self.webview, &HostToWebviewMessage::RevealMatch { query });
+        } else {
+            *self.pending_reveal.borrow_mut() = Some(query);
+        }
+    }
+
+    /// Tells the page that a note it offered no longer exists.
+    pub fn report_missing_note(&self, note_id: Uuid) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SearchResultMissing { note_id },
+        );
+    }
+
+    /// Hands the page the answer to the search it asked for.
+    pub fn send_search_results(&self, request_id: u64, results: Vec<crate::search::SearchResult>) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SearchResults {
+                request_id,
+                results,
+            },
+        );
     }
 
     /// Collapses or expands the note from the host side.

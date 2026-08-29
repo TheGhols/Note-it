@@ -29,6 +29,19 @@ export interface NoteData {
   theme: ThemePreference;
 }
 
+/** One note that matched, exactly as the host sends it. */
+export interface SearchResult {
+  /** What every action addresses. Never a path, never the label. */
+  noteId: string;
+  label: string;
+  snippet: string;
+  matchCount: number;
+  /** The first occurrence as the note spells it. Global search folds accents
+   *  and the editor's own find does not, so this is what the opened note is
+   *  told to look for. */
+  matchedText: string;
+}
+
 export type HostToWebviewMessage =
   | { type: 'load_note'; payload: NoteData }
   | { type: 'set_timestamps'; payload: { createdAt: string | null; updatedAt: string | null } }
@@ -37,6 +50,9 @@ export type HostToWebviewMessage =
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_theme'; payload: { theme: ThemePreference } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
+  | { type: 'search_results'; payload: { requestId: number; results: SearchResult[] } }
+  | { type: 'search_result_missing'; payload: { noteId: string } }
+  | { type: 'reveal_match'; payload: { query: string } }
   | { type: 'request_content' }
   | { type: 'request_save_and_close' }
   | { type: 'request_flush'; payload: { requestId: number } };
@@ -56,6 +72,8 @@ export type WebviewToHostMessage =
   | { type: 'collapse_changed'; payload: { id: string; collapsed: boolean } }
   | { type: 'zoom_changed'; payload: { id: string; zoomPercent: number } }
   | { type: 'toggle_layer_mode' }
+  | { type: 'search_requested'; payload: { requestId: number; query: string } }
+  | { type: 'open_search_result'; payload: { noteId: string; query: string } }
   | { type: 'open_external_url'; payload: { url: string } }
   | { type: 'drag_start' }
   | { type: 'drag_update'; payload: { dx: number; dy: number } }

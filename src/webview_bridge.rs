@@ -1,3 +1,4 @@
+use crate::search::SearchResult;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -62,6 +63,28 @@ pub enum HostToWebviewMessage {
         #[serde(rename = "fontSize")]
         font_size: u32,
     },
+    /// The answer to one `SearchRequested`. `request_id` is the page's own
+    /// counter: a slow answer to an older query arrives carrying the number it
+    /// was asked with, and the page drops it rather than letting it overwrite
+    /// a newer one.
+    SearchResults {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        results: Vec<SearchResult>,
+    },
+    /// The note a search result named is no longer on disk — removed by
+    /// another program between the search and the choice.
+    SearchResultMissing {
+        #[serde(rename = "noteId")]
+        note_id: Uuid,
+    },
+    /// Sent to a note after search has brought it to the front, so the editor
+    /// can find the occurrence itself. The query travels rather than a
+    /// position: an offset into the stored Markdown is not an offset into the
+    /// editor's document, and only the editor can turn one into the other.
+    RevealMatch {
+        query: String,
+    },
     RequestContent,
     RequestSaveAndClose,
     RequestFlush {
@@ -119,6 +142,21 @@ pub enum WebviewToHostMessage {
     /// Requests the shared Desktop/Overlay switch. The host owns the mode, so
     /// the WebView only asks for the toggle.
     ToggleLayerMode,
+    /// Asks the host to search every stored note. Reading only: nothing about
+    /// answering this writes a note, touches a timestamp or opens a window.
+    SearchRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        query: String,
+    },
+    /// Asks the host to bring one search result to the front. The note is
+    /// named by identifier, which `serde` will only accept as a UUID, so no
+    /// path can be spelled here at all.
+    OpenSearchResult {
+        #[serde(rename = "noteId")]
+        note_id: Uuid,
+        query: String,
+    },
     OpenExternalUrl {
         url: String,
     },

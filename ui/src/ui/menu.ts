@@ -33,6 +33,9 @@ export interface NoteMenuHandlers {
   onToggleBlockquote(): void;
   onSelectCallout(type: CalloutType | null): void;
   onInsertComment(): void;
+  onOpenGlobalSearch(): void;
+  onOpenFind(): void;
+  onOpenReplace(): void;
   onOpen?(): void;
   onClose?(): void;
 }
@@ -60,7 +63,8 @@ type MenuPanel =
   | 'layer'
   | 'blocks'
   | 'codeLanguage'
-  | 'callout';
+  | 'callout'
+  | 'search';
 
 export interface NoteMenuOptions {
   /** Button that toggles the menu; it stays outside the drag region. */
@@ -172,6 +176,7 @@ export class NoteMenu {
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
     const blocksItem = this.createSubmenuItem('Blocos', 'blocks');
+    const searchItem = this.createSubmenuItem('Buscar', 'search');
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
     this.layerValue = this.doc.createElement('span');
@@ -199,6 +204,7 @@ export class NoteMenu {
       textColorItem,
       highlightItem,
       blocksItem,
+      searchItem,
       zoomItem,
       themeItem,
       layerItem,
@@ -227,6 +233,7 @@ export class NoteMenu {
         (intensity) => this.options.handlers.onSelectPaperIntensity(intensity),
       ),
     );
+    this.panels.set('search', this.buildSearchPanel());
     this.panels.set('textSize', this.buildTextSizePanel());
     this.panels.set('textColor', this.buildSwatchPanel(
       'Cor do texto',
@@ -748,6 +755,36 @@ export class NoteMenu {
     panel.append(body);
 
     return { panel, body };
+  }
+
+  /**
+   * The three ways of looking for something, in one place.
+   *
+   * They are here because a reader who has not learned the chords still has to
+   * be able to find them, and each row carries its shortcut so they learn them
+   * once. The menu closes first: every one of these opens something that wants
+   * the keyboard.
+   */
+  private buildSearchPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Buscar', 'note-menu-search');
+
+    const rows: Array<[string, string, () => void]> = [
+      ['Buscar em todas as notas', 'Ctrl+K', () => this.options.handlers.onOpenGlobalSearch()],
+      ['Buscar nesta nota', 'Ctrl+F', () => this.options.handlers.onOpenFind()],
+      ['Localizar e substituir', 'Ctrl+H', () => this.options.handlers.onOpenReplace()],
+    ];
+
+    for (const [label, shortcut, action] of rows) {
+      const item = this.createItem(label, 'note-menu-item');
+      item.append(this.createShortcutHint(shortcut));
+      item.addEventListener('click', () => {
+        this.close();
+        action();
+      });
+      body.append(item);
+    }
+
+    return { element: panel };
   }
 
   private createSubmenuItem(label: string, target: MenuPanel): HTMLButtonElement {

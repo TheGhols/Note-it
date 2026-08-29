@@ -1,4 +1,5 @@
 import { Editor } from '@tiptap/core';
+import { handleAutoPaste } from './autoPaste.ts';
 import { editorExtensions } from './extensions.ts';
 import { CalloutType, calloutType } from './callout.ts';
 import { sanitizeHtml, sanitizeMarkdown } from '../markdown/sanitizer.ts';
@@ -32,6 +33,9 @@ export class NoteEditor {
       autofocus: true,
       editorProps: {
         transformPastedHTML: sanitizeHtml,
+        // A URL pasted over selected text links that text instead of replacing
+        // it. Everything else pastes exactly as it did.
+        handlePaste: (view, event) => handleAutoPaste(view, event),
       },
       onUpdate: () => {
         if (this.debounceTimer !== null) {
@@ -76,6 +80,18 @@ export class NoteEditor {
 
   public focus(): void {
     this.editor.commands.focus();
+  }
+
+  /** The ProseMirror view, for the find and replace commands. */
+  public getView() {
+    return this.editor.view;
+  }
+
+  /** Whatever is selected, as plain text. Empty when nothing is. */
+  public selectedText(): string {
+    const { from, to } = this.editor.state.selection;
+    if (from === to) return '';
+    return this.editor.state.doc.textBetween(from, to, '\n');
   }
 
   public toggleStrike(): void {

@@ -651,3 +651,82 @@ The stub half of that test exists so the whole thing runs in CI, where there is
 no display. What the stub proves is where the harness *points* a process, which
 is the thing that failed; the daemon half proves the consequence.
 
+
+## ADR-027: Search Without an Index, and Two Different Ideas of "the Same Word"
+
+Phase 3.8 had to make every note findable, take the reader to what was found,
+and let them change it — without any of that becoming a second source of truth
+about what the notes contain. Four decisions did that.
+
+**No index, because the scan is already fast enough to be invisible.** A
+thousand notes are listed, read, accent-folded, matched and turned into snippets
+in about 20 ms on this machine; a query that matches nothing costs the same, and
+one that matches everything costs less because the result list is capped. That
+is well under the threshold where a person perceives a delay, and it is the
+whole budget — there is no warm cache and no first-run penalty, because there is
+nothing to warm.
+
+An index would buy nothing measurable here and would cost a great deal that is
+not measured in milliseconds: invalidation when a file changes underneath it,
+rebuilding after a crash, a format version to migrate, a file to back up that is
+not a note, and a second implementation for the CLI to agree with. Every one of
+those is a way for search to disagree with the notes. Reading the notes cannot
+disagree with the notes. The measurement lives in
+`searching_a_thousand_notes_is_fast_and_writes_nothing`, so the claim is
+re-checked rather than remembered, and the day it fails is the day this decision
+should be revisited — with the number in hand.
+
+**Search reads; it never writes.** Nothing in the search path flushes, saves or
+touches a note, and opening a result does not either: activating, opening and
+expanding are window state, and `updated_at` means "when the text last changed".
+A reader must be able to search their notes a hundred times and find every
+timestamp exactly where they left it. The same test that measures the scan also
+asserts that the notes' modification times are unchanged after it.
+
+**Two different foldings, on purpose.** Global search is
+accent-insensitive: `biopsia` finds `Biópsia`, which in Portuguese is the
+difference between search working and search being a typing exercise. Find and
+Replace inside a note is accent-*sensitive*, because replacing is destructive
+and a reader who types `saude` has not asked to overwrite `saúde`. Being able to
+say why they differ is worth more than the tidiness of one rule.
+
+That leaves a seam, and it is closed explicitly: a result carries the spelling
+that actually matched *in that note*, so choosing `biopsia` from the palette
+tells the note to look for `Biópsia`. Without it the note would open on a
+highlight of nothing, which is a worse answer than not searching. Recovering
+that spelling is why folding is length-preserving where it can be and mapped
+back through the source where it cannot — the folded offsets have to name real
+positions in the original bytes.
+
+**Replace is a transaction, not a string operation.** Serialising the note to
+Markdown, running `String.replace` and reloading would be a few lines and would
+throw away marks, selection, scroll position and the undo history, and it would
+apply the replacement to link targets, escape characters and everything else the
+serialiser writes that the reader never typed. Instead every occurrence is a
+document range, and `Replace All` is one ProseMirror transaction applying them
+last-to-first — last-to-first so earlier positions stay valid, one transaction
+so twenty replacements are one `Ctrl+Z`. Marks, list structure and headings
+survive because the document was never rebuilt.
+
+The same principle answers what Find is allowed to see. A calculation's `4` and
+a conversion's `10000 m` are decorations, and decorations are not in the
+document; a search over the document therefore cannot find them, with no rule
+needed to exclude them. `Ctrl+F` for `4` in a note whose only `4` is a result
+finds nothing, which is exactly right: that character is not in the file.
+
+**AutoPaste is one behaviour with one gate; compact links are none.** Pasting a
+URL over selected text is the one paste where the reader's intent is
+unambiguous — they chose the words first — and where the default behaviour
+throws away the thing they chose. It reuses `safeLinkUrl`, the allowlist the
+autolink policy already had, so there is exactly one opinion in the application
+about what a URL is; Tiptap's own `linkOnPaste` was switched off for that
+reason, because it uses `linkifyjs` and would have accepted schemes this
+application does not allow. Nothing is fetched: no title, no favicon, no
+preview, and therefore no network, no tracking and no waiting.
+
+Compact link rendering was evaluated and deliberately not implemented. Its whole
+effect is to hide part of a destination, and the reader who most needs to see
+`https://evil.example.com/path` in full is the one a shortened form would fool.
+Note-it already renders a link's text and keeps its target in the Markdown,
+which is the honest version of the same idea. The roadmap asked for it "only
+where it fits the architecture"; it does not, and saying so is the deliverable.

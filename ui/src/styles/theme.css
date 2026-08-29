@@ -884,6 +884,200 @@ body[data-collapsed="true"] .resize-handle {
   letter-spacing: 0.01em;
 }
 
+/* A found occurrence. Decoration, never content: these classes exist only in
+   the rendered document and the stored `.md` knows nothing about them.
+
+   The ink is the note's own text over a tinted ground, so a match is readable
+   on all seven papers in both themes without a palette of its own — the same
+   reasoning the calculated result follows. The active occurrence is the same
+   idea turned up, plus an outline, so it is told apart by more than colour. */
+.ProseMirror .note-find-match {
+  border-radius: 3px;
+  background-color: color-mix(in srgb, var(--paper-text) 18%, transparent);
+  color: var(--paper-text);
+}
+
+.ProseMirror .note-find-match-active {
+  background-color: color-mix(in srgb, var(--paper-text) 34%, transparent);
+  outline: 1px solid var(--paper-text);
+  outline-offset: -1px;
+}
+
+/* Search across the notes, and search inside this one. Both are chrome rather
+   than paper: they wear the interface theme, exactly as the note's menu does,
+   so they read the same over a yellow note and a black one. */
+.note-search,
+.note-find {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
+  background-color: var(--ui-surface);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  box-shadow: var(--ui-shadow);
+  font-family: var(--note-font-family);
+  /* Fixed in pixels: this is the application's furniture, so the note's zoom
+     scales the text it is searching and leaves the control alone. */
+  font-size: 12px;
+}
+
+.note-search[hidden],
+.note-find[hidden] {
+  display: none;
+}
+
+.note-search {
+  top: calc(var(--note-header-height) + 4px);
+  left: 8px;
+  right: 8px;
+  max-height: calc(100% - var(--note-header-height) - 16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.note-search-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.note-search-input,
+.note-find-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ui-text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.note-search-input::placeholder,
+.note-find-input::placeholder {
+  color: var(--ui-text-muted);
+}
+
+.note-search-status,
+.note-find-counter {
+  flex: none;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.note-find[data-no-match] .note-find-counter {
+  color: var(--callout-caution);
+}
+
+.note-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.note-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  cursor: default;
+}
+
+.note-search-row.selected {
+  background-color: var(--ui-surface-hover);
+}
+
+.note-search-label {
+  grid-column: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-search-snippet {
+  grid-column: 1;
+  color: var(--ui-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-search-count {
+  grid-row: 1;
+  grid-column: 2;
+  align-self: center;
+  color: var(--ui-text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.note-find {
+  top: calc(var(--note-header-height) + 4px);
+  right: 8px;
+  max-width: calc(100% - 16px);
+  padding: 4px;
+}
+
+.note-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+}
+
+.note-find-row[hidden] {
+  display: none;
+}
+
+.note-find .note-find-input {
+  width: 130px;
+  flex: 0 1 auto;
+}
+
+.note-find-button {
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--ui-text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.note-find-button.note-find-wide {
+  padding: 0 8px;
+}
+
+.note-find-button:hover {
+  background-color: var(--ui-surface-hover);
+}
+
+.note-find-button:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
+.note-find-case.active {
+  background-color: var(--ui-surface-hover);
+  color: var(--ui-text);
+  font-weight: 700;
+}
+
 /* The highlight mark paints its own foreground inline, because the extension
    renders an inline style that would beat a rule here. Only the shape is
    styled from the stylesheet. */

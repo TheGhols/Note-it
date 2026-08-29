@@ -170,6 +170,39 @@ impl StorageManager {
         notes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         Ok(notes.into_iter().map(|(id, _)| id).collect())
     }
+
+    /// Every note's own text, newest first, ready to be searched.
+    ///
+    /// Reads the files and splits the front matter off; the YAML is never
+    /// parsed, because search wants what a reader wrote and nothing Note-it
+    /// records about it. That also keeps a scan of a thousand notes to a
+    /// thousand reads rather than a thousand reads and a thousand YAML parses.
+    ///
+    /// The order is [`list_notes_by_recency`](Self::list_notes_by_recency) —
+    /// the store's existing rule, which since Phase 3.4R follows the last real
+    /// edit. Reusing it means a reader meets one idea of "most recent"
+    /// everywhere in the application rather than two that disagree.
+    ///
+    /// A note that has vanished or cannot be read is skipped rather than
+    /// failing the whole scan: one unreadable file must not stop search
+    /// working. Nothing here writes, so searching never touches a note.
+    pub fn read_note_bodies_by_recency(&self, limit: usize) -> Vec<(Uuid, String)> {
+        let ids = match self.list_notes_by_recency() {
+            Ok(ids) => ids,
+            Err(error) => {
+                eprintln!("Failed to list notes for search: {error}");
+                return Vec::new();
+            }
+        };
+
+        ids.into_iter()
+            .take(limit)
+            .filter_map(|id| {
+                let raw = fs::read_to_string(self.note_path(&id)).ok()?;
+                Some((id, NoteDocument::body_of(&raw).to_string()))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +415,154 @@ mod tests {
             .expect("a later save syncs normally");
         assert_eq!(store.load_note(&id).expect("reload").content, "conteúdo C");
         assert!(temp_debris_in(store.notes_dir()).is_empty());
+    }
+
+    #[test]
+    fn search_reads_the_note_and_never_its_front_matter() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "# Biópsia hepática\n\ncorpo da nota".to_string();
+        manager.save_note_atomic(&doc).expect("save");
+
+        let bodies = manager.read_note_bodies_by_recency(10);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].0, doc.metadata.id);
+        assert_eq!(bodies[0].1, "# Biópsia hepática\n\ncorpo da nota");
+
+        // The stored file really does carry the metadata this skipped.
+        let raw = fs::read_to_string(manager.note_path(&doc.metadata.id)).expect("read");
+        assert!(raw.contains("note_it:"));
+        assert!(raw.contains("created_at:"));
+        for internal in ["note_it", "created_at", "updated_at", "paper_type"] {
+            assert!(
+                !bodies[0].1.contains(internal),
+                "{internal} reached the searchable body"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_bodies_survives_a_note_that_vanished_or_cannot_be_parsed() {
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let mut good = NoteDocument::new_empty();
+        good.content = "nota legível".to_string();
+        manager.save_note_atomic(&good).expect("save");
+
+        // A file with an id but no front matter at all: still a note, and its
+        // whole text is searchable.
+        let orphan = Uuid::new_v4();
+        fs::write(manager.note_path(&orphan), "sem front matter\n").expect("write orphan");
+
+        // ...and a directory where a note should be, which cannot be read.
+        let broken = Uuid::new_v4();
+        fs::create_dir(manager.note_path(&broken)).expect("occupy a note path");
+
+        let bodies = manager.read_note_bodies_by_recency(10);
+        let ids: Vec<Uuid> = bodies.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&good.metadata.id));
+        assert!(ids.contains(&orphan));
+        assert!(!ids.contains(&broken), "an unreadable note is skipped");
+        assert!(bodies.iter().any(|(_, body)| body == "sem front matter"));
+    }
+
+    #[test]
+    fn searching_a_thousand_notes_is_fast_and_writes_nothing() {
+        // The evidence behind having no index. A thousand notes is far more
+        // than a post-it application accumulates, and the whole scan — listing,
+        // reading, folding, matching, snippets — is measured end to end.
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("Init storage manager");
+
+        let count = 1_000;
+        let filler = "Texto de contexto para dar corpo à nota. ".repeat(20);
+        for index in 0..count {
+            let mut doc = NoteDocument::new_empty();
+            doc.content = if index % 100 == 0 {
+                format!("# Biópsia hepática {index}\n\n{filler}\nagulha de punção\n")
+            } else {
+                format!("# Nota {index}\n\n{filler}\n")
+            };
+            manager.save_note_atomic(&doc).expect("save note");
+        }
+
+        let before: Vec<_> = fs::read_dir(&notes_dir)
+            .expect("read notes dir")
+            .flatten()
+            .map(|entry| {
+                (
+                    entry.file_name(),
+                    entry.metadata().and_then(|m| m.modified()).ok(),
+                )
+            })
+            .collect();
+
+        let mut timings = Vec::new();
+        for query in ["biopsia", "nota", "inexistente-xyz", "punção"] {
+            let started = std::time::Instant::now();
+            let bodies = manager.read_note_bodies_by_recency(5_000);
+            let results = crate::search::search_notes(
+                query,
+                bodies.iter().map(|(id, body)| (*id, body.as_str())),
+            );
+            let elapsed = started.elapsed();
+            timings.push((query, elapsed, results.len()));
+        }
+
+        for (query, elapsed, hits) in &timings {
+            println!("search {count} notes for {query:?}: {elapsed:?} ({hits} hits)");
+            assert!(
+                *elapsed < std::time::Duration::from_secs(2),
+                "searching {count} notes for {query:?} took {elapsed:?}"
+            );
+        }
+
+        // `biopsia` finds the ten notes that have it, accents and case folded.
+        assert_eq!(timings[0].2, 10);
+        // `nota` is in every one, and the result list is still capped.
+        assert_eq!(timings[1].2, crate::search::MAX_RESULTS);
+        assert_eq!(timings[2].2, 0);
+        assert_eq!(timings[3].2, 10);
+
+        // Searching is reading: not one file was written or even touched.
+        let after: Vec<_> = fs::read_dir(&notes_dir)
+            .expect("read notes dir")
+            .flatten()
+            .map(|entry| {
+                (
+                    entry.file_name(),
+                    entry.metadata().and_then(|m| m.modified()).ok(),
+                )
+            })
+            .collect();
+        let mut before_sorted = before;
+        let mut after_sorted = after;
+        before_sorted.sort();
+        after_sorted.sort();
+        assert_eq!(before_sorted, after_sorted, "a search modified the store");
     }
 
     #[test]

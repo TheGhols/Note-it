@@ -124,6 +124,23 @@ and `dbus-send`. The daemon half is skipped, out loud, where there is no display
 Running it locally will briefly open a real note window: that is the point of the fidelity half, and
 it is pointed at a throwaway store the whole time.
 
+### Measuring search rather than guessing at it
+
+The claim that Note-it needs no search index is a test, not a memory:
+
+```bash
+cargo test --release searching_a_thousand_notes -- --nocapture
+```
+
+It builds a thousand notes in a temporary directory, runs four queries — one matching a few notes,
+one matching all of them, one matching none, one with accents — end to end through listing,
+reading, folding, matching and snippets, prints each timing and asserts the notes' modification
+times did not move. On the development machine the whole scan is around 18–20 ms per query in
+release and under 90 ms in debug.
+
+That is the number ADR-027 rests on. If it stops being comfortable, the evidence for adding an
+index will be in the test output, which is where it should be — not in a hunch.
+
 ### GTK's compose table
 
 A cold `XDG_CACHE_HOME` makes GTK rebuild its compose table, which produces the one-off

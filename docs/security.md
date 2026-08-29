@@ -58,3 +58,45 @@ converts is a constant, which is exactly why currencies are not among them.
 ## Production Markdown pipeline
 
 Raw Markdown remains the source format and is never passed wholesale through `DOMParser`. Before Tiptap parses it, Note-it inspects only embedded HTML fragments, removes dangerous blocks and unsupported tags, canonicalizes the supported custom tags, and validates their colors as 3- or 6-digit HEX. The same HEX validator is used by the custom Markdown tokenizers and serializers. Clipboard HTML is sanitized separately before ProseMirror parses it.
+
+## Search reads notes; it never executes them
+
+A query is text. It is folded for accents, lower-cased and matched as a literal substring — there
+is no regex engine, so `.*`, `[a-z]` and `(foo|bar)` are those characters and cost what those
+characters cost. Nothing is passed to a shell, to SQL or to any interpreter, because there is none
+to pass it to.
+
+The limits are explicit, so a hostile query or a pathological note costs a bounded amount: 512
+characters of query, 100 results, about 240 characters of snippet, and a scan that reads note
+bodies rather than loading a WebView for each one — searching a thousand notes creates zero
+additional WebViews.
+
+**A snippet is text.** Labels and snippets are written with `textContent`, never `innerHTML`. A
+note containing `<script>alert(1)</script>` or `<img onerror=...>` shows those characters in the
+result list; no element is created from them and nothing runs. The note is a file the user
+controls, and a search result is a rendering of it, not an execution of it.
+
+**The interface cannot name a file.** A search result carries a `note_id`, and the message the
+WebView sends back to open one carries a `Uuid` — a path cannot be spelled in it, so
+`../../etc/passwd` is not a request that exists. The host resolves the identifier through the same storage
+rules everything else uses and reports a missing note rather than creating one.
+
+**Searching does not write.** No note is saved, flushed or rewritten to answer a query, no
+`updated_at` moves, and there is no index file, so there is no second copy of the user's notes on
+disk to protect, back up or leak.
+
+## Pasting a URL creates a link through one gate
+
+Pasting a URL over selected text makes that text a link, and the URL is judged by `safeLinkUrl` —
+the same allowlist the rest of the application uses. `http`, `https` and `mailto` pass; everything
+else, `javascript:`, `data:`, `file:`, `vbscript:` and `ftp:` among them, is pasted as ordinary
+text. Whitespace, control characters, a scheme-only string and a hostless `http://` are all
+refused.
+
+There is deliberately exactly one opinion in the application about what a URL is. Tiptap's own
+`linkOnPaste` is switched off, because it uses `linkifyjs` — a second parser, with a different
+answer, that accepted schemes this application does not allow. A test asserts that pasting
+`ftp://…`, `ssh://…` or `www.…` produces no link at all.
+
+Nothing is fetched. No title, no favicon, no OpenGraph, no preview, and no HTTP client was added:
+the clipboard already holds everything the feature needs, so the feature adds no network surface.

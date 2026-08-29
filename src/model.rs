@@ -156,25 +156,52 @@ impl NoteDocument {
         content.trim_end_matches(['\n', '\r'])
     }
 
-    pub fn parse(raw: &str) -> Result<Self, String> {
+    /// Splits a stored file into its front matter and the note itself.
+    ///
+    /// One definition of "where the note starts", because two would eventually
+    /// disagree: [`parse`](Self::parse) reads the metadata through it, and
+    /// search reads the body through it without paying for the YAML. `None`
+    /// means there is no front matter and the whole file is the note.
+    pub fn split_front_matter(raw: &str) -> (Option<&str>, &str) {
         let trimmed = raw.trim_start();
         if !trimmed.starts_with("---") {
+            return (None, raw);
+        }
+
+        let rest = &trimmed[3..];
+        let Some(end) = rest.find("\n---") else {
+            return (None, raw);
+        };
+
+        // Skip the closing `\n---` and the line break that follows it.
+        let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
+        (Some(&rest[..end]), body)
+    }
+
+    /// The note's own text, with any front matter and trailing newlines gone.
+    ///
+    /// This is what a reader wrote and therefore what search looks at: the
+    /// stored metadata is Note-it's bookkeeping, not something anyone typed.
+    pub fn body_of(raw: &str) -> &str {
+        Self::canonical_content(Self::split_front_matter(raw).1)
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let (front_matter, content) = Self::split_front_matter(raw);
+
+        let Some(yaml_str) = front_matter else {
+            if raw.trim_start().starts_with("---") {
+                return Err(
+                    "Invalid markdown front matter: missing closing delimiter '---'".to_string(),
+                );
+            }
             // No front matter present, create default metadata
             let doc = Self::new_empty();
             return Ok(Self {
                 metadata: doc.metadata,
                 content: Self::canonical_content(raw).to_string(),
             });
-        }
-
-        let rest = &trimmed[3..];
-        let end_idx = rest.find("\n---").ok_or_else(|| {
-            "Invalid markdown front matter: missing closing delimiter '---'".to_string()
-        })?;
-
-        let yaml_str = &rest[..end_idx];
-        let content_start = end_idx + 4; // Skip \n---
-        let content = rest[content_start..].trim_start_matches(['\r', '\n']);
+        };
 
         let wrapper: NoteFrontMatterWrapper = serde_yaml::from_str(yaml_str)
             .map_err(|e| format!("Failed to parse YAML front matter: {e}"))?;

@@ -513,6 +513,167 @@ a quantity, and with it percentages, aggregation and every rule already
 established. It is a deliberate boundary for this version rather than a
 half-built one.
 
+## Search
+
+Opened with `Ctrl+K` from inside any note. The palette is a panel in the page, not a second window,
+and not part of the document — nothing typed into it can reach the Markdown.
+
+### What is searched
+
+The note's **body**: everything below the front matter. Headings, lists, tasks, quotes, callouts,
+code blocks and comments are all note content and are all searchable.
+
+The front matter itself is not. `note_it:`, `created_at:`, `updated_at:` and `paper:` are how the
+file is written, not what the reader wrote, and a search for `paper` must not return every note in
+the store.
+
+Neither is anything the editor merely draws. A `4` shown beside `= 2 + 2`, a `10000 m` shown beside
+`= 10 km em m` and every other decoration are not in the file, so no search can find them.
+
+### How a query is matched
+
+| Property | Behaviour |
+| --- | --- |
+| Case | Insensitive — `BIÓPSIA`, `Biópsia` and `biópsia` are one word |
+| Accents | Insensitive — `biopsia` finds `Biópsia`, `coracao` finds `Coração` |
+| Matching | Literal substring. `.*`, `[a-z]` and `(foo\|bar)` are those characters, not a pattern |
+| Query limit | 512 characters; longer is refused rather than truncated silently |
+| Results | 100 notes at most |
+| Snippet | About 240 characters, cut at a character boundary |
+| Order | Most recently written first |
+
+There is no stemming, no fuzzy matching and no semantic search. `biopsia` finds `biópsia`; it does
+not find `punção`. The rule is one a reader can predict, which is the point.
+
+### What a result looks like
+
+One note is one result, however many times the word appears in it.
+
+```text
+Biópsia hepática                                    4
+…a biópsia transjugular é utilizada quando…
+```
+
+- The **label** is the note's first non-empty line, with the most obvious Markdown markers removed
+  for display — `# Biópsia hepática` is shown as `Biópsia hepática`. Nothing is written to the file
+  to create a title. A note with no text is listed as `Nota vazia`.
+- The **snippet** is the text around the first match, rendered as text. A note containing
+  `<script>alert(1)</script>` shows those characters; it does not become an element.
+- The **count** appears when a note holds more than one occurrence.
+
+### An empty query lists recent notes
+
+Opening the palette without typing shows the most recently written notes, so the same control is
+also how you move between them. Appearing in that list is not editing: `updated_at` does not move.
+
+### Opening a result
+
+`Enter`, or a click:
+
+- a note **already open** is activated;
+- a note that is **closed** is opened;
+- a note that is **collapsed** is expanded;
+- the note scrolls to the first occurrence and highlights it, with the find bar open so the
+  highlight has a visible cause and an obvious way out.
+
+None of that changes the note's text, and none of it moves `updated_at`. The Desktop/Overlay layer
+is not touched either: opening a note from a search never switches the layer for everything else.
+
+A result the store no longer has — deleted from outside between the search and the `Enter` — says
+`nota não encontrada`, drops the row and searches again. Nothing is recreated.
+
+### Keyboard
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+K` | Open |
+| `Esc` | Close, returning the keyboard to the editor |
+| `↓` / `↑` | Next / previous result, wrapping |
+| `Enter` | Open the selected result |
+| `Ctrl+Shift+Space` | Deliberately **not** claimed — the layer belongs to the application, and toggling it with the palette open neither closes it nor types a space |
+
+Typing is debounced by 120 ms and every request is numbered, so a slow answer to `bio` can never
+replace a newer answer to `biopsia`.
+
+### Searching writes nothing
+
+No save, no flush, no `.md` touched, no `updated_at` moved, no index file, and nothing recorded in
+`state.json` — not the query, not the selection, not the palette. Opening a closed note from a
+result does change that note's `is_open`, because the reader really did open it.
+
+### No index
+
+There is none, on purpose. A thousand notes are listed, read, folded, matched and turned into
+snippets in about 20 ms, so an index would buy nothing a person could perceive and would cost
+invalidation, rebuilding, a file format to migrate and a second implementation to keep honest. The
+measurement is a test, so the day it stops being true is a day something fails. See ADR-027.
+
+## Find & Replace
+
+Inside the note you are looking at, over the live document — including text typed a second ago and
+not yet saved.
+
+### Find
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+F` | Open, seeded from the selection when it is short and on one line |
+| `Enter` | Next occurrence |
+| `Shift+Enter` | Previous occurrence |
+| `Esc` | Close |
+| `Aa` | Match case |
+
+The counter reads `2 de 7`, or `nenhuma`. Navigation wraps in both directions. Every occurrence is
+highlighted, the current one more strongly, using theme tokens so the highlight is visible on light
+paper and on black paper alike.
+
+Finding changes nothing: the highlights are decorations, so there is no transaction, no undo step,
+no rewritten Markdown and no change to `updated_at`.
+
+Find searches the document, so it cannot find a calculated or converted result — searching a note
+containing `= 2 + 2` for `4` reports `nenhuma`.
+
+### Replace
+
+`Ctrl+H` adds a second row: **Substituir por…**, **Substituir**, **Todas**.
+
+- **Substituir** replaces the current occurrence and moves to the next. Each is its own undo step.
+- **Todas** replaces every occurrence in **one** transaction, applied last-to-first so earlier
+  positions stay valid. Twenty replacements come back with a single `Ctrl+Z`.
+- Replacement is literal. There is no regex, no `$1`, no `\1` and no capture groups.
+- Marks, lists, headings, tasks, quotes and code blocks survive, because the document is edited
+  rather than serialised, string-replaced and reloaded.
+- Replace is **accent-sensitive**, unlike global search: `saude` does not overwrite `saúde`.
+  Because of that, a note opened from the palette is told the spelling that actually matched in it,
+  so searching `biopsia` still highlights `Biópsia`.
+- Replacing is a real edit, so `updated_at` moves — once, for the edit, and not again for the
+  decorations that follow it.
+
+Replace acts on the current note only. There is no cross-note replace.
+
+## Pasting a URL over selected text
+
+Select `site oficial`, paste `https://example.com`, and the note holds:
+
+```markdown
+[site oficial](https://example.com)
+```
+
+The words you chose are kept and become the link, instead of being replaced by the URL.
+
+- The URL is judged by `safeLinkUrl`, the same allowlist the rest of the application uses. `http`,
+  `https` and `mailto` become links; `javascript:`, `data:`, `file:`, `ftp:` and anything else are
+  pasted as ordinary text.
+- Nothing is fetched. No title, no favicon, no OpenGraph, no preview — and therefore no network, no
+  tracking and no waiting.
+- Inside inline code or a code block, or with a selection spanning two blocks, it is an ordinary
+  paste: a URL in source is characters, and a link cannot wrap a structure.
+- It is one undo step.
+
+**Compact link rendering is deliberately not implemented.** Shortening a URL hides part of where it
+leads, and the reader who most needs to see `https://evil.example.com/path` in full is exactly the
+one an abbreviation would fool. See ADR-027.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
@@ -557,6 +718,8 @@ half-built one.
 - **Keyboard Shortcuts:**
   - `Ctrl+N` to create a new note in cascade.
   - `Ctrl+W` to save and dismiss current note.
+  - `Ctrl+K` to search every note, `Ctrl+F` to find in this one, `Ctrl+H` to find and replace.
+    All three were free before Phase 3.8 and collide with nothing above.
 
 ## Storage & Reliability
 

@@ -215,12 +215,30 @@
       It runs under `cargo test`.
 - [x] No application code changed. The defect was in the harness, not in Note-it.
 
-### Phase 3.8: Search & Productivity (Planned)
-- [ ] Global search across notes.
-- [ ] Find and replace.
-- [ ] Productivity affordances around finding and moving between notes.
-- [ ] Compact links / AutoPaste, only where they fit the architecture rather than for their own
-      sake.
+### Phase 3.8: Search & Productivity (Completed)
+- [x] Global search across every note, opened with `Ctrl+K` from any note. Case-insensitive and
+      accent-insensitive, so `biopsia` finds `Biópsia` — the property Portuguese needs most.
+- [x] No persistent index. A thousand notes are listed, read, folded, matched and turned into
+      snippets in about 20 ms, which is faster than anything a person can notice and cheaper than
+      an index that would have to be invalidated, rebuilt and kept honest. The measurement is a
+      test, so the claim keeps being checked — see ADR-027.
+- [x] Search lives in `src/search.rs` and `StorageManager`, not in the window or the WebView: it
+      needs no GTK, no WebKit and no display, which is what a future CLI will need too.
+- [x] An empty query lists the most recently written notes, so the same control is also the way to
+      move between them.
+- [x] A result is one note, addressed by `note_id` — never by path, and never by the label, which
+      two notes may share. Opening one activates it, opens it if it was closed, expands it if it
+      was collapsed, and scrolls to the match, all without touching `updated_at`.
+- [x] Find inside a note with `Ctrl+F`, replace with `Ctrl+H`. Enter and Shift+Enter walk the
+      occurrences and wrap at both ends; `Replace All` is a single ProseMirror transaction, so one
+      `Ctrl+Z` puts all of it back.
+- [x] Neither search nor find can find what is not in the file: a calculation's `4` and a
+      conversion's `10000 m` are decorations, and searching for them finds nothing.
+- [x] AutoPaste: pasting a URL over selected text makes that text the link, judged by the link
+      allowlist the application already had, with no network, no metadata lookup and one undo step.
+- [x] Compact link rendering evaluated and deliberately deferred: shortening a URL hides where it
+      leads, which is a security regression sold as tidiness. Recorded in ADR-027 rather than
+      quietly skipped.
 
 ### Phase 3.9: Reliability (Planned)
 - [ ] Recoverable trash, so a deleted note is not gone.

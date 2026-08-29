@@ -53,6 +53,9 @@ function buildNote() {
     onToggleBlockquote: vi.fn(),
     onSelectCallout: vi.fn(),
     onInsertComment: vi.fn(),
+  onOpenGlobalSearch: vi.fn(),
+  onOpenFind: vi.fn(),
+  onOpenReplace: vi.fn(),
   };
   const menu = new NoteMenu({ trigger: btnMenu, mount: left, colors: COLORS, handlers });
 

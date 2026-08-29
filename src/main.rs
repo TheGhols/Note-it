@@ -5,6 +5,7 @@ mod diagnostics;
 mod layer_shell;
 mod model;
 mod note_window;
+mod search;
 mod settings;
 mod state;
 mod storage;

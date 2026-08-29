@@ -17,6 +17,41 @@ export const ALLOWED_AUTOLINK_SCHEMES: ReadonlySet<string> = new Set([
   'mailto',
 ]);
 
+/**
+ * The one place that decides whether a string may become a link.
+ *
+ * Every feature that turns text into a link asks here — the autolink policy
+ * and, since Phase 3.8, pasting a URL over a selection. A second opinion about
+ * what a safe URL is would eventually be a second answer, and the whole point
+ * of an allowlist is that there is one.
+ *
+ * Returns the URL as it will be stored, or `null`. `javascript:`, `data:`,
+ * `file:` and everything else are not on the list; whitespace and control
+ * characters are refused outright, because a "URL" that needs trimming to look
+ * like one is not a URL somebody meant to paste.
+ */
+export function safeLinkUrl(candidate: string): string | null {
+  const text = candidate.trim();
+  if (text === '' || /\s/.test(text) || Array.from(text).some((c) => c < ' ' || c === '\u007f')) {
+    return null;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return null;
+  }
+
+  const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+  if (!ALLOWED_AUTOLINK_SCHEMES.has(scheme)) return null;
+  // `http://` with nothing after it is a scheme, not a destination.
+  if ((scheme === 'http' || scheme === 'https') && parsed.hostname === '') return null;
+  if (scheme === 'mailto' && parsed.pathname === '') return null;
+
+  return text;
+}
+
 type CustomTagAction =
   | { kind: 'open'; tag: 'u' | 'span' | 'mark'; canonical: string }
   | { kind: 'close'; tag: 'u' | 'span' | 'mark'; canonical: string };

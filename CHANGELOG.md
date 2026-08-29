@@ -27,6 +27,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - No application code changed: the defect was in the harness.
 
 ### Added
+- Search across every note, and the ways of getting to what it finds:
+  - `Ctrl+K` opens a search palette inside the note you are already in — no second window, no
+    second application. Case-insensitive and accent-insensitive, so `biopsia` finds `Biópsia` and
+    `coracao` finds `Coração`.
+  - An empty query lists the most recently written notes, so the same control is also a quick
+    switcher.
+  - One note is one result, with a label derived from its first non-empty line, a snippet around
+    the first match and a count when there are several. Snippets are rendered as text, never as
+    markup.
+  - `Enter` opens the chosen result: a note already open is activated, a closed one is opened, a
+    collapsed one is expanded, and the match is scrolled to and highlighted. None of that touches
+    `updated_at`, and none of it changes the Desktop/Overlay layer.
+  - Results are addressed by `note_id`. The WebView cannot name a path, so it cannot ask for one.
+  - Explicit limits: 512 characters of query, 100 results, ~240 characters of snippet. Typing is
+    debounced by 120 ms and every request is numbered, so a slow answer to `bio` can never replace
+    a newer answer to `biopsia`.
+  - Searching writes nothing: no flush, no save, no index file, no `state.json` entry.
+- Find and replace inside the current note:
+  - `Ctrl+F` finds, with a live count, `Enter`/`Shift+Enter` to walk the occurrences and wrapping at
+    both ends; `Esc` closes and hands the keyboard back to the editor. Opening it with a short
+    single-line selection seeds the field from it.
+  - `Ctrl+H` adds replace: one occurrence, or all of them. An `Aa` toggle makes the search
+    case-sensitive.
+  - `Replace All` is a single ProseMirror transaction applied last-to-first, so twenty
+    replacements come back with one `Ctrl+Z`. Marks, lists, headings and code blocks survive,
+    because the document is edited rather than re-serialised.
+  - Unlike global search, find and replace is accent-**sensitive**: replacing is destructive, and
+    `saude` must not overwrite `saúde`. A result chosen from the palette therefore carries the
+    spelling that actually matched, so `biopsia` still lands on `Biópsia`.
+  - Highlighting is a decoration: finding 7 occurrences creates no transaction, no undo step and no
+    write.
+- Pasting a URL over selected text turns that text into a link — select `site oficial`, paste
+  `https://example.com`, and the note holds `[site oficial](https://example.com)`.
+  - It reuses `safeLinkUrl`, the allowlist the rest of the application already used, so there is
+    exactly one opinion about what a URL is. Tiptap's own `linkOnPaste` is switched off, because it
+    uses `linkifyjs` and accepted schemes this application does not.
+  - Nothing is fetched: no title, no favicon, no preview, no network.
+  - Inline code, code blocks and selections spanning two blocks are left as an ordinary paste, and
+    the whole thing is one undo step.
 - Unit conversions, written the way the rest of the engine is and shown the same way:
   - `= 10 km em m` shows `10000 m` beside the line. `em` is the conversion keyword, and the only
     one.

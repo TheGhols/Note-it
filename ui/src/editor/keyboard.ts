@@ -9,6 +9,9 @@ export interface NoteKeyboardActions {
   toggleLayerMode(): void;
   increaseTextSize(): void;
   decreaseTextSize(): void;
+  openGlobalSearch(): void;
+  openFind(): void;
+  openReplace(): void;
 }
 
 /**
@@ -90,6 +93,21 @@ export class NoteKeyboardController {
       case '0':
         event.preventDefault();
         if (!event.repeat) this.actions.resetZoom();
+        break;
+      // `Ctrl+K`, `Ctrl+F` and `Ctrl+H` were all free: nothing in Note-it
+      // claimed them before Phase 3.8, and none of them collides with the
+      // chords above.
+      case 'k':
+        event.preventDefault();
+        if (!event.repeat) this.actions.openGlobalSearch();
+        break;
+      case 'f':
+        event.preventDefault();
+        if (!event.repeat) this.actions.openFind();
+        break;
+      case 'h':
+        event.preventDefault();
+        if (!event.repeat) this.actions.openReplace();
         break;
     }
   };
