@@ -134,6 +134,123 @@ describe('the collapsed note title', () => {
     expect(title).not.toContain('span');
   });
 
+  describe('cutting a long title', () => {
+    /**
+     * A high surrogate with no low one after it, or a low one with no high one
+     * before it. Either is a broken character: the bar renders a replacement
+     * glyph where a letter or an emoji should be.
+     */
+    function hasLoneSurrogate(text: string): boolean {
+      return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+    }
+
+    /** What the reader counts: characters, not UTF-16 code units. */
+    function characters(text: string): string[] {
+      return Array.from(new Intl.Segmenter('pt-BR', { granularity: 'grapheme' }).segment(text))
+        .map((piece) => piece.segment);
+    }
+
+    function isWhole(title: string): void {
+      expect(hasLoneSurrogate(title)).toBe(false);
+      expect(title).not.toContain('�');
+      expect(characters(title).length).toBeLessThanOrEqual(80);
+    }
+
+    it('leaves a short ASCII title exactly as it is', () => {
+      expect(noteTitle('Comprar madeira amanhã')).toBe('Comprar madeira amanhã');
+    });
+
+    it('caps a long ASCII title with the ellipsis glyph', () => {
+      const title = noteTitle('A'.repeat(160));
+      expect(title).toHaveLength(80);
+      expect(title.endsWith('…')).toBe(true);
+      isWhole(title);
+    });
+
+    it('keeps an emoji that sits before the limit', () => {
+      const title = noteTitle(`🎉 festa ${'A'.repeat(200)}`);
+      expect(title.startsWith('🎉 festa ')).toBe(true);
+      isWhole(title);
+    });
+
+    it('never cuts an emoji that lands exactly on the boundary', () => {
+      // 3.9UX.R.2. The emoji begins at UTF-16 index 78, so the old
+      // `slice(0, 79)` landed between its two halves and the bar was handed a
+      // lone surrogate. Counted in characters, it is either kept whole or
+      // dropped whole.
+      const markdown = `${'A'.repeat(78)}🎉 e muito mais texto depois do limite`;
+      expect(markdown.indexOf('🎉')).toBe(78);
+
+      const title = noteTitle(markdown);
+      expect(title).toBe(`${'A'.repeat(78)}🎉…`);
+      isWhole(title);
+    });
+
+    it('never cuts an emoji wherever the boundary happens to fall', () => {
+      // Every offset around the limit, so the case cannot be fixed by luck.
+      for (let lead = 70; lead <= 85; lead += 1) {
+        const title = noteTitle(`${'A'.repeat(lead)}🎉${'B'.repeat(60)}`);
+        isWhole(title);
+      }
+    });
+
+    it('keeps a run of consecutive emoji whole', () => {
+      const title = noteTitle('🎉🎊🥳🎈🍰'.repeat(40));
+      isWhole(title);
+      expect(characters(title).length).toBe(80);
+      expect(title.endsWith('…')).toBe(true);
+    });
+
+    it('never separates a combining accent from the letter it belongs to', () => {
+      // Text reaches Note-it decomposed as well as precomposed; search folds
+      // `o` + U+0301 exactly like `\u00F3` for that reason. Counted in UTF-16 the
+      // letter sits inside the limit and its accent just outside it, so the cut
+      // fell between them and a note about a `beb\u00E9` was named after a `bebe`.
+      const accented = `${'a'.repeat(78)}e\u0301${'b'.repeat(60)}`;
+      expect(accented.indexOf('\u0301')).toBe(79);
+
+      const title = noteTitle(accented);
+      expect(title).toBe(`${'a'.repeat(78)}e\u0301\u2026`);
+      isWhole(title);
+    });
+
+    it('counts accented and CJK characters as the characters they are', () => {
+      expect(noteTitle('Biópsia hepática — ação e coração')).toBe(
+        'Biópsia hepática — ação e coração',
+      );
+      const japanese = noteTitle('日本語'.repeat(40));
+      isWhole(japanese);
+      expect(characters(japanese).length).toBe(80);
+    });
+
+    it('cuts the projected text and never the stored Markdown', () => {
+      const markdown = `**${'A'.repeat(200)}🎉**`;
+      const before = markdown;
+
+      const title = noteTitle(markdown);
+      isWhole(title);
+      expect(title).not.toContain('*');
+      expect(markdown).toBe(before);
+    });
+
+    it('leaks no markup from a long coloured or highlighted title', () => {
+      const long = `${'A'.repeat(78)}🎉 continua bem depois do limite de oitenta`;
+      for (const markdown of [
+        `<span data-note-it-color="#64748B" style="color:#64748B">${long}</span>`,
+        `<mark data-note-it-highlight="#FDE68A" style="background-color:#FDE68A">${long}</mark>`,
+        `# <mark data-note-it-highlight="#FDE68A" style="background-color:#FDE68A">` +
+          `<span data-note-it-color="#64748B" style="color:#64748B">${long}</span></mark>`,
+      ]) {
+        const title = noteTitle(markdown);
+        expect(title).toBe(`${'A'.repeat(78)}🎉…`);
+        isWhole(title);
+        for (const spelling of ['<span', '<mark', 'data-note-it-', 'style=', '#']) {
+          expect(title).not.toContain(spelling);
+        }
+      }
+    });
+  });
+
   it('is presentation only and never mutates the Markdown source', () => {
     const markdown = '# Título real\n\nTexto **intacto**';
     const before = markdown;

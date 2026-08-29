@@ -237,6 +237,28 @@ html, body {
   position: absolute;
   inset: 0 0 auto 0;
   z-index: 20;
+  /* The bar carries its own paper under the controls.
+     It used to carry none, and the claim that the gutter kept text out of the
+     strip only held while the note was at the top: `.editor-wrapper` is the
+     scroll container and its top padding scrolls away with the text, so the
+     moment a reader scrolled, their own words travelled up into the strip and
+     the icons were drawn over them — a row of controls tangled with a
+     highlighted heading, unreadable and impossible to tell apart.
+
+     The fill is the paper's own colour, so nothing reads as a foreign panel,
+     and it is painted on the header itself, so it fades in and out with the
+     chrome exactly as before: an absent bar still paints nothing at all.
+
+     It stops at the gutter rather than filling the whole box. The gutter is by
+     definition the strip that is always the note's own and never a line's, so
+     covering exactly it can never hide a line the reader has at rest, and it
+     covers every pixel the controls occupy. Both stops sit at the same
+     position, which is a hard edge and not a fade: nothing is interpolated. */
+  background-image: linear-gradient(
+    to bottom,
+    var(--paper-bg) var(--note-chrome-gutter),
+    transparent var(--note-chrome-gutter)
+  );
   display: flex;
   /* Top-aligned, so the controls sit in the gutter rather than in the middle
      of the bar's height, where they would land on the first line of the note. */

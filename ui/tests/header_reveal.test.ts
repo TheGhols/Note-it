@@ -177,6 +177,31 @@ describe('revealing the note chrome', () => {
     expect(note.reveal.isRevealed()).toBe(false);
   });
 
+  it('changes nothing but its own answer when the pointer crosses the bar', () => {
+    // 3.9UX.R.2. Revealing the chrome is presentation: it must not touch the
+    // note, the title or anything that would eventually be written to a file.
+    note = buildNote();
+    note.editor.textContent = 'texto da nota';
+    const title = document.createElement('span');
+    title.id = 'note-title';
+    title.textContent = 'Nota de teste';
+    note.header.append(title);
+
+    const before = document.getElementById('app')!.innerHTML;
+
+    pointerTo(0);
+    pointerTo(REVEAL_ZONE_PX);
+    pointerTo(HOLD_ZONE_PX);
+    pointerTo(500);
+    pointerTo(2);
+
+    expect(document.getElementById('app')!.innerHTML).toBe(before);
+    expect(note.editor.textContent).toBe('texto da nota');
+    expect(title.textContent).toBe('Nota de teste');
+    // The only thing a hover writes anywhere.
+    expect(published()).toBe('true');
+  });
+
   it('stops listening once destroyed', () => {
     note = buildNote();
     note.reveal.destroy();

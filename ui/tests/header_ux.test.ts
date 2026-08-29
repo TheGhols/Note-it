@@ -159,6 +159,102 @@ describe('the one Note-it header', () => {
     expect(isPointerTarget(menu)).toBe(true);
   });
 
+  it('carries its own paper under the controls, so nothing can be read through them', () => {
+    // 3.9UX.R.2. The bar painted nothing at all, and the claim that the gutter
+    // kept text out of the strip held only at the top of the note: the editor
+    // is the scroll container and its top padding scrolls away with the text,
+    // so a scrolled note put the reader's own words behind the icons.
+    const fill = declarationIn('.note-header', 'background-image');
+    expect(fill).toContain('var(--paper-bg)');
+    // The paper's own colour, so the bar is never a foreign panel; painted on
+    // the header itself, so it fades with the chrome and an absent bar still
+    // paints nothing.
+    expect(declarationIn('.note-header', 'opacity')).toBe('0');
+    expect(declarationIn('.note-header', 'transition')).toBe(
+      'opacity var(--note-header-reveal)',
+    );
+  });
+
+  it('paints exactly the strip that is always the note\'s own', () => {
+    const fill = declarationIn('.note-header', 'background-image');
+    // Both stops at the gutter: a hard edge, nothing interpolated, and never a
+    // pixel of a line the reader has at rest.
+    const stops = fill.match(/var\(--note-chrome-gutter\)/g) ?? [];
+    expect(stops).toHaveLength(2);
+    expect(fill).toContain('transparent var(--note-chrome-gutter)');
+  });
+
+  it('covers every pixel a control occupies', () => {
+    // The band is only worth anything if the whole control row sits inside it.
+    const gutter = Number.parseFloat(tokenIn(':root', '--note-chrome-gutter'));
+    const icon = Number.parseFloat(tokenIn(':root', '--header-action-size'));
+    const padding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
+    const offset = Number.parseFloat(declarationIn('.note-header .icon-btn', 'margin-top'));
+
+    expect(offset + padding + icon + padding).toBeLessThanOrEqual(gutter);
+  });
+
+  it('puts no title text on the row the controls live on', () => {
+    // The expanded note names itself nowhere in the bar. The title element is
+    // the collapsed note's, and only the collapsed note displays it.
+    expect(declarationIn('.note-title', 'display')).toBe('none');
+    expect(declarationIn('body[data-collapsed="true"] .note-title', 'display')).toBe('block');
+    expect(rulesFor('.note-title:hover')).toHaveLength(0);
+    expect(rulesFor('.note-header:hover .note-title')).toHaveLength(0);
+  });
+
+  it('shows the note information below the controls and never over them', () => {
+    // The one thing the bar reveals on hover. It hangs off the bottom of the
+    // control block rather than sharing the row with it, and it is never a
+    // pointer target, so it cannot take a click meant for a button.
+    expect(declarationIn('.note-tooltip', 'position')).toBe('absolute');
+    expect(declarationIn('.note-tooltip', 'top')).toBe('calc(100% + 4px)');
+    expect(declarationIn('.note-tooltip', 'pointer-events')).toBe('none');
+    expect(declarationIn('.note-controls-left', 'position')).toBe('relative');
+  });
+
+  it('never lets a title take room away from a control', () => {
+    // Only the drag region flexes. Both control blocks are fixed, so a title
+    // of any length is cut by the title and never by the buttons.
+    expect(declarationIn('.note-controls-left', 'flex')).toBe('0 0 auto');
+    expect(declarationIn('.note-controls-right', 'flex')).toBe('0 0 auto');
+    expect(declarationIn('.drag-region', 'flex')).toBe('1');
+    expect(declarationIn('.drag-region', 'min-width')).toBe('0');
+    expect(declarationIn('.note-title', 'min-width')).toBe('0');
+    expect(declarationIn('.note-title', 'max-width')).toBe('100%');
+    expect(declarationIn('.note-title', 'overflow')).toBe('hidden');
+    expect(declarationIn('.note-title', 'white-space')).toBe('nowrap');
+    expect(declarationIn('.note-title', 'text-overflow')).toBe('ellipsis');
+  });
+
+  it('keeps every control in the bar however long the title gets', () => {
+    const page = noteIn({ collapsed: true, revealed: true });
+    const title = page.querySelector('#note-title')!;
+    title.textContent = `${'A'.repeat(78)}🎉…`;
+
+    // The title is written into the drag region and nowhere else; the controls
+    // are its siblings, not its container.
+    expect(title.closest('.drag-region')).not.toBeNull();
+    expect(title.closest('.note-controls-left')).toBeNull();
+    expect(title.closest('.note-controls-right')).toBeNull();
+    expect(page.querySelector('#btn-menu')).not.toBeNull();
+    expect(page.querySelector('#btn-close')).not.toBeNull();
+    expect(isPointerTarget(page.querySelector('#btn-menu')!)).toBe(true);
+    expect(isPointerTarget(page.querySelector('#btn-close')!)).toBe(true);
+    // ...and the title still cannot take a pointer event from either of them.
+    expect(isPointerTarget(title)).toBe(false);
+  });
+
+  it('keeps every control named for a reader who cannot see the icon', () => {
+    // The bug was painted, so the fix is painted. Nothing here gives up an
+    // accessible name to buy visual room.
+    const page = noteIn({ revealed: true });
+    for (const button of page.querySelectorAll('.note-header .icon-btn')) {
+      expect(button.getAttribute('aria-label')).toBeTruthy();
+      expect(button.getAttribute('title')).toBeTruthy();
+    }
+  });
+
   it('names every quick action in the markup the application loads', () => {
     const page = noteIn({});
     for (const action of QUICK_ACTIONS) {
