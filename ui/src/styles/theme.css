@@ -215,6 +215,9 @@ html, body {
 }
 
 .note-header {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -222,11 +225,11 @@ html, body {
   flex: 0 0 auto;
   padding: 0 8px;
   user-select: none;
-  opacity: 0.25;
+  opacity: 0.06;
   transition: opacity var(--transition-fast);
 }
 
-#app:hover .note-header,
+.note-header:hover,
 .note-header:focus-within {
   opacity: 1;
 }
@@ -240,11 +243,15 @@ body[data-collapsed="true"] .note-header {
   position: relative;
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .drag-region {
   flex: 1;
+  min-width: 0;
   height: 100%;
+  display: flex;
+  align-items: center;
   cursor: grab;
 }
 
@@ -270,6 +277,51 @@ body[data-collapsed="true"] .note-header {
   background-color: var(--selection-bg);
 }
 
+.header-action-icon {
+  display: block;
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+  -webkit-mask-image: var(--header-action-mask);
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-image: var(--header-action-mask);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.header-action-icon-color {
+  --header-action-mask: url('../../../IconesNote-it/palette-round-svgrepo-com.svg');
+}
+
+.header-action-icon-text-size {
+  --header-action-mask: url('../../../IconesNote-it/larger-text-svgrepo-com.svg');
+}
+
+.note-title {
+  display: none;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--paper-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+body[data-collapsed="true"] .header-quick-action {
+  display: none;
+}
+
+body[data-collapsed="true"] .note-title {
+  display: block;
+}
+
 /* Note settings popover */
 .note-menu {
   position: absolute;
@@ -277,6 +329,11 @@ body[data-collapsed="true"] .note-header {
   left: 0;
   z-index: 30;
   min-width: 168px;
+  max-width: calc(100vw - 12px);
+  max-height: calc(100vh - var(--note-header-height) - 8px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   border: 1px solid var(--ui-border);
   border-radius: 8px;
@@ -285,6 +342,15 @@ body[data-collapsed="true"] .note-header {
   color: var(--ui-text);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.note-menu::-webkit-scrollbar {
+  width: 4px;
+}
+
+.note-menu::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background-color: var(--ui-text-muted);
 }
 
 .note-menu[hidden],
@@ -523,7 +589,10 @@ body[data-collapsed="true"] .note-header {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 14px 14px 14px;
+  /* The editor paints the whole paper behind the overlay header, while its
+     first clickable line stays exactly where it was when the header occupied
+     layout space. */
+  padding: calc(var(--note-header-height) + 8px) 14px 14px 14px;
   outline: none;
   /* Zoom scales the rendered text through the font size the editor inherits,
      so layout, caret position and hit testing all stay in agreement. A CSS
@@ -533,6 +602,7 @@ body[data-collapsed="true"] .note-header {
   /* The paper pattern is painted here; see the rules further down. `local`
      makes it travel with the text as the note scrolls. */
   background-repeat: repeat;
+  background-position-y: var(--note-header-height);
   background-attachment: local;
   /* Composed on the element that paints it, deliberately.
      `var()` is substituted where the declaration sits, using that element's

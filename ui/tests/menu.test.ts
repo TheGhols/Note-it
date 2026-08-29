@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NoteMenu } from '../src/ui/menu.ts';
 import { PaperColor } from '../src/bridge/types.ts';
+import { declarationIn } from './support/stylesheet.ts';
 
 const COLORS: PaperColor[] = ['yellow', 'blue', 'green', 'pink', 'purple', 'gray', 'black'];
 
@@ -12,18 +13,24 @@ function buildHeader() {
   left.id = 'note-controls-left';
   const trigger = document.createElement('button');
   trigger.id = 'btn-menu';
-  left.append(trigger);
+  const colorTrigger = document.createElement('button');
+  colorTrigger.id = 'btn-note-color';
+  colorTrigger.setAttribute('aria-label', 'Cor da nota');
+  const textSizeTrigger = document.createElement('button');
+  textSizeTrigger.id = 'btn-text-size';
+  textSizeTrigger.setAttribute('aria-label', 'Tamanho do texto');
+  left.append(trigger, colorTrigger, textSizeTrigger);
 
   const dragRegion = document.createElement('div');
   dragRegion.className = 'drag-region';
 
   header.append(left, dragRegion);
   document.body.append(header);
-  return { header, left, trigger, dragRegion };
+  return { header, left, trigger, colorTrigger, textSizeTrigger, dragRegion };
 }
 
 function mountMenu() {
-  const { left, trigger, dragRegion } = buildHeader();
+  const { left, trigger, colorTrigger, textSizeTrigger, dragRegion } = buildHeader();
   const handlers = {
     onSelectColor: vi.fn(),
     onSelectPaperType: vi.fn(),
@@ -42,17 +49,23 @@ function mountMenu() {
     onToggleBlockquote: vi.fn(),
     onSelectCallout: vi.fn(),
     onInsertComment: vi.fn(),
-  onOpenGlobalSearch: vi.fn(),
-  onOpenFind: vi.fn(),
-  onOpenReplace: vi.fn(),
-  onTrashNote: vi.fn(),
-  onOpenTrash: vi.fn(),
-  onCreateBackup: vi.fn(),
+    onOpenGlobalSearch: vi.fn(),
+    onOpenFind: vi.fn(),
+    onOpenReplace: vi.fn(),
+    onTrashNote: vi.fn(),
+    onOpenTrash: vi.fn(),
+    onCreateBackup: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };
-  const menu = new NoteMenu({ trigger, mount: left, colors: COLORS, handlers });
-  return { menu, trigger, dragRegion, handlers };
+  const menu = new NoteMenu({
+    trigger,
+    mount: left,
+    colors: COLORS,
+    handlers,
+    quickTriggers: { paper: colorTrigger, textSize: textSizeTrigger },
+  });
+  return { menu, trigger, colorTrigger, textSizeTrigger, dragRegion, handlers };
 }
 
 /** The value chip shown on a root row, addressed by that row's label. */
@@ -158,14 +171,11 @@ describe('NoteMenu', () => {
     expect(menu.activePanel()).toBe('root');
   });
 
-  it('the colour palette is reachable through the menu and applies a colour', () => {
-    const { menu, trigger, handlers } = mountMenu();
+  it('the colour palette is reachable from its header action and applies a colour', () => {
+    const { menu, colorTrigger, handlers } = mountMenu();
     active = menu;
 
-    click(trigger);
-    expect(menu.activePanel()).toBe('root');
-
-    click(menu.element.querySelector('[data-panel="paper"]')!);
+    click(colorTrigger);
     expect(menu.activePanel()).toBe('paper');
 
     const swatches = menu.element.querySelectorAll<HTMLElement>(
@@ -182,12 +192,11 @@ describe('NoteMenu', () => {
   });
 
   it('marks the note current colour in the palette', () => {
-    const { menu, trigger } = mountMenu();
+    const { menu, colorTrigger } = mountMenu();
     active = menu;
 
     menu.setSelectedColor('green');
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="paper"]')!);
+    click(colorTrigger);
 
     const checked = menu.element.querySelectorAll(
       '.note-menu-paper .note-menu-swatch[aria-checked="true"]',
@@ -235,20 +244,25 @@ describe('NoteMenu', () => {
     expect(document.activeElement).toBe(items[0]);
 
     items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
-    expect(menu.activePanel()).toBe('paper');
+    expect(menu.activePanel()).toBe('paperType');
 
     key('ArrowLeft');
     expect(menu.activePanel()).toBe('root');
   });
 
-  it('gives both header buttons an accessible name', () => {
-    const { menu, trigger } = mountMenu();
+  it('gives every menu trigger an accessible popup relationship', () => {
+    const { menu, trigger, colorTrigger, textSizeTrigger } = mountMenu();
     active = menu;
 
     trigger.setAttribute('aria-label', 'Configurações da nota');
     expect(trigger.getAttribute('aria-label')).toBeTruthy();
     expect(trigger.getAttribute('aria-haspopup')).toBe('true');
     expect(trigger.getAttribute('aria-controls')).toBe(menu.element.id);
+    for (const quickTrigger of [colorTrigger, textSizeTrigger]) {
+      expect(quickTrigger.getAttribute('aria-label')).toBeTruthy();
+      expect(quickTrigger.getAttribute('aria-haspopup')).toBe('true');
+      expect(quickTrigger.getAttribute('aria-controls')).toBe(menu.element.id);
+    }
 
     click(trigger);
     for (const item of menu.element.querySelectorAll('.note-menu-item')) {
@@ -262,7 +276,7 @@ describe('NoteMenu', () => {
     }
   });
 
-  it('offers paper, zoom, theme, layer, text size, text colour and highlight panels', () => {
+  it('keeps colour and text size out of the root menu and in the two header actions', () => {
     const { menu, trigger } = mountMenu();
     active = menu;
     click(trigger);
@@ -281,10 +295,8 @@ describe('NoteMenu', () => {
     // sits beside it, because moving a note to the trash, opening the trash and
     // taking a backup are the other things you do with one rather than to it.
     expect(panels).toEqual([
-      'paper',
       'paperType',
       'paperIntensity',
-      'textSize',
       'textColor',
       'highlight',
       'blocks',
@@ -294,6 +306,8 @@ describe('NoteMenu', () => {
       'theme',
       'layer',
     ]);
+    expect(rootPanel?.textContent).not.toContain('Cor da nota');
+    expect(rootPanel?.textContent).not.toContain('Tamanho do texto');
   });
 
   it('shows the current zoom and steps it from the submenu', () => {
@@ -465,7 +479,7 @@ describe('NoteMenu', () => {
   });
 
   it('marks the current text size and reports a mixed selection', () => {
-    const { menu, trigger, handlers } = mountMenu();
+    const { menu, textSizeTrigger, handlers } = mountMenu();
     active = menu;
 
     menu.setInlineFormatting({
@@ -474,8 +488,7 @@ describe('NoteMenu', () => {
       textColor: null,
       highlight: null,
     });
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="textSize"]')!);
+    click(textSizeTrigger);
 
     const options = menu.element.querySelectorAll<HTMLElement>(
       '.note-menu-sizes .note-menu-option',
@@ -495,8 +508,7 @@ describe('NoteMenu', () => {
       textColor: null,
       highlight: null,
     });
-    click(trigger);
-    click(menu.element.querySelector('[data-panel="textSize"]')!);
+    click(textSizeTrigger);
     expect(menu.element.querySelector<HTMLElement>('.note-menu-hint')!.hidden).toBe(false);
     expect(
       menu.element.querySelectorAll('.note-menu-sizes .note-menu-option[aria-checked="true"]'),
@@ -539,5 +551,45 @@ describe('NoteMenu', () => {
       menu.element.querySelectorAll<HTMLElement>('.note-menu-item'),
     ).find((node) => /Recolher nota/.test(node.textContent ?? ''))!;
     expect(collapse.textContent).toContain('Ctrl+Shift+M');
+  });
+
+  it('caps only a menu that exceeds the WebView and leaves native vertical scrolling enabled', () => {
+    const { menu, trigger } = mountMenu();
+    active = menu;
+
+    expect(declarationIn('.note-menu', 'max-height')).toBe(
+      'calc(100vh - var(--note-header-height) - 8px)',
+    );
+    expect(declarationIn('.note-menu', 'overflow-y')).toBe('auto');
+    expect(declarationIn('.note-menu', 'overflow-x')).toBe('hidden');
+
+    click(trigger);
+    const wheel = new WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+    menu.element.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(menu.isOpen()).toBe(true);
+  });
+
+  it('opens both quick panels through the same handlers without a duplicate popover', () => {
+    const { menu, colorTrigger, textSizeTrigger, handlers } = mountMenu();
+    active = menu;
+
+    click(colorTrigger);
+    expect(menu.activePanel()).toBe('paper');
+    expect(colorTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(handlers.onSelectColor).not.toHaveBeenCalled();
+
+    click(textSizeTrigger);
+    expect(menu.activePanel()).toBe('textSize');
+    expect(colorTrigger.getAttribute('aria-expanded')).toBe('false');
+    expect(textSizeTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelectorAll('.note-menu')).toHaveLength(1);
+    expect(handlers.onSelectTextSize).not.toHaveBeenCalled();
+
+    const size = menu.element.querySelectorAll<HTMLElement>(
+      '.note-menu-sizes .note-menu-option',
+    )[4];
+    click(size);
+    expect(handlers.onSelectTextSize).toHaveBeenCalledWith(18);
   });
 });

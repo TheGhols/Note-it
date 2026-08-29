@@ -79,6 +79,11 @@ export interface NoteMenuOptions {
   mount: HTMLElement;
   colors: readonly PaperColor[];
   handlers: NoteMenuHandlers;
+  /** The two header actions that open existing panels directly. */
+  quickTriggers?: {
+    paper: HTMLElement;
+    textSize: HTMLElement;
+  };
   /** Defaults to the document owning the trigger. */
   document?: Document;
 }
@@ -108,6 +113,7 @@ export class NoteMenu {
   private readonly doc: Document;
   private readonly root: HTMLElement;
   private readonly panels = new Map<MenuPanel, PanelEntry>();
+  private readonly triggers = new Map<HTMLElement, MenuPanel>();
   private readonly collapseItem: HTMLButtonElement;
   private readonly paperTypeValue: HTMLElement;
   private readonly paperIntensityValue: HTMLElement;
@@ -120,6 +126,7 @@ export class NoteMenu {
   private calloutValue!: HTMLElement;
   private blockquoteItem!: HTMLButtonElement;
   private panel: MenuPanel = 'root';
+  private invoker: HTMLElement;
   private open = false;
   private collapsed = false;
   private zoomPercent = 100;
@@ -142,6 +149,7 @@ export class NoteMenu {
 
   public constructor(private readonly options: NoteMenuOptions) {
     this.doc = options.document ?? options.trigger.ownerDocument;
+    this.invoker = options.trigger;
 
     this.root = this.doc.createElement('div');
     this.root.className = 'note-menu';
@@ -151,8 +159,6 @@ export class NoteMenu {
 
     const rootPanel = this.doc.createElement('div');
     rootPanel.className = 'note-menu-panel';
-
-    const paperItem = this.createSubmenuItem('Cor da nota', 'paper');
 
     const paperTypeItem = this.createSubmenuItem('Tipo de papel', 'paperType');
     this.paperTypeValue = this.doc.createElement('span');
@@ -167,7 +173,6 @@ export class NoteMenu {
       paperIntensityItem.lastElementChild,
     );
 
-    const textSizeItem = this.createSubmenuItem('Tamanho do texto', 'textSize');
     const textColorItem = this.createSubmenuItem('Cor do texto', 'textColor');
     const highlightItem = this.createSubmenuItem('Marca-texto', 'highlight');
 
@@ -204,10 +209,8 @@ export class NoteMenu {
     const blocksPanel = this.buildBlocksPanel();
 
     rootPanel.append(
-      paperItem,
       paperTypeItem,
       paperIntensityItem,
-      textSizeItem,
       textColorItem,
       highlightItem,
       blocksItem,
@@ -304,15 +307,11 @@ export class NoteMenu {
     // pointerdown here must never be read as the start of a window drag.
     this.root.addEventListener('pointerdown', (event) => event.stopPropagation());
 
-    options.trigger.setAttribute('aria-haspopup', 'true');
-    options.trigger.setAttribute('aria-expanded', 'false');
-    options.trigger.setAttribute('aria-controls', this.root.id);
-    options.trigger.addEventListener('pointerdown', (event) => event.stopPropagation());
-    options.trigger.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.toggle();
-    });
+    this.bindTrigger(options.trigger, 'root');
+    if (options.quickTriggers) {
+      this.bindTrigger(options.quickTriggers.paper, 'paper');
+      this.bindTrigger(options.quickTriggers.textSize, 'textSize');
+    }
 
     this.doc.addEventListener('pointerdown', this.handleDocumentPointerDown, true);
     this.doc.addEventListener('keydown', this.handleKeyDown);
@@ -484,15 +483,21 @@ export class NoteMenu {
   public openMenu(): void {
     if (this.open) {
       // Never stack a second popover: reset the existing one to its root panel.
+      this.invoker = this.options.trigger;
+      this.syncTriggerState();
       this.showPanel('root');
       return;
     }
+    this.openAt('root', this.options.trigger);
+  }
+
+  private openAt(panel: MenuPanel, invoker: HTMLElement): void {
     this.open = true;
+    this.invoker = invoker;
     this.root.hidden = false;
-    this.showPanel('root');
-    this.options.trigger.setAttribute('aria-expanded', 'true');
+    this.syncTriggerState();
     this.options.handlers.onOpen?.();
-    this.focusFirstItem();
+    this.showPanel(panel);
   }
 
   public close(): void {
@@ -500,8 +505,37 @@ export class NoteMenu {
     this.open = false;
     this.root.hidden = true;
     this.showPanel('root');
-    this.options.trigger.setAttribute('aria-expanded', 'false');
+    this.syncTriggerState();
     this.options.handlers.onClose?.();
+  }
+
+  private bindTrigger(trigger: HTMLElement, panel: MenuPanel): void {
+    this.triggers.set(trigger, panel);
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-controls', this.root.id);
+    trigger.addEventListener('pointerdown', (event) => event.stopPropagation());
+    trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.open && this.invoker === trigger) {
+        this.close();
+        return;
+      }
+      if (this.open) {
+        this.invoker = trigger;
+        this.syncTriggerState();
+        this.showPanel(panel);
+        return;
+      }
+      this.openAt(panel, trigger);
+    });
+  }
+
+  private syncTriggerState(): void {
+    for (const trigger of this.triggers.keys()) {
+      trigger.setAttribute('aria-expanded', String(this.open && trigger === this.invoker));
+    }
   }
 
   private buildPaperPanel(colors: readonly PaperColor[]): PanelEntry {
@@ -883,6 +917,7 @@ export class NoteMenu {
 
   private showPanel(panel: MenuPanel): void {
     this.panel = panel;
+    this.root.scrollTop = 0;
     for (const [name, entry] of this.panels) {
       entry.element.hidden = name !== panel;
     }
@@ -915,7 +950,13 @@ export class NoteMenu {
   private readonly handleDocumentPointerDown = (event: Event): void => {
     if (!this.open) return;
     const target = event.target as Node | null;
-    if (target && (this.root.contains(target) || this.options.trigger.contains(target))) return;
+    if (
+      target &&
+      (
+        this.root.contains(target) ||
+        Array.from(this.triggers.keys()).some((trigger) => trigger.contains(target))
+      )
+    ) return;
     this.close();
   };
 
@@ -924,8 +965,9 @@ export class NoteMenu {
 
     if (event.key === 'Escape') {
       event.preventDefault();
+      const invoker = this.invoker;
       this.close();
-      (this.options.trigger as HTMLElement).focus?.();
+      invoker.focus?.();
       return;
     }
 

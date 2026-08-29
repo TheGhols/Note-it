@@ -45,6 +45,10 @@ export default defineConfig({
         fileURLToPath(new URL('./src/styles/theme.css', import.meta.url)),
         'utf8',
       ),
+      indexHtml: readFileSync(
+        fileURLToPath(new URL('./index.html', import.meta.url)),
+        'utf8',
+      ),
       mathSources: mathSources(),
       // The documented unit table has to be the table the application ships,
       // so the test that compares them reads the real file.

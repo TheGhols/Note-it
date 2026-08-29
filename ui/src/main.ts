@@ -19,6 +19,7 @@ import {
 } from './editor/find.ts';
 import { FindBar } from './ui/findBar.ts';
 import { NoteMenu } from './ui/menu.ts';
+import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
 import { NoteStatus } from './ui/status.ts';
 import { TrashPanel } from './ui/trashPanel.ts';
@@ -201,12 +202,23 @@ function applyTextSize(size: TextSize | null): void {
   syncInlineFormatting();
 }
 
+/** Mirrors content into the collapsed label without ever sending it anywhere. */
+function setNoteTitle(markdown: string): void {
+  const title = document.getElementById('note-title');
+  if (title) {
+    const label = noteTitle(markdown);
+    title.textContent = label;
+    title.title = label;
+  }
+}
+
 /**
  * Applies the collapsed look. The editor is only hidden, never destroyed, so
  * the content and the Tiptap instance survive untouched.
  */
 function setCollapsed(collapsed: boolean): void {
   isCollapsed = collapsed;
+  if (collapsed) setNoteTitle(noteEditor?.getMarkdown() ?? '');
   document.body.setAttribute('data-collapsed', String(collapsed));
   noteMenu?.setCollapsed(collapsed);
   // A collapsed note is a header bar. Nothing that needs room to be typed into
@@ -328,6 +340,7 @@ function initUI(): void {
     element: editorContainer,
     initialContent: '',
     onUpdate: (markdown) => {
+      setNoteTitle(markdown);
       if (activeNoteId) {
         bridge.sendMessage({
           type: 'content_changed',
@@ -342,12 +355,17 @@ function initUI(): void {
   // Note settings menu. The trigger and the popover both sit outside the drag
   // region, so interacting with them can never move the window.
   const btnMenu = document.getElementById('btn-menu');
+  const btnNoteColor = document.getElementById('btn-note-color');
+  const btnTextSize = document.getElementById('btn-text-size');
   const menuMount = document.getElementById('note-controls-left');
   if (btnMenu && menuMount) {
     noteMenu = new NoteMenu({
       trigger: btnMenu,
       mount: menuMount,
       colors: PAPER_COLORS,
+      quickTriggers: btnNoteColor && btnTextSize
+        ? { paper: btnNoteColor, textSize: btnTextSize }
+        : undefined,
       handlers: {
         onOpen: () => {
           infoTooltip?.hide();
@@ -615,7 +633,6 @@ function initUI(): void {
       );
       setTheme(normalizeTheme(msg.payload.theme), false);
       setFontSize(msg.payload.fontSize || 15);
-      setCollapsed(Boolean(msg.payload.collapsed));
       applyZoom(msg.payload.zoomPercent ?? DEFAULT_ZOOM_PERCENT, false);
       setLayerMode(msg.payload.layerMode ?? 'overlay');
       infoTooltip?.setTimestamps({
@@ -629,6 +646,8 @@ function initUI(): void {
       trashPanel?.close();
       noteStatus?.hide();
       noteEditor?.setMarkdown(msg.payload.content || '');
+      setNoteTitle(msg.payload.content || '');
+      setCollapsed(Boolean(msg.payload.collapsed));
       noteEditor?.focus();
       syncInlineFormatting();
     } else if (msg.type === 'set_timestamps') {

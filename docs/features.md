@@ -17,13 +17,22 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
 
 ## Note Header
 
+- An expanded note keeps one transparent overlay header. Moving the pointer into its top strip
+  reveals the controls with a short transition; leaving the strip makes the chrome recede again,
+  while the same hit area remains available for dragging.
+- **Quick actions:** the existing colour and inline text-size panels open directly from the header.
+  They reuse `IconesNote-it/palette-round-svgrepo-com.svg` and
+  `IconesNote-it/larger-text-svgrepo-com.svg` as colour-adapting masks. Those are the only files
+  from the supplied icon collection included in the build.
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
-  - Entries: **Cor da nota**, **Tipo de papel**, **Intensidade**, **Tamanho do texto**,
-    **Cor do texto**, **Marca-texto**, **Zoom**, **Tema**, **Camada**, and **Recolher nota** /
-    **Expandir nota**.
+  - Entries: **Tipo de papel**, **Intensidade**, **Cor do texto**, **Marca-texto**, **Blocos**,
+    **Buscar**, **Dados**, **Zoom**, **Tema**, **Camada**, and **Recolher nota** /
+    **Expandir nota**. Colour and text size live only in the two quick actions above.
   - The menu shows the current paper, intensity, zoom, theme and layer on their own rows, so none
     of them depends on opening a submenu or knowing a shortcut.
+  - On a short note the popover is capped at the WebView's remaining height and scrolls vertically;
+    a large note keeps the original natural-height menu.
   - Closes on outside click, `Escape`, or selecting an entry; only one popover exists per note.
   - The button and the popover sit outside the drag region, so using them never moves the note.
 - **Note Information Tooltip:**
@@ -37,6 +46,9 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
   - The expanded width and height are recorded before collapsing and restored on expand, at
     whatever position the collapsed bar was left.
   - A collapsed note can still be dragged; resizing is unavailable until it is expanded again.
+  - Its header stays visible and names the note from the first useful content line. A heading marker
+    is removed for presentation, an empty note says **Nota sem título**, and long names end in `…`.
+    The label is never written into the Markdown or front matter.
   - The collapsed state is persisted, so a note left collapsed reopens collapsed.
 
 ## Paper

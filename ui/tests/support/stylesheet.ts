@@ -4,6 +4,8 @@ declare module 'vitest' {
   export interface ProvidedContext {
     /** `src/styles/theme.css`, supplied by the Vitest config. */
     themeCss: string;
+    /** The real header markup shipped from `index.html`. */
+    indexHtml: string;
   }
 }
 

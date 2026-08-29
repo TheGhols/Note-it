@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.9UX header ergonomics.** The existing header now recedes on expanded notes and returns
+  on hover/focus, while a collapsed note keeps it visible with a presentation-only title derived
+  from the first useful Markdown line. Colour and inline text size moved out of `☰` into exactly two
+  quick actions that open their existing panels and pipelines. A menu taller than the note is capped
+  to the WebView and scrolls vertically, including every submenu; larger notes keep the natural menu.
+  The two shipped icons are the reviewed `palette-round` and `larger-text` SVGs from
+  `IconesNote-it/`; the rest of the supplied collection remains local and ignored.
 - **Recoverable trash.** Deleting a note now exists, and it can be undone.
   - *☰ › Dados › Mover esta nota para a lixeira* asks first, and the question says the deletion is
     recoverable rather than just "Excluir?". Cancel is what the panel focuses. The `×` button and

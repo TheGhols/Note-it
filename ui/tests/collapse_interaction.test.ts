@@ -20,7 +20,11 @@ function buildNote() {
   left.id = 'note-controls-left';
   const btnMenu = document.createElement('button');
   btnMenu.id = 'btn-menu';
-  left.append(btnMenu);
+  const btnNoteColor = document.createElement('button');
+  btnNoteColor.id = 'btn-note-color';
+  const btnTextSize = document.createElement('button');
+  btnTextSize.id = 'btn-text-size';
+  left.append(btnMenu, btnNoteColor, btnTextSize);
   const dragRegion = document.createElement('div');
   dragRegion.className = 'drag-region';
   const btnClose = document.createElement('button');
@@ -53,14 +57,20 @@ function buildNote() {
     onToggleBlockquote: vi.fn(),
     onSelectCallout: vi.fn(),
     onInsertComment: vi.fn(),
-  onOpenGlobalSearch: vi.fn(),
-  onOpenFind: vi.fn(),
-  onOpenReplace: vi.fn(),
-  onTrashNote: vi.fn(),
-  onOpenTrash: vi.fn(),
-  onCreateBackup: vi.fn(),
+    onOpenGlobalSearch: vi.fn(),
+    onOpenFind: vi.fn(),
+    onOpenReplace: vi.fn(),
+    onTrashNote: vi.fn(),
+    onOpenTrash: vi.fn(),
+    onCreateBackup: vi.fn(),
   };
-  const menu = new NoteMenu({ trigger: btnMenu, mount: left, colors: COLORS, handlers });
+  const menu = new NoteMenu({
+    trigger: btnMenu,
+    mount: left,
+    colors: COLORS,
+    handlers,
+    quickTriggers: { paper: btnNoteColor, textSize: btnTextSize },
+  });
 
   function setCollapsed(collapsed: boolean): void {
     state.collapsed = collapsed;
@@ -95,7 +105,20 @@ function buildNote() {
     true,
   );
 
-  return { app, header, dragRegion, btnMenu, btnClose, editor, menu, state, collapseRequests, setCollapsed };
+  return {
+    app,
+    header,
+    dragRegion,
+    btnMenu,
+    btnNoteColor,
+    btnTextSize,
+    btnClose,
+    editor,
+    menu,
+    state,
+    collapseRequests,
+    setCollapsed,
+  };
 }
 
 function click(element: Element): void {
@@ -203,7 +226,7 @@ describe('clicking a collapsed note', () => {
     click(note.menu.element.querySelector('[data-panel="zoom"]')!);
     expect(note.menu.activePanel()).toBe('zoom');
 
-    click(note.menu.element.querySelector('[data-panel="paper"]')!);
+    click(note.btnNoteColor);
     expect(note.menu.activePanel()).toBe('paper');
   });
 

@@ -47,3 +47,9 @@ test-data-local/
 .DS_Store
 Thumbs.db
 .directory
+
+# Icon source drop. Phase 3.9UX uses only the two reviewed assets below; keep
+# the rest of the supplied collection local rather than accidentally shipping it.
+IconesNote-it/*
+!IconesNote-it/palette-round-svgrepo-com.svg
+!IconesNote-it/larger-text-svgrepo-com.svg
