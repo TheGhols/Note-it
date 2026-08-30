@@ -25,6 +25,8 @@ import { MenuPanel, NoteMenu } from './ui/menu.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
 import { NoteStatus } from './ui/status.ts';
+import { finishMessage } from './timer/format.ts';
+import { TimerPanel } from './ui/timerPanel.ts';
 import { TrashPanel } from './ui/trashPanel.ts';
 import {
   applyPaper,
@@ -65,6 +67,7 @@ let infoTooltip: NoteInfoTooltip | null = null;
 let searchPalette: SearchPalette | null = null;
 let findBar: FindBar | null = null;
 let trashPanel: TrashPanel | null = null;
+let timerPanel: TimerPanel | null = null;
 let noteStatus: NoteStatus | null = null;
 
 /**
@@ -77,6 +80,7 @@ let noteStatus: NoteStatus | null = null;
 function openGlobalSearch(): void {
   findBar?.close();
   trashPanel?.close();
+  timerPanel?.close();
   searchPalette?.openPalette();
 }
 
@@ -90,6 +94,7 @@ function openGlobalSearch(): void {
 function openTrash(): void {
   searchPalette?.close();
   findBar?.close();
+  timerPanel?.close();
   trashPanel?.openPanel();
 }
 
@@ -97,7 +102,23 @@ function openTrash(): void {
 function openFindBar(replace: boolean): void {
   searchPalette?.close();
   trashPanel?.close();
+  timerPanel?.close();
   findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
+}
+
+/**
+ * Opens the timer panel.
+ *
+ * Everything that would sit over the same corner of a small note closes first.
+ * The note menu closes too, but from the panel's own `onOpen`, because that
+ * covers the path a pointer outside it would not: expanding a collapsed note
+ * and opening this in the same click.
+ */
+function openTimer(): void {
+  searchPalette?.close();
+  findBar?.close();
+  trashPanel?.close();
+  timerPanel?.openPanel();
 }
 
 /** Mirrors how many occurrences there are into the bar. */
@@ -235,6 +256,10 @@ function setCollapsed(collapsed: boolean): void {
     searchPalette?.close();
     findBar?.close();
     trashPanel?.close();
+    // The popover goes; the countdown does not. A collapsed note keeps its
+    // timer running and keeps showing it on the bar — that is the whole reason
+    // the readout is up there rather than in the panel.
+    timerPanel?.close();
     noteStatus?.hide();
   }
   if (transition.restoreCaret) noteEditor?.focus();
@@ -311,6 +336,8 @@ function handleCollapsedClick(event: MouseEvent): void {
 
   if (target?.closest('#btn-menu')) {
     afterViewportGrows(() => noteMenu?.openMenu());
+  } else if (target?.closest('#btn-timer')) {
+    afterViewportGrows(openTimer);
   }
 }
 
@@ -458,6 +485,56 @@ function initUI(): void {
         },
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
+      },
+    });
+  }
+
+  // The note's Timer and Pomodoro. Anchored under its own header button, in
+  // the same group the menu is mounted in, so it sits outside the drag region
+  // and a click on it can never move the window.
+  //
+  // It is created whether or not anything ever opens it, because the countdown
+  // is not the panel's: a restored timer has to keep running, keep the header
+  // readout in step and be able to finish while the popover is shut.
+  const btnTimer = document.getElementById('btn-timer');
+  const timerReadout = document.getElementById('note-timer-readout');
+  if (btnTimer && timerReadout && menuMount) {
+    timerPanel = new TimerPanel({
+      trigger: btnTimer,
+      readout: timerReadout,
+      mount: menuMount,
+      handlers: {
+        // Operational state, and only on a real change: a start, a pause, a
+        // resume, a cancel, a phase change or a completion. Never a tick, so a
+        // running timer writes nothing once a second — and never a
+        // `content_changed`, so the note's Markdown and its modification date
+        // are untouched by any of this.
+        onPersist: (snapshot) => {
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'timer_changed',
+              payload: { id: activeNoteId, timer: snapshot },
+            });
+          }
+        },
+        onFinished: (kind) => {
+          // Once, because the engine transitions once. The host turns the kind
+          // into the desktop notification; the line at the foot of the note is
+          // the signal that does not depend on a notification daemon existing.
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'timer_finished',
+              payload: { id: activeNoteId, kind },
+            });
+          }
+          if (!isCollapsed) noteStatus?.show(finishMessage(kind), true);
+        },
+        onOpen: () => {
+          infoTooltip?.hide();
+          noteMenu?.close();
+          headerReveal?.setHeld(true);
+        },
+        onClose: () => headerReveal?.setHeld(false),
       },
     });
   }
@@ -664,6 +741,10 @@ function initUI(): void {
       searchPalette?.close();
       findBar?.close();
       trashPanel?.close();
+      timerPanel?.close();
+      // The stored timer, resolved against the clock as it is now rather than
+      // resumed for whatever was left when this note was last on screen.
+      timerPanel?.restore(msg.payload.timer ?? null);
       noteStatus?.hide();
       noteEditor?.setMarkdown(msg.payload.content || '');
       setNoteTitle(msg.payload.content || '');

@@ -46,7 +46,13 @@ Note-it separates native system integration from document editing through a clea
 - `backup.rs`: local snapshots. Copies `notes/`, `trash/`, `config.toml` and `state.json` into
   `backups/<timestamp>/`, atomically, with retention. Pure functions decide when one is owed, so
   the 24-hour rule is tested without waiting a day. See ADR-029.
-- `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`).
+- `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`). Each note's entry
+  also carries its Timer/Pomodoro, for the same reason it carries the zoom: it is state of the
+  application, not of the document.
+- `timer.rs`: the timer's stored shape and the words of its notification. The host keeps the record
+  and rings the bell; it does not run the countdown. Everything arriving from `state.json` or from
+  the page goes through `NoteTimerState::sanitize`, so a state that claims to be running with no
+  instant to run to comes back idle. See ADR-030.
 - `settings.rs`: Application configuration (`$XDG_CONFIG_HOME/note-it/config.toml`).
 - `layer_shell.rs`: Wayland Layer Shell initialization, anchors, layers, and focus management.
 - `note_window.rs`: GTK4 window wrapper embedding WebKitGTK 6.0 webviews.
@@ -74,6 +80,12 @@ Note-it separates native system integration from document editing through a clea
   panels. All live in the page rather than in a second window, own their keys, and are not part of
   the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
   action did; it is not a dialog and takes nothing from the reader.
+- `ui/src/timer/`: the countdown itself, independent of the DOM — `engine.ts` (the state machine
+  over a deadline, with the clock injected), `format.ts` (`MM:SS` / `H:MM:SS` and the words for each
+  state) and `controls.ts` (which button applies in which state, as a value rather than as four
+  branches inside a handler). It knows nothing about the header or the popover;
+  `ui/src/ui/timerPanel.ts` is the only thing that joins the two, and it owns the single pending
+  redraw rather than an interval.
 - `ui/src/bridge/`: Native message handlers for load, save, theme, and font changes.
 - `ui/src/styles/`: Minimalist themes, paper color definitions, and layout styling.
 

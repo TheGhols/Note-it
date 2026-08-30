@@ -9,6 +9,7 @@ use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFron
 use crate::settings::theme_name;
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
+use crate::timer::TimerFinishKind;
 use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
     WebviewToHostMessage,
@@ -59,6 +60,9 @@ pub struct NoteWindowOptions<'a> {
     pub on_restore_note: Rc<dyn Fn(Uuid, Uuid)>,
     /// Asks the host for a snapshot now, and to answer the note that asked.
     pub on_backup: Rc<dyn Fn(Uuid)>,
+    /// One run reached zero. The host posts the notification; the page only
+    /// says which kind of run it was.
+    pub on_timer_finished: Rc<dyn Fn(Uuid, TimerFinishKind)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -235,6 +239,7 @@ impl NoteWindow {
         let on_list_trash_clone = Rc::clone(&options.on_list_trash);
         let on_restore_note_clone = Rc::clone(&options.on_restore_note);
         let on_backup_clone = Rc::clone(&options.on_backup);
+        let on_timer_finished_clone = Rc::clone(&options.on_timer_finished);
         let loaded = Rc::new(Cell::new(false));
         let pending_reveal: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let loaded_clone = Rc::clone(&loaded);
@@ -270,6 +275,7 @@ impl NoteWindow {
                                         zoom_percent: state_clone.borrow().zoom_percent,
                                         layer_mode: layer_mode_clone.get().as_str().to_string(),
                                         theme: theme_clone.borrow().clone(),
+                                        timer: state_clone.borrow().timer,
                                     },
                                 );
                                 loaded_clone.set(true);
@@ -461,6 +467,41 @@ impl NoteWindow {
                         }
                         WebviewToHostMessage::BackupRequested => {
                             on_backup_clone(id);
+                        }
+                        WebviewToHostMessage::TimerChanged {
+                            id: message_id,
+                            timer,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Timer change rejected a mismatched note identifier");
+                                return;
+                            }
+                            let snapshot = {
+                                let mut st = state_clone.borrow_mut();
+                                // Whatever the page sends is resolved against
+                                // the supported shape before it is stored, the
+                                // same way a zoom is.
+                                let sanitized = timer.and_then(|timer| timer.sanitize());
+                                if st.timer == sanitized {
+                                    return;
+                                }
+                                st.timer = sanitized;
+                                st.clone()
+                            };
+                            // Operational state, persisted with the window
+                            // geometry. The note document is not opened, not
+                            // written and not dated by any of this.
+                            on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::TimerFinished {
+                            id: message_id,
+                            kind,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Timer completion rejected a mismatched note identifier");
+                                return;
+                            }
+                            on_timer_finished_clone(id, kind);
                         }
                         WebviewToHostMessage::NewNoteRequested => {
                             on_new_note_clone();
@@ -2045,6 +2086,226 @@ mod tests {
         // Zoom, theme, collapse, geometry and the layer never reach the
         // document at all: they live in `state.json` and `config.toml`.
         assert_eq!(document.borrow().metadata.updated_at, updated_at);
+    }
+
+    /// The five writes a Timer makes over one run, as the window makes them.
+    ///
+    /// The window's message handler sanitises what the page sent, puts it on
+    /// the note's window state and hands that to the geometry callback, which
+    /// is the ordinary `state.json` write. Nothing in that path opens a note
+    /// file, which is the property the tests below turn into an assertion.
+    fn timer_run() -> [Option<crate::timer::NoteTimerState>; 5] {
+        use crate::timer::{NoteTimerState, TimerRunState};
+        let deadline = 1_800_000_000_000_i64 + 25 * 60_000;
+        [
+            Some(NoteTimerState {
+                state: TimerRunState::Running,
+                deadline_ms: Some(deadline),
+                ..NoteTimerState::default()
+            }),
+            Some(NoteTimerState {
+                state: TimerRunState::Paused,
+                remaining_ms: Some(18 * 60_000 + 42_000),
+                ..NoteTimerState::default()
+            }),
+            Some(NoteTimerState {
+                state: TimerRunState::Running,
+                deadline_ms: Some(deadline + 7 * 60_000),
+                ..NoteTimerState::default()
+            }),
+            Some(NoteTimerState {
+                state: TimerRunState::Finished,
+                ..NoteTimerState::default()
+            }),
+            // Cancelled: the note goes back to having no timer at all.
+            None,
+        ]
+    }
+
+    #[test]
+    fn a_whole_timer_run_leaves_the_note_file_byte_for_byte_as_it_was() {
+        // The rule the phase rests on: a timer is operational state, not
+        // content. Starting, pausing, resuming, finishing and cancelling one
+        // are five writes to `state.json` and nought writes to the note.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "# Reunião\n\n- pauta\n- 25 minutos de foco");
+        let id = document.borrow().metadata.id;
+        let updated_at = document.borrow().metadata.updated_at;
+        let created_at = document.borrow().metadata.created_at;
+        let file_before = fs::read(storage.note_path(&id)).expect("read the stored note");
+
+        let state_path = storage.state_file_path();
+        let mut app_state = crate::state::AppState::default();
+        app_state.notes.insert(id, NoteWindowState::default());
+
+        for timer in timer_run() {
+            let entry = app_state
+                .notes
+                .get_mut(&id)
+                .expect("the note's window state");
+            entry.timer = timer.and_then(|timer| timer.sanitize());
+            app_state
+                .save_to_file(&state_path)
+                .expect("persist the timer");
+        }
+
+        // Byte for byte. Not "equivalent", not "the same content" — the same
+        // file, so front matter, ordering and the terminating newline are all
+        // exactly as they were.
+        assert_eq!(
+            fs::read(storage.note_path(&id)).expect("read the note again"),
+            file_before,
+        );
+
+        let reopened = storage.load_note(&id).expect("reopen");
+        assert_eq!(reopened.metadata.updated_at, updated_at);
+        assert_eq!(reopened.metadata.created_at, created_at);
+        assert_eq!(
+            reopened.content,
+            "# Reunião\n\n- pauta\n- 25 minutos de foco"
+        );
+
+        // And nothing about a timer is written into the Markdown anywhere,
+        // in any form — no comment, no front-matter key, no marker.
+        let text = String::from_utf8(file_before).expect("the note is text");
+        for forbidden in [
+            "timer",
+            "pomodoro",
+            "deadline",
+            "focus",
+            "phase",
+            "remaining",
+            "25:00",
+        ] {
+            assert!(
+                !text.to_lowercase().contains(forbidden),
+                "the note file mentions {forbidden:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_running_timer_is_invisible_to_search_the_trash_and_the_title() {
+        // Searching "25:00" must not find a note merely because it has a
+        // twenty-five minute Pomodoro on it. That holds structurally: search
+        // reads `notes/`, the timer lives in `state.json`, and the two never
+        // meet — this is the assertion that the arrangement really is that.
+        use crate::timer::{NoteTimerState, PomodoroPhase, TimerMode, TimerRunState};
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "Comprar pão e café");
+        let id = document.borrow().metadata.id;
+
+        let mut app_state = crate::state::AppState::default();
+        app_state.notes.insert(
+            id,
+            NoteWindowState {
+                timer: NoteTimerState {
+                    mode: TimerMode::Pomodoro,
+                    state: TimerRunState::Running,
+                    deadline_ms: Some(1_800_000_000_000),
+                    phase: PomodoroPhase::Focus,
+                    focus_completed: 2,
+                    ..NoteTimerState::default()
+                }
+                .sanitize(),
+                ..NoteWindowState::default()
+            },
+        );
+        app_state
+            .save_to_file(&storage.state_file_path())
+            .expect("persist the timer");
+
+        let bodies = storage.read_note_bodies_by_recency();
+        for query in ["25:00", "pomodoro", "timer", "foco", "deadline"] {
+            let results = crate::search::search_notes(
+                query,
+                bodies.iter().map(|(id, body)| (*id, body.as_str())),
+            );
+            assert!(
+                results.is_empty(),
+                "searching {query:?} found a note that only has a timer",
+            );
+        }
+        // The note is still found by what it actually says.
+        assert_eq!(
+            crate::search::search_notes(
+                "café",
+                bodies.iter().map(|(id, body)| (*id, body.as_str())),
+            )
+            .len(),
+            1,
+        );
+
+        // The trash names a note by its own first line, and the timer is not
+        // part of that either.
+        storage.move_note_to_trash(&id).expect("move to the trash");
+        let entries = storage.list_trash();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "Comprar pão e café");
+        assert!(!entries[0].snippet.to_lowercase().contains("pomodoro"));
+        assert!(!entries[0].snippet.contains("25:00"));
+    }
+
+    #[test]
+    fn two_notes_keep_their_own_timers() {
+        // The record hangs off the note's identifier, so there is no shared
+        // slot for one note's countdown to appear on another.
+        use crate::timer::{NoteTimerState, TimerRunState};
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let first = stored_note(&storage, "nota A").borrow().metadata.id;
+        let second = stored_note(&storage, "nota B").borrow().metadata.id;
+        let state_path = storage.state_file_path();
+
+        let mut app_state = crate::state::AppState::default();
+        app_state.notes.insert(
+            first,
+            NoteWindowState {
+                timer: NoteTimerState {
+                    state: TimerRunState::Running,
+                    deadline_ms: Some(1_800_000_600_000),
+                    ..NoteTimerState::default()
+                }
+                .sanitize(),
+                ..NoteWindowState::default()
+            },
+        );
+        app_state.notes.insert(second, NoteWindowState::default());
+        app_state.save_to_file(&state_path).expect("persist");
+
+        let reloaded = crate::state::AppState::load_from_file(&state_path);
+        assert!(reloaded.notes[&first].timer.is_some());
+        assert!(
+            reloaded.notes[&second].timer.is_none(),
+            "a note with no timer must not inherit another note's",
+        );
+
+        // The second note starts its own, and neither disturbs the other.
+        app_state.notes.get_mut(&second).expect("note B").timer = NoteTimerState {
+            state: TimerRunState::Paused,
+            remaining_ms: Some(90_000),
+            ..NoteTimerState::default()
+        }
+        .sanitize();
+        app_state.save_to_file(&state_path).expect("persist");
+
+        let reloaded = crate::state::AppState::load_from_file(&state_path);
+        assert_eq!(
+            reloaded.notes[&first]
+                .timer
+                .expect("A keeps its own")
+                .deadline_ms,
+            Some(1_800_000_600_000),
+        );
+        assert_eq!(
+            reloaded.notes[&second]
+                .timer
+                .expect("B keeps its own")
+                .remaining_ms,
+            Some(90_000),
+        );
     }
 
     #[test]

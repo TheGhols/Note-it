@@ -1,3 +1,5 @@
+import { TimerFinishKind, TimerSnapshot } from '../timer/engine.ts';
+
 export type PaperColor = 'yellow' | 'blue' | 'green' | 'pink' | 'purple' | 'gray' | 'black';
 
 /** Background pattern of a note's paper. A property of the note. */
@@ -27,6 +29,16 @@ export interface NoteData {
   zoomPercent: number;
   layerMode: NoteLayerMode;
   theme: ThemePreference;
+  /**
+   * The note's Timer or Pomodoro, or `null` when it has none.
+   *
+   * A running one arrives as the instant it ends rather than as what was left
+   * when the WebView went away, so the page works the remainder out against
+   * the clock as it is now: a note reopened ten minutes later shows the ten
+   * minutes that really went by, and one reopened past its deadline comes back
+   * finished rather than counting through zero.
+   */
+  timer: TimerSnapshot | null;
 }
 
 /** One note that matched, exactly as the host sends it. */
@@ -93,6 +105,10 @@ export type WebviewToHostMessage =
   | { type: 'trash_list_requested'; payload: { requestId: number } }
   | { type: 'restore_note_requested'; payload: { noteId: string } }
   | { type: 'backup_requested' }
+  /** The note's timer changed in a way worth keeping. Never sent for a tick. */
+  | { type: 'timer_changed'; payload: { id: string; timer: TimerSnapshot | null } }
+  /** A run reached zero, exactly once. The host owns the words. */
+  | { type: 'timer_finished'; payload: { id: string; kind: TimerFinishKind } }
   | { type: 'open_external_url'; payload: { url: string } }
   | { type: 'drag_start' }
   | { type: 'drag_update'; payload: { dx: number; dy: number } }

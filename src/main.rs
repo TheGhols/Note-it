@@ -10,6 +10,7 @@ mod search;
 mod settings;
 mod state;
 mod storage;
+mod timer;
 mod trash;
 mod visible_text;
 mod webview_bridge;

@@ -800,6 +800,65 @@ entry.
 > stolen one, and they are not encrypted. Protection from hardware failure needs a copy on other
 > hardware, and Note-it does not make one.
 
+## Timer & Pomodoro
+
+A countdown on the note you are working in, without leaving it and without a second window.
+
+**Where.** The ⏱ button at the end of the header bar opens a small panel under it. There are two
+modes in the panel and one countdown per note: a note runs a Timer or a Pomodoro, never both, so the
+mode tabs are unavailable while a run is live rather than being a way to end up with two.
+
+**Timer.** Seven presets — 5, 10, 15, 25, 30, 45 and 60 minutes — and a field for anything else from
+1 to 600 whole minutes. A duration that is not one of those is refused and says so; nothing is
+rounded into range, because a timer that quietly ran for a duration you did not choose is worse than
+one that declined to start. `Enter` in the field starts it.
+
+**Pomodoro.** The classic cycle: 25 minutes of focus, 5 minutes of short break, and a 15-minute long
+break after the fourth focus session, after which the count begins again. The panel shows which
+phase you are on, which session of the four, and four marks for the cycle.
+
+**Nothing starts on its own.** When a phase runs out it is marked finished and the *next* one is
+offered on the button — "Iniciar pausa curta" — for you to start when you are ready. A break that
+began by itself while you were still mid-sentence would be a Pomodoro you never agreed to. *Pular
+etapa* moves to the next step without waiting for this one.
+
+**Start, pause, continue, cancel.** Only the controls that apply are shown, so there is no Pause on a
+paused timer and no Continue on one that never started. Cancelling a Timer keeps the duration you
+chose; cancelling a Pomodoro keeps your place in the cycle, and *Reiniciar ciclo* is what goes back
+to the beginning.
+
+**It is honest about time.** A running countdown is stored as the *instant it ends*, not as a number
+something has to decrement. Every reading is that instant minus the clock now, so nothing drifts, and
+nothing is lost to a WebView that was throttled, a machine that was busy, or a laptop that was shut
+for ten minutes. Suspend the machine for ten minutes with fifteen left and you come back to five.
+Pausing is the mirror: the instant is discarded and the remainder frozen, so paused time cannot be
+spent — not while the note is hidden, and not while the application is closed.
+
+**It survives the note going away.** Collapse the note, hide everything, close the application and
+come back: a run resumes with the time that really passed already taken off, and one whose end has
+gone by comes back **finished** rather than counting through zero. A run that ended while the
+application was not open does not ring when you return — an alarm about the past is not an alarm —
+but the finished state is right there on the bar.
+
+**On a collapsed note** the bar keeps the clock beside the ⏱, next to the note's name, so a running
+countdown never needs the note expanded to be trusted. On a note too narrow to carry both, the digits
+give way and the icon stays; the name and the close button never do.
+
+**When it ends** the clock reads `00:00`, the bar and the panel say *Concluído*, a line at the foot
+of the note says what finished, and the desktop gets one notification — "Timer concluído", or
+"Pomodoro — Sessão de foco concluída." The notification carries nothing from the note: not its title,
+not a line of its text. Exactly one is sent per run, however long the note sits at zero. A desktop
+with no notification daemon simply gets no notification; nothing about the timer depends on it.
+
+**A timer is not part of the note.** It is never written into the Markdown — no comment, no
+front-matter key, no marker. Starting, pausing, finishing or cancelling one leaves the note file byte
+for byte as it was and leaves its modification date where it was, so a note with a timer does not
+jump to the top of the quick switcher. It is invisible to search, to the collapsed title and to the
+trash: searching `25:00` will not find a note merely because it has a 25-minute Pomodoro running. The
+state lives beside the window geometry in `state.json`, and it is written only when something
+actually happens — a start, a pause, a resume, a cancel, a phase change or a completion. A running
+countdown writes nothing at all, once a second or otherwise.
+
 ## View Controls
 
 - **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**

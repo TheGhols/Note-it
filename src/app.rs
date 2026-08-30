@@ -10,6 +10,7 @@ use crate::search;
 use crate::settings::{theme_name, AppConfig};
 use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
+use crate::timer::TimerFinishKind;
 use gio::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1042,6 +1043,29 @@ impl NoteItAppClone {
         }
     }
 
+    /// Says that a timer ran out, once, to the desktop.
+    ///
+    /// The words come from [`TimerFinishKind::notification`] and from nowhere
+    /// else: the page reports which kind of run ended and has no way to supply
+    /// text, so no part of a note can reach the shell. Nothing here is
+    /// required for the feature to work — the note itself shows the finished
+    /// state whether or not a notification daemon is listening — so a desktop
+    /// with none simply gets no notification rather than an error.
+    ///
+    /// One identifier for every note, so a second completion replaces the
+    /// first in the shell instead of piling up beside it.
+    pub fn announce_timer_finished(&self, kind: TimerFinishKind) {
+        let (title, body) = kind.notification();
+        let notification = gio::Notification::new(title);
+        if let Some(body) = body {
+            notification.set_body(Some(body));
+        }
+        notification.set_priority(gio::NotificationPriority::Normal);
+        self.app
+            .send_notification(Some(kind.notification_id()), &notification);
+        diagnostics::log(format_args!("event=timer-finished kind={title}"));
+    }
+
     fn report_data_result(&self, requester: Uuid, action: &str, ok: bool, message: &str) {
         let ctx = self.context.borrow();
         if let Some(window) = ctx.windows.get(&requester) {
@@ -1323,6 +1347,11 @@ fn instantiate_note_window(
         app_clone11.create_backup(requester);
     });
 
+    let app_clone12 = app_controller.clone();
+    let on_timer_finished = Rc::new(move |_id, kind| {
+        app_clone12.announce_timer_finished(kind);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1354,6 +1383,7 @@ fn instantiate_note_window(
         on_list_trash,
         on_restore_note,
         on_backup,
+        on_timer_finished,
     })
 }
 

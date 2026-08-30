@@ -318,15 +318,46 @@ mistake into lost text? See ADR-028 and ADR-029.
 whole store. The first two are irreversible controls in the phase whose subject is reversibility;
 the third is a multi-file transaction that deserves its own design rather than a menu entry.
 
-### Phase 3.10: Timer & Pomodoro (Planned)
+### Phase 3.10: Timer & Pomodoro (Complete)
 
-- [ ] Stopwatch.
-- [ ] Countdown.
-- [ ] Named timers.
-- [ ] Pause and resume.
-- [ ] Restart and stop.
-- [ ] Pomodoro 25/5.
-- [ ] Appropriate local notifications — local, like everything else here.
+- [x] A countdown on the note, reached from a ⏱ in the header bar and shown in a small panel under
+      it. No second window, no permanent strip taken from the note.
+- [x] Presets at 5, 10, 15, 25, 30, 45 and 60 minutes, and a field for anything else from 1 to 600
+      whole minutes. A duration outside that — zero, negative, fractional, `NaN`, absurd — is
+      refused and said so, never rounded into range.
+- [x] Pomodoro 25/5/15: four focus sessions to a cycle, the fourth followed by the long break, then
+      the count begins again. The phase is an explicit model, not behaviour spread across handlers.
+- [x] Start, pause, continue, cancel and reset, with only the controls that apply on show. Skip
+      moves to the next Pomodoro step without waiting for this one.
+- [x] Nothing starts on its own. A finished phase is marked finished and **offers** the next one;
+      the reader begins it.
+- [x] **The truth is an instant, not a counter.** A running timer is stored as the wall-clock moment
+      it ends, and every reading is `deadline - now`. Nothing decrements, so nothing drifts and
+      nothing is lost to a throttled WebView, a busy machine or a suspended laptop.
+- [x] Pausing discards the instant and freezes the remainder, so paused time cannot be spent —
+      through a hide, through a restart, through any number of pause/resume cycles.
+- [x] The run survives the note being collapsed, hidden, or the application being closed: it comes
+      back with the time that really passed taken off, and one whose end has gone by comes back
+      **finished** rather than counting through zero.
+- [x] A collapsed note keeps the clock on its bar beside the note's name; a note too narrow for both
+      gives up the digits and never the name or the close control.
+- [x] Completion happens exactly once, guarded by the state transition itself rather than by a flag:
+      one line at the foot of the note and one desktop notification, however long the note sits at
+      zero.
+- [x] Notifications carry nothing from the note — no title, no text. The page reports *which* kind
+      of run ended, from a closed set, and the host owns the words.
+- [x] **Not content.** The timer is never written into the Markdown in any form. Starting, pausing,
+      finishing and cancelling leave the note file byte for byte as it was and leave `updated_at`
+      where it was; search, the collapsed title and the trash never see it. It lives beside the
+      window geometry in `state.json`, written only on a semantic change and never on a tick.
+- [x] One countdown per note, keyed by the note's identifier, so two notes cannot mix their timers
+      and there is no global timer manager.
+
+**Deliberately not in this phase:** the stopwatch and named timers this entry once listed. A
+stopwatch counts *up* and has no deadline, which is a second temporal model rather than a second
+button on this one; naming a timer is a label with nowhere to be read from — the note is already the
+name. Both belong to whatever asks for them with a reason, not to the phase whose subject is a
+countdown that can be trusted.
 
 ### Phase 3.11: Clipboard AutoPaste (Planned)
 

@@ -12,6 +12,8 @@ declare module 'vitest' {
     quickActionIcons: Record<string, string>;
     /** The repository's `.gitignore`, so the shipped assets can be checked. */
     gitignore: string;
+    /** `MIN_NOTE_WIDTH` from `src/layer_shell.rs`: the narrowest a note can be. */
+    minNoteWidth: number;
   }
 }
 

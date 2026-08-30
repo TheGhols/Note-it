@@ -1,4 +1,5 @@
 use crate::search::SearchResult;
+use crate::timer::{NoteTimerState, TimerFinishKind};
 use crate::trash::TrashEntry;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,14 @@ pub enum HostToWebviewMessage {
         /// Shared interface theme, so a note dresses its chrome correctly from
         /// the first paint instead of restyling once the first broadcast lands.
         theme: String,
+        /// The note's Timer or Pomodoro, or `null` when it has none.
+        ///
+        /// A running one travels as the instant it ends rather than as what
+        /// was left when the note closed, so the page works out the remainder
+        /// against the clock as it is now: a note reopened ten minutes later
+        /// shows the ten minutes that really went by, and one reopened past
+        /// its deadline comes back finished rather than counting through zero.
+        timer: Option<NoteTimerState>,
     },
     /// Sent when the host changes a note's collapse state, so the page and its
     /// menu follow a request that did not start in the WebView.
@@ -193,6 +202,25 @@ pub enum WebviewToHostMessage {
     },
     /// Asks for a snapshot right now.
     BackupRequested,
+    /// The note's timer changed in a way worth keeping: started, paused,
+    /// resumed, cancelled, reset, moved to another phase, or finished.
+    ///
+    /// Never sent for a tick. The countdown is redrawn about once a second and
+    /// none of that reaches the host, so a running timer costs no message and
+    /// no write; what is stored is the deadline, which does not change while it
+    /// is being counted down to. `null` means the note has no timer any more.
+    TimerChanged {
+        id: Uuid,
+        timer: Option<NoteTimerState>,
+    },
+    /// A run reached zero, exactly once, and the host should say so.
+    ///
+    /// The page reports *which* run ended and never the words for it, so the
+    /// notification cannot be made to carry anything from the note.
+    TimerFinished {
+        id: Uuid,
+        kind: TimerFinishKind,
+    },
     OpenExternalUrl {
         url: String,
     },
@@ -440,6 +468,7 @@ mod tests {
             zoom_percent: 130,
             layer_mode: "desktop".to_string(),
             theme: "dark".to_string(),
+            timer: None,
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -454,6 +483,196 @@ mod tests {
         assert_eq!(payload["theme"], "dark");
         // An unknown timestamp travels as null instead of a fabricated date.
         assert!(payload["updatedAt"].is_null());
+    }
+
+    #[test]
+    fn a_note_with_no_timer_says_so_rather_than_inventing_one() {
+        let message = super::HostToWebviewMessage::LoadNote {
+            id: Uuid::new_v4(),
+            content: String::new(),
+            color: "yellow".to_string(),
+            paper_type: "blank".to_string(),
+            paper_intensity: "normal".to_string(),
+            font_size: 15,
+            collapsed: false,
+            created_at: None,
+            updated_at: None,
+            zoom_percent: 100,
+            layer_mode: "overlay".to_string(),
+            theme: "system".to_string(),
+            timer: None,
+        };
+        let encoded = serde_json::to_value(&message).expect("serialize load_note");
+        assert!(encoded["payload"]["timer"].is_null());
+    }
+
+    #[test]
+    fn a_running_timer_travels_as_the_instant_it_ends() {
+        // The deadline is what makes a reopened note honest: it is an absolute
+        // moment, so the page subtracts the clock as it is *now* rather than
+        // resuming whatever was left when the WebView went away.
+        let deadline = 1_800_000_600_000_i64;
+        let message = super::HostToWebviewMessage::LoadNote {
+            id: Uuid::new_v4(),
+            content: "conteúdo".to_string(),
+            color: "yellow".to_string(),
+            paper_type: "blank".to_string(),
+            paper_intensity: "normal".to_string(),
+            font_size: 15,
+            collapsed: false,
+            created_at: None,
+            updated_at: None,
+            zoom_percent: 100,
+            layer_mode: "overlay".to_string(),
+            theme: "system".to_string(),
+            timer: Some(crate::timer::NoteTimerState {
+                state: crate::timer::TimerRunState::Running,
+                deadline_ms: Some(deadline),
+                ..crate::timer::NoteTimerState::default()
+            }),
+        };
+        let encoded = serde_json::to_value(&message).expect("serialize load_note");
+        let timer = &encoded["payload"]["timer"];
+        assert_eq!(timer["state"], "running");
+        assert_eq!(timer["deadlineMs"], deadline);
+        // No remainder travels with a running run: there is one source of
+        // truth on the wire, and it is the instant.
+        assert!(timer["remainingMs"].is_null());
+    }
+
+    #[test]
+    fn parses_the_timer_messages_a_note_can_send_about_itself() {
+        let id = Uuid::new_v4();
+
+        let raw = serde_json::json!({
+            "type": "timer_changed",
+            "payload": {
+                "id": id,
+                "timer": {
+                    "mode": "pomodoro",
+                    "state": "paused",
+                    "timerMinutes": 25,
+                    "deadlineMs": null,
+                    "remainingMs": 742_000,
+                    "phase": "focus",
+                    "focusCompleted": 1
+                }
+            }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("timer change") {
+            WebviewToHostMessage::TimerChanged {
+                id: parsed_id,
+                timer,
+            } => {
+                assert_eq!(parsed_id, id);
+                let timer = timer.expect("a paused run travels");
+                assert_eq!(timer.state, crate::timer::TimerRunState::Paused);
+                assert_eq!(timer.remaining_ms, Some(742_000));
+                assert_eq!(timer.focus_completed, 1);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        // Clearing a note's timer is the same message carrying nothing.
+        let raw = serde_json::json!({
+            "type": "timer_changed",
+            "payload": { "id": id, "timer": null }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("timer cleared") {
+            WebviewToHostMessage::TimerChanged { timer, .. } => assert!(timer.is_none()),
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let raw = serde_json::json!({
+            "type": "timer_finished",
+            "payload": { "id": id, "kind": "focus" }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("timer finished") {
+            WebviewToHostMessage::TimerFinished {
+                id: parsed_id,
+                kind,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(kind, crate::timer::TimerFinishKind::Focus);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_completion_cannot_carry_words_of_its_own() {
+        // The only thing a page may say about a finished run is which kind it
+        // was. There is no field for a title, a body or a snippet, so a note's
+        // text has no route to the desktop's notification area at all.
+        for kind in ["timer", "focus", "shortBreak", "longBreak"] {
+            let raw = serde_json::json!({
+                "type": "timer_finished",
+                "payload": { "id": Uuid::new_v4(), "kind": kind }
+            })
+            .to_string();
+            assert!(parse_webview_message(&raw).is_ok(), "rejected {kind}");
+        }
+
+        for payload in [
+            serde_json::json!({ "id": Uuid::new_v4(), "kind": "# a nota inteira" }),
+            serde_json::json!({ "id": Uuid::new_v4(), "kind": { "title": "x", "body": "y" } }),
+            serde_json::json!({ "id": Uuid::new_v4(), "kind": "timer", "body": "senha" }),
+        ] {
+            let raw =
+                serde_json::json!({ "type": "timer_finished", "payload": payload }).to_string();
+            let parsed = parse_webview_message(&raw);
+            match parsed {
+                Err(_) => {}
+                Ok(WebviewToHostMessage::TimerFinished { kind, .. }) => {
+                    // An extra field is ignored rather than carried: whatever
+                    // was smuggled alongside is simply not part of the message.
+                    assert_eq!(kind, crate::timer::TimerFinishKind::Timer);
+                }
+                Ok(other) => panic!("unexpected message: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_timer_state_from_the_page_is_never_trusted_as_it_arrives() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "timer_changed",
+            "payload": {
+                "id": id,
+                "timer": {
+                    "mode": "timer",
+                    "state": "running",
+                    "timerMinutes": 999,
+                    "deadlineMs": null,
+                    "focusCompleted": 99
+                }
+            }
+        })
+        .to_string();
+
+        match parse_webview_message(&raw).expect("timer change") {
+            WebviewToHostMessage::TimerChanged { timer, .. } => {
+                let arrived = timer.expect("the payload parses");
+                // As it arrives it is nonsense: running, with nothing to run
+                // to, for a duration outside the supported range. Sanitising
+                // is what the window does before any of it is stored.
+                assert_eq!(arrived.state, crate::timer::TimerRunState::Running);
+                let stored = arrived
+                    .sanitize()
+                    .expect("clamped values still say something");
+                assert_eq!(stored.state, crate::timer::TimerRunState::Idle);
+                assert_eq!(stored.timer_minutes, crate::timer::MAX_TIMER_MINUTES);
+                assert_eq!(
+                    stored.focus_completed,
+                    crate::timer::FOCUS_SESSIONS_PER_CYCLE
+                );
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
     }
 
     #[test]

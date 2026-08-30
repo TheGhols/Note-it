@@ -958,3 +958,123 @@ restorable, and that is a test: a snapshot is copied into a second, empty XDG
 tree and opened, and the notes, identifiers, Markdown, trash, configuration and
 window state all come back. The manual procedure is written down in
 `docs/storage.md`, and it is `cp` with the application closed.
+
+## ADR-030: The Timer's Truth Is an Instant, and It Is Not Part of the Note
+
+**Status:** Accepted (Phase 3.10)
+
+Two decisions, and everything else in the phase follows from them.
+
+### A running countdown is stored as the moment it ends
+
+The obvious implementation is a number and a repeating tick:
+
+```js
+setInterval(() => { remaining -= 1000; render(); }, 1000);
+```
+
+It is wrong in exactly the situations a timer exists for. `setInterval` does
+not promise a tick a second; it promises no more than one. A WebView the
+compositor is not showing gets throttled, a machine under load delivers late, a
+suspended laptop delivers nothing at all — and each missed tick is a second the
+countdown silently keeps. Come back from lunch and a 25-minute Pomodoro still
+claims eleven minutes left. The error is not a rounding artefact to be tuned
+away; it is the model paying out whatever the scheduler happened to deliver.
+
+So a running run stores `deadline` — a wall-clock instant — and every reading
+is `deadline - now`. Nothing decrements. A redraw that arrives late, or never,
+costs a stale *picture* and not a wrong *answer*: the next reading is correct
+whenever it happens. Drift cannot accumulate because there is no accumulator.
+
+Pausing is the mirror image, and the mirror matters. A paused run has no end
+instant — it has a debt — so the deadline is **discarded** and the remainder
+frozen. Leaving a stale deadline on a paused timer is precisely what makes
+paused time get spent anyway the next time something reads it, which is why
+`sanitize` clears the field belonging to the state a record is not in, and why
+there is a test for a paused record carrying a deadline.
+
+`Date.now()` is the clock, deliberately, and not `performance.now()`. The
+monotonic clock is the right answer to "how long did this take" and the wrong
+answer to "how much of the afternoon is left": on Linux it does not advance
+across suspend, so a machine closed for ten minutes would come back believing
+no time had passed. Civil time is what a timer is about, and a jump in the
+system clock is a rarer and more visible problem than a suspended laptop is.
+
+The whole thing is therefore reconstructible from a number. Close the
+application at 14:05 with a timer started at 14:00 for 25 minutes, reopen at
+14:10, and the fifteen minutes that remain are computed, not remembered. Reopen
+at 14:30 and the state is `finished` rather than a countdown through zero.
+
+**Completion is guarded by the transition, not by a flag.** Only a `running`
+run can finish, and finishing makes it `finished`. However many redraws observe
+a deadline in the past, exactly one of them is the one that moves the state —
+one write, one line at the foot of the note, one notification. The check and
+the assignment are the same step, which is the only version of this that is not
+a race.
+
+**Restoring never rings.** A run that ended while the application was closed is
+restored as finished and silently. An alarm about the past is not an alarm, and
+any rule for "recent enough to still ring" would be an arbitrary number. The
+finished state is on the bar instead, which is what actually tells the reader.
+
+### A timer is operational state, in `state.json`, and never in the Markdown
+
+The tempting place to put it is the note: it belongs to that note, and the note
+is a file that already has front matter. That would be wrong for the same
+reason the zoom is not in the note. A note's file is the reader's document —
+the thing they wrote, the thing they can open in any editor, the thing whose
+modification date orders their quick switcher. Starting a timer is not writing.
+
+Putting the timer in the Markdown would mean: the file changes when nobody
+edited it; `updated_at` moves, so a note jumps to the top of the switcher
+because a countdown ticked over; the trash and the search index see a key
+nobody typed; and `25:00` becomes findable text in a note that merely has a
+Pomodoro running. Every one of those is a defect, and none of them is worth a
+convenient home for seven scalars.
+
+So it lives in the note's entry in `state.json`, beside the geometry, the
+collapse state and the zoom — all of which are already "state of the
+application about this note" rather than "state of the note". The consequences
+are the properties the phase is judged on, and they hold structurally rather
+than by care: search reads `notes/`, the trash moves files in `notes/`, the
+collapsed title is projected from the Markdown, and none of those three ever
+opens `state.json`.
+
+**Written on a change, never on a tick.** Starts, pauses, resumes, cancels,
+resets, phase changes and completions are writes; the seconds going by are not,
+because the stored deadline does not change while it is being counted down to.
+A running timer therefore costs no disk traffic and no IPC at all. A note whose
+timer is in its pristine state stores nothing: the field is absent, so a note
+that never had one looks exactly as it did before this phase existed.
+
+**One per note, by construction.** The record hangs off the note's identifier
+and the engine is one machine, so there is no arrangement of clicks that starts
+two countdowns in a note and no shared slot for one note's timer to appear in
+another. Changing mode is not a way around it: the tabs are unavailable while a
+run is live and the engine refuses the change anyway. There is deliberately no
+global timer manager — a note is the scope, and a second one is a second note.
+
+### The page cannot write a notification
+
+The completion message on the wire is a `TimerFinishKind`, a value from a
+closed set of four. The words are `TimerFinishKind::notification` in the host.
+The page reports *which kind of run* ended and has no field in which to supply
+text, so there is no route by which a line of a note, a title or a snippet
+could reach the desktop's notification area — not through a bug in the page,
+and not through anything a note could contain. The notification is also
+optional in the working sense: a desktop with no notification daemon gets none,
+and everything else about the feature is unchanged, because the signal the
+feature actually depends on is the one inside the note.
+
+### What the split costs
+
+The host does not run the countdown, so a timer does not complete while the
+application is hidden — hiding destroys the WebViews, and there is nothing left
+to observe the deadline. The completion is then delivered when the note comes
+back, from the deadline, which is correct but late. The alternative is a second
+state machine in Rust holding a `glib` alarm per note, and two owners of one
+completion is exactly the shape that produces two notifications. Switching to
+another application does **not** hide Note-it — the notes stay on screen with
+live WebViews, and that is the case the feature is for — so the deferral
+applies only to an explicit "put everything away". One owner, one transition,
+one notification was worth that.

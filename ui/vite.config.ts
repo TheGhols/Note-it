@@ -29,6 +29,26 @@ function quickActionIcons(): Record<string, string> {
   return icons;
 }
 
+/**
+ * The host's own minimum note width.
+ *
+ * Read out of the file that declares it rather than copied, because it is the
+ * budget the header bar has to fit inside: at this width the menu, the six
+ * quick actions, the timer and the close cross must all still be on the note.
+ * A second copy of the number would keep passing after the real one moved.
+ */
+function minNoteWidth(): number {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/layer_shell.rs', import.meta.url)),
+    'utf8',
+  );
+  const match = /pub const MIN_NOTE_WIDTH: i32 = (\d+);/.exec(source);
+  if (!match) {
+    throw new Error('MIN_NOTE_WIDTH is no longer declared in src/layer_shell.rs');
+  }
+  return Number(match[1]);
+}
+
 const indexHtml = readFileSync(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
 
 export default defineConfig({
@@ -80,6 +100,9 @@ export default defineConfig({
       // Read so a test can prove the six files are the only ones released from
       // the icon drop, and that every file the page uses is one of them.
       gitignore: readFileSync(fileURLToPath(new URL('../.gitignore', import.meta.url)), 'utf8'),
+      // The narrowest a note can be, so the header's budget is measured
+      // against the real floor the host enforces.
+      minNoteWidth: minNoteWidth(),
       mathSources: mathSources(),
       // The host and the page each carry a `stored note -> visible text`
       // projection, and two implementations only *described* as equivalent

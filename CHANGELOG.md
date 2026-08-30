@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.10 Timer & Pomodoro.** A countdown on the note you are working in, reached from a ⏱ in
+  the header bar and shown in a small panel under it. No second window, and no strip permanently
+  taken from the note.
+  - **Timer** with presets at 5, 10, 15, 25, 30, 45 and 60 minutes and a field for anything else
+    from 1 to 600 whole minutes. Zero, a negative, a fraction, `NaN` or something past the ceiling
+    is refused and said so; nothing is rounded into range, because a timer that quietly ran for a
+    duration nobody chose is worse than one that declined to start.
+  - **Pomodoro 25/5/15**: four focus sessions to a cycle, the fourth followed by the long break,
+    then the count begins again. The phase is an explicit model rather than behaviour spread across
+    event handlers, and the panel shows which phase, which session of the four, and the cycle.
+  - Start, pause, continue, cancel, reset and skip, with only the controls that apply on show —
+    no Pause on a paused timer, no Continue on one that never started.
+  - **Nothing starts by itself.** A phase that runs out is marked finished and *offers* the next one
+    on the button; the reader begins it. A break that started on its own mid-sentence would be a
+    Pomodoro nobody agreed to.
+  - **The truth is an instant, not a counter.** A running run is stored as the wall-clock moment it
+    ends and every reading is `deadline - now`, so nothing drifts and nothing is lost to a throttled
+    WebView, a busy machine or a suspended laptop. Pausing discards the instant and freezes the
+    remainder, so paused time cannot be spent — through a hide, through a restart, or through any
+    number of pause/resume cycles. See ADR-030.
+  - The run survives the note being collapsed, hidden, or the application closed and reopened: it
+    comes back with the time that really passed already taken off, and one whose end has gone by
+    comes back **finished** rather than counting through zero. It does not ring for a run that ended
+    while nothing was there to hear it; the finished state is on the bar instead.
+  - A collapsed note keeps the clock on its bar beside the note's name, so a running countdown never
+    needs the note expanded to be trusted. A note too narrow for both gives up the digits and keeps
+    the icon; the name and the close control never give way.
+  - Completion happens **exactly once**, guarded by the state transition itself rather than by a
+    flag: one line at the foot of the note and one desktop notification, however long the note sits
+    at zero. The notification carries nothing from the note — the page reports which kind of run
+    ended, from a closed set of four, and the host owns the words.
+  - **A timer is not part of the note.** It is never written into the Markdown in any form.
+    Starting, pausing, finishing and cancelling leave the note file byte for byte as it was and
+    leave `updated_at` where it was, so a note with a timer does not jump to the top of the quick
+    switcher; search, the collapsed title and the trash never see it. Searching `25:00` will not
+    find a note merely because it has a 25-minute Pomodoro running. The state lives beside the
+    window geometry in `state.json`, written only on a semantic change and never on a tick, so a
+    running countdown costs no disk traffic and no IPC at all.
+  - One countdown per note, keyed by the note's identifier: two notes cannot mix their timers, and
+    there is no global timer manager.
 - **Phase 3.9UX header ergonomics.** The existing header now recedes on expanded notes and returns
   on hover/focus, while a collapsed note keeps it visible with a presentation-only title derived
   from the first useful Markdown line. Colour and inline text size moved out of `☰` into exactly two

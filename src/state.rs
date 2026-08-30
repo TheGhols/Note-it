@@ -1,5 +1,6 @@
 use crate::atomic_file::write_atomic;
 use crate::diagnostics;
+use crate::timer::NoteTimerState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -66,6 +67,17 @@ pub struct NoteWindowState {
     /// it never touches the document or the note's `updated_at`.
     #[serde(default = "default_zoom_percent")]
     pub zoom_percent: u16,
+    /// The note's Timer or Pomodoro, if it has one.
+    ///
+    /// Here rather than in the Markdown for the same reason the geometry and
+    /// the zoom are here: it is state of the *application*, not of the
+    /// document. Starting, pausing or finishing a timer therefore leaves the
+    /// note file byte for byte as it was, leaves `updated_at` where it was, and
+    /// is invisible to search, to the title and to the trash — none of which
+    /// read this file. A note with no timer stores nothing at all, so the field
+    /// is absent rather than null in `state.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<NoteTimerState>,
 }
 
 pub const MIN_ZOOM_PERCENT: u16 = 75;
@@ -114,6 +126,7 @@ impl Default for NoteWindowState {
             expanded_width: None,
             expanded_height: None,
             zoom_percent: default_zoom_percent(),
+            timer: None,
         }
     }
 }
@@ -554,6 +567,188 @@ mod tests {
     }
 
     #[test]
+    fn a_note_with_no_timer_writes_no_timer_field_at_all() {
+        // The commonest note is one that never had a countdown. Its window
+        // state must look exactly as it did before this phase existed, so
+        // `state.json` grows nothing for a feature nobody used.
+        let state = NoteWindowState::default();
+        let encoded = serde_json::to_value(&state).expect("serialize");
+        assert!(encoded.get("timer").is_none());
+        assert!(!serde_json::to_string(&state).unwrap().contains("timer"));
+    }
+
+    #[test]
+    fn a_state_file_written_before_this_phase_still_loads() {
+        let legacy_json = r#"{
+            "active_layer_mode": "overlay",
+            "notes": {
+                "00000000-0000-0000-0000-000000000003": { "x": 10, "y": 20, "zoom_percent": 130 }
+            }
+        }"#;
+        let parsed: AppState = serde_json::from_str(legacy_json).expect("parse legacy json");
+        let id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let note = parsed.notes.get(&id).expect("note");
+        assert_eq!(note.timer, None);
+        assert_eq!(note.zoom_percent, 130);
+    }
+
+    #[test]
+    fn a_running_timer_survives_a_restart_as_the_instant_it_ends() {
+        // The whole restart story in one assertion: what is written down is
+        // the deadline, so the page that reads it back subtracts the clock as
+        // it is *then*. Nothing here records "fifteen minutes left", which is
+        // a claim that stops being true the moment it is written.
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp.path().join("state.json");
+        let note_id = Uuid::new_v4();
+        let deadline = 1_800_000_000_000_i64 + 25 * 60_000;
+
+        let mut state = AppState::default();
+        state.notes.insert(
+            note_id,
+            NoteWindowState {
+                x: 240,
+                y: 180,
+                timer: NoteTimerState {
+                    state: crate::timer::TimerRunState::Running,
+                    deadline_ms: Some(deadline),
+                    ..NoteTimerState::default()
+                }
+                .sanitize(),
+                ..NoteWindowState::default()
+            },
+        );
+        state.save_to_file(&state_path).expect("save state");
+
+        let restored = AppState::load_from_file(&state_path);
+        let timer = restored.notes[&note_id].timer.expect("the timer came back");
+        assert_eq!(timer.state, crate::timer::TimerRunState::Running);
+        assert_eq!(timer.deadline_ms, Some(deadline));
+        assert_eq!(timer.remaining_ms, None);
+        // The geometry is untouched by the timer riding beside it.
+        assert_eq!(
+            (restored.notes[&note_id].x, restored.notes[&note_id].y),
+            (240, 180)
+        );
+    }
+
+    #[test]
+    fn a_paused_timer_survives_a_restart_as_the_time_it_had_left() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp.path().join("state.json");
+        let note_id = Uuid::new_v4();
+
+        let mut state = AppState::default();
+        state.notes.insert(
+            note_id,
+            NoteWindowState {
+                timer: NoteTimerState {
+                    mode: crate::timer::TimerMode::Pomodoro,
+                    state: crate::timer::TimerRunState::Paused,
+                    remaining_ms: Some(18 * 60_000 + 42_000),
+                    phase: crate::timer::PomodoroPhase::ShortBreak,
+                    focus_completed: 3,
+                    ..NoteTimerState::default()
+                }
+                .sanitize(),
+                ..NoteWindowState::default()
+            },
+        );
+        state.save_to_file(&state_path).expect("save state");
+
+        let timer = AppState::load_from_file(&state_path).notes[&note_id]
+            .timer
+            .expect("the paused timer came back");
+        assert_eq!(timer.remaining_ms, Some(18 * 60_000 + 42_000));
+        // No instant, so the time the application spent closed cannot have
+        // been spent by a paused countdown.
+        assert_eq!(timer.deadline_ms, None);
+        assert_eq!(timer.focus_completed, 3);
+        assert_eq!(timer.phase, crate::timer::PomodoroPhase::ShortBreak);
+    }
+
+    #[test]
+    fn cancelling_a_timer_takes_it_out_of_the_state_file() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp.path().join("state.json");
+        let note_id = Uuid::new_v4();
+
+        let mut state = AppState::default();
+        state.notes.insert(
+            note_id,
+            NoteWindowState {
+                timer: NoteTimerState {
+                    state: crate::timer::TimerRunState::Running,
+                    deadline_ms: Some(1_800_000_600_000),
+                    ..NoteTimerState::default()
+                }
+                .sanitize(),
+                ..NoteWindowState::default()
+            },
+        );
+        state.save_to_file(&state_path).expect("save state");
+        assert!(fs::read_to_string(&state_path)
+            .unwrap()
+            .contains("deadlineMs"));
+
+        state.notes.get_mut(&note_id).unwrap().timer = None;
+        state.save_to_file(&state_path).expect("save state");
+
+        let written = fs::read_to_string(&state_path).unwrap();
+        assert!(!written.contains("timer"));
+        assert_eq!(
+            AppState::load_from_file(&state_path).notes[&note_id].timer,
+            None
+        );
+    }
+
+    #[test]
+    fn a_timer_never_touches_the_note_geometry_beside_it() {
+        let mut note = NoteWindowState {
+            x: 300,
+            y: 400,
+            width: 480,
+            height: 620,
+            zoom_percent: 130,
+            ..NoteWindowState::default()
+        };
+        let geometry = note.clone();
+
+        note.timer = NoteTimerState {
+            state: crate::timer::TimerRunState::Running,
+            deadline_ms: Some(1_800_000_600_000),
+            ..NoteTimerState::default()
+        }
+        .sanitize();
+
+        assert_eq!(
+            (
+                note.x,
+                note.y,
+                note.width,
+                note.height,
+                note.zoom_percent,
+                note.collapsed
+            ),
+            (
+                geometry.x,
+                geometry.y,
+                geometry.width,
+                geometry.height,
+                geometry.zoom_percent,
+                geometry.collapsed
+            ),
+        );
+
+        // ...and collapsing does not disturb the timer either: a note recolhida
+        // keeps counting.
+        assert!(note.apply_collapsed(true, 30));
+        assert!(note.timer.is_some());
+        assert!(note.apply_collapsed(false, 30));
+        assert!(note.timer.is_some());
+    }
+
+    #[test]
     fn layer_mode_toggle_matches_the_command_line_switch() {
         assert_eq!(LayerMode::Overlay.toggled(), LayerMode::Desktop);
         assert_eq!(LayerMode::Desktop.toggled(), LayerMode::Overlay);
@@ -583,6 +778,7 @@ mod tests {
             expanded_width: Some(480),
             expanded_height: Some(600),
             zoom_percent: 130,
+            timer: None,
         };
         state.notes.insert(first, note.clone());
         state.notes.insert(second, note.clone());
