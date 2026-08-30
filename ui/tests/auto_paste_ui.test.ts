@@ -60,6 +60,7 @@ function mount() {
     onTrashNote: vi.fn(),
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
+    onInsertImage: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),

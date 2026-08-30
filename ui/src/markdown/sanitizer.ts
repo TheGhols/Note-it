@@ -5,6 +5,13 @@
 
 import { normalizeTextSize } from '../editor/textSize.ts';
 
+import {
+  clampImageWidth,
+  DEFAULT_IMAGE_ALIGN,
+  isManagedAsset,
+  normalizeImageAlign,
+} from './assetReference.ts';
+
 export const HEX_COLOR_REGEX = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 
 export function isValidHexColor(value: unknown): value is string {
@@ -54,9 +61,66 @@ export function safeLinkUrl(candidate: string): string | null {
 
 type CustomTagAction =
   | { kind: 'open'; tag: 'u' | 'span' | 'mark'; canonical: string }
-  | { kind: 'close'; tag: 'u' | 'span' | 'mark'; canonical: string };
+  | { kind: 'close'; tag: 'u' | 'span' | 'mark'; canonical: string }
+  | { kind: 'void'; tag: 'img'; canonical: string };
+
+/**
+ * One `<img>` as Note-it stores it, rewritten to exactly the form Note-it
+ * writes — or refused.
+ *
+ * The rules are the ones the `span` above follows, for the same reason. Only
+ * four attributes survive, always in this order, and each is validated rather
+ * than copied: the source must be one of this store's own managed assets, the
+ * width must be a number inside the supported range, and the alignment must be
+ * one of three words. An `onerror`, a `style`, a `srcset`, a `javascript:` src
+ * or a path climbing out of the assets directory is not rewritten and not
+ * escaped — the tag is simply not one of ours, and it is dropped, exactly as a
+ * `<span>` with no Note-it attribute is.
+ *
+ * A remote image is not refused as such: it is written `![alt](url)` like any
+ * other Markdown image, and stays that. What cannot exist is an `<img>` tag in
+ * a note carrying anything this application did not put there.
+ */
+function canonicalImageTag(rawTag: string): string | null {
+  const parser = new DOMParser();
+  const element = parser
+    .parseFromString(rawTag, 'text/html')
+    .body.querySelector('img');
+  if (!element) return null;
+
+  const src = element.getAttribute('src') ?? '';
+  if (!isManagedAsset(src)) return null;
+
+  const attributes = [`src="${src}"`, `alt="${escapeAttributeValue(element.getAttribute('alt') ?? '')}"`];
+
+  const width = clampImageWidth(element.getAttribute('data-note-it-width'));
+  if (width !== null) attributes.push(`data-note-it-width="${width}"`);
+
+  const align = element.getAttribute('data-note-it-align');
+  if (align !== null && align !== DEFAULT_IMAGE_ALIGN) {
+    const normalized = normalizeImageAlign(align);
+    if (normalized !== DEFAULT_IMAGE_ALIGN) {
+      attributes.push(`data-note-it-align="${normalized}"`);
+    }
+  }
+
+  return `<img ${attributes.join(' ')}>`;
+}
+
+function escapeAttributeValue(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 function parseCustomTag(rawTag: string): CustomTagAction | null {
+  // An image is a void element: it opens nothing, so it closes nothing.
+  if (/^<img\b/i.test(rawTag)) {
+    const canonical = canonicalImageTag(rawTag);
+    return canonical ? { kind: 'void', tag: 'img', canonical } : null;
+  }
   if (/^<u\s*>$/i.test(rawTag)) return { kind: 'open', tag: 'u', canonical: '<u>' };
   if (/^<\/u\s*>$/i.test(rawTag)) return { kind: 'close', tag: 'u', canonical: '</u>' };
   if (/^<\/span\s*>$/i.test(rawTag)) return { kind: 'close', tag: 'span', canonical: '</span>' };
@@ -287,7 +351,9 @@ export function sanitizeMarkdown(markdown: string): string {
         const rawTag = htmlTagMatch[0];
         const parsed = parseCustomTag(rawTag);
         if (parsed) {
-          if (parsed.kind === 'open') {
+          if (parsed.kind === 'void') {
+            output += parsed.canonical;
+          } else if (parsed.kind === 'open') {
             openTagStack.push(parsed.tag);
             output += parsed.canonical;
           } else {

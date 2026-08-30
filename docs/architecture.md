@@ -49,6 +49,10 @@ Note-it separates native system integration from document editing through a clea
 - `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`). Each note's entry
   also carries its Timer/Pomodoro, for the same reason it carries the zoom: it is state of the
   application, not of the document.
+- `assets.rs`: images a note owns. Where their bytes live, what they are called, and what a request
+  for one is allowed to resolve to. The format is decided by the bytes rather than by a filename, the
+  name is minted here rather than taken from the reader's disk, and a request is two `Uuid`s parsed
+  as `Uuid`s — so nothing outside `assets/<note>/` is nameable. See ADR-032.
 - `autopaste.rs`: the clipboard capture policy — armed or not, whose note, which generation, which
   read is stale. No GDK, no clipboard and no text: it decides, and `app.rs` owns the `GdkClipboard`
   and carries the words straight from the read callback to the target note. Testable without a
@@ -85,6 +89,13 @@ Note-it separates native system integration from document editing through a clea
   panels. All live in the page rather than in a second window, own their keys, and are not part of
   the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
   action did; it is not a dialog and takes nothing from the reader.
+- `ui/src/markdown/assetReference.ts`: what a note is allowed to say about a picture — the managed
+  reference format, the width limits, the three alignments, and the one function that turns a stored
+  reference into something the page may load. A markdown concern rather than an editor one, because
+  the sanitizer recognises it on the way in and the editor writes it on the way out.
+- `ui/src/editor/image.ts` and `ui/src/editor/imageView.ts`: the image node and its own interface —
+  the two stored forms and the round trip between them, and the handles, alignment controls and
+  single-transaction resize that never take the focus or move the selection.
 - `ui/src/capture/autoPaste.ts`: what a note becomes when a capture arrives — the plain-text split
   ProseMirror itself uses for `text/plain`, the three delimiters, and the single transaction that
   appends at the end without taking focus, moving the selection or scrolling. It reads no clipboard:

@@ -1,4 +1,5 @@
 mod app;
+mod assets;
 mod atomic_file;
 mod autopaste;
 mod backup;

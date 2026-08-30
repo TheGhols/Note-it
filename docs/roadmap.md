@@ -408,7 +408,47 @@ untouched by this.
 - [x] Note-it never takes ownership of the clipboard: after a capture, the copied text still pastes
       normally into any other application.
 
-### Phase 3.12: Capture & Export (Planned)
+### Phase 3.12: Images & Rich Layout (Complete)
+
+Reordered deliberately: what a note was missing was a picture in it, not a way out of it. Capture &
+Export moves back, and Flashcards — which needs images to be worth building — moves next.
+
+- [x] Local images in a note: pasted, dropped, or chosen from *☰ › Mídia › Inserir imagem…*.
+- [x] **Never base64 in the Markdown.** The bytes go into `assets/<note-uuid>/<asset-uuid>.<ext>`
+      beside `notes/` and `trash/`, and the note refers to them by a path relative to `notes/`.
+- [x] That relative path is why a note reaches the trash and comes back without a byte being
+      rewritten: `notes/` and `trash/` are siblings, so `../assets/…` resolves the same from either.
+      No absolute path from the reader's machine is ever written into a note.
+- [x] The page never spells a filesystem path. It loads `note-it-asset:/<note>/<asset>.<ext>`, which
+      the host serves after parsing both halves as `Uuid`s — so a `..`, an absolute path or an
+      encoded separator does not resolve to a file, it does not parse. See ADR-032.
+- [x] PNG, JPEG, WebP and GIF, decided by the bytes and never by the filename. **SVG is refused**:
+      it is a document that can carry script, and a note is not a place that needs one.
+- [x] Plain `![](…)` while there is nothing else to say, and a canonical `<img>` carrying exactly
+      `src`, `alt`, `data-note-it-width` and `data-note-it-align` once a width or an alignment is
+      chosen. The sanitizer rewrites the tag to that form or drops it entirely.
+- [x] Resize by dragging a handle, proportions kept because only the width is ever stored. One drag
+      is one entry in the history, not five hundred.
+- [x] Left, centre and right, with the text wrapping around a picture aligned left or right.
+- [x] Every change to a picture is an ordinary edit through the ordinary autosave: the Markdown
+      changes, `updated_at` moves, search finds the words around it. Selecting one, opening its
+      controls, cancelling the chooser or choosing the alignment it already has change nothing.
+- [x] A picture is not text. Nothing about how one is stored reaches the collapsed title, a search
+      snippet, the trash label or `visibleText` — searching an asset's identifier, a width or an
+      alignment finds nothing, and a note holding one picture and no words is still unnamed.
+- [x] Nothing is fetched. A remote image round-trips as the text it is and is drawn with no source
+      at all, so displaying a note reaches the network for nothing.
+- [x] No dependency was added.
+
+**Deliberately not in this phase:** cropping, rotation, filters, captions, galleries, lightboxes,
+images by URL, and **automatic collection of orphaned assets** — removing a picture takes it out of
+the note and leaves the file, because deleting bytes on a guess is worse than keeping them.
+
+### Phase 3.13: Flashcards Core (Planned)
+
+### Phase 3.14: Capture & Export (Planned)
+
+Moved back from 3.12.
 
 - [ ] Text export.
 - [ ] PDF export.

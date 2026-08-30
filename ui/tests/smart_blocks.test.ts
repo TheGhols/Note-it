@@ -147,6 +147,7 @@ describe('the Blocos menu section', () => {
   onTrashNote: vi.fn(),
   onOpenTrash: vi.fn(),
   onCreateBackup: vi.fn(),
+  onInsertImage: vi.fn(),
   onToggleAutoPaste: vi.fn(),
   onSelectCaptureDelimiter: vi.fn(),
     };

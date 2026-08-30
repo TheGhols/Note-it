@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.12 Images & Rich Layout.** A picture in a note, kept as a file rather than smuggled into
+  the text. Paste one, drop one on the note, or choose one from *☰ › Mídia › Inserir imagem…*.
+  - PNG, JPEG, WebP and GIF, decided by the first few bytes and never by a filename — so a PNG
+    called `.txt` is a PNG and something called `.png` that is not an image is refused. **SVG is
+    not accepted**: it is a document format that can carry script. A refusal says so in a line at
+    the foot of the note and leaves nothing behind.
+  - **Never base64 in the Markdown.** The bytes go to
+    `~/.local/share/note-it/assets/<note-id>/<asset-id>.<ext>`, beside `notes/` and `trash/`, and
+    the note stores a path relative to `notes/`. One screenshot would otherwise turn a note you can
+    read into a megabyte you cannot, and do the same to every backup and every diff.
+  - That relative form is why a note reaches the trash and comes back byte for byte: `notes/` and
+    `trash/` are siblings, so `../assets/…` resolves the same from either and nothing is rewritten.
+    No absolute path from the reader's machine is ever written into a note.
+  - **The page never spells a filesystem path.** It loads `note-it-asset:/<note>/<asset>.<ext>`,
+    which the host serves after parsing both halves as `Uuid`s — a `..`, an absolute path or an
+    encoded separator does not resolve to a file, it does not parse. The page's
+    Content-Security-Policy was widened by that scheme and nothing else. See ADR-032.
+  - Plain `![](…)` while there is nothing to say beyond where the picture is, and a canonical
+    `<img src alt data-note-it-width data-note-it-align>` once a width or an alignment is chosen —
+    always those attributes, always in that order, only the ones set. Anything else in such a tag is
+    dropped: an `onerror`, a `style`, a `srcset`, or a source that is not one of this store's assets.
+  - Resize by dragging either handle, with proportions kept because only the width is ever stored.
+    A picture can be made as wide as the note and no wider. The whole drag is one entry in the
+    history, so `Ctrl+Z` returns the width you started from.
+  - Left, centre and right, with the text running down the other side of a picture aligned left or
+    right — around it, never under it. Quotes, comments and code blocks sit beside a float rather
+    than beneath it.
+  - Every change to a picture is an ordinary edit: the Markdown changes, `updated_at` moves and the
+    existing autosave writes it. Selecting one, opening its controls, cancelling the file chooser or
+    choosing the alignment it already has change nothing at all.
+  - **A picture is not text.** Nothing about how one is stored reaches the collapsed title, a search
+    snippet, the trash label or `visibleText`: searching an identifier, a width, an alignment or
+    `assets` finds nothing, and a note holding one picture and no words is still *Nota sem título*.
+  - Nothing is fetched. There is no way to insert an image by URL, and a remote one somebody typed
+    is drawn with no source at all, so opening a note reaches the network for nothing.
+  - Removing a picture takes it out of the note and **leaves the file**. There is no automatic
+    collection of orphaned assets, deliberately: deciding a file is unused is a guess, and acting on
+    that guess destroys something.
+  - No dependency was added.
+
+### Changed
+- **Roadmap reordered.** 3.12 is Images & Rich Layout; Flashcards Core stays next at 3.13; Capture &
+  Export — text export, PDF and the offline-OCR evaluation — moves back to 3.14.
 - **Phase 3.11 Clipboard AutoPaste.** Copy something anywhere on the machine and it lands at the end
   of a note you chose. No window appears, no key is pressed for you, and nothing takes your cursor.
   Distinct from *Paste URL on Selection*, which Phase 3.8 shipped and which is untouched.

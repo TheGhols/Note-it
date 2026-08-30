@@ -15,6 +15,7 @@ import {
   DEFAULT_CAPTURE_DELIMITER,
   normalizeDelimiter,
 } from './capture/autoPaste.ts';
+import { imageBytesFromTransfer } from './editor/imageTransfer.ts';
 import { PointerGestureController } from './geometry/gesture.ts';
 import {
   findStatus,
@@ -212,6 +213,29 @@ function applyZoom(percent: number, persist: boolean): void {
       payload: { id: activeNoteId, zoomPercent: clamped },
     });
   }
+}
+
+/**
+ * Hands the bytes of a pasted or dropped image to the host.
+ *
+ * The page sends what the gesture gave it rather than naming a file, so there
+ * is nothing here the host could be talked into reading. What the bytes
+ * actually are is the host's decision, made from the bytes.
+ */
+function importImage(transfer: DataTransfer): boolean {
+  if (!activeNoteId) return false;
+  // Reading the bytes is asynchronous; deciding to handle the gesture is not.
+  // The editor is told at once that the picture is being dealt with, so the
+  // paste or drop does not also land as text, and the document changes when
+  // the reference comes back from the host.
+  void imageBytesFromTransfer(transfer).then((encoded) => {
+    if (encoded === null || !activeNoteId) return;
+    bridge.sendMessage({
+      type: 'image_bytes_received',
+      payload: { id: activeNoteId, data: encoded },
+    });
+  });
+  return true;
 }
 
 /**
@@ -426,6 +450,7 @@ function initUI(): void {
   noteEditor = new NoteEditor({
     element: editorContainer,
     initialContent: '',
+    onImageTransfer: importImage,
     onUpdate: (markdown) => {
       setNoteTitle(markdown);
       if (activeNoteId) {
@@ -542,6 +567,16 @@ function initUI(): void {
         },
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
+        onInsertImage: () => {
+          // The host owns the chooser: the page asks for the gesture and is
+          // told the result, so no path is named in either direction.
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'insert_image_requested',
+              payload: { id: activeNoteId },
+            });
+          }
+        },
         onToggleAutoPaste: (active) => {
           // A request, not a decision: the host owns the single target, and
           // the answer comes back as `set_auto_paste` to every note affected.
@@ -842,6 +877,14 @@ function initUI(): void {
       setPaperColor(msg.payload.color);
     } else if (msg.type === 'set_auto_paste') {
       setAutoPaste(Boolean(msg.payload.active), normalizeDelimiter(msg.payload.delimiter));
+    } else if (msg.type === 'image_inserted') {
+      // The picture is in the store and this is how the note refers to it.
+      // Inserting it is an ordinary edit: the editor's own update path sends
+      // `content_changed` and the existing autosave writes the note.
+      noteEditor?.insertImage(msg.payload.src);
+    } else if (msg.type === 'image_import_failed') {
+      // A line at the foot of the note, not a dialog over it.
+      noteStatus?.show(msg.payload.message, false);
     } else if (msg.type === 'auto_paste_captured') {
       applyCapture(msg.payload.text);
     } else if (msg.type === 'set_theme') {

@@ -71,6 +71,10 @@ pub struct NoteWindowOptions<'a> {
     pub on_autopaste_requested: Rc<dyn Fn(Uuid, bool)>,
     /// Asks the host to store a different capture delimiter.
     pub on_capture_delimiter_changed: Rc<dyn Fn(CaptureDelimiter)>,
+    /// Asks the host to show a file chooser and import the chosen image.
+    pub on_insert_image: Rc<dyn Fn(Uuid)>,
+    /// Bytes of an image the reader pasted or dropped, base64 on the wire.
+    pub on_image_bytes: Rc<dyn Fn(Uuid, String)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -253,6 +257,8 @@ impl NoteWindow {
         let on_timer_finished_clone = Rc::clone(&options.on_timer_finished);
         let on_autopaste_requested_clone = Rc::clone(&options.on_autopaste_requested);
         let on_capture_delimiter_clone = Rc::clone(&options.on_capture_delimiter_changed);
+        let on_insert_image_clone = Rc::clone(&options.on_insert_image);
+        let on_image_bytes_clone = Rc::clone(&options.on_image_bytes);
         let capture_delimiter_cell = Rc::new(Cell::new(options.capture_delimiter));
         let capture_delimiter_clone = Rc::clone(&capture_delimiter_cell);
         let loaded = Rc::new(Cell::new(false));
@@ -522,6 +528,23 @@ impl NoteWindow {
                                 return;
                             }
                             on_autopaste_requested_clone(id, active);
+                        }
+                        WebviewToHostMessage::InsertImageRequested { id: message_id } => {
+                            if message_id != id {
+                                eprintln!("Image request rejected a mismatched note identifier");
+                                return;
+                            }
+                            on_insert_image_clone(id);
+                        }
+                        WebviewToHostMessage::ImageBytesReceived {
+                            id: message_id,
+                            data,
+                        } => {
+                            if message_id != id {
+                                eprintln!("Image bytes rejected a mismatched note identifier");
+                                return;
+                            }
+                            on_image_bytes_clone(id, data);
                         }
                         WebviewToHostMessage::CaptureDelimiterChanged { delimiter } => {
                             on_capture_delimiter_clone(delimiter);
@@ -894,6 +917,26 @@ impl NoteWindow {
         send_to_webview(
             &self.webview,
             &HostToWebviewMessage::SetAutoPaste { active, delimiter },
+        );
+    }
+
+    /// Tells the page how this note should refer to an image now in the store.
+    pub fn send_image_inserted(&self, src: &str) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::ImageInserted {
+                src: src.to_string(),
+            },
+        );
+    }
+
+    /// Says why an image was not taken in. One sentence, and never a path.
+    pub fn send_image_failed(&self, message: &str) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::ImageImportFailed {
+                message: message.to_string(),
+            },
         );
     }
 
@@ -2246,6 +2289,134 @@ mod tests {
                 "the note file mentions {forbidden:?}",
             );
         }
+    }
+
+    #[test]
+    fn an_image_is_content_but_its_plumbing_is_not() {
+        // A picture is real content — the note holds it, the file records it,
+        // and a reader can delete it. What is *not* content is how it is
+        // stored: the identifiers, the width, the alignment and the path are
+        // machinery, and searching for any of them must not find the note.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let note_id = Uuid::new_v4();
+        let asset_id = Uuid::new_v4();
+
+        let body = format!(
+            "# Biópsia hepática\n\n             <img src=\"../assets/{note_id}/{asset_id}.png\" alt=\"\"              data-note-it-width=\"320\" data-note-it-align=\"left\">\n\n             encefalopatia hepática"
+        );
+        let document = stored_note(&storage, &body);
+        let id = document.borrow().metadata.id;
+
+        let bodies = storage.read_note_bodies_by_recency();
+        let search = |query: &str| {
+            crate::search::search_notes(query, bodies.iter().map(|(id, text)| (*id, text.as_str())))
+        };
+
+        // None of the plumbing is findable.
+        for query in [
+            asset_id.to_string(),
+            note_id.to_string(),
+            "assets".to_string(),
+            "../assets".to_string(),
+            "data-note-it-width".to_string(),
+            "data-note-it-align".to_string(),
+            "320".to_string(),
+            ".png".to_string(),
+            "img src".to_string(),
+        ] {
+            assert!(
+                search(&query).is_empty(),
+                "searching {query:?} found a note only because of how a picture is stored",
+            );
+        }
+
+        // The words around it still are.
+        assert_eq!(search("encefalopatia").len(), 1);
+        assert_eq!(search("Biópsia").len(), 1);
+        // ...and the snippet the palette shows carries none of the machinery.
+        let result = &search("encefalopatia")[0];
+        assert_eq!(result.label, "Biópsia hepática");
+        for technical in ["<img", "data-note-it", "assets", ".png"] {
+            assert!(
+                !result.snippet.contains(technical),
+                "the snippet leaked {technical:?}",
+            );
+            assert!(!result.label.contains(technical));
+        }
+
+        // The trash names it the same way, and leaks nothing either.
+        storage.move_note_to_trash(&id).expect("move to the trash");
+        let entries = storage.list_trash();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "Biópsia hepática");
+        for technical in ["<img", "data-note-it", "assets", ".png"] {
+            assert!(!entries[0].snippet.contains(technical));
+        }
+    }
+
+    #[test]
+    fn a_note_that_is_only_a_picture_is_still_a_note_nobody_named() {
+        // Every image this application inserts carries an empty alternative
+        // text, so a note holding one picture and no words has no title to
+        // take from it.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let note_id = Uuid::new_v4();
+        let asset_id = Uuid::new_v4();
+
+        for body in [
+            format!("![](../assets/{note_id}/{asset_id}.png)"),
+            format!(
+                "<img src=\"../assets/{note_id}/{asset_id}.png\" alt=\"\"                  data-note-it-width=\"320\">"
+            ),
+        ] {
+            let document = stored_note(&storage, &body);
+            let id = document.borrow().metadata.id;
+            storage.move_note_to_trash(&id).expect("move to the trash");
+        }
+
+        for entry in storage.list_trash() {
+            // The store's own word for a note with nothing to read, which is
+            // what a note holding one picture and no text is. What matters is
+            // that no part of how the picture is stored became its name.
+            assert_eq!(
+                entry.label,
+                crate::search::EMPTY_LABEL,
+                "a note that is one picture was given a name from its plumbing",
+            );
+            assert!(entry.snippet.is_empty(), "a picture became a preview");
+        }
+    }
+
+    #[test]
+    fn moving_a_note_with_a_picture_never_rewrites_the_reference() {
+        // The whole reason the stored path is relative. `notes/` and `trash/`
+        // are siblings, so `../assets/…` resolves the same from either, and a
+        // note travels between them byte for byte.
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let note_id = Uuid::new_v4();
+        let asset_id = Uuid::new_v4();
+        let body = format!("uma nota\n\n![](../assets/{note_id}/{asset_id}.png)");
+
+        let document = stored_note(&storage, &body);
+        let id = document.borrow().metadata.id;
+        let before = fs::read(storage.note_path(&id)).expect("read the stored note");
+
+        storage.move_note_to_trash(&id).expect("to the trash");
+        let in_trash =
+            fs::read(storage.trash_dir().join(format!("{id}.md"))).expect("read it in the trash");
+        assert_eq!(in_trash, before, "the file changed on its way to the trash");
+
+        storage
+            .restore_note_from_trash(&id)
+            .expect("and back again");
+        assert_eq!(
+            fs::read(storage.note_path(&id)).expect("read it back"),
+            before,
+            "the file changed on its way out of the trash",
+        );
     }
 
     #[test]

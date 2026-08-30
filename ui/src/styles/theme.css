@@ -17,6 +17,12 @@
   /* Icon size for the header's quick actions. Larger than the hamburger and
      the close cross because those are drawn with a much heavier stroke. */
   --header-action-size: 15px;
+  /* How wide a picture is drawn when nobody has resized it: a fraction of the
+     note, with a ceiling so a large photograph does not fill a wide note edge
+     to edge. Only a cap — the image keeps its own proportions and never grows
+     past its natural size. Once the reader drags a handle the stored width
+     takes over, still bounded by the note's own width. */
+  --note-image-default-width: 300px;
   /* View scale of the note content; never applied to the header bar. */
   --note-zoom: 1;
 
@@ -1890,4 +1896,179 @@ body[data-collapsed="true"] .resize-handle {
   max-width: 220px;
   font-style: normal;
   white-space: normal;
+}
+
+/* Images.
+   A picture is content: it sits in the text, it is selected like anything else,
+   and its own controls appear only while it is. The float is what makes text
+   run alongside it — displacing the words rather than covering them, which is
+   the one thing a floated picture must never do. */
+.note-image-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  vertical-align: bottom;
+}
+
+.note-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+/* Un-resized: capped, so an inserted photograph opens at a readable size in a
+   wide note and still fits a narrow one. A stored width replaces this cap
+   rather than fighting it — see `[data-width]` below. */
+.note-image-frame:not([data-width]) .note-image {
+  max-width: min(100%, var(--note-image-default-width));
+}
+
+/* A block of its own. The default, because a picture that rearranged the
+   paragraph around it the moment it arrived would be a surprise. */
+.note-image-frame[data-align="center"] {
+  display: block;
+  margin: 10px auto;
+}
+
+/* Text runs down the other side. The bottom margin is larger than the top so a
+   wrapped paragraph does not touch the picture it flows around. */
+.note-image-frame[data-align="left"] {
+  float: left;
+  margin: 4px 14px 8px 0;
+}
+
+.note-image-frame[data-align="right"] {
+  float: right;
+  margin: 4px 0 8px 14px;
+}
+
+/* A float must not escape the note. The editor closes over its own floats, so
+   the last paragraph of a note never hangs beside one that has ended. */
+.ProseMirror::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+
+/* Blocks that cannot flow around a picture sit beside it instead of under it.
+   A quote and a comment each become their own formatting context, which is
+   what stops a float from overlapping the one kind of content whose left edge
+   actually carries meaning. `flow-root` rather than `overflow`, so nothing
+   gains a scrollbar it did not need. A code block already establishes its own
+   context, because a long line of code scrolls rather than reflowing. */
+.ProseMirror blockquote,
+.ProseMirror .note-comment {
+  display: flow-root;
+}
+
+.note-image-frame[data-selected="true"] .note-image {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
+/* The two handles. Present only while the picture is selected, so a note being
+   read has nothing on it, and large enough to be grabbed without being large
+   enough to cover the picture. */
+.note-image-handle {
+  position: absolute;
+  bottom: 6px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--ui-surface);
+  border-radius: 3px;
+  background-color: var(--ui-focus-ring);
+  cursor: ew-resize;
+  display: none;
+}
+
+.note-image-frame[data-selected="true"] .note-image-handle {
+  display: block;
+}
+
+.note-image-handle-left {
+  left: 6px;
+}
+
+.note-image-handle-right {
+  right: 6px;
+}
+
+/* The picture's own controls: alignment and removal, and nothing else. A small
+   row over the top of it rather than a panel beside the note, so nothing takes
+   permanent room from the text. */
+.note-image-controls {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background-color: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.note-image-frame[data-selected="true"] .note-image-controls {
+  display: flex;
+}
+
+.note-image-control {
+  padding: 3px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-text);
+  font-family: var(--note-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.note-image-control:hover {
+  background-color: var(--ui-surface-hover);
+}
+
+/* The alignment in force is marked by weight and a ground, never by colour
+   alone, and its pressed state says so to anything reading the tree. */
+.note-image-control[aria-pressed="true"] {
+  background-color: var(--ui-surface-hover);
+  font-weight: 700;
+}
+
+.note-image-control:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
+.note-image-remove {
+  color: var(--callout-caution);
+}
+
+/* A picture the store no longer has. The note keeps its place and says so,
+   rather than showing a broken element or losing the reference. */
+.note-image-missing {
+  display: inline-block;
+  padding: 10px 12px;
+  border: 1px dashed var(--paper-muted);
+  border-radius: 4px;
+  color: var(--paper-muted);
+  font-family: var(--note-font-family);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.note-image-missing[hidden] {
+  display: none;
+}
+
+/* While a handle is being dragged the picture follows the pointer and nothing
+   else does: no selection, no caret, no text being highlighted underneath. */
+.note-image-frame[data-resizing="true"] {
+  user-select: none;
 }

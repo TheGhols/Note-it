@@ -800,6 +800,70 @@ entry.
 > stolen one, and they are not encrypted. Protection from hardware failure needs a copy on other
 > hardware, and Note-it does not make one.
 
+## Images
+
+A picture in a note, kept as a file rather than smuggled into the text.
+
+**Putting one in.** Paste it, drop it on the note, or *☰ › Mídia › Inserir imagem…* for a file
+chooser. All three end in the same place: the bytes are written into the store, and the note gains a
+reference to them.
+
+**PNG, JPEG, WebP and GIF.** What a file *is* decided by its first few bytes, never by its name — so
+a PNG called `.txt` is a PNG, and something called `.png` that is not an image is refused. **SVG is
+not accepted**: it is a document format that can carry script, and admitting it would open a whole
+surface for the sake of a picture. A refusal says so in a line at the foot of the note and leaves
+nothing behind — no directory, no half-written file, no change to the note.
+
+**Where the bytes go.** `~/.local/share/note-it/assets/<note-id>/<asset-id>.<ext>`, beside `notes/`
+and `trash/`. Ordinary files with ordinary names, copied out with `cp` like everything else here.
+Nothing is ever inlined into the Markdown as base64: a screenshot would turn a note you can read
+into a megabyte you cannot, and would do it to your backups and your diffs too.
+
+**What the note stores.** A path relative to `notes/` — `../assets/<note-id>/<asset-id>.png` — and
+never an absolute one, so a note you put in Git says nothing about your home directory. That
+relative form is also why a note reaches the trash and comes back untouched: `notes/` and `trash/`
+are siblings, so `..` climbs to the same place from either, and nothing has to be rewritten.
+
+**Two stored forms, and a rule for which.** While there is nothing to say beyond where the picture
+is, it is plain Markdown — `![](../assets/…)`. Once you choose a width or an alignment, which
+Markdown's image syntax has nowhere to put, it becomes a canonical tag carrying exactly four things:
+
+```html
+<img src="../assets/…" alt="" data-note-it-width="320" data-note-it-align="left">
+```
+
+Always those attributes, always in that order, and only the ones actually set — so the same picture
+always writes the same bytes and a save that changed nothing changes nothing on disk. Anything else
+in such a tag is dropped rather than kept: an `onerror`, a `style`, a `srcset`, or a source that is
+not one of this store's own assets.
+
+**Size.** A new picture opens capped — wide enough to see in a wide note, small enough to fit a
+narrow one — and never larger than its own natural size. Select it and drag either handle to resize:
+proportions are kept because only the width is ever stored, height following from the picture
+itself. A picture can be made as wide as the note and no wider, whatever the pointer does. The whole
+drag is one entry in the history, so `Ctrl+Z` returns the width you started from.
+
+**Alignment and wrapping.** Select the picture and choose *Esquerda*, *Centro* or *Direita*.
+Left and right float it, and the text runs down the other side — around the picture, never under it.
+Centre is a block of its own, with the text above and below. Quotes, comments and code blocks sit
+beside a floated picture rather than under it.
+
+**Removing one.** Take it out of the note like any other content. **The file is not deleted.** There
+is no automatic collection of pictures no note points at any more, deliberately: deciding a file is
+unused is a guess, and acting on that guess destroys something. If you want the space back, the
+assets are ordinary files in an ordinary directory and `rm` still works.
+
+**Nothing is fetched, ever.** There is no way to insert an image by URL, and a remote image somebody
+typed by hand is drawn with no source at all — so opening a note reaches the network for nothing, and
+a note cannot be used to tell anyone that you read it. The page cannot even name a file: it asks the
+application for `note-it-asset:/<note>/<asset>.<ext>`, and the application resolves that inside the
+note's own asset directory or not at all.
+
+**A picture is not text.** Nothing about how one is stored reaches the collapsed title, a search
+result, the trash, or what the note reads as: searching an identifier, a width, an alignment or
+`assets` finds nothing, and a note holding one picture and no words is still *Nota sem título*. The
+words around a picture stay as findable as they always were.
+
 ## Clipboard AutoPaste
 
 Copy something anywhere on the machine, and it lands at the end of a note you chose. No window

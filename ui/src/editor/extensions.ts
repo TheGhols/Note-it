@@ -12,6 +12,7 @@ import { NoteItBlockquote } from './callout.ts';
 import { NoteItCodeBlock } from './codeBlock.ts';
 import { NoteItComment } from './comment.ts';
 import { NoteItFind } from './find.ts';
+import { NoteItImage } from './image.ts';
 import { NoteItMath } from './math.ts';
 import { NoteItTaskItem } from './taskItem.ts';
 import { NoteItTypography } from './typography.ts';
@@ -271,6 +272,7 @@ export const editorExtensions = [
   NoteItBlockquote,
   NoteItCodeBlock,
   NoteItComment,
+  NoteItImage,
   NoteItUnderline,
   NoteItHighlight.configure({
     multicolor: true,

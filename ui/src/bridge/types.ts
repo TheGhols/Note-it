@@ -87,6 +87,10 @@ export type HostToWebviewMessage =
   | { type: 'set_auto_paste'; payload: { active: boolean; delimiter: CaptureDelimiter } }
   /** One clipboard capture, on its way to the editor. Text and nothing else. */
   | { type: 'auto_paste_captured'; payload: { text: string } }
+  /** An image is in the store; this is how the note refers to it. */
+  | { type: 'image_inserted'; payload: { src: string } }
+  /** An image could not be taken in. Already the sentence to show. */
+  | { type: 'image_import_failed'; payload: { message: string } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
   | { type: 'search_results'; payload: { requestId: number; results: SearchResult[] } }
   | { type: 'search_result_missing'; payload: { noteId: string } }
@@ -118,6 +122,10 @@ export type WebviewToHostMessage =
   | { type: 'trash_list_requested'; payload: { requestId: number } }
   | { type: 'restore_note_requested'; payload: { noteId: string } }
   | { type: 'backup_requested' }
+  /** Asks the host for a file chooser and the image chosen in it. */
+  | { type: 'insert_image_requested'; payload: { id: string } }
+  /** Bytes of a pasted or dropped image, base64 for the length of one message. */
+  | { type: 'image_bytes_received'; payload: { id: string; data: string } }
   /** Asks the host to capture into this note, or to stop capturing at all. */
   | { type: 'auto_paste_requested'; payload: { id: string; active: boolean } }
   /** Asks the host to store a different capture delimiter. Application-wide. */

@@ -1199,3 +1199,127 @@ here does.
 
 Switching the mode on or off, and changing the delimiter, touch none of that.
 They are application state, so they leave the note byte for byte as it was.
+
+## ADR-032: A Picture Is a File Beside the Note, Reached Through a Scheme
+
+**Status:** Accepted (Phase 3.12)
+
+### The bytes are a file, and the note holds a path
+
+The tempting shortcut is a `data:` URI in the Markdown. It works immediately
+and it ruins the thing the file is for: one screenshot turns a note somebody
+can read, diff, grep and hand-edit into a megabyte of base64 they cannot, and
+it does the same to every backup and every commit that note ever appears in.
+A note is a text file on purpose.
+
+So the bytes go to `assets/<note-uuid>/<asset-uuid>.<ext>`, a sibling of
+`notes/` and `trash/`, and the note stores `../assets/<note>/<asset>.<ext>`.
+
+**Relative, and relative to `notes/` specifically.** `notes/` and `trash/` are
+siblings, so `..` climbs to the same data directory from either of them: a note
+moved to the trash and restored needs no rewriting, and the reference is valid
+the whole way. An absolute path would have to be rewritten on every move, would
+break the moment a store was copied to another machine, and would write the
+reader's home directory into a file they may well put in Git.
+
+**The identifiers are ours.** Whatever the file was called on the reader's disk
+is not what it is called here. Nothing a filename can carry — a `..`, a
+separator, a newline, a control character, a case fold that means something
+different in another locale — survives into a path, because none of it is used
+to build one. The format is decided the same way: by the first few bytes, never
+by the extension. A PNG called `.txt` is a PNG, and an SVG called `.png` is
+still an SVG and is still refused.
+
+**SVG is refused, and by construction rather than by a rule about it.** It is a
+document format that can carry script and external references. Admitting it
+would mean auditing that whole surface for the sake of a picture. It has no
+binary signature, so the same sniffing that accepts the other four rejects it
+without a special case.
+
+### The page asks for a picture; it never names a file
+
+An `<img src="file:///home/…">` would have worked. It would also have put an
+absolute filesystem path in the page's reach, in an application whose whole
+frontend contract is that it never spells one — search takes a `Uuid`, the
+trash takes a `Uuid`, and there is no message in the bridge carrying a path
+precisely so there is nothing to traverse.
+
+So the host registers `note-it-asset:` and serves it. The page loads
+`note-it-asset:/<note>/<asset>.<ext>`, and the handler parses both halves as
+`Uuid`s before anything touches the disk. A `..`, an absolute path, an extra
+segment, a percent-encoded separator: none of them resolve to a file, because
+none of them *parse*. Traversal is not blocked by a check that could be got
+around; it is unrepresentable.
+
+The page's Content-Security-Policy was widened by exactly that scheme —
+`img-src 'self' note-it-asset:` — and by nothing else. No `http:`, no `https:`,
+no `data:`, no `file:`. A note cannot fetch anything, which is also the answer
+to remote images: one somebody typed by hand round-trips as the text it is and
+is drawn with no source at all. Opening a note reaches the network for nothing,
+and cannot be used to tell anybody that it was opened.
+
+Measured before it was built on: a synthetic asset served this way loads in the
+real WebKitGTK under the real policy, reporting its true dimensions. The icons
+in Phase 3.9UX failed silently under this same policy, which is why this was
+measured first rather than assumed.
+
+### Two stored forms, and a rule for which
+
+Markdown's image syntax has nowhere to put a width or an alignment, and those
+are two of the four things this phase exists to deliver. HTML has, and this
+codebase already stores what Markdown cannot as canonical inline tags —
+`<span data-note-it-color>`, `<mark data-note-it-highlight>`.
+
+So: plain `![alt](src)` while there is nothing to say beyond where the picture
+is, and a canonical `<img>` once a width or a non-default alignment is chosen.
+The rule is deterministic in both directions — the default alignment normalises
+*back* to the plain form — so one picture is always one set of bytes and a save
+that changed nothing changes nothing on disk.
+
+The tag is canonicalised by the same function that canonicalises a `<span>`,
+under the same discipline: four attributes, always in one order, each validated
+rather than copied, and the source must be one of this store's own managed
+assets. An `onerror`, a `style`, a `srcset` or a path climbing out of the assets
+directory is not escaped and not kept — the tag is simply not one of ours, and
+it is dropped.
+
+**The alternative text is stored and never projected.** Every image this
+application inserts carries `alt=""`. That is what keeps a note holding one
+picture and no words still unnamed, and what keeps an asset's identifier out of
+search — and it means the plain form and the tag form agree about what a note
+reads as, which they would not if a filename-derived alt were projected from one
+and stripped from the other. A hand-written `![alt](url)` keeps the behaviour it
+has always had.
+
+### The host stores; the page edits; the ordinary save writes
+
+The host never writes the `.md`. It takes bytes, decides what they are, stores
+them, and sends back a relative path; the page puts that into the document
+through a normal editor transaction and the existing autosave carries it to
+disk. One authority over the document, which is the same rule a clipboard
+capture follows and the reason an image behaves like the edit it is:
+`updated_at` moves, search finds the words around it, and a failed save fails
+the way every other failed save here does.
+
+The three ways in differ only in where the bytes come from. The file chooser is
+the host's own dialog, so the path is one the *reader* picked rather than one
+the page named. A paste and a drop hand the page a `File`, and the page sends
+its bytes — base64 for the length of one message, never anything that reaches a
+note. In none of the three does the page get to point the host at a file.
+
+### Removing a picture leaves the file
+
+Taking an image out of a note takes it out of the note. The bytes stay.
+
+There is no automatic collection of assets no note points at any more, and that
+is deliberate rather than unfinished. Deciding a file is unused means being sure
+about every note, including ones in the trash, ones being edited in a WebView
+that has not saved yet, and ones a backup will later restore — and being wrong
+destroys something the reader cannot get back. Keeping a file nobody references
+costs disk space; deleting one somebody does costs the picture.
+
+The arrangement leaves a future sweep possible: assets are grouped by note
+identifier, so the set of live references is `notes/` plus `trash/` parsed for
+`../assets/…`, and anything under `assets/<id>/` not named there is a candidate.
+If that is ever built it should be something the reader asks for and can see the
+result of first, not something that runs on its own.

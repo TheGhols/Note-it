@@ -88,6 +88,19 @@ pub enum HostToWebviewMessage {
         active: bool,
         delimiter: CaptureDelimiter,
     },
+    /// One image is now in the store, and this is how the note refers to it.
+    ///
+    /// A path relative to `notes/` and nothing else — no absolute path, no
+    /// bytes, no name from the machine it came from. The page puts it into the
+    /// document and the ordinary autosave writes the note.
+    ImageInserted {
+        src: String,
+    },
+    /// An image could not be taken in. Already the sentence to show; the page
+    /// never composes one, and it never names a file.
+    ImageImportFailed {
+        message: String,
+    },
     /// One clipboard capture, on its way to the target note's editor.
     ///
     /// Text and nothing else: no HTML, no formats, no source, no timestamp.
@@ -239,6 +252,21 @@ pub enum WebviewToHostMessage {
     TimerChanged {
         id: Uuid,
         timer: Option<NoteTimerState>,
+    },
+    /// Asks the host to show a file chooser and put the chosen image in this
+    /// note. The host opens it, reads it and decides: no path is named here,
+    /// in either direction.
+    InsertImageRequested {
+        id: Uuid,
+    },
+    /// Bytes of an image the reader pasted or dropped, base64 on the wire.
+    ///
+    /// The page sends what the gesture handed it rather than naming a file, so
+    /// there is no path here for the host to be talked into reading. What the
+    /// bytes actually are is decided by the host, from the bytes.
+    ImageBytesReceived {
+        id: Uuid,
+        data: String,
     },
     /// Asks the host to make this note the AutoPaste target, or to stop
     /// capturing altogether.

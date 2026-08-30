@@ -96,6 +96,10 @@ pub struct StorageManager {
     trash_dir: PathBuf,
     /// Local snapshots. Never a backup source: see [`crate::backup`].
     backups_dir: PathBuf,
+    /// Images the notes hold, one directory per note. A sibling of `notes/`
+    /// and `trash/`, which is what lets a note's own `../assets/…` reference
+    /// resolve the same way from either of them.
+    assets_dir: PathBuf,
     config_dir: PathBuf,
     state_dir: PathBuf,
     runtime_dir: PathBuf,
@@ -168,6 +172,7 @@ impl StorageManager {
         Self {
             trash_dir: data_dir.join("trash"),
             backups_dir: data_dir.join("backups"),
+            assets_dir: data_dir.join(crate::assets::ASSETS_DIRECTORY),
             notes_dir,
             config_dir,
             state_dir,
@@ -193,6 +198,8 @@ impl StorageManager {
             .map_err(|e| format!("Failed to create trash directory: {e}"))?;
         fs::create_dir_all(&self.backups_dir)
             .map_err(|e| format!("Failed to create backups directory: {e}"))?;
+        fs::create_dir_all(&self.assets_dir)
+            .map_err(|e| format!("Failed to create assets directory: {e}"))?;
         fs::create_dir_all(&self.config_dir)
             .map_err(|e| format!("Failed to create config directory: {e}"))?;
         fs::create_dir_all(&self.state_dir)
@@ -210,6 +217,10 @@ impl StorageManager {
     #[allow(dead_code)]
     pub fn trash_dir(&self) -> &Path {
         &self.trash_dir
+    }
+
+    pub fn assets_dir(&self) -> &Path {
+        &self.assets_dir
     }
 
     #[allow(dead_code)]

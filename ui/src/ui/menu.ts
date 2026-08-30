@@ -46,6 +46,8 @@ export interface NoteMenuHandlers {
   onTrashNote(): void;
   onOpenTrash(): void;
   onCreateBackup(): void;
+  /** Asks the host for a file chooser and an image from it. */
+  onInsertImage(): void;
   /** Asks for this note to start or stop capturing the clipboard. */
   onToggleAutoPaste(active: boolean): void;
   onSelectCaptureDelimiter(delimiter: CaptureDelimiter): void;
@@ -78,6 +80,7 @@ export type MenuPanel =
   | 'codeLanguage'
   | 'callout'
   | 'search'
+  | 'media'
   | 'capture'
   | 'captureDelimiter'
   | 'data'
@@ -203,6 +206,7 @@ export class NoteMenu {
     this.themeValue.className = 'note-menu-value';
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
+    const mediaItem = this.createSubmenuItem('Mídia', 'media');
     const captureItem = this.createSubmenuItem('Captura', 'capture');
     const dataItem = this.createSubmenuItem('Dados', 'data');
 
@@ -232,6 +236,7 @@ export class NoteMenu {
     rootPanel.append(
       paperTypeItem,
       paperIntensityItem,
+      mediaItem,
       captureItem,
       dataItem,
       zoomItem,
@@ -263,6 +268,7 @@ export class NoteMenu {
       ),
     );
     this.panels.set('search', this.buildSearchPanel());
+    this.panels.set('media', this.buildMediaPanel());
     this.panels.set('capture', this.buildCapturePanel());
     this.panels.set(
       'captureDelimiter',
@@ -478,6 +484,33 @@ export class NoteMenu {
       : 'Nenhum';
     this.panels.get('codeLanguage')?.refresh?.();
     this.panels.get('callout')?.refresh?.();
+  }
+
+  /**
+   * Media: putting a picture in the note.
+   *
+   * Here rather than in the header bar, which is already carrying the menu,
+   * six quick actions, the timer and the close cross. Inserting an image is
+   * something done occasionally and deliberately, so it costs a menu rather
+   * than a permanent control — and the two gestures most people will actually
+   * use, pasting and dropping, need no control at all.
+   */
+  private buildMediaPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Mídia', 'note-menu-media');
+
+    const insert = this.createItem('Inserir imagem…', 'note-menu-item');
+    insert.addEventListener('click', () => {
+      // The chooser is the host's, so the menu gets out of the way first.
+      this.close();
+      this.options.handlers.onInsertImage();
+    });
+
+    const hint = this.doc.createElement('p');
+    hint.className = 'note-menu-hint note-menu-media-hint';
+    hint.textContent = 'Também é possível colar uma imagem ou arrastá-la para a nota.';
+
+    body.append(insert, hint);
+    return { element: panel };
   }
 
   /**

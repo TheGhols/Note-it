@@ -1,3 +1,4 @@
+use crate::assets::{decode_base64, import_image, parse_asset_request, ImportError, ASSET_SCHEME};
 use crate::autopaste::{
     delimiter_from_name, delimiter_name, is_capturable, AutoPaste, CaptureDelimiter,
     CaptureSession, ChangeDecision, IgnoreReason,
@@ -251,6 +252,7 @@ impl NoteItApp {
         }
 
         let storage = StorageManager::new().expect("Failed to initialize XDG storage");
+        register_asset_scheme(storage.assets_dir().to_path_buf());
         let config = AppConfig::load_from_file(&storage.config_file_path());
         let state = AppState::load_from_file(&storage.state_file_path());
         let ui_dist_path = find_ui_dist_path();
@@ -1352,6 +1354,106 @@ impl NoteItAppClone {
         }
     }
 
+    /// Shows a file chooser and puts the chosen image in the note.
+    ///
+    /// The host opens the chooser, so the path is one the *reader* picked in a
+    /// native dialog rather than one the page named — the page asks for the
+    /// gesture and is told the result. A cancelled chooser is not a failure and
+    /// not a change: nothing is imported, nothing is said and the note is not
+    /// touched, so its modification date does not move for a dialog somebody
+    /// looked at and closed.
+    pub fn choose_image(&self, note_id: Uuid) {
+        if !self.context.borrow().windows.contains_key(&note_id) {
+            eprintln!("Image request rejected for a note that is not open");
+            return;
+        }
+
+        let filter = gtk4::FileFilter::new();
+        filter.set_name(Some("Imagens"));
+        for mime in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
+            filter.add_mime_type(mime);
+        }
+        let filters = gio::ListStore::new::<gtk4::FileFilter>();
+        filters.append(&filter);
+
+        let dialog = gtk4::FileDialog::new();
+        dialog.set_title("Inserir imagem");
+        dialog.set_filters(Some(&filters));
+        dialog.set_default_filter(Some(&filter));
+
+        let controller = self.clone();
+        dialog.open(
+            None::<&gtk4::Window>,
+            gio::Cancellable::NONE,
+            move |result| {
+                let Ok(file) = result else {
+                    // Cancelled, or dismissed. Neither is worth reporting and
+                    // neither changes anything.
+                    return;
+                };
+                let Some(path) = file.path() else {
+                    controller.report_image_failure(note_id, ImportError::Empty.message());
+                    return;
+                };
+                match std::fs::read(&path) {
+                    Ok(bytes) => controller.import_image_for(note_id, &bytes),
+                    Err(_) => {
+                        controller.report_image_failure(note_id, ImportError::Empty.message())
+                    }
+                }
+            },
+        );
+    }
+
+    /// Takes in an image the reader pasted or dropped.
+    ///
+    /// The page hands over the bytes the gesture gave it, never a path, so
+    /// there is nothing here the page could point at a file it should not
+    /// read. What the bytes are is decided from the bytes.
+    pub fn import_image_bytes(&self, note_id: Uuid, encoded: &str) {
+        let Some(bytes) = decode_base64(encoded) else {
+            self.report_image_failure(note_id, ImportError::Empty.message());
+            return;
+        };
+        self.import_image_for(note_id, &bytes);
+    }
+
+    /// Writes an accepted image into the note's own asset directory and tells
+    /// the page how the note should refer to it.
+    ///
+    /// The host never edits the note. It stores the bytes and sends back a
+    /// relative path; the page puts that into the document and the existing
+    /// autosave writes the file — one authority over the document, the same
+    /// rule a clipboard capture follows.
+    fn import_image_for(&self, note_id: Uuid, bytes: &[u8]) {
+        let assets_dir = self.context.borrow().storage.assets_dir().to_path_buf();
+        match import_image(&assets_dir, note_id, bytes) {
+            Ok(asset) => {
+                diagnostics::log(format_args!(
+                    "event=image-imported format={} bytes={}",
+                    asset.format.extension(),
+                    bytes.len()
+                ));
+                let window = self.context.borrow().windows.get(&note_id).cloned();
+                if let Some(window) = window {
+                    window.send_image_inserted(&asset.relative_path());
+                }
+            }
+            Err(error) => {
+                // The reason, never the picture and never where it came from.
+                diagnostics::log(format_args!("event=image-refused reason={error:?}"));
+                self.report_image_failure(note_id, error.message());
+            }
+        }
+    }
+
+    fn report_image_failure(&self, note_id: Uuid, message: &str) {
+        let window = self.context.borrow().windows.get(&note_id).cloned();
+        if let Some(window) = window {
+            window.send_image_failed(message);
+        }
+    }
+
     fn report_data_result(&self, requester: Uuid, action: &str, ok: bool, message: &str) {
         let ctx = self.context.borrow();
         if let Some(window) = ctx.windows.get(&requester) {
@@ -1388,6 +1490,62 @@ impl NoteItAppClone {
             }
             Err(error) => eprintln!("Failed to load note {id}: {error}"),
         }
+    }
+}
+
+/// Serves a note's own images to its WebView, and nothing else.
+///
+/// The page asks for `note-it-asset:/<note>/<asset>.<ext>` rather than for a
+/// file, which is the same rule the rest of Note-it follows: the frontend
+/// never spells a path, so there is nothing for it to traverse. Both halves of
+/// the request are parsed as `Uuid`s before anything touches the disk, so a
+/// `..`, an absolute path or an encoded separator does not resolve to a file —
+/// it does not parse at all.
+///
+/// Registered once, at startup, on the default web context every note's
+/// WebView is built from. `register_uri_scheme_as_local` puts it in the same
+/// class as `file:`, which is what lets a page loaded from disk display one.
+fn register_asset_scheme(assets_dir: PathBuf) {
+    let Some(context) = webkit6::WebContext::default() else {
+        eprintln!("Images unavailable: no WebKit context to serve them from");
+        return;
+    };
+
+    context.register_uri_scheme(ASSET_SCHEME, move |request| {
+        let path = request
+            .path()
+            .map(|path| path.to_string())
+            .unwrap_or_default();
+        diagnostics::log(format_args!("event=asset-request path={path}"));
+
+        let Some(asset) = parse_asset_request(&path) else {
+            let mut error = glib::Error::new(gio::IOErrorEnum::InvalidArgument, "not an asset");
+            request.finish_error(&mut error);
+            return;
+        };
+
+        let file = asset.file_path(&assets_dir);
+        let length = std::fs::metadata(&file)
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or(-1);
+        match gio::File::for_path(&file).read(gio::Cancellable::NONE) {
+            Ok(stream) => {
+                let response = webkit6::URISchemeResponse::new(&stream, length);
+                response.set_content_type(asset.format.mime_type());
+                request.finish_with_response(&response);
+            }
+            Err(_) => {
+                // A note pointing at an image that is no longer there is a
+                // note with a broken picture, not a broken note: the page
+                // shows its own placeholder and carries on.
+                let mut error = glib::Error::new(gio::IOErrorEnum::NotFound, "no such image");
+                request.finish_error(&mut error);
+            }
+        }
+    });
+
+    if let Some(security) = context.security_manager() {
+        security.register_uri_scheme_as_local(ASSET_SCHEME);
     }
 }
 
@@ -1664,6 +1822,16 @@ fn instantiate_note_window(
         app_clone14.set_capture_delimiter(delimiter);
     });
 
+    let app_clone15 = app_controller.clone();
+    let on_insert_image = Rc::new(move |id| {
+        app_clone15.choose_image(id);
+    });
+
+    let app_clone16 = app_controller.clone();
+    let on_image_bytes = Rc::new(move |id, data: String| {
+        app_clone16.import_image_bytes(id, &data);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1699,6 +1867,8 @@ fn instantiate_note_window(
         capture_delimiter: delimiter_from_name(&ctx.config.capture_delimiter),
         on_autopaste_requested,
         on_capture_delimiter_changed,
+        on_insert_image,
+        on_image_bytes,
     })
 }
 

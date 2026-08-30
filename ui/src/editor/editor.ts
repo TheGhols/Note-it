@@ -1,5 +1,6 @@
 import { Editor } from '@tiptap/core';
 import { handleLinkPaste } from './linkPaste.ts';
+import { isImagePaste } from './imageTransfer.ts';
 import { editorExtensions } from './extensions.ts';
 import { CalloutType, calloutType } from './callout.ts';
 import { sanitizeHtml, sanitizeMarkdown } from '../markdown/sanitizer.ts';
@@ -15,15 +16,23 @@ export interface NoteEditorOptions {
   element: HTMLElement;
   initialContent?: string;
   onUpdate?: (markdown: string) => void;
+  /**
+   * A picture arrived by paste or by drop. Returning `true` means the editor
+   * should leave the event alone: the host is importing it, and the document
+   * changes when the reference comes back.
+   */
+  onImageTransfer?: (transfer: DataTransfer) => boolean;
 }
 
 export class NoteEditor {
   private editor: Editor;
   private debounceTimer: number | null = null;
   private onUpdateCallback?: (markdown: string) => void;
+  private onImageTransfer?: (transfer: DataTransfer) => boolean;
 
   constructor(options: NoteEditorOptions) {
     this.onUpdateCallback = options.onUpdate;
+    this.onImageTransfer = options.onImageTransfer;
 
     this.editor = new Editor({
       element: options.element,
@@ -35,7 +44,20 @@ export class NoteEditor {
         transformPastedHTML: sanitizeHtml,
         // A URL pasted over selected text links that text instead of replacing
         // it. Everything else pastes exactly as it did.
-        handlePaste: (view, event) => handleLinkPaste(view, event),
+        handlePaste: (view, event) => {
+          // A pasted picture is taken in by the host and comes back as a
+          // reference. A paste carrying text as well is a text paste, which is
+          // what pasting has always done here.
+          if (isImagePaste(event.clipboardData) && this.onImageTransfer?.(event.clipboardData!)) {
+            return true;
+          }
+          return handleLinkPaste(view, event);
+        },
+        handleDrop: (_view, event) => {
+          const transfer = (event as DragEvent).dataTransfer;
+          if (!transfer) return false;
+          return this.onImageTransfer?.(transfer) ?? false;
+        },
       },
       onUpdate: () => {
         if (this.debounceTimer !== null) {
@@ -65,6 +87,19 @@ export class NoteEditor {
       contentType: 'markdown',
       emitUpdate: false,
     });
+  }
+
+  /**
+   * Puts one image into the document at the selection.
+   *
+   * An ordinary edit through an ordinary transaction, so it is one undo step,
+   * it moves the note's modification date, and the existing autosave writes
+   * it. Nothing about an image takes a second path to the file.
+   */
+  public insertImage(src: string): void {
+    (this.editor.commands as unknown as {
+      setNoteItImage: (attrs: { src: string; alt?: string }) => boolean;
+    }).setNoteItImage({ src, alt: '' });
   }
 
   public cancelPendingSave(): void {
