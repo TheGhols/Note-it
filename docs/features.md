@@ -800,6 +800,81 @@ entry.
 > stolen one, and they are not encrypted. Protection from hardware failure needs a copy on other
 > hardware, and Note-it does not make one.
 
+## Clipboard AutoPaste
+
+Copy something anywhere on the machine, and it lands at the end of a note you chose. No window
+appears, no key is pressed for you, and nothing takes your cursor.
+
+> **This is not *Paste URL on Selection*.** That one — select some words, paste a URL, get a link —
+> is a different feature and is still where it was. AutoPaste is a capture mode.
+
+**Off, always, until you say otherwise.** AutoPaste is off when Note-it starts, and switching it on
+is a decision you make in *☰ › Captura*. While it is off there is no clipboard handler connected at
+all: nothing is observed, read, hashed, stored, logged or sent. That is a property of the
+arrangement rather than a promise about it — there is nothing subscribed to observe with.
+
+**It does not come back on by itself.** Whether AutoPaste was on is written nowhere — not in the
+note, not in `state.json`, not in `config.toml`. A restart, a logout, a crash or an update leaves it
+off, and you decide again. A mode that watches what you copy should never resume without being
+asked, and the only way to guarantee that is to have nothing to resume from.
+
+**One note at a time.** The system clipboard is one thing, so exactly one note can be the target.
+Switching it on in a second note switches it off in the first, in the same step, and the first
+note's bar and menu stop claiming it.
+
+**What it captures.** Text. A copied image, file or unknown format is declined from the formats the
+clipboard offers, without a byte of it being read. An empty or blank copy files nothing — no line,
+no delimiter, no modification date. And the clipboard as it was *before* you switched the mode on is
+never captured: only a change after that moment counts, so whatever was there stays where it was.
+
+**Where it lands.** At the end of the note, always. Not at your cursor and not over your selection:
+you are in another application, so the caret in that note is wherever you left it and does not mean
+"insert here". The note does not take focus, does not scroll, does not come to the front and does
+not change layer. If you are looking at it you will see the text arrive; that is all that happens.
+
+**As text, exactly.** A capture is a paste of plain text, with the same meaning a `Ctrl+V` has here:
+`**isso é literal**` stays asterisks, `<script>alert(1)</script>` stays eleven characters and a
+copied URL stays a URL you can read. Nothing is fetched — no title lookup, no preview, no favicon —
+so AutoPaste works with the network off. Accents, emoji, 日本語 and multi-line copies all survive
+unchanged.
+
+**One capture, one undo.** `Ctrl+Z` takes back the last capture whole, delimiter and all, not one
+character at a time.
+
+**Separating captures.** *☰ › Captura › Separar capturas* offers three:
+
+| | Between one capture and the next |
+|---|---|
+| **Linha** | the next line of the same paragraph |
+| **Linha em branco** | a paragraph of its own — the default |
+| **Separador** | a horizontal rule |
+
+Exactly one is applied between each pair, never two, and never in front of the first capture into an
+empty note. Changing the preference applies to the next capture and rewrites nothing already
+written. The choice is remembered across restarts, because it says how you like captures laid out
+and nothing about what you copied.
+
+**It will not feed the note its own words back.** Copying or cutting inside the note that is
+capturing does not append what you just copied. That is not a text comparison — it is the toolkit's
+own answer to "did this application put that on the clipboard", checked before any read begins. The
+distinction matters: copying `ABC` twice from another application, in two separate actions, files it
+twice, because you asked for it twice.
+
+**While it is on** the note keeps its bar out with a 📋 beside the other controls, so a mode that is
+watching every copy is never running invisibly. The indicator is on the bar of a collapsed note too,
+and pressing it opens the panel that switches it off.
+
+**What it never does:** take ownership of the clipboard (after a capture, what you copied still
+pastes normally anywhere else), keep a history of what you have copied, reach the network, write
+clipboard content to any log, or put a marker of its own into your note. A capture is ordinary
+content once it lands — searchable, deletable, and part of the note's own title if the note was
+empty.
+
+**It switches itself off** when the note is closed, sent to the trash, when Note-it is hidden and
+when it quits — before any of those finish, so a read still in flight cannot arrive afterwards.
+Collapsing the note, changing layer or switching to another application all leave it on; that last
+one is what the mode is for.
+
 ## Timer & Pomodoro
 
 A countdown on the note you are working in, without leaving it and without a second window.

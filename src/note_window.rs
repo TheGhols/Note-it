@@ -1,3 +1,4 @@
+use crate::autopaste::CaptureDelimiter;
 use crate::diagnostics;
 use crate::layer_shell::{
     apply_live_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
@@ -63,6 +64,13 @@ pub struct NoteWindowOptions<'a> {
     /// One run reached zero. The host posts the notification; the page only
     /// says which kind of run it was.
     pub on_timer_finished: Rc<dyn Fn(Uuid, TimerFinishKind)>,
+    /// How a capture is laid out. Application-wide, so the window is told it
+    /// rather than reading it back from the store.
+    pub capture_delimiter: CaptureDelimiter,
+    /// Asks the host to make this note the AutoPaste target, or to stop.
+    pub on_autopaste_requested: Rc<dyn Fn(Uuid, bool)>,
+    /// Asks the host to store a different capture delimiter.
+    pub on_capture_delimiter_changed: Rc<dyn Fn(CaptureDelimiter)>,
 }
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
@@ -113,6 +121,9 @@ pub struct NoteWindow {
     /// False until the page has said `Ready` and been handed its note. A
     /// message that assumes a loaded document has to wait for this.
     loaded: Rc<Cell<bool>>,
+    /// The layout preference this note was last told about, so a reload sends
+    /// the current one rather than the one the window was built with.
+    capture_delimiter: Rc<Cell<CaptureDelimiter>>,
     /// A match to reveal once the page is loaded. A note opened *by* a search
     /// is told what to look for before it exists, so the request waits here
     /// rather than being sent into a page that is about to replace its
@@ -240,6 +251,10 @@ impl NoteWindow {
         let on_restore_note_clone = Rc::clone(&options.on_restore_note);
         let on_backup_clone = Rc::clone(&options.on_backup);
         let on_timer_finished_clone = Rc::clone(&options.on_timer_finished);
+        let on_autopaste_requested_clone = Rc::clone(&options.on_autopaste_requested);
+        let on_capture_delimiter_clone = Rc::clone(&options.on_capture_delimiter_changed);
+        let capture_delimiter_cell = Rc::new(Cell::new(options.capture_delimiter));
+        let capture_delimiter_clone = Rc::clone(&capture_delimiter_cell);
         let loaded = Rc::new(Cell::new(false));
         let pending_reveal: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let loaded_clone = Rc::clone(&loaded);
@@ -276,6 +291,7 @@ impl NoteWindow {
                                         layer_mode: layer_mode_clone.get().as_str().to_string(),
                                         theme: theme_clone.borrow().clone(),
                                         timer: state_clone.borrow().timer,
+                                        capture_delimiter: capture_delimiter_clone.get(),
                                     },
                                 );
                                 loaded_clone.set(true);
@@ -492,6 +508,23 @@ impl NoteWindow {
                             // geometry. The note document is not opened, not
                             // written and not dated by any of this.
                             on_geom_clone(id, snapshot);
+                        }
+                        WebviewToHostMessage::AutoPasteRequested {
+                            id: message_id,
+                            active,
+                        } => {
+                            // A note can only ask about its own capture. The
+                            // host owns the single target, so what comes back
+                            // is a `SetAutoPaste` to every note affected —
+                            // nothing here assumes the request was granted.
+                            if message_id != id {
+                                eprintln!("AutoPaste request rejected a mismatched note identifier");
+                                return;
+                            }
+                            on_autopaste_requested_clone(id, active);
+                        }
+                        WebviewToHostMessage::CaptureDelimiterChanged { delimiter } => {
+                            on_capture_delimiter_clone(delimiter);
                         }
                         WebviewToHostMessage::TimerFinished {
                             id: message_id,
@@ -732,6 +765,7 @@ impl NoteWindow {
             allow_close,
             pending_flushes,
             loaded,
+            capture_delimiter: capture_delimiter_cell,
             pending_reveal,
         }
     }
@@ -849,6 +883,35 @@ impl NoteWindow {
 
     /// Dresses this note's chrome with the shared interface theme. The paper
     /// is untouched: a yellow note stays yellow under the dark theme.
+    /// Tells the page whether it is the capture target, and how a capture
+    /// would be laid out.
+    ///
+    /// Pushed rather than asked for: the target is exclusive, so a note that
+    /// has just lost it has to hear so — its own menu and its own bar are
+    /// still claiming it otherwise.
+    pub fn set_autopaste(&self, active: bool, delimiter: CaptureDelimiter) {
+        self.capture_delimiter.set(delimiter);
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SetAutoPaste { active, delimiter },
+        );
+    }
+
+    /// Hands one clipboard capture to the note's editor.
+    ///
+    /// The text goes nowhere else. It is not stored here, not written to disk
+    /// by this path and never logged: the page appends it as plain text and
+    /// the ordinary autosave carries it to the file, which is what makes a
+    /// capture an edit like any other.
+    pub fn send_autopaste_capture(&self, text: &str) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::AutoPasteCaptured {
+                text: text.to_string(),
+            },
+        );
+    }
+
     pub fn set_theme(&self, theme: &str) {
         let resolved = theme_name(theme);
         *self.theme.borrow_mut() = resolved.to_string();

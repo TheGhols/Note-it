@@ -65,6 +65,8 @@ function buildNote() {
     onTrashNote: vi.fn(),
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
+    onToggleAutoPaste: vi.fn(),
+    onSelectCaptureDelimiter: vi.fn(),
   };
   const menu = new NoteMenu({
     trigger: btnMenu,

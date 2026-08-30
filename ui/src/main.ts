@@ -9,6 +9,12 @@ import {
   PaperType,
   ThemePreference,
 } from './bridge/types.ts';
+import {
+  appendCapture,
+  CaptureDelimiter,
+  DEFAULT_CAPTURE_DELIMITER,
+  normalizeDelimiter,
+} from './capture/autoPaste.ts';
 import { PointerGestureController } from './geometry/gesture.ts';
 import {
   findStatus,
@@ -60,6 +66,9 @@ let themeController: ThemeController | null = null;
 /** Whether the gesture in progress actually moved the note. */
 let dragMoved = false;
 let isCollapsed = false;
+/** Whether this note is the one the host is capturing the clipboard into. */
+let autoPasteActive = false;
+let captureDelimiter: CaptureDelimiter = DEFAULT_CAPTURE_DELIMITER;
 let noteEditor: NoteEditor | null = null;
 let noteMenu: NoteMenu | null = null;
 let headerReveal: HeaderReveal | null = null;
@@ -203,6 +212,49 @@ function applyZoom(percent: number, persist: boolean): void {
       payload: { id: activeNoteId, zoomPercent: clamped },
     });
   }
+}
+
+/**
+ * Applies what the host says about this note's capture state.
+ *
+ * Always pushed, never assumed: the target is exclusive across the
+ * application, so a note that has just lost it is told, and a note that asked
+ * to have it only shows it once the host has agreed. Nothing here reads a
+ * clipboard — the page has no part in observing one.
+ *
+ * The chrome is held out while capturing, which is the persistent sign that a
+ * mode watching every copy is running. The bar paints its own paper over the
+ * gutter, so keeping it out covers no line of the note.
+ */
+function setAutoPaste(active: boolean, delimiter: CaptureDelimiter): void {
+  autoPasteActive = active;
+  captureDelimiter = delimiter;
+  noteMenu?.setAutoPaste(active, delimiter);
+  headerReveal?.setCapturing(active);
+
+  const indicator = document.getElementById('btn-autopaste');
+  if (indicator) {
+    indicator.hidden = !active;
+    indicator.setAttribute('aria-pressed', String(active));
+  }
+  document.body.setAttribute('data-autopaste', String(active));
+}
+
+/**
+ * One clipboard capture, appended to the end of this note.
+ *
+ * Deliberately passive: no focus, no selection change, no scroll, no window
+ * raised. The reader is in another application — that is the whole point of
+ * the mode — so the note takes the text and stays exactly where it was.
+ *
+ * A capture is a real edit, so it goes through the ordinary update path: the
+ * editor's own `onUpdate` debounce sends `content_changed` and the existing
+ * autosave writes the note. There is no second save channel here.
+ */
+function applyCapture(text: string): void {
+  const view = noteEditor?.getView();
+  if (!view || !autoPasteActive) return;
+  appendCapture(view, text, captureDelimiter);
 }
 
 function setLayerMode(mode: NoteLayerMode): void {
@@ -405,6 +457,11 @@ function initUI(): void {
     const button = document.getElementById(action.buttonId);
     if (button) quickTriggers[action.panel] = button;
   }
+  // The AutoPaste indicator opens the panel that switches it off. A second way
+  // in, never a second implementation — the same rule the six quick actions
+  // follow.
+  const autoPasteIndicator = document.getElementById('btn-autopaste');
+  if (autoPasteIndicator) quickTriggers.capture = autoPasteIndicator;
   if (btnMenu && menuMount) {
     noteMenu = new NoteMenu({
       trigger: btnMenu,
@@ -485,6 +542,22 @@ function initUI(): void {
         },
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
+        onToggleAutoPaste: (active) => {
+          // A request, not a decision: the host owns the single target, and
+          // the answer comes back as `set_auto_paste` to every note affected.
+          if (activeNoteId) {
+            bridge.sendMessage({
+              type: 'auto_paste_requested',
+              payload: { id: activeNoteId, active },
+            });
+          }
+        },
+        onSelectCaptureDelimiter: (delimiter) => {
+          bridge.sendMessage({
+            type: 'capture_delimiter_changed',
+            payload: { delimiter },
+          });
+        },
       },
     });
   }
@@ -745,6 +818,10 @@ function initUI(): void {
       // The stored timer, resolved against the clock as it is now rather than
       // resumed for whatever was left when this note was last on screen.
       timerPanel?.restore(msg.payload.timer ?? null);
+      // A WebView that has just been created is never the capture target: the
+      // mode does not survive the destruction of the previous one, and there
+      // is no field on this message that could bring it back.
+      setAutoPaste(false, normalizeDelimiter(msg.payload.captureDelimiter));
       noteStatus?.hide();
       noteEditor?.setMarkdown(msg.payload.content || '');
       setNoteTitle(msg.payload.content || '');
@@ -763,6 +840,10 @@ function initUI(): void {
       setLayerMode(msg.payload.layerMode);
     } else if (msg.type === 'set_color') {
       setPaperColor(msg.payload.color);
+    } else if (msg.type === 'set_auto_paste') {
+      setAutoPaste(Boolean(msg.payload.active), normalizeDelimiter(msg.payload.delimiter));
+    } else if (msg.type === 'auto_paste_captured') {
+      applyCapture(msg.payload.text);
     } else if (msg.type === 'set_theme') {
       // A theme chosen from another note's menu.
       setTheme(normalizeTheme(msg.payload.theme), false);

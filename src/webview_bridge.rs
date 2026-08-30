@@ -1,3 +1,4 @@
+use crate::autopaste::CaptureDelimiter;
 use crate::search::SearchResult;
 use crate::timer::{NoteTimerState, TimerFinishKind};
 use crate::trash::TrashEntry;
@@ -43,6 +44,14 @@ pub enum HostToWebviewMessage {
         /// shows the ten minutes that really went by, and one reopened past
         /// its deadline comes back finished rather than counting through zero.
         timer: Option<NoteTimerState>,
+        /// What AutoPaste would put between the note's content and a capture.
+        ///
+        /// A preference, so it travels with the note that is opening. Whether
+        /// AutoPaste is *on* does not travel here and is never restored: a
+        /// WebView that has just been created is never the capture target,
+        /// because nothing survives the destruction of the previous one.
+        #[serde(rename = "captureDelimiter")]
+        capture_delimiter: CaptureDelimiter,
     },
     /// Sent when the host changes a note's collapse state, so the page and its
     /// menu follow a request that did not start in the WebView.
@@ -68,6 +77,24 @@ pub enum HostToWebviewMessage {
     /// dresses its chrome the same way without being reloaded.
     SetTheme {
         theme: String,
+    },
+    /// Whether this note is the one AutoPaste is capturing into, and how a
+    /// capture would be laid out.
+    ///
+    /// Pushed rather than asked for, because the host owns both: the target is
+    /// exclusive across the application, so a note that loses it has to be told
+    /// — its own menu and its own bar are still claiming it otherwise.
+    SetAutoPaste {
+        active: bool,
+        delimiter: CaptureDelimiter,
+    },
+    /// One clipboard capture, on its way to the target note's editor.
+    ///
+    /// Text and nothing else: no HTML, no formats, no source, no timestamp.
+    /// The page appends it at the end of the document as plain text and never
+    /// takes the keyboard, moves the selection or scrolls to it.
+    AutoPasteCaptured {
+        text: String,
     },
     SetFontSize {
         #[serde(rename = "fontSize")]
@@ -212,6 +239,21 @@ pub enum WebviewToHostMessage {
     TimerChanged {
         id: Uuid,
         timer: Option<NoteTimerState>,
+    },
+    /// Asks the host to make this note the AutoPaste target, or to stop
+    /// capturing altogether.
+    ///
+    /// Only ever a request. The host owns the single target, so turning it on
+    /// here is what turns it off wherever it was before, and the answer comes
+    /// back as `SetAutoPaste` to both notes rather than being assumed here.
+    AutoPasteRequested {
+        id: Uuid,
+        active: bool,
+    },
+    /// Asks the host to store a different capture delimiter. Application-wide,
+    /// like the theme, so it is stored once and broadcast.
+    CaptureDelimiterChanged {
+        delimiter: CaptureDelimiter,
     },
     /// A run reached zero, exactly once, and the host should say so.
     ///
@@ -469,6 +511,7 @@ mod tests {
             layer_mode: "desktop".to_string(),
             theme: "dark".to_string(),
             timer: None,
+            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -501,6 +544,7 @@ mod tests {
             layer_mode: "overlay".to_string(),
             theme: "system".to_string(),
             timer: None,
+            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         assert!(encoded["payload"]["timer"].is_null());
@@ -530,6 +574,7 @@ mod tests {
                 deadline_ms: Some(deadline),
                 ..crate::timer::NoteTimerState::default()
             }),
+            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         let timer = &encoded["payload"]["timer"];
@@ -672,6 +717,138 @@ mod tests {
                 );
             }
             other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_note_is_told_whether_it_is_the_capture_target() {
+        // Pushed rather than asked for: the target is exclusive across the
+        // application, so the note that just lost it has to hear so.
+        for active in [true, false] {
+            let encoded = serde_json::to_value(super::HostToWebviewMessage::SetAutoPaste {
+                active,
+                delimiter: crate::autopaste::CaptureDelimiter::Separator,
+            })
+            .expect("serialize set_autopaste");
+            assert_eq!(encoded["type"], "set_auto_paste");
+            assert_eq!(encoded["payload"]["active"], active);
+            assert_eq!(encoded["payload"]["delimiter"], "separator");
+        }
+    }
+
+    #[test]
+    fn a_capture_travels_as_text_and_nothing_else() {
+        // No formats, no source, no timestamp, no HTML. The page is handed the
+        // words and appends them; there is no field here for anything that
+        // would let a capture become markup or metadata.
+        let encoded = serde_json::to_value(super::HostToWebviewMessage::AutoPasteCaptured {
+            text: "encefalopatia hepática 🧪\nsegunda linha".to_string(),
+        })
+        .expect("serialize auto_paste_captured");
+        assert_eq!(encoded["type"], "auto_paste_captured");
+        assert_eq!(
+            encoded["payload"]["text"],
+            "encefalopatia hepática 🧪\nsegunda linha"
+        );
+        let payload = encoded["payload"].as_object().expect("an object");
+        assert_eq!(payload.len(), 1, "a capture carries only its text");
+    }
+
+    #[test]
+    fn a_note_can_only_ask_about_its_own_capture() {
+        let id = Uuid::new_v4();
+        for active in [true, false] {
+            let raw = serde_json::json!({
+                "type": "auto_paste_requested",
+                "payload": { "id": id, "active": active }
+            })
+            .to_string();
+            match parse_webview_message(&raw).expect("autopaste request") {
+                WebviewToHostMessage::AutoPasteRequested {
+                    id: parsed,
+                    active: parsed_active,
+                } => {
+                    assert_eq!(parsed, id);
+                    assert_eq!(parsed_active, active);
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+
+        // A path is not a value that can be spelled here either.
+        for payload in [
+            serde_json::json!({ "id": "../../etc/passwd", "active": true }),
+            serde_json::json!({ "id": 42, "active": true }),
+            serde_json::json!({ "id": id, "active": "sim" }),
+        ] {
+            let raw = serde_json::json!({ "type": "auto_paste_requested", "payload": payload })
+                .to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn the_delimiter_is_a_choice_from_a_closed_set() {
+        for name in crate::autopaste::CAPTURE_DELIMITERS {
+            let raw = serde_json::json!({
+                "type": "capture_delimiter_changed",
+                "payload": { "delimiter": name }
+            })
+            .to_string();
+            match parse_webview_message(&raw).expect("delimiter change") {
+                WebviewToHostMessage::CaptureDelimiterChanged { delimiter } => {
+                    assert_eq!(delimiter.as_str(), *name);
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+
+        // Anything outside the set is refused by `serde` rather than reaching
+        // the configuration: there is no template language here to smuggle.
+        for unknown in [
+            serde_json::json!("regex:.*"),
+            serde_json::json!("\n\n---\n\n"),
+            serde_json::json!(7),
+            serde_json::json!({ "custom": "x" }),
+        ] {
+            let raw = serde_json::json!({
+                "type": "capture_delimiter_changed",
+                "payload": { "delimiter": unknown }
+            })
+            .to_string();
+            assert!(parse_webview_message(&raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn a_note_opening_is_told_the_layout_but_never_that_capture_was_on() {
+        // There is no field on `LoadNote` that could switch capture back on,
+        // which is what makes "AutoPaste is off after a restart" a property of
+        // the protocol rather than a promise about the code.
+        let message = super::HostToWebviewMessage::LoadNote {
+            id: Uuid::new_v4(),
+            content: String::new(),
+            color: "yellow".to_string(),
+            paper_type: "blank".to_string(),
+            paper_intensity: "normal".to_string(),
+            font_size: 15,
+            collapsed: false,
+            created_at: None,
+            updated_at: None,
+            zoom_percent: 100,
+            layer_mode: "overlay".to_string(),
+            theme: "system".to_string(),
+            timer: None,
+            capture_delimiter: crate::autopaste::CaptureDelimiter::Line,
+        };
+        let encoded = serde_json::to_value(&message).expect("serialize load_note");
+        let payload = encoded["payload"].as_object().expect("an object");
+        assert_eq!(payload["captureDelimiter"], "line");
+        for forbidden in ["autoPaste", "autoPasteActive", "capturing", "captureTarget"] {
+            assert!(
+                !payload.contains_key(forbidden),
+                "load_note carries {forbidden}"
+            );
         }
     }
 

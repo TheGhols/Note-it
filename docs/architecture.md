@@ -49,6 +49,11 @@ Note-it separates native system integration from document editing through a clea
 - `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`). Each note's entry
   also carries its Timer/Pomodoro, for the same reason it carries the zoom: it is state of the
   application, not of the document.
+- `autopaste.rs`: the clipboard capture policy — armed or not, whose note, which generation, which
+  read is stale. No GDK, no clipboard and no text: it decides, and `app.rs` owns the `GdkClipboard`
+  and carries the words straight from the read callback to the target note. Testable without a
+  graphical session, which is why the rules live here rather than in the signal handler. See
+  ADR-031.
 - `timer.rs`: the timer's stored shape and the words of its notification. The host keeps the record
   and rings the bell; it does not run the countdown. Everything arriving from `state.json` or from
   the page goes through `NoteTimerState::sanitize`, so a state that claims to be running with no
@@ -80,6 +85,10 @@ Note-it separates native system integration from document editing through a clea
   panels. All live in the page rather than in a second window, own their keys, and are not part of
   the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
   action did; it is not a dialog and takes nothing from the reader.
+- `ui/src/capture/autoPaste.ts`: what a note becomes when a capture arrives — the plain-text split
+  ProseMirror itself uses for `text/plain`, the three delimiters, and the single transaction that
+  appends at the end without taking focus, moving the selection or scrolling. It reads no clipboard:
+  the page has no part in observing one.
 - `ui/src/timer/`: the countdown itself, independent of the DOM — `engine.ts` (the state machine
   over a deadline, with the clock injected), `format.ts` (`MM:SS` / `H:MM:SS` and the words for each
   state) and `controls.ts` (which button applies in which state, as a value rather than as four

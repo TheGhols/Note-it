@@ -1,4 +1,5 @@
 use crate::atomic_file::write_atomic;
+use crate::autopaste::DEFAULT_CAPTURE_DELIMITER;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -37,6 +38,13 @@ pub struct AppConfig {
     /// Appearance of the application chrome, shared by every note.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// What AutoPaste puts between the note's existing content and a capture.
+    ///
+    /// A preference and not a mode: it says how captures should be laid out,
+    /// which is worth remembering across a restart. Whether AutoPaste is *on*
+    /// is deliberately not stored anywhere at all — see ADR-031.
+    #[serde(default = "default_capture_delimiter")]
+    pub capture_delimiter: String,
 }
 
 fn default_color() -> String {
@@ -63,6 +71,10 @@ fn default_theme() -> String {
     DEFAULT_THEME.to_string()
 }
 
+fn default_capture_delimiter() -> String {
+    DEFAULT_CAPTURE_DELIMITER.to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -72,6 +84,7 @@ impl Default for AppConfig {
             default_height: default_note_height(),
             autosave_interval_ms: default_autosave_interval_ms(),
             theme: default_theme(),
+            capture_delimiter: default_capture_delimiter(),
         }
     }
 }
@@ -115,6 +128,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::autopaste::delimiter_name;
     use tempfile::tempdir;
 
     #[test]
@@ -184,6 +198,80 @@ mod tests {
             debris.is_empty(),
             "a save left temp files behind: {debris:?}"
         );
+    }
+
+    #[test]
+    fn a_configuration_written_before_autopaste_existed_uses_a_blank_line() {
+        // Every configuration on disk predates this phase. None of them may
+        // need migrating, and none of them may lose a preference by loading.
+        let legacy = concat!(
+            "default_color = \"blue\"\n",
+            "default_font_size = 15\n",
+            "default_width = 360\n",
+            "default_height = 300\n",
+            "autosave_interval_ms = 300\n",
+            "theme = \"dark\"\n",
+        );
+
+        let parsed: AppConfig = toml::from_str(legacy).expect("legacy config must keep loading");
+        assert_eq!(parsed.default_color, "blue");
+        assert_eq!(parsed.theme, "dark");
+        assert_eq!(parsed.capture_delimiter, DEFAULT_CAPTURE_DELIMITER);
+        assert_eq!(parsed.capture_delimiter, "blankLine");
+    }
+
+    #[test]
+    fn the_capture_delimiter_survives_a_restart_and_nothing_else_does() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("config.toml");
+
+        for delimiter in crate::autopaste::CAPTURE_DELIMITERS {
+            let config = AppConfig {
+                capture_delimiter: (*delimiter).to_string(),
+                theme: "dark".to_string(),
+                ..AppConfig::default()
+            };
+            config.save_to_file(&path).expect("save config");
+
+            let reloaded = AppConfig::load_from_file(&path);
+            assert_eq!(reloaded.capture_delimiter, *delimiter);
+            assert_eq!(reloaded.theme, "dark");
+        }
+
+        // Whether AutoPaste was on is not a thing this file can say. Nothing
+        // reactivates a clipboard watcher across a restart.
+        let written = fs::read_to_string(&path).expect("read the configuration");
+        for forbidden in ["autopaste_active", "autopaste_enabled", "capture_target"] {
+            assert!(!written.contains(forbidden), "config carries {forbidden:?}");
+        }
+        assert!(!written.contains("true"));
+    }
+
+    #[test]
+    fn a_corrupted_delimiter_degrades_instead_of_losing_the_file() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("config.toml");
+        fs::write(
+            &path,
+            concat!(
+                "default_color = \"green\"\n",
+                "default_font_size = 15\n",
+                "default_width = 360\n",
+                "default_height = 300\n",
+                "autosave_interval_ms = 300\n",
+                "theme = \"light\"\n",
+                "capture_delimiter = \"a-regex-nobody-supports\"\n",
+            ),
+        )
+        .expect("write a hand-edited configuration");
+
+        let loaded = AppConfig::load_from_file(&path);
+        // The unknown value is kept in the struct as read; what resolves it is
+        // the same allowlist the theme uses, at the point of use.
+        assert_eq!(delimiter_name(&loaded.capture_delimiter), "blankLine");
+        // ...and the rest of the file survived rather than resetting.
+        assert_eq!(loaded.default_color, "green");
+        assert_eq!(loaded.theme, "light");
     }
 
     #[test]

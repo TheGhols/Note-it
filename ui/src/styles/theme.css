@@ -463,6 +463,29 @@ body[data-collapsed="true"][data-timer="finished"] .header-timer-action {
   display: inline-flex;
 }
 
+/* The AutoPaste indicator.
+   Absent from the bar entirely unless this note is the one capturing, which is
+   what makes its presence the signal rather than a tint on a control that was
+   always there. It is also the way back to the panel that switches it off.
+   Sized like the hand-drawn marks beside it, so the whole row still sits inside
+   the gutter the header paints its paper over. */
+.header-autopaste {
+  flex: 0 0 auto;
+  color: var(--paper-text);
+}
+
+.header-autopaste[hidden] {
+  display: none;
+}
+
+/* A collapsed note keeps this for the same reason it keeps the clock: a note
+   recolhida must not have to be expanded to find out that everything copied is
+   being filed into it. There is deliberately no `body[data-collapsed]` rule to
+   say so — the six quick actions need one because they are hidden when the note
+   collapses, and this is not one of them. A rule here would out-specify the
+   `[hidden]` above and pin the indicator to a note that had *lost* the target,
+   which is exactly what it did before this comment replaced it. */
+
 /* An expanded note narrower than this cannot carry the digits, the seven other
    controls and a legible name at once. The digits go and the icon stays: the
    reader can still see that the note has a timer, and reading it is one click.
@@ -1850,4 +1873,21 @@ body[data-collapsed="true"] .resize-handle {
 .note-timer-secondary,
 .note-timer-skip {
   color: var(--ui-text-muted);
+}
+
+/* Captura. The one row that turns clipboard observation on says so in words as
+   well as in its pressed state, because a mode that watches what you copy must
+   not be readable only as a tick. */
+.note-menu-capture .note-menu-option[aria-pressed="true"] .note-menu-value {
+  color: var(--ui-text);
+  font-weight: 600;
+}
+
+/* The sentence stating what the switch does. It wraps rather than eliding:
+   a reader deciding whether to have their clipboard watched has to be able to
+   read the whole thing. */
+.note-menu-capture-hint {
+  max-width: 220px;
+  font-style: normal;
+  white-space: normal;
 }

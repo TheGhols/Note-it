@@ -72,6 +72,8 @@ function mountMenu() {
     onTrashNote: vi.fn(),
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
+    onToggleAutoPaste: vi.fn(),
+    onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };
@@ -317,12 +319,14 @@ describe('NoteMenu', () => {
     // inline formatting they belong beside, and the theme sits with the other
     // application-wide switch rather than among the note's own settings.
     // Searching comes after the things a note is made of and before the ones
-    // that describe how it is shown: it is what you do *with* a note. Dados
-    // sits beside it, because moving a note to the trash, opening the trash and
-    // taking a backup are the other things you do with one rather than to it.
+    // that describe how it is shown: it is what you do *with* a note. Captura
+    // and Dados sit beside it, because filling a note from the clipboard,
+    // moving it to the trash, opening the trash and taking a backup are the
+    // other things you do with one rather than to it.
     expect(panels).toEqual([
       'paperType',
       'paperIntensity',
+      'capture',
       'data',
       'zoom',
       'theme',

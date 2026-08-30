@@ -1,3 +1,7 @@
+use crate::autopaste::{
+    delimiter_from_name, delimiter_name, is_capturable, AutoPaste, CaptureDelimiter,
+    CaptureSession, ChangeDecision, IgnoreReason,
+};
 use crate::cli::CliCommand;
 use crate::diagnostics::{self, LayerToggleTrace};
 use crate::layer_shell::{
@@ -12,6 +16,8 @@ use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use crate::timer::TimerFinishKind;
 use gio::prelude::*;
+use gtk4::gdk;
+use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -212,6 +218,17 @@ pub struct AppContext {
     /// application is not mistaken for summoning it.
     activated: bool,
     layer_state_persistence: StatePersistenceDebouncer,
+    /// Which note, if any, is capturing the clipboard, and under which
+    /// generation. Never written to disk: see ADR-031.
+    autopaste: AutoPaste,
+    /// The live `changed` connection, present only while capturing.
+    ///
+    /// Held so it can be *disconnected* rather than merely ignored. "Off"
+    /// having no listener at all is the difference between a promise and a
+    /// property: while AutoPaste is off there is nothing subscribed to the
+    /// clipboard, so nothing can observe it however the rest of the code
+    /// behaves.
+    clipboard_watch: Option<gdk::glib::SignalHandlerId>,
 }
 
 pub struct NoteItApp {
@@ -248,6 +265,8 @@ impl NoteItApp {
             summon_restore: None,
             activated: false,
             layer_state_persistence: StatePersistenceDebouncer::default(),
+            autopaste: AutoPaste::new(),
+            clipboard_watch: None,
         }));
 
         let action = gio::SimpleAction::new("toggle-layer", None);
@@ -494,6 +513,9 @@ impl NoteItAppClone {
 
     pub fn close_note(&self, id: &Uuid) -> Result<(), String> {
         self.ensure_structural_action_allowed("closing a note")?;
+        // Before the window goes: a closed note is not a place a capture can
+        // land, and nothing may keep watching the clipboard on its behalf.
+        self.disarm_autopaste_for(*id, "close");
         let mut ctx = self.context.borrow_mut();
         if !ctx.windows.contains_key(id) {
             return Err("note window is not instantiated".to_string());
@@ -608,6 +630,10 @@ impl NoteItAppClone {
                 eprintln!("Hide operation rejected: {error}");
                 return;
             }
+            // Before the flush, not after it. Hiding destroys every WebView,
+            // and a read still in the air must not reach a document that is
+            // about to be written out and torn down.
+            self.disarm_autopaste("hide");
             let self_clone = self.clone();
             self.flush_all_windows(move |result| match result {
                 Ok(()) => {
@@ -725,6 +751,8 @@ impl NoteItAppClone {
             eprintln!("Quit operation rejected: {error}");
             return;
         }
+        // Same order as hiding: stop capturing, then flush, then go.
+        self.disarm_autopaste("quit");
         let self_clone = self.clone();
         self.flush_all_windows(move |result| match result {
             Ok(()) => {
@@ -945,6 +973,10 @@ impl NoteItAppClone {
             return;
         };
 
+        // Before the flush that precedes the move. A note on its way to the
+        // trash is not somewhere a capture may still land.
+        self.disarm_autopaste_for(id, "trash");
+
         let request_id = NEXT_FLUSH_ID.fetch_add(1, Ordering::SeqCst);
         let app = self.clone();
         window.request_flush(request_id, move |flush| {
@@ -1066,6 +1098,260 @@ impl NoteItAppClone {
         diagnostics::log(format_args!("event=timer-finished kind={title}"));
     }
 
+    /// Turns AutoPaste on for one note, or off.
+    ///
+    /// The system clipboard is one thing, so there is one target: arming a
+    /// note releases whatever held it, and both notes are told, because a note
+    /// that has lost the target is still showing that it has it otherwise.
+    ///
+    /// Switching on is also the only place the clipboard handler is ever
+    /// connected, and switching off is the only place it is disconnected.
+    /// Nothing observes the clipboard in between.
+    pub fn set_autopaste(&self, note_id: Uuid, active: bool) {
+        if active && !self.context.borrow().windows.contains_key(&note_id) {
+            eprintln!("AutoPaste request rejected for a note that is not open");
+            return;
+        }
+
+        let (released, target) = {
+            let mut ctx = self.context.borrow_mut();
+            if active {
+                let outcome = ctx.autopaste.arm(note_id);
+                (outcome.released, Some(outcome.session.note_id))
+            } else {
+                (ctx.autopaste.disarm_note(note_id), None)
+            }
+        };
+
+        if active {
+            self.connect_clipboard_watch();
+        } else if released.is_some() {
+            self.disconnect_clipboard_watch();
+        }
+
+        diagnostics::log(format_args!(
+            "event=autopaste-target active={} released={}",
+            target.is_some(),
+            released.is_some()
+        ));
+        // The note that asked is told either way, so a request that changed
+        // nothing cannot leave its own switch showing something else.
+        let mut told: Vec<Uuid> = released.into_iter().chain(target).collect();
+        if !told.contains(&note_id) {
+            told.push(note_id);
+        }
+        self.publish_autopaste(told);
+    }
+
+    /// Stops capturing, whatever asked for it, and takes the listener down.
+    ///
+    /// Called before every teardown — closing a note, hiding, quitting, moving
+    /// a note to the trash — and always *before* the flush, so a read still in
+    /// flight can no longer reach a document that is about to be written and
+    /// destroyed.
+    fn disarm_autopaste(&self, reason: &str) {
+        let released = {
+            let mut ctx = self.context.borrow_mut();
+            ctx.autopaste.disarm()
+        };
+        if released.is_none() {
+            return;
+        }
+        self.disconnect_clipboard_watch();
+        diagnostics::log(format_args!("event=autopaste-disarmed reason={reason}"));
+        self.publish_autopaste(released.into_iter().collect());
+    }
+
+    /// Stops capturing if `note_id` is the note doing it. A note that never
+    /// held the target must not switch it off for the note that does.
+    fn disarm_autopaste_for(&self, note_id: Uuid, reason: &str) {
+        if self.context.borrow().autopaste.is_target(note_id) {
+            self.disarm_autopaste(reason);
+        }
+    }
+
+    /// The capture delimiter, chosen from any note's menu.
+    ///
+    /// Application-wide like the theme, so it is stored once and broadcast.
+    /// It changes how the *next* capture is laid out and nothing else: no note
+    /// is opened, rewritten or dated by choosing one.
+    pub fn set_capture_delimiter(&self, delimiter: CaptureDelimiter) {
+        let windows: Vec<NoteWindow> = {
+            let mut ctx = self.context.borrow_mut();
+            let resolved = delimiter.as_str();
+            if delimiter_name(&ctx.config.capture_delimiter) == resolved {
+                return;
+            }
+            ctx.config.capture_delimiter = resolved.to_string();
+            let config_path = ctx.storage.config_file_path();
+            if let Err(error) = ctx.config.save_to_file(&config_path) {
+                eprintln!("Failed to persist the capture delimiter: {error}");
+            }
+            ctx.windows.values().cloned().collect()
+        };
+
+        let (delimiter, target) = {
+            let ctx = self.context.borrow();
+            (
+                delimiter_from_name(&ctx.config.capture_delimiter),
+                ctx.autopaste.target(),
+            )
+        };
+        for window in windows {
+            window.set_autopaste(target == Some(window.id), delimiter);
+        }
+    }
+
+    /// Tells each named note whether it is the capture target now.
+    fn publish_autopaste(&self, notes: Vec<Uuid>) {
+        let (delimiter, target, windows) = {
+            let ctx = self.context.borrow();
+            (
+                delimiter_from_name(&ctx.config.capture_delimiter),
+                ctx.autopaste.target(),
+                notes
+                    .into_iter()
+                    .filter_map(|id| ctx.windows.get(&id).cloned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for window in windows {
+            window.set_autopaste(target == Some(window.id), delimiter);
+        }
+    }
+
+    fn clipboard(&self) -> Option<gdk::Clipboard> {
+        gdk::Display::default().map(|display| display.clipboard())
+    }
+
+    fn connect_clipboard_watch(&self) {
+        {
+            let ctx = self.context.borrow();
+            // The listener exists if and only if a note is capturing. Stated
+            // here rather than assumed, because "off observes nothing" is the
+            // whole privacy contract and it should not rest on call order.
+            if ctx.clipboard_watch.is_some() || !ctx.autopaste.is_armed() {
+                return;
+            }
+        }
+        let Some(clipboard) = self.clipboard() else {
+            eprintln!("AutoPaste cannot observe the clipboard: no display");
+            return;
+        };
+
+        // Connected here and nowhere else, and only once AutoPaste has been
+        // switched on deliberately. Connecting does not read anything: GDK
+        // emits `changed` for changes from here on, so whatever was on the
+        // clipboard before this moment is never seen.
+        let controller = self.clone();
+        let handler = clipboard.connect_changed(move |clipboard| {
+            controller.handle_clipboard_change(clipboard);
+        });
+        self.context.borrow_mut().clipboard_watch = Some(handler);
+    }
+
+    fn disconnect_clipboard_watch(&self) {
+        let handler = self.context.borrow_mut().clipboard_watch.take();
+        let Some(handler) = handler else {
+            return;
+        };
+        if let Some(clipboard) = self.clipboard() {
+            clipboard.disconnect(handler);
+        }
+    }
+
+    /// One clipboard change, decided by [`crate::autopaste`].
+    ///
+    /// Two gates before anything is read. `is_local` is GDK's own answer to
+    /// "did this application put that there", and it is the loop protection: a
+    /// `Ctrl+C` or `Ctrl+X` inside a note is Note-it claiming the clipboard, so
+    /// the capture that would feed a note its own words back never starts. The
+    /// formats gate refuses an image or a file list without transferring a
+    /// byte of it.
+    fn handle_clipboard_change(&self, clipboard: &gdk::Clipboard) {
+        let own = clipboard.is_local();
+        let has_text = clipboard_offers_text(clipboard);
+        let decision = {
+            let mut ctx = self.context.borrow_mut();
+            ctx.autopaste.observe(own, has_text)
+        };
+        // The shape of the decision, never a byte of the content. Off by
+        // default like every other diagnostic here, and even when it is on
+        // there is nothing in it that could say what was copied.
+        diagnostics::log(format_args!(
+            "event=clipboard-change decision={} own={own} text={has_text}",
+            match decision {
+                ChangeDecision::Read(_) => "read",
+                ChangeDecision::Queue => "queued",
+                ChangeDecision::Ignore(IgnoreReason::NotArmed) => "ignored-not-armed",
+                ChangeDecision::Ignore(IgnoreReason::OwnClipboard) => "ignored-own",
+                ChangeDecision::Ignore(IgnoreReason::NotText) => "ignored-not-text",
+            }
+        ));
+        match decision {
+            ChangeDecision::Read(session) => self.read_clipboard(clipboard, session),
+            ChangeDecision::Ignore(_) | ChangeDecision::Queue => {}
+        }
+    }
+
+    fn read_clipboard(&self, clipboard: &gdk::Clipboard, session: CaptureSession) {
+        let controller = self.clone();
+        let clipboard = clipboard.clone();
+        clipboard.read_text_async(gio::Cancellable::NONE, move |result| {
+            controller.deliver_capture(result, session);
+        });
+    }
+
+    /// A finished read, revalidated against the state as it is *now*.
+    ///
+    /// Everything may have changed while the read was in the air: AutoPaste
+    /// switched off, the target moved to another note, the note closed, the
+    /// application hiding. The session carries the generation it started under
+    /// and the check is exact, so a stale read delivers nothing rather than
+    /// arriving late in a note that stopped asking for it.
+    fn deliver_capture(
+        &self,
+        result: Result<Option<glib::GString>, glib::Error>,
+        session: CaptureSession,
+    ) {
+        // The read is over whatever came of it, so the queue may move on.
+        let next = {
+            let mut ctx = self.context.borrow_mut();
+            ctx.autopaste.finish_read()
+        };
+
+        match result {
+            Ok(Some(text)) if is_capturable(&text) => {
+                let window = {
+                    let ctx = self.context.borrow();
+                    ctx.autopaste
+                        .accept(session)
+                        .and_then(|note_id| ctx.windows.get(&note_id).cloned())
+                };
+                if let Some(window) = window {
+                    diagnostics::log(format_args!("event=clipboard-capture delivered=true"));
+                    // The text goes to the note's editor and to nothing else.
+                    // It is not stored here, not logged, and not written to
+                    // disk by this path: the page inserts it and the ordinary
+                    // autosave carries it to the file.
+                    window.send_autopaste_capture(&text);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // The reason, never the content — and the mode stays armed, so
+                // one unreadable clipboard does not end the capture session.
+                eprintln!("AutoPaste could not read the clipboard: {error}");
+            }
+        }
+
+        if let Some(session) = next {
+            if let Some(clipboard) = self.clipboard() {
+                self.read_clipboard(&clipboard, session);
+            }
+        }
+    }
+
     fn report_data_result(&self, requester: Uuid, action: &str, ok: bool, message: &str) {
         let ctx = self.context.borrow();
         if let Some(window) = ctx.windows.get(&requester) {
@@ -1103,6 +1389,22 @@ impl NoteItAppClone {
             Err(error) => eprintln!("Failed to load note {id}: {error}"),
         }
     }
+}
+
+/// Whether the clipboard is offering something that can be read as text.
+///
+/// The same question `gdk_clipboard_read_text_async` asks itself before it
+/// transfers anything, asked first so an image, a file list or an unknown
+/// binary format is declined without a byte of it being read. Nothing about
+/// the *content* is examined here — only what the owner says it can provide.
+fn clipboard_offers_text(clipboard: &gdk::Clipboard) -> bool {
+    let formats = clipboard.formats();
+    formats
+        .clone()
+        .union_deserialize_types()
+        .contains_type(glib::types::Type::STRING)
+        || formats.contain_mime_type("text/plain")
+        || formats.contain_mime_type("text/plain;charset=utf-8")
 }
 
 fn persist_state_now(ctx: &mut AppContext, reason: &str) -> Result<(), String> {
@@ -1352,6 +1654,16 @@ fn instantiate_note_window(
         app_clone12.announce_timer_finished(kind);
     });
 
+    let app_clone13 = app_controller.clone();
+    let on_autopaste_requested = Rc::new(move |id, active| {
+        app_clone13.set_autopaste(id, active);
+    });
+
+    let app_clone14 = app_controller.clone();
+    let on_capture_delimiter_changed = Rc::new(move |delimiter| {
+        app_clone14.set_capture_delimiter(delimiter);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1384,6 +1696,9 @@ fn instantiate_note_window(
         on_restore_note,
         on_backup,
         on_timer_finished,
+        capture_delimiter: delimiter_from_name(&ctx.config.capture_delimiter),
+        on_autopaste_requested,
+        on_capture_delimiter_changed,
     })
 }
 

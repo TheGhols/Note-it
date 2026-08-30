@@ -1,5 +1,6 @@
 mod app;
 mod atomic_file;
+mod autopaste;
 mod backup;
 mod cli;
 mod diagnostics;

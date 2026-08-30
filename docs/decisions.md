@@ -1078,3 +1078,124 @@ another application does **not** hide Note-it — the notes stay on screen with
 live WebViews, and that is the case the feature is for — so the deferral
 applies only to an explicit "put everything away". One owner, one transition,
 one notification was worth that.
+
+## ADR-031: Off Means No Listener, and the Toolkit Decides What Is Ours
+
+**Status:** Accepted (Phase 3.11)
+
+AutoPaste watches the system clipboard. The clipboard carries passwords,
+tokens, private messages, medical notes and everything else somebody happens to
+copy, so the decisions below are about that before they are about anything else.
+
+### "Off" is the absence of a listener, not a branch inside one
+
+The easy implementation keeps a handler connected and returns early when the
+mode is off. It would behave identically and it would be the wrong shape,
+because then "Note-it does not look at your clipboard" is a claim about a
+conditional — one refactor, one inverted boolean, one early-return moved, and it
+quietly stops being true.
+
+So the `changed` handler is connected in exactly one place, when a note is
+armed, and disconnected in exactly one place, when it is released. While
+AutoPaste is off there is nothing subscribed to the clipboard at all. `AutoPaste`
+in `autopaste.rs` still answers `NotArmed` for a change it should never see,
+because a total policy is worth having; but the guarantee does not rest on it.
+
+The same reasoning runs through the rest. `AutoPaste` holds four small fields
+and none of them is text: there is no last-clipboard, no hash of one and no
+buffer, so there is nothing to leak, nothing to persist and nothing that has to
+be remembered to be cleared. The formats are checked before any read, so an
+image is refused without being transferred. And no clipboard content reaches a
+log at any level — the diagnostics record the *shape* of a decision (`read`,
+`queued`, `ignored-own`, `ignored-not-text`) and never a byte of what was in it.
+
+### Whether the mode is on is not written down anywhere
+
+The delimiter is a preference and lives in `config.toml`. Whether AutoPaste is
+*on* is deliberately stored nowhere: not in the Markdown, not in `state.json`,
+not in the configuration, not in a sidecar.
+
+This is not a limitation, and persisting it would not be a convenience. A mode
+that observes the clipboard must never come back by itself after a reboot, a
+crash, a logout or an update, because the person who switched it on last Tuesday
+for one note is not necessarily consenting to it today. Having nothing to
+restore from is what makes that certain — there is no field on `LoadNote` that
+could switch it back on, which is why the test asserting that is about the
+protocol rather than about the code.
+
+### One target, because the clipboard is one thing
+
+Two notes both capturing would mean every `Ctrl+C` filed twice, in two places,
+which is surprising the first time and dangerous the tenth. So arming a note
+releases whatever held it, in the same step, and both notes are told: a note
+that has lost the target is still showing that it has it otherwise.
+
+There is deliberately no capture manager, no queue of targets and no per-note
+mode. One `Option<CaptureSession>` for the application is the whole model.
+
+### The loop guard is `gdk_clipboard_is_local`, not a comparison
+
+Copying inside the note that is capturing must not append the note's own words
+back to itself. The tempting fix is `if text == last_text { ignore }`, and it is
+wrong in a way that only shows up in use: copying `ABC` twice from a browser, in
+two deliberate actions, is two captures, and content dedupe silently eats the
+second one forever.
+
+The right question is not "is this the same text" but "did *we* put it there",
+and GDK answers it. A `Ctrl+C` or `Ctrl+X` inside a WebView is this application
+claiming the clipboard, so `is_local()` is true and the change is refused before
+any read starts. It is a property of the toolkit rather than a heuristic, and it
+is checked at the only moment it can be checked reliably.
+
+**What that costs, stated plainly:** `is_local()` is true for the whole process,
+so copying from note B while note A is capturing is also refused. Distinguishing
+them would mean the WebView reporting its own copy and the host racing that
+report against GDK's signal on the same main loop, with nothing ordering the
+two. A wrong answer there is either a note eating its own text or a capture
+silently lost, so the conservative answer is the honest one: Note-it captures
+from other applications, and note-to-note copying is done by pasting. That is a
+real boundary and it is documented rather than papered over.
+
+### A generation, checked when the read lands
+
+A clipboard read is asynchronous, and everything can change while it is in the
+air: the mode switched off, the target moved to another note, the note closed,
+the application hiding. So every armed run carries a generation, every read
+carries the session it started under, and the check when it returns is exact
+equality against the state as it is *then*. Arming and disarming both mint a new
+generation, which is what makes every read already in flight stale — including
+the one that would otherwise arrive in a note the reader stopped capturing into
+a moment ago.
+
+Reads are also serialised, one at a time. Two in flight can finish in either
+order, and captures arriving as A, C, B would be a defect nobody could explain.
+A change arriving during a read is remembered and read after it; several
+collapse into one, because the clipboard holds one value and the intermediate
+ones are already gone.
+
+Measured on a real Niri session rather than assumed: GDK emits exactly one
+`changed` per copy there, so three copies produce three reads and three
+captures, and no coalescing window was needed.
+
+### Disarmed before the flush, never after
+
+Closing a note, hiding, quitting and moving a note to the trash all end with a
+WebView being destroyed, and all of them flush first. AutoPaste is switched off
+*before* the flush in every one of those paths, so a read still in the air
+cannot reach a document that is about to be written out and torn down. The
+generation check would already refuse it; doing it in this order means the
+question never arises.
+
+### The host reads, the page inserts, the ordinary save writes
+
+The capture goes from the read callback to the target note's WebView and
+nowhere else. It is not written to the `.md` by the watcher, because the open
+WebView owns the live document and two authorities over one file is how a note
+loses an edit. The page appends it through a normal editor transaction, the
+editor's own update path debounces, and the existing autosave writes the note —
+which is also why a capture behaves like the edit it is: `updated_at` moves,
+search finds the text, and a failed save fails the way every other failed save
+here does.
+
+Switching the mode on or off, and changing the delimiter, touch none of that.
+They are application state, so they leave the note byte for byte as it was.

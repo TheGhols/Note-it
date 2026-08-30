@@ -1,3 +1,4 @@
+import { CaptureDelimiter } from '../capture/autoPaste.ts';
 import { TimerFinishKind, TimerSnapshot } from '../timer/engine.ts';
 
 export type PaperColor = 'yellow' | 'blue' | 'green' | 'pink' | 'purple' | 'gray' | 'black';
@@ -39,6 +40,14 @@ export interface NoteData {
    * finished rather than counting through zero.
    */
   timer: TimerSnapshot | null;
+  /**
+   * What AutoPaste would put between the note's content and a capture.
+   *
+   * A preference, so it travels with the note that is opening. Whether
+   * AutoPaste is *on* deliberately does not travel here and is never restored:
+   * a WebView that has just been created is never the capture target.
+   */
+  captureDelimiter: CaptureDelimiter;
 }
 
 /** One note that matched, exactly as the host sends it. */
@@ -74,6 +83,10 @@ export type HostToWebviewMessage =
   | { type: 'set_collapsed'; payload: { collapsed: boolean } }
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_theme'; payload: { theme: ThemePreference } }
+  /** Whether this note is the AutoPaste target, and how a capture is laid out. */
+  | { type: 'set_auto_paste'; payload: { active: boolean; delimiter: CaptureDelimiter } }
+  /** One clipboard capture, on its way to the editor. Text and nothing else. */
+  | { type: 'auto_paste_captured'; payload: { text: string } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
   | { type: 'search_results'; payload: { requestId: number; results: SearchResult[] } }
   | { type: 'search_result_missing'; payload: { noteId: string } }
@@ -105,6 +118,10 @@ export type WebviewToHostMessage =
   | { type: 'trash_list_requested'; payload: { requestId: number } }
   | { type: 'restore_note_requested'; payload: { noteId: string } }
   | { type: 'backup_requested' }
+  /** Asks the host to capture into this note, or to stop capturing at all. */
+  | { type: 'auto_paste_requested'; payload: { id: string; active: boolean } }
+  /** Asks the host to store a different capture delimiter. Application-wide. */
+  | { type: 'capture_delimiter_changed'; payload: { delimiter: CaptureDelimiter } }
   /** The note's timer changed in a way worth keeping. Never sent for a tick. */
   | { type: 'timer_changed'; payload: { id: string; timer: TimerSnapshot | null } }
   /** A run reached zero, exactly once. The host owns the words. */

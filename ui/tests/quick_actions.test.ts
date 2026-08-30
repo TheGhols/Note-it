@@ -53,6 +53,8 @@ function mountFromPage() {
     onTrashNote: vi.fn(),
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
+    onToggleAutoPaste: vi.fn(),
+    onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
   };

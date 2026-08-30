@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.11 Clipboard AutoPaste.** Copy something anywhere on the machine and it lands at the end
+  of a note you chose. No window appears, no key is pressed for you, and nothing takes your cursor.
+  Distinct from *Paste URL on Selection*, which Phase 3.8 shipped and which is untouched.
+  - **Off by default, and off means no listener.** While AutoPaste is off there is no clipboard
+    handler connected at all, so nothing is observed, read, hashed, stored, logged or sent. Measured
+    on a real Niri session: three copies with the mode off produced zero clipboard events of any
+    kind. See ADR-031.
+  - **The mode is never written down.** Not in the Markdown, not in `state.json`, not in
+    `config.toml`. A restart, a logout, a crash or an update leaves it off and the reader decides
+    again — there is no field on the protocol that could switch it back on.
+  - Switched on in *☰ › Captura*, with one line saying exactly what it will do. While it is on the
+    note keeps its bar out with a 📋 beside the other controls, on a collapsed note too, and pressing
+    that opens the panel that switches it off.
+  - **One target for the whole application**, because the system clipboard is one thing. Arming a
+    second note releases the first in the same step, and the released note's bar and menu stop
+    claiming it.
+  - Event-driven through GDK's own `changed` signal — no polling, no interval, no
+    `navigator.clipboard`, and no new dependency.
+  - Text only: an image, a file list or an unknown format is declined from the offered formats
+    without a byte of it being transferred. An empty or blank copy files nothing at all.
+  - **Whatever was on the clipboard before the switch is never captured.** Connecting the handler
+    reads nothing, so only a change after that moment is a capture.
+  - Captures are appended to the **end** of the note as one transaction: no focus taken, no
+    selection moved, no scroll, no window raised, no layer changed. One capture is one `Ctrl+Z`.
+  - Text goes in as text, with the same meaning a `Ctrl+V` has here: `**isso é literal**` stays
+    asterisks, `<script>alert(1)</script>` stays eleven characters, a URL stays a URL and nothing is
+    fetched. Accents, emoji, 日本語 and multi-line copies survive unchanged.
+  - Three delimiters — **Linha**, **Linha em branco** (default) and **Separador** — applied exactly
+    once between each pair and never in front of the first capture into an empty note. Changing the
+    preference applies to the next capture and rewrites nothing already written.
+  - **Loop protection from the toolkit, not from a comparison.** A copy or cut inside Note-it makes
+    the application the clipboard's owner and GDK says so, and that change is refused before any
+    read starts. Content dedupe was rejected deliberately: copying `ABC` twice, in two actions,
+    files it twice.
+  - A generation on every armed run, revalidated when each asynchronous read returns, so a read
+    still in the air when the mode is switched off, the target changes, the note closes or the
+    application hides delivers nothing. Reads are serialised, so A, B, C arrive as A, B, C.
+  - Switched off **before** the flush on close, hide, quit and trash, so no stale callback can reach
+    a document that is about to be written out and destroyed. Collapsing, changing layer and moving
+    to another application all leave it on.
+  - A capture is a real edit — the Markdown changes, `updated_at` moves, the existing autosave
+    writes it and search finds the text. Switching the mode on or off and changing the delimiter
+    change none of those, and put no marker of their own into the note.
+  - Note-it never takes ownership of the clipboard: after a capture, what you copied still pastes
+    normally into any other application.
 - **Phase 3.10 Timer & Pomodoro.** A countdown on the note you are working in, reached from a ⏱ in
   the header bar and shown in a small panel under it. No second window, and no strip permanently
   taken from the note.

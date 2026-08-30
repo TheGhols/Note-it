@@ -41,12 +41,14 @@ export interface HeaderRevealOptions {
  * was the bar itself, so the bar had to already be covering the text in order
  * to be reachable.
  *
- * Here the state is explicit and lives in one place. Four independent reasons
+ * Here the state is explicit and lives in one place. Five independent reasons
  * hold the chrome out, and the stylesheet only reads the answer:
  *
  * - the pointer is in the strip along the top of the note;
  * - something inside the header has keyboard focus;
  * - a quick action or the menu is open;
+ * - the note is capturing the clipboard, so the indicator saying so stays
+ *   where it can be seen;
  * - the note is collapsed, in which case the bar *is* the note.
  *
  * Nothing here paints. It publishes `data-header-revealed` and the stylesheet
@@ -63,6 +65,7 @@ export class HeaderReveal {
   private pointerAtTop = false;
   private focusInside = false;
   private held = false;
+  private capturing = false;
   private collapsed = false;
 
   public constructor(options: HeaderRevealOptions) {
@@ -87,7 +90,9 @@ export class HeaderReveal {
 
   /** Whether the chrome is currently on show. */
   public isRevealed(): boolean {
-    return this.collapsed || this.held || this.focusInside || this.pointerAtTop;
+    return (
+      this.collapsed || this.held || this.capturing || this.focusInside || this.pointerAtTop
+    );
   }
 
   /**
@@ -108,6 +113,23 @@ export class HeaderReveal {
    */
   public setHeld(held: boolean): void {
     this.held = held;
+    this.publish();
+  }
+
+  /**
+   * Keeps the chrome out while the note is capturing the clipboard.
+   *
+   * A reason of its own rather than another caller of `setHeld`, because the
+   * two end at different times: closing the menu must not take down the one
+   * visible sign that everything copied is being filed into this note.
+   *
+   * Safe against the defect this bar was rebuilt to fix. The header paints the
+   * paper under exactly the gutter, which is by definition the strip that is
+   * always the note's own and never a line's, so a bar that stays out covers
+   * no text even when the note is scrolled.
+   */
+  public setCapturing(capturing: boolean): void {
+    this.capturing = capturing;
     this.publish();
   }
 

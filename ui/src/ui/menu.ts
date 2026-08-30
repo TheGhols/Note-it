@@ -1,4 +1,10 @@
 import { PaperColor, PaperIntensity, PaperType, ThemePreference } from '../bridge/types.ts';
+import {
+  CAPTURE_DELIMITERS,
+  CaptureDelimiter,
+  DEFAULT_CAPTURE_DELIMITER,
+  delimiterLabel,
+} from '../capture/autoPaste.ts';
 import { CALLOUT_TYPES, CalloutType } from '../editor/callout.ts';
 import { CODE_LANGUAGES, codeLanguageLabel } from '../editor/codeBlock.ts';
 import { TEXT_SIZES, TextSize } from '../editor/textSize.ts';
@@ -40,6 +46,9 @@ export interface NoteMenuHandlers {
   onTrashNote(): void;
   onOpenTrash(): void;
   onCreateBackup(): void;
+  /** Asks for this note to start or stop capturing the clipboard. */
+  onToggleAutoPaste(active: boolean): void;
+  onSelectCaptureDelimiter(delimiter: CaptureDelimiter): void;
   onOpen?(): void;
   onClose?(): void;
 }
@@ -69,6 +78,8 @@ export type MenuPanel =
   | 'codeLanguage'
   | 'callout'
   | 'search'
+  | 'capture'
+  | 'captureDelimiter'
   | 'data'
   | 'trashConfirm';
 
@@ -122,6 +133,9 @@ export class NoteMenu {
   private readonly paperTypeValue: HTMLElement;
   private readonly paperIntensityValue: HTMLElement;
   private readonly zoomValue: HTMLElement;
+  private autoPasteItem!: HTMLButtonElement;
+  private autoPasteValue!: HTMLElement;
+  private captureDelimiterValue!: HTMLElement;
   private readonly themeValue: HTMLElement;
   private readonly layerValue: HTMLElement;
   private codeBlockItem!: HTMLButtonElement;
@@ -139,6 +153,8 @@ export class NoteMenu {
   private paperType: PaperType = DEFAULT_PAPER_TYPE;
   private paperIntensity: PaperIntensity = DEFAULT_PAPER_INTENSITY;
   private theme: ThemePreference = DEFAULT_THEME;
+  private autoPaste = false;
+  private captureDelimiter: CaptureDelimiter = DEFAULT_CAPTURE_DELIMITER;
   private currentTextSize: TextSize | null = null;
   private textSizeMixed = false;
   private currentTextColor: string | null = null;
@@ -187,6 +203,7 @@ export class NoteMenu {
     this.themeValue.className = 'note-menu-value';
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
+    const captureItem = this.createSubmenuItem('Captura', 'capture');
     const dataItem = this.createSubmenuItem('Dados', 'data');
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
@@ -215,6 +232,7 @@ export class NoteMenu {
     rootPanel.append(
       paperTypeItem,
       paperIntensityItem,
+      captureItem,
       dataItem,
       zoomItem,
       themeItem,
@@ -245,6 +263,17 @@ export class NoteMenu {
       ),
     );
     this.panels.set('search', this.buildSearchPanel());
+    this.panels.set('capture', this.buildCapturePanel());
+    this.panels.set(
+      'captureDelimiter',
+      this.buildChoicePanel(
+        'Separar capturas',
+        'note-menu-capture-delimiter',
+        CAPTURE_DELIMITERS,
+        () => this.captureDelimiter,
+        (delimiter) => this.options.handlers.onSelectCaptureDelimiter(delimiter),
+      ),
+    );
     this.panels.set('data', this.buildDataPanel());
     this.panels.set('trashConfirm', this.buildTrashConfirmPanel());
     this.panels.set('textSize', this.buildTextSizePanel());
@@ -319,6 +348,7 @@ export class NoteMenu {
     this.setLayerMode('overlay');
     this.setPaper(DEFAULT_PAPER_TYPE, DEFAULT_PAPER_INTENSITY);
     this.setTheme(DEFAULT_THEME);
+    this.setAutoPaste(false, DEFAULT_CAPTURE_DELIMITER);
     this.setCollapsed(false);
     this.setBlockState(this.block);
   }
@@ -363,6 +393,33 @@ export class NoteMenu {
     this.paperIntensityValue.textContent = paperIntensityLabel(intensity);
     this.panels.get('paperType')?.refresh?.();
     this.panels.get('paperIntensity')?.refresh?.();
+  }
+
+  /**
+   * Reflects whether this note is the one capturing the clipboard.
+   *
+   * Both halves come from the host together, because both are its to decide:
+   * the target is exclusive across the application, so a note that has just
+   * lost it must stop claiming it, and the delimiter is one preference shared
+   * by every note's menu.
+   */
+  public setAutoPaste(active: boolean, delimiter: CaptureDelimiter): void {
+    this.autoPaste = active;
+    this.captureDelimiter = delimiter;
+    this.autoPasteItem.setAttribute('aria-pressed', String(active));
+    // Said in words as well as marked, so the state does not depend on
+    // noticing a tick or a colour.
+    this.autoPasteValue.textContent = active ? 'Ativo' : 'Desativado';
+    this.autoPasteItem.setAttribute(
+      'aria-label',
+      active ? 'AutoPaste ativo. Desativar' : 'AutoPaste desativado. Ativar',
+    );
+    this.captureDelimiterValue.textContent = delimiterLabel(delimiter);
+    this.panels.get('captureDelimiter')?.refresh?.();
+  }
+
+  public isAutoPasteActive(): boolean {
+    return this.autoPaste;
   }
 
   /** Reflects the shared interface theme, which every note's menu agrees on. */
@@ -421,6 +478,49 @@ export class NoteMenu {
       : 'Nenhum';
     this.panels.get('codeLanguage')?.refresh?.();
     this.panels.get('callout')?.refresh?.();
+  }
+
+  /**
+   * Capture: the switch, how captures are separated, and what the switch means.
+   *
+   * It lives in the menu rather than as an eighth button in the bar because
+   * turning clipboard observation on is a decision, not a quick action — and
+   * because the bar has no room for another permanent control. What the bar
+   * gets instead is the indicator, and only while capture is on.
+   *
+   * The sentence is not a warning dialog and asks for no confirmation. It is
+   * one line saying exactly what the switch does, which is what a reader needs
+   * before agreeing to have their clipboard watched.
+   */
+  private buildCapturePanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Captura', 'note-menu-capture');
+
+    this.autoPasteItem = this.createItem('AutoPaste', 'note-menu-item note-menu-option');
+    this.autoPasteItem.setAttribute('role', 'menuitemcheckbox');
+    this.autoPasteItem.setAttribute('aria-pressed', 'false');
+    this.autoPasteValue = this.doc.createElement('span');
+    this.autoPasteValue.className = 'note-menu-value';
+    this.autoPasteItem.append(this.autoPasteValue);
+    this.autoPasteItem.addEventListener('click', () => {
+      const next = !this.autoPaste;
+      // The panel stays open: the reader has just switched clipboard
+      // observation on, and the sentence saying what that means should still
+      // be in front of them.
+      this.options.handlers.onToggleAutoPaste(next);
+    });
+
+    const delimiterItem = this.createSubmenuItem('Separar capturas', 'captureDelimiter');
+    this.captureDelimiterValue = this.doc.createElement('span');
+    this.captureDelimiterValue.className = 'note-menu-value';
+    delimiterItem.insertBefore(this.captureDelimiterValue, delimiterItem.lastElementChild);
+
+    const hint = this.doc.createElement('p');
+    hint.className = 'note-menu-hint note-menu-capture-hint';
+    hint.textContent =
+      'Enquanto ativo, todo novo texto copiado será adicionado a esta nota.';
+
+    body.append(this.autoPasteItem, delimiterItem, hint);
+    return { element: panel };
   }
 
   private buildBlocksPanel(): PanelEntry {
@@ -974,7 +1074,11 @@ export class NoteMenu {
       event.preventDefault();
       // The confirmation was reached from Dados, so back is Dados. Everything
       // else is one level down from the root panel.
-      this.showPanel(this.panel === 'trashConfirm' ? 'data' : 'root');
+      const back: Partial<Record<MenuPanel, MenuPanel>> = {
+        trashConfirm: 'data',
+        captureDelimiter: 'capture',
+      };
+      this.showPanel(back[this.panel] ?? 'root');
       return;
     }
 

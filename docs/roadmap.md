@@ -359,17 +359,54 @@ button on this one; naming a timer is a label with nowhere to be read from — t
 name. Both belong to whatever asks for them with a reason, not to the phase whose subject is a
 countdown that can be trusted.
 
-### Phase 3.11: Clipboard AutoPaste (Planned)
+### Phase 3.11: Clipboard AutoPaste (Complete)
 
 The real one, in the sense Antinote uses the word: a capture mode, not the URL-over-selection paste
-Phase 3.8 shipped under that name.
+Phase 3.8 shipped under that name. That one is still there, still called Paste URL on Selection, and
+untouched by this.
 
-- [ ] An explicit capture mode, off by default.
-- [ ] Watching the clipboard only while that mode is on.
-- [ ] New copies appended to the note automatically.
-- [ ] Configurable delimiters between captures.
-- [ ] Loop protection, so the note's own content cannot feed itself back in.
-- [ ] Nothing captured, and nothing observed, while the mode is off.
+- [x] An explicit capture mode, off by default, switched on in *☰ › Captura* with one line saying
+      exactly what it will do.
+- [x] **Off means off, as a property rather than a promise.** While AutoPaste is off there is no
+      handler connected to the clipboard at all, so nothing is observed, read, hashed, stored or
+      sent. Measured on a real Niri session: three copies with the mode off produced zero clipboard
+      events of any kind.
+- [x] Event-driven through GDK's own `changed` signal. No polling, no interval, no
+      `navigator.clipboard`, and no new dependency: the toolkit already in the process answers this.
+- [x] **The mode is session-only and is never written down.** Not in the Markdown, not in
+      `state.json`, not in `config.toml`. A restart, a crash or an update leaves it off, and the
+      reader decides again.
+- [x] One target for the whole application, because the system clipboard is one thing. Arming a
+      second note releases the first in the same step, and the released note's bar and menu say so.
+- [x] Text only. An image, a file list or an unknown format is declined from the offered formats
+      without a byte of it being transferred.
+- [x] The clipboard as it was *before* the switch is never captured: connecting the handler reads
+      nothing, so only a change after that moment is a capture.
+- [x] Captures are appended to the **end** of the note, as one transaction, with no focus taken, no
+      selection moved, no scroll and no window raised — the reader is in another application, which
+      is the whole point.
+- [x] One capture is one `Ctrl+Z`.
+- [x] Three delimiters — Linha, Linha em branco (default) and Separador — applied between the
+      existing content and the capture, exactly one each time, and never in front of the first
+      capture into an empty note. Changing the preference never rewrites what is already there.
+- [x] **Loop protection from the toolkit, not from a guess.** A copy or cut inside Note-it makes the
+      application the clipboard's owner, and GDK says so; that change is refused before any read
+      starts. Comparing text was rejected deliberately: two deliberate copies of the same words are
+      two captures.
+- [x] A generation on every armed run, checked again when each asynchronous read returns, so a read
+      still in the air when the mode is switched off, the target changes, the note closes or the
+      application hides delivers nothing.
+- [x] One read at a time, so A, B, C arrive as A, B, C.
+- [x] Disarmed **before** the flush on close, hide, quit and trash, so no stale callback can reach a
+      document that is about to be written out and destroyed.
+- [x] A capture is a real edit: the Markdown changes, `updated_at` moves, the ordinary autosave
+      writes it, and search finds it. Switching the mode on or off and changing the delimiter change
+      none of those.
+- [x] Nothing about the mode is content. No marker in the Markdown, nothing in the title, the
+      snippet, the trash label or the search index.
+- [x] No clipboard content in any log, at any level.
+- [x] Note-it never takes ownership of the clipboard: after a capture, the copied text still pastes
+      normally into any other application.
 
 ### Phase 3.12: Capture & Export (Planned)
 
