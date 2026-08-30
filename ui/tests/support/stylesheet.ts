@@ -8,8 +8,8 @@ declare module 'vitest' {
     indexHtml: string;
     /** `index.html` after the build has written the icons into it. */
     renderedHtml: string;
-    /** The chosen icon files, by quick-action id. */
-    quickActionIcons: Record<string, string>;
+    /** The chosen icon files, by header-button id. */
+    headerIcons: Record<string, string>;
     /** The repository's `.gitignore`, so the shipped assets can be checked. */
     gitignore: string;
     /** `MIN_NOTE_WIDTH` from `src/layer_shell.rs`: the narrowest a note can be. */

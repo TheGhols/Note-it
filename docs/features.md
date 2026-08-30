@@ -38,6 +38,18 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
     or a `data:` URL, which is why the earlier masked icons came out blank on WebKitGTK.
   - Every shape inherits `currentColor` at full strength, so one file serves all seven papers and
     both interface themes and clears 3:1 against every one of them.
+- **Clipper (paperclip):** a seventh icon in the bar, between **Buscar** and the timer, that opens
+  the image chooser straight away — the same chooser, the same import and the same asset directory
+  as *☰ › Mídia › Inserir imagem…*, which stays exactly where it is. It is the one header button
+  that does something rather than opening a panel, and putting a picture in a note is the commonest
+  thing anyone does with the Mídia section, so a panel in front of it would be a click for no
+  reading. Its drawing is inline SVG from the same collection (`attach-svgrepo-com5`), it is hidden
+  while the note is collapsed like the six, and there is no keyboard shortcut for it.
+  - It is also the one control that gives way on a note narrower than 300 px: the bar has a hard
+    budget at `MIN_NOTE_WIDTH`, and with the clock and the capture indicator on it something has to
+    yield before the close cross does. The paperclip is a shortcut to what the menu still offers in
+    full, so losing it costs a click and nothing else — where losing ☰, the clock, the indicator or
+    the cross would cost a control with nowhere else to be.
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
   - Entries: **Tipo de papel**, **Intensidade**, **Dados**, **Zoom**, **Tema**, **Camada**, and
@@ -811,9 +823,10 @@ entry.
 
 A picture in a note, kept as a file rather than smuggled into the text.
 
-**Putting one in.** Paste it, drop it on the note, or *☰ › Mídia › Inserir imagem…* for a file
-chooser. All three end in the same place: the bytes are written into the store, and the note gains a
-reference to them.
+**Putting one in.** Paste it, drop it on the note, or ask for a file chooser — from the paperclip in
+the header, or from *☰ › Mídia › Inserir imagem…*. All of them end in the same place: the bytes are
+written into the store, and the note gains a reference to them. The paperclip and the menu entry are
+two doors into one room: one request, one chooser, one import, so nothing can drift between them.
 
 **PNG, JPEG, WebP and GIF.** What a file *is* decided by its first few bytes, never by its name — so
 a PNG called `.txt` is a PNG, and something called `.png` that is not an image is refused. **SVG is

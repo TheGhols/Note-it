@@ -1,6 +1,6 @@
 import { describe, expect, inject, it } from 'vitest';
 import { HOLD_ZONE_PX, REVEAL_ZONE_PX } from '../src/ui/headerReveal.ts';
-import { QUICK_ACTIONS } from '../src/ui/icons.ts';
+import { HEADER_ICONS } from '../src/ui/icons.ts';
 import { declarationIn, RULES, ruleFor, rulesFor, tokenIn } from './support/stylesheet.ts';
 
 /** A note in a given state, so a selector can be asked what it applies to. */
@@ -47,13 +47,16 @@ function safeMatches(element: Element, selector: string): boolean {
 }
 
 describe('the one Note-it header', () => {
-  it('carries the menu, the six quick actions, the drag region and the close control', () => {
+  it('carries the menu, the drawn actions, the drag region and the close control', () => {
     const page = noteIn({});
     const headers = page.querySelectorAll('.note-header');
 
     expect(headers).toHaveLength(1);
     expect(headers[0].querySelector('#btn-menu')).not.toBeNull();
-    expect(headers[0].querySelectorAll('.header-quick-action')).toHaveLength(6);
+    // The six that open a panel, and the paperclip that opens the chooser.
+    expect(headers[0].querySelectorAll('.header-quick-action')).toHaveLength(
+      HEADER_ICONS.length,
+    );
     expect(headers[0].querySelector('.drag-region #note-title')).not.toBeNull();
     expect(headers[0].querySelector('#btn-close')).not.toBeNull();
   });
@@ -255,11 +258,12 @@ describe('the one Note-it header', () => {
     }
   });
 
-  it('names every quick action in the markup the application loads', () => {
+  it('names every drawn action in the markup the application loads', () => {
     const page = noteIn({});
-    for (const action of QUICK_ACTIONS) {
-      const button = page.getElementById(action.buttonId);
-      expect(button?.getAttribute('aria-label')).toBe(action.label);
+    for (const icon of HEADER_ICONS) {
+      const button = page.getElementById(icon.buttonId);
+      expect(button?.getAttribute('aria-label')).toBe(icon.label);
+      expect(button?.getAttribute('title')).toBe(icon.label);
     }
   });
 });

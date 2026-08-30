@@ -124,7 +124,7 @@ describe('where AutoPaste is switched on', () => {
     // quick action, and there is no room for another permanent control.
     const page = renderedPage();
     const permanent = page.querySelectorAll('.note-header .icon-btn:not([hidden])');
-    expect(permanent).toHaveLength(9);
+    expect(permanent).toHaveLength(10);
 
     const note = mount();
     click(note.trigger);
@@ -343,8 +343,14 @@ describe('the chrome stays out while the clipboard is being watched', () => {
 });
 
 describe('the header bar still fits with everything on it', () => {
-  /** The row's fixed width, from the markup and the stylesheet. */
-  function controlRowWidth(includeHidden: boolean): number {
+  /**
+   * The row's fixed width, from the markup and the stylesheet.
+   *
+   * `omit` names the buttons a rule takes off the bar at the width being
+   * measured, so the same arithmetic answers both "what does a narrow note
+   * carry" and "what does a wide one".
+   */
+  function controlRowWidth(options: { includeHidden: boolean; omit?: string[] }): number {
     const page = renderedPage();
     const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
     const quickIcon = Number.parseFloat(
@@ -356,25 +362,41 @@ describe('the header bar still fits with everything on it', () => {
 
     let width = headerPadding * 2;
     for (const button of page.querySelectorAll('.note-header .icon-btn')) {
-      if (!includeHidden && button.hasAttribute('hidden')) continue;
+      if (!options.includeHidden && button.hasAttribute('hidden')) continue;
+      if (options.omit?.includes(button.id)) continue;
       const intrinsic = button.querySelector('svg')?.getAttribute('width');
       width += (intrinsic ? Number.parseFloat(intrinsic) : quickIcon) + iconPadding * 2;
     }
     return width;
   }
 
+  /**
+   * The buttons the stylesheet takes off an expanded note below the
+   * breakpoint, read from the stylesheet rather than listed here — so the
+   * budget below is measured against the row a narrow note actually carries,
+   * and a rule that stops hiding something is caught by the arithmetic.
+   */
+  function narrowlyHidden(): string[] {
+    const block = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
+    return [...block.matchAll(/#([\w-]+)\s*\{[^}]*display:\s*none/g)].map((match) => match[1]);
+  }
   it('fits every control, capture included, at the narrowest a note can be', () => {
-    // 220 px, and the close cross must still be on the note. This is why the
-    // indicator is not a permanent button: it costs its width only while the
-    // note is actually the capture target.
+    // 220 px, and the close cross must still be on the note. Two things buy
+    // the room: the capture indicator costs its width only while the note is
+    // actually the target, and the paperclip is taken off a note this narrow.
     const floor = inject('minNoteWidth');
-    expect(controlRowWidth(false)).toBeLessThan(floor);
-    expect(controlRowWidth(true)).toBeLessThan(floor);
+    expect(
+      controlRowWidth({ includeHidden: false, omit: narrowlyHidden() }),
+    ).toBeLessThan(floor);
+    expect(
+      controlRowWidth({ includeHidden: true, omit: narrowlyHidden() }),
+    ).toBeLessThan(floor);
   });
 
   it('fits the timer clock beside it wherever that clock is shown', () => {
-    // The digits are hidden on an expanded note below the breakpoint, so the
-    // widest the row ever gets is at that breakpoint and above.
+    // The digits and the paperclip are both hidden on an expanded note below
+    // the breakpoint, so the widest the row ever gets is at that breakpoint
+    // and above — where all three are on the bar at once.
     const breakpoint = Number.parseFloat(
       /@media \(max-width: (\d+)px\)/.exec(THEME_CSS)![1],
     );
@@ -384,10 +406,26 @@ describe('the header bar still fits with everything on it', () => {
     // `H:MM:SS`, at a generous upper bound for a tabular digit's advance.
     const widestClock = readoutFont * 0.75 * 7 + 3;
 
-    expect(controlRowWidth(true) + widestClock).toBeLessThanOrEqual(breakpoint);
-    // ...and with the digits hidden, the row fits the floor with room to spare
-    // for the note's own name.
-    expect(controlRowWidth(true)).toBeLessThan(inject('minNoteWidth'));
+    expect(controlRowWidth({ includeHidden: true }) + widestClock).toBeLessThanOrEqual(
+      breakpoint,
+    );
+    // ...and below it, with the digits and the paperclip gone, the row fits
+    // the narrowest note there is.
+    expect(
+      controlRowWidth({ includeHidden: true, omit: narrowlyHidden() }),
+    ).toBeLessThan(inject('minNoteWidth'));
+  });
+
+  it('takes the paperclip off a note too narrow to hold everything', () => {
+    // The rule, and which control it applies to. The paperclip is the one that
+    // gives way because the menu still offers what it does; ☰, the clock, the
+    // capture indicator and the close cross have nowhere else to be.
+    const narrow = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
+    expect(narrow).toContain('body:not([data-collapsed="true"]) #btn-insert-image');
+    expect(narrow).toContain('display: none');
+    for (const kept of ['btn-menu', 'btn-close', 'btn-timer', 'btn-autopaste']) {
+      expect(narrow, kept).not.toContain(kept);
+    }
   });
 
   it('keeps the close control and the collapsed title whatever else is on', () => {

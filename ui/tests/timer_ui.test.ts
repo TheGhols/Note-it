@@ -143,10 +143,10 @@ describe('the timer control in the header', () => {
     expect(button!.closest('.note-controls-left')).not.toBeNull();
     // Outside the drag region, so pressing it can never move the window.
     expect(button!.closest('.drag-region')).toBeNull();
-    // It is not a seventh quick action: those open panels of the note menu,
-    // and this opens its own.
+    // It is not one of the drawn actions beside it: those wear an icon from
+    // the icon files and this carries its own hand-drawn mark and a readout.
     expect(button!.classList.contains('header-quick-action')).toBe(false);
-    expect(page.querySelectorAll('.header-quick-action')).toHaveLength(6);
+    expect(button!.querySelector('[data-quick-icon]')).toBeNull();
   });
 
   it('shows only the icon until the note has a timer', () => {
@@ -704,11 +704,20 @@ describe('a collapsed note', () => {
 });
 
 describe('the header bar still fits', () => {
-  it('leaves room for every control at the narrowest a note can be', () => {
-    // 3.9UX.R.2 is not to be reopened, and neither is the close cross being
-    // pushed off the edge. The budget is measured rather than assumed.
+  /**
+   * The buttons the stylesheet takes off an expanded note below the
+   * breakpoint, read from the stylesheet rather than listed here — so the
+   * budget below is measured against the row a narrow note actually carries,
+   * and a rule that stops hiding something is caught by the arithmetic.
+   */
+  function narrowlyHidden(): string[] {
+    const block = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
+    return [...block.matchAll(/#([\w-]+)\s*\{[^}]*display:\s*none/g)].map((match) => match[1]);
+  }
+
+  /** What the row costs, with `omit` standing for what a rule takes off it. */
+  function controlRowWidth(omit: string[] = []): number {
     const page = renderedPage();
-    const floor = inject('minNoteWidth');
     const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
     const quickIcon = Number.parseFloat(
       ruleFor(':root').body.match(/--header-action-size:\s*([\d.]+)px/)![1],
@@ -719,16 +728,33 @@ describe('the header bar still fits', () => {
 
     let width = headerPadding * 2;
     for (const button of page.querySelectorAll('.note-header .icon-btn')) {
+      if (omit.includes(button.id)) continue;
       const drawn = button.querySelector('svg');
       const intrinsic = drawn?.getAttribute('width');
       // A hand-drawn mark states its own size; a quick action is sized by the
       // stylesheet token.
       width += (intrinsic ? Number.parseFloat(intrinsic) : quickIcon) + iconPadding * 2;
     }
+    return width;
+  }
 
-    // Every control, on the narrowest note the host will make, with the name
-    // still able to take what is left.
-    expect(width).toBeLessThan(floor);
+  it('leaves room for every control at the narrowest a note can be', () => {
+    // 3.9UX.R.2 is not to be reopened, and neither is the close cross being
+    // pushed off the edge. The budget is measured rather than assumed.
+    //
+    // Below the breakpoint the stylesheet takes the paperclip off an expanded
+    // note, so what has to fit the floor is the row without it. That is the
+    // control that gives way because the menu still offers what it does; the
+    // rest of the row has nowhere else to be.
+    expect(controlRowWidth(narrowlyHidden())).toBeLessThan(inject('minNoteWidth'));
+  });
+
+  it('fits the paperclip too, from the width that keeps it', () => {
+    // And above the breakpoint the full row is carried, digits included.
+    const breakpoint = Number.parseFloat(
+      /@media \(max-width: (\d+)px\)/.exec(THEME_CSS)![1],
+    );
+    expect(controlRowWidth()).toBeLessThan(breakpoint);
   });
 
   it('holds the whole control row inside the strip the bar paints its paper over', () => {

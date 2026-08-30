@@ -465,6 +465,25 @@ what a backup promises.
 - [x] Proved by restoring into a second, empty store with the original deleted: both notes come
       back, both images render through `note-it-asset:`, and every file is byte-identical.
 
+#### 3.12R.1: the clipper
+
+A refinement of the same phase, not a phase of its own: the way in was three clicks deep for the
+thing people do most.
+
+- [x] A paperclip in the header, between **Buscar** and the timer, opening the file chooser on the
+      first click — no panel in between.
+- [x] One function, two triggers. The button and *☰ › Mídia › Inserir imagem…* call the same handler
+      and send the same `insert_image_requested`; no second chooser, importer, asset path or
+      serializer exists to drift from the first.
+- [x] The menu entry stays, and so do paste and drop.
+- [x] Hidden on a collapsed note like the six quick actions, and hidden on an expanded note narrower
+      than 300 px: the bar's budget at `MIN_NOTE_WIDTH` has to give somewhere, and the paperclip is
+      the only control on it whose job the menu still does in full.
+- [x] The drawing is inline SVG from the icon collection, written into the page at build time — the
+      pipeline that survives the page's `default-src 'self'`.
+- [x] No new keyboard shortcut, no new bridge message, and nothing touched in `assets`, `backup`,
+      `storage`, `search`, `timer` or `autopaste`.
+
 ### Phase 3.13: Flashcards Core (Planned)
 
 ### Phase 3.14: Capture & Export (Planned)

@@ -33,6 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/storage.md` now includes `assets/` in the manual restore procedure.
 
 ### Added
+- **Phase 3.12R.1 — a paperclip in the header.** Putting a picture in a note is the commonest thing
+  anyone does with the Mídia section, and it took opening the menu and walking into a submenu first.
+  A paperclip now sits in the bar between **Buscar** and the timer and opens the file chooser on the
+  first click.
+  - The same chooser, the same import, the same `assets/<note-uuid>/<asset-uuid>.<ext>` and the same
+    relative reference in the Markdown. Both triggers run one function and send the one existing
+    `insert_image_requested` message: a second door into the room, never a second room.
+  - *☰ › Mídia › Inserir imagem…* is untouched and keeps working, as do paste and drop.
+  - Hidden while the note is collapsed, like the six quick actions, and hidden on an expanded note
+    narrower than 300 px — the bar's budget at `MIN_NOTE_WIDTH` has to give somewhere, and the
+    paperclip is the only control there whose job the menu still does in full.
+  - Its drawing is inline SVG written into the page at build time from the icon collection, like
+    every other icon in the bar. Nothing is fetched, so nothing comes out blank under the page's
+    own `default-src 'self'`.
+  - No new IPC message, no new chooser, no new import path, no new keyboard shortcut, and no change
+    to `assets`, `backup`, `storage`, `search`, `timer` or `autopaste`.
+
 - **Phase 3.12 Images & Rich Layout.** A picture in a note, kept as a file rather than smuggled into
   the text. Paste one, drop one on the note, or choose one from *☰ › Mídia › Inserir imagem…*.
   - PNG, JPEG, WebP and GIF, decided by the first few bytes and never by a filename — so a PNG

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, inject, it, vi } from 'vitest';
-import { normalizeIconSvg, QUICK_ACTIONS } from '../src/ui/icons.ts';
+import { CLIPPER, HEADER_ICONS, normalizeIconSvg, QUICK_ACTIONS } from '../src/ui/icons.ts';
 import { MenuPanel, NoteMenu } from '../src/ui/menu.ts';
 import { PaperColor } from '../src/bridge/types.ts';
 import { contrastRatio } from './support/color.ts';
@@ -82,7 +82,7 @@ describe('the header quick actions', () => {
     document.body.innerHTML = '';
   });
 
-  it('there are exactly six, in the approved order', () => {
+  it('there are exactly six that open a panel, in the approved order', () => {
     expect(QUICK_ACTIONS.map((action) => action.label)).toEqual([
       'Cor da nota',
       'Tamanho do texto',
@@ -91,12 +91,23 @@ describe('the header quick actions', () => {
       'Blocos',
       'Buscar',
     ]);
+    // Every one of them names the panel it opens, and none has logic of its
+    // own. The paperclip beside them is not one: it opens nothing.
+    expect(QUICK_ACTIONS.every((action) => typeof action.panel === 'string')).toBe(true);
+    expect(Object.hasOwn(CLIPPER, 'panel')).toBe(false);
+  });
 
+  it('the bar carries the six, and then the paperclip, in that order', () => {
     const page = renderedPage();
     const buttons = page.querySelectorAll('.note-header .header-quick-action');
     expect(Array.from(buttons, (button) => button.id)).toEqual(
-      QUICK_ACTIONS.map((action) => action.buttonId),
+      HEADER_ICONS.map((icon) => icon.buttonId),
     );
+    // Straight after Buscar and before the clock, which is where a reader
+    // reaching for it will look.
+    const ids = Array.from(page.querySelectorAll('.note-header .icon-btn'), (b) => b.id);
+    expect(ids.indexOf('btn-insert-image')).toBe(ids.indexOf('btn-search') + 1);
+    expect(ids.indexOf('btn-insert-image')).toBeLessThan(ids.indexOf('btn-timer'));
   });
 
   it('each one is named for what it does, for the reader and for the screen reader', () => {
@@ -229,7 +240,7 @@ describe('the quick-action icons', () => {
     expect(page).not.toMatch(/(?:src|href)="https?:/);
   });
 
-  it('releases exactly the six files it uses from the icon drop', () => {
+  it('releases exactly the files it uses from the icon drop, and no others', () => {
     const gitignore = inject('gitignore');
     const released = Array.from(
       gitignore.matchAll(/^!IconesNote-it\/(.+)$/gm),
@@ -237,15 +248,15 @@ describe('the quick-action icons', () => {
     );
 
     expect(gitignore).toContain('IconesNote-it/*');
-    expect(released.sort()).toEqual(QUICK_ACTIONS.map((action) => action.asset).sort());
-    // One asset per action, and no asset serving two.
-    expect(new Set(released).size).toBe(6);
+    expect(released.sort()).toEqual(HEADER_ICONS.map((icon) => icon.asset).sort());
+    // One asset per button, and no asset serving two.
+    expect(new Set(released).size).toBe(HEADER_ICONS.length);
   });
 
   it('is drawn in the button colour, on any paper and either theme', () => {
-    const icons = inject('quickActionIcons');
+    const icons = inject('headerIcons');
 
-    for (const action of QUICK_ACTIONS) {
+    for (const action of HEADER_ICONS) {
       const normalized = normalizeIconSvg(icons[action.id]);
       // No literal colour survives: the whole drawing inherits the button's.
       expect(normalized).not.toMatch(/(?:fill|stroke)="#/);
@@ -257,7 +268,7 @@ describe('the quick-action icons', () => {
   });
 
   it('reads at full strength on every paper, black included', () => {
-    const icons = inject('quickActionIcons');
+    const icons = inject('headerIcons');
 
     // Every part of every icon is opaque, so the whole drawing is the button's
     // own colour. The supplied files are two-tone at 40%, which at this size

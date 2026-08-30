@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { QUICK_ACTIONS, renderQuickActionIcons } from './src/ui/icons.ts';
+import { HEADER_ICONS, renderHeaderIcons } from './src/ui/icons.ts';
 
 /** Every module of the math engine and the unit registry, by path. Read here
  *  for the same reason the stylesheet is: a test asserting what the engine
@@ -19,12 +19,12 @@ function mathSources(): Record<string, string> {
   return sources;
 }
 
-/** The six chosen icon files, by quick-action id. The only copy of each. */
-function quickActionIcons(): Record<string, string> {
+/** The chosen icon files, by header-button id. The only copy of each. */
+function headerIcons(): Record<string, string> {
   const directory = fileURLToPath(new URL('../IconesNote-it', import.meta.url));
   const icons: Record<string, string> = {};
-  for (const action of QUICK_ACTIONS) {
-    icons[action.id] = readFileSync(`${directory}/${action.asset}`, 'utf8');
+  for (const icon of HEADER_ICONS) {
+    icons[icon.id] = readFileSync(`${directory}/${icon.asset}`, 'utf8');
   }
   return icons;
 }
@@ -61,10 +61,10 @@ export default defineConfig({
       // relative one would have to be a file the bundle ships and the browser
       // then asks for. Inline SVG is neither — it is simply part of the
       // document, which is why it renders on the real application.
-      name: 'note-it-quick-action-icons',
+      name: 'note-it-header-icons',
       enforce: 'pre',
       transformIndexHtml(html) {
-        return renderQuickActionIcons(html, quickActionIcons());
+        return renderHeaderIcons(html, headerIcons());
       },
     },
     {
@@ -95,10 +95,10 @@ export default defineConfig({
       // The page as the application receives it: the same transform the build
       // applies, over the same file, so a test of the icons is a test of what
       // ships rather than of the markup before it was finished.
-      renderedHtml: renderQuickActionIcons(indexHtml, quickActionIcons()),
-      quickActionIcons: quickActionIcons(),
-      // Read so a test can prove the six files are the only ones released from
-      // the icon drop, and that every file the page uses is one of them.
+      renderedHtml: renderHeaderIcons(indexHtml, headerIcons()),
+      headerIcons: headerIcons(),
+      // Read so a test can prove the released files are the only ones taken
+      // from the icon drop, and that every file the page uses is one of them.
       gitignore: readFileSync(fileURLToPath(new URL('../.gitignore', import.meta.url)), 'utf8'),
       // The narrowest a note can be, so the header's budget is measured
       // against the real floor the host enforces.

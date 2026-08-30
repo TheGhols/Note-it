@@ -27,7 +27,7 @@ import {
 import { FindBar } from './ui/findBar.ts';
 import { collapseTransition } from './ui/collapse.ts';
 import { HeaderReveal } from './ui/headerReveal.ts';
-import { QUICK_ACTIONS } from './ui/icons.ts';
+import { CLIPPER, QUICK_ACTIONS } from './ui/icons.ts';
 import { MenuPanel, NoteMenu } from './ui/menu.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
@@ -213,6 +213,23 @@ function applyZoom(percent: number, persist: boolean): void {
       payload: { id: activeNoteId, zoomPercent: clamped },
     });
   }
+}
+
+/**
+ * Asks the host for a file chooser and the image chosen in it.
+ *
+ * The one path, and both ways in end here: the paperclip in the bar and
+ * *☰ › Mídia › Inserir imagem…* send the same message and get the same
+ * chooser. The host owns the dialog, so the path is one the reader picked
+ * rather than one the page named — nothing about that changes because there is
+ * now a second button.
+ */
+function requestImageInsert(): void {
+  if (!activeNoteId) return;
+  bridge.sendMessage({
+    type: 'insert_image_requested',
+    payload: { id: activeNoteId },
+  });
 }
 
 /**
@@ -487,6 +504,16 @@ function initUI(): void {
   // follow.
   const autoPasteIndicator = document.getElementById('btn-autopaste');
   if (autoPasteIndicator) quickTriggers.capture = autoPasteIndicator;
+
+  // The paperclip is not one of the quick triggers: it opens no panel. It runs
+  // the same request the menu entry runs, and that is the whole of it.
+  const clipper = document.getElementById(CLIPPER.buttonId);
+  clipper?.addEventListener('pointerdown', (event) => event.stopPropagation());
+  clipper?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    requestImageInsert();
+  });
   if (btnMenu && menuMount) {
     noteMenu = new NoteMenu({
       trigger: btnMenu,
@@ -567,16 +594,7 @@ function initUI(): void {
         },
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
-        onInsertImage: () => {
-          // The host owns the chooser: the page asks for the gesture and is
-          // told the result, so no path is named in either direction.
-          if (activeNoteId) {
-            bridge.sendMessage({
-              type: 'insert_image_requested',
-              payload: { id: activeNoteId },
-            });
-          }
-        },
+        onInsertImage: requestImageInsert,
         onToggleAutoPaste: (active) => {
           // A request, not a decision: the host owns the single target, and
           // the answer comes back as `set_auto_paste` to every note affected.

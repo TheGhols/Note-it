@@ -501,6 +501,17 @@ body[data-collapsed="true"][data-timer="finished"] .header-timer-action {
   body:not([data-collapsed="true"]) .header-timer-readout {
     display: none;
   }
+
+  /* The same reckoning, for the same reason. The bar has a hard budget at
+     MIN_NOTE_WIDTH, and with the clock, the capture indicator and eight
+     buttons on it the close cross would be the thing pushed off the edge. The
+     paperclip is the one that gives way: it is a shortcut to something the
+     menu still offers in full, so losing it on a note this narrow costs a
+     click and nothing else — where losing ☰, the clock, the capture indicator
+     or the close cross would cost a control with nowhere else to be. */
+  body:not([data-collapsed="true"]) #btn-insert-image {
+    display: none;
+  }
 }
 
 /* Note settings popover */

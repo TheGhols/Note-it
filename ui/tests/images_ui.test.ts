@@ -87,12 +87,13 @@ function imageFile(type = 'image/png', name = 'captura de tela.png'): File {
 }
 
 describe('where an image is inserted from', () => {
-  it('lives in the menu rather than in a bar that is already full', () => {
-    // The header carries the menu, six quick actions, the timer and the close
-    // cross. Inserting a picture is occasional and deliberate, so it costs a
-    // menu row — and the two gestures most people use need no control at all.
+  it('keeps its menu row whatever else reaches it', () => {
+    // 3.12R.1 put a paperclip in the bar beside the six quick actions, the
+    // timer and the close cross. It is a second door, so the row it is a
+    // shortcut to has to still be there — a note too narrow for the paperclip
+    // still has somewhere to insert a picture from.
     const page = renderedPage();
-    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(9);
+    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(10);
 
     const note = mount();
     const panels = Array.from(
