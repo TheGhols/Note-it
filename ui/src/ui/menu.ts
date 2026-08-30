@@ -6,6 +6,7 @@ import {
   delimiterLabel,
 } from '../capture/autoPaste.ts';
 import { CALLOUT_TYPES, CalloutType } from '../editor/callout.ts';
+import { FlashcardCounts } from '../flashcards/extract.ts';
 import { CODE_LANGUAGES, codeLanguageLabel } from '../editor/codeBlock.ts';
 import { TEXT_SIZES, TextSize } from '../editor/textSize.ts';
 import { HIGHLIGHT_COLORS, PaletteEntry, TEXT_COLORS } from './palettes.ts';
@@ -48,6 +49,8 @@ export interface NoteMenuHandlers {
   onCreateBackup(): void;
   /** Asks the host for a file chooser and an image from it. */
   onInsertImage(): void;
+  /** The reader wants to study the cards this note holds. */
+  onOpenStudy(): void;
   /** Asks for this note to start or stop capturing the clipboard. */
   onToggleAutoPaste(active: boolean): void;
   onSelectCaptureDelimiter(delimiter: CaptureDelimiter): void;
@@ -81,6 +84,7 @@ export type MenuPanel =
   | 'callout'
   | 'search'
   | 'media'
+  | 'study'
   | 'capture'
   | 'captureDelimiter'
   | 'data'
@@ -136,6 +140,10 @@ export class NoteMenu {
   private readonly paperTypeValue: HTMLElement;
   private readonly paperIntensityValue: HTMLElement;
   private readonly zoomValue: HTMLElement;
+  private studyItem!: HTMLButtonElement;
+  private studyValue!: HTMLElement;
+  private studyAction!: HTMLButtonElement;
+  private studySummary!: HTMLElement;
   private autoPasteItem!: HTMLButtonElement;
   private autoPasteValue!: HTMLElement;
   private captureDelimiterValue!: HTMLElement;
@@ -157,6 +165,7 @@ export class NoteMenu {
   private paperIntensity: PaperIntensity = DEFAULT_PAPER_INTENSITY;
   private theme: ThemePreference = DEFAULT_THEME;
   private autoPaste = false;
+  private flashcards: FlashcardCounts = { cards: 0, reviews: 0 };
   private captureDelimiter: CaptureDelimiter = DEFAULT_CAPTURE_DELIMITER;
   private currentTextSize: TextSize | null = null;
   private textSizeMixed = false;
@@ -207,6 +216,15 @@ export class NoteMenu {
     themeItem.insertBefore(this.themeValue, themeItem.lastElementChild);
 
     const mediaItem = this.createSubmenuItem('Mídia', 'media');
+
+    // Studying is a section rather than a button in the bar. The bar is full,
+    // and a control that opens a panel over the whole note is not something
+    // anyone needs within a pixel of the text they are writing.
+    this.studyItem = this.createSubmenuItem('Estudo', 'study');
+    this.studyValue = this.doc.createElement('span');
+    this.studyValue.className = 'note-menu-value';
+    this.studyItem.insertBefore(this.studyValue, this.studyItem.lastElementChild);
+
     const captureItem = this.createSubmenuItem('Captura', 'capture');
     const dataItem = this.createSubmenuItem('Dados', 'data');
 
@@ -237,6 +255,7 @@ export class NoteMenu {
       paperTypeItem,
       paperIntensityItem,
       mediaItem,
+      this.studyItem,
       captureItem,
       dataItem,
       zoomItem,
@@ -269,6 +288,7 @@ export class NoteMenu {
     );
     this.panels.set('search', this.buildSearchPanel());
     this.panels.set('media', this.buildMediaPanel());
+    this.panels.set('study', this.buildStudyPanel());
     this.panels.set('capture', this.buildCapturePanel());
     this.panels.set(
       'captureDelimiter',
@@ -428,6 +448,36 @@ export class NoteMenu {
     return this.autoPaste;
   }
 
+  /**
+   * How many cards the note holds as it stands.
+   *
+   * Called on every change to the document, so the number in the menu is the
+   * number in the note rather than the number when it was last opened. It is
+   * a count of something already there: nothing is written, and nothing is
+   * saved, by knowing it.
+   */
+  public setFlashcardCounts(counts: FlashcardCounts): void {
+    this.flashcards = counts;
+    const { cards, reviews } = counts;
+
+    this.studyValue.textContent =
+      cards === 0 ? 'Nenhum' : `${cards} ${cards === 1 ? 'cartão' : 'cartões'}`;
+
+    // Both numbers, because they differ the moment one card is reversible and
+    // a reader counting questions would otherwise be given the wrong total.
+    this.studySummary.textContent =
+      cards === 0
+        ? 'Nenhum flashcard nesta nota'
+        : `${cards} ${cards === 1 ? 'cartão' : 'cartões'} · ${reviews} ${
+            reviews === 1 ? 'revisão' : 'revisões'
+          }`;
+    this.studyAction.disabled = reviews === 0;
+  }
+
+  public flashcardCounts(): FlashcardCounts {
+    return this.flashcards;
+  }
+
   /** Reflects the shared interface theme, which every note's menu agrees on. */
   public setTheme(theme: ThemePreference): void {
     this.theme = theme;
@@ -510,6 +560,42 @@ export class NoteMenu {
     hint.textContent = 'Também é possível colar uma imagem ou arrastá-la para a nota.';
 
     body.append(insert, hint);
+    return { element: panel };
+  }
+
+  /**
+   * Study: what the note holds, and the way in to it.
+   *
+   * A section rather than a button in the bar, which is already carrying the
+   * menu, seven icons, the timer and the close cross — and studying is not a
+   * thing anyone does mid-sentence. The row above says how many cards there
+   * are before the panel is even opened, because the commonest question about
+   * flashcards in a note is whether there are any.
+   *
+   * The hint is not decoration. `::` and `:::` are the whole syntax, and a
+   * feature whose syntax has to be looked up somewhere else is a feature
+   * nobody uses; two lines here is the documentation.
+   */
+  private buildStudyPanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Estudo', 'note-menu-study');
+
+    this.studyAction = this.createItem('Estudar flashcards', 'note-menu-item');
+    this.studyAction.addEventListener('click', () => {
+      // The panel takes the whole note and wants the keyboard; the menu gets
+      // out of the way first, exactly as it does for the chooser.
+      this.close();
+      this.options.handlers.onOpenStudy();
+    });
+
+    this.studySummary = this.doc.createElement('p');
+    this.studySummary.className = 'note-menu-hint note-menu-study-summary';
+    this.studySummary.textContent = 'Nenhum flashcard nesta nota';
+
+    const hint = this.doc.createElement('p');
+    hint.className = 'note-menu-hint note-menu-study-hint';
+    hint.textContent = 'Escreva Pergunta :: Resposta, ou Termo ::: Definição para os dois sentidos.';
+
+    body.append(this.studyAction, this.studySummary, hint);
     return { element: panel };
   }
 

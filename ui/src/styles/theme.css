@@ -2083,3 +2083,187 @@ body[data-collapsed="true"] .resize-handle {
 .note-image-frame[data-resizing="true"] {
   user-select: none;
 }
+
+/* ── Flashcards ───────────────────────────────────────────────────────────
+   A card is text somebody typed, so what the editor shows is that text with
+   two faint hints on it: the delimiter tinted, and a quiet rule down the block
+   it sits in. Nothing is hidden, nothing is replaced by a widget, and the
+   reader goes on editing the `::` character by character. Both are painted by
+   ProseMirror decorations — no part of this is in the document, and no part of
+   it can move a modification date. */
+.ProseMirror .note-flashcard-mark {
+  border-radius: 3px;
+  padding: 0 1px;
+  background-color: color-mix(in srgb, var(--paper-text) 12%, transparent);
+  color: var(--paper-text);
+  /* The two characters keep their own width, so tinting them does not reflow
+     the line they are on. */
+  font-variant-ligatures: none;
+}
+
+.ProseMirror .note-flashcard-line {
+  /* Enough to notice while scrolling, not enough to read as a quote. The
+     padding is what the border takes, so the text does not shift when a card
+     comes into being under the caret. */
+  border-left: 2px solid color-mix(in srgb, var(--paper-text) 22%, transparent);
+  margin-left: -8px;
+  padding-left: 6px;
+}
+
+/* Studying. Chrome rather than paper — it wears the interface theme like the
+   menu, the trash and the search palette, so it reads the same over a yellow
+   note and a black one. */
+.note-study {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
+  top: calc(var(--note-header-height) + 4px);
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--ui-surface);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  box-shadow: var(--ui-shadow);
+  font-family: var(--note-font-family);
+  /* Fixed in pixels: the application's own furniture, so a note's zoom scales
+     the note and leaves the panel alone. */
+  font-size: 13px;
+}
+
+.note-study[hidden] {
+  display: none;
+}
+
+.note-study:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: -2px;
+}
+
+.note-study-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.note-study-title {
+  font-weight: 600;
+}
+
+.note-study-progress {
+  margin-left: auto;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.note-study-summary {
+  margin: 0;
+  padding: 4px 8px 0;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+}
+
+/* The card itself scrolls. A long answer must not grow the note: the window
+   is where the reader put it, and a panel that resized it would move every
+   line of the text underneath. */
+.note-study-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.note-study-side {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.note-study-side > :first-child {
+  margin-top: 0;
+}
+
+.note-study-side > :last-child {
+  margin-bottom: 0;
+}
+
+/* The line between the question and its answer, drawn only once the answer is
+   there to be separated from. */
+.note-study-answer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.note-study-side[hidden] {
+  display: none;
+}
+
+/* A picture in a card is the note's own picture, drawn by the same schema and
+   loaded through the same `note-it-asset:` reference. It is bounded by the
+   panel rather than by the note, so a stored width is a preference here and
+   never an escape route. */
+.note-study-side .note-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.note-study-reveal,
+.note-study-button,
+.note-study-close {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 5px;
+  color: var(--ui-text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.note-study-reveal {
+  display: block;
+  margin: 10px 0 0;
+}
+
+.note-study-reveal[hidden] {
+  display: none;
+}
+
+.note-study-reveal:hover,
+.note-study-button:hover,
+.note-study-close:hover {
+  background-color: var(--ui-surface-hover);
+}
+
+.note-study-reveal:focus-visible,
+.note-study-button:focus-visible,
+.note-study-close:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
+.note-study-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Wrapping is the layout, not a fallback: at 220px the three controls stack
+   and the panel stays usable instead of pushing one of them off the note. */
+.note-study-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--ui-border);
+}

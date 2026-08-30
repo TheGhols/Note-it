@@ -98,6 +98,12 @@ Note-it separates native system integration from document editing through a clea
 - `ui/src/editor/image.ts` and `ui/src/editor/imageView.ts`: the image node and its own interface —
   the two stored forms and the round trip between them, and the handles, alignment controls and
   single-transaction resize that never take the focus or move the selection.
+- `ui/src/flashcards/`: a projection of the live ProseMirror document. `extract.ts` recognises the
+  inline and structural syntax, keeps sides as document fragments and expands reversible sources
+  into review items; `session.ts` owns only the ephemeral order, cursor and reveal state. The editor
+  plugin in `ui/src/editor/flashcardMark.ts` paints delimiters and holds the live count without a
+  document transaction, while `ui/src/ui/flashcardPanel.ts` renders snapshot fragments with the
+  note's `DOMSerializer` and never receives an editor or dispatch function.
 - `ui/src/capture/autoPaste.ts`: what a note becomes when a capture arrives — the plain-text split
   ProseMirror itself uses for `text/plain`, the three delimiters, and the single transaction that
   appends at the end without taking focus, moving the selection or scrolling. It reads no clipboard:

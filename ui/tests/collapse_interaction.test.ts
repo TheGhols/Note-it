@@ -66,6 +66,7 @@ function buildNote() {
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
+    onOpenStudy: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
   };

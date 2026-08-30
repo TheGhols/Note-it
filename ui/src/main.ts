@@ -25,6 +25,9 @@ import {
   stepFind,
 } from './editor/find.ts';
 import { FindBar } from './ui/findBar.ts';
+import { FlashcardPanel } from './ui/flashcardPanel.ts';
+import { flashcardCountsIn, flashcardsIn } from './editor/flashcardMark.ts';
+import { reviewItems } from './flashcards/extract.ts';
 import { collapseTransition } from './ui/collapse.ts';
 import { HeaderReveal } from './ui/headerReveal.ts';
 import { CLIPPER, QUICK_ACTIONS } from './ui/icons.ts';
@@ -78,6 +81,7 @@ let searchPalette: SearchPalette | null = null;
 let findBar: FindBar | null = null;
 let trashPanel: TrashPanel | null = null;
 let timerPanel: TimerPanel | null = null;
+let flashcardPanel: FlashcardPanel | null = null;
 let noteStatus: NoteStatus | null = null;
 
 /**
@@ -91,6 +95,7 @@ function openGlobalSearch(): void {
   findBar?.close();
   trashPanel?.close();
   timerPanel?.close();
+  flashcardPanel?.close();
   searchPalette?.openPalette();
 }
 
@@ -105,6 +110,7 @@ function openTrash(): void {
   searchPalette?.close();
   findBar?.close();
   timerPanel?.close();
+  flashcardPanel?.close();
   trashPanel?.openPanel();
 }
 
@@ -113,6 +119,7 @@ function openFindBar(replace: boolean): void {
   searchPalette?.close();
   trashPanel?.close();
   timerPanel?.close();
+  flashcardPanel?.close();
   findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
 }
 
@@ -128,7 +135,49 @@ function openTimer(): void {
   searchPalette?.close();
   findBar?.close();
   trashPanel?.close();
+  flashcardPanel?.close();
   timerPanel?.openPanel();
+}
+
+/**
+ * Opens studying, with the cards the note holds at this moment.
+ *
+ * The list is taken here and handed over once. From this point the note goes
+ * on being edited and captured into, and the sitting stays as it started —
+ * which is the only way a reader on question four is still on the question
+ * they were on. The panel is given content and nothing else: it has no editor
+ * to write to.
+ */
+function openStudy(invoker?: HTMLElement | null): void {
+  if (!noteEditor || !flashcardPanel) return;
+  searchPalette?.close();
+  findBar?.close();
+  trashPanel?.close();
+  timerPanel?.close();
+
+  const state = noteEditor.getView().state;
+  const sources = flashcardsIn(state);
+  const items = reviewItems(sources);
+  if (items.length === 0) return;
+
+  flashcardPanel.openPanel({
+    items,
+    cards: sources.length,
+    schema: state.schema,
+    invoker: invoker ?? document.getElementById('btn-menu'),
+  });
+}
+
+/**
+ * Tells the menu how many cards the note holds now.
+ *
+ * Reading, and only reading: the count comes from the plugin that already
+ * recomputed it for the decoration, so knowing it costs one property access
+ * and writes nothing anywhere.
+ */
+function syncFlashcardCounts(): void {
+  if (!noteEditor || !noteMenu) return;
+  noteMenu.setFlashcardCounts(flashcardCountsIn(noteEditor.getView().state));
 }
 
 /** Mirrors how many occurrences there are into the bar. */
@@ -349,6 +398,9 @@ function setCollapsed(collapsed: boolean): void {
     searchPalette?.close();
     findBar?.close();
     trashPanel?.close();
+    // A collapsed note is a header bar: there is no room to study in, and the
+    // sitting is not worth keeping — the cards are still in the note.
+    flashcardPanel?.close();
     // The popover goes; the countdown does not. A collapsed note keeps its
     // timer running and keeps showing it on the bar — that is the whole reason
     // the readout is up there rather than in the panel.
@@ -468,6 +520,9 @@ function initUI(): void {
     element: editorContainer,
     initialContent: '',
     onImageTransfer: importImage,
+    // Live, per keystroke: a card exists the moment its delimiter is finished
+    // and stops existing the moment it is taken out.
+    onDocChange: syncFlashcardCounts,
     onUpdate: (markdown) => {
       setNoteTitle(markdown);
       if (activeNoteId) {
@@ -523,6 +578,10 @@ function initUI(): void {
       handlers: {
         onOpen: () => {
           infoTooltip?.hide();
+          // The header stays reachable while Study fills the note. Opening the
+          // menu is therefore also an explicit end to that sitting; otherwise
+          // the two panels would be stacked over the same surface.
+          flashcardPanel?.close();
           headerReveal?.setHeld(true);
           syncInlineFormatting();
         },
@@ -595,6 +654,7 @@ function initUI(): void {
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
         onInsertImage: requestImageInsert,
+        onOpenStudy: () => openStudy(document.getElementById('btn-menu')),
         onToggleAutoPaste: (active) => {
           // A request, not a decision: the host owns the single target, and
           // the answer comes back as `set_auto_paste` to every note affected.
@@ -681,6 +741,16 @@ function initUI(): void {
         onOpen: (noteId, query) => {
           bridge.sendMessage({ type: 'open_search_result', payload: { noteId, query } });
         },
+        onClose: () => noteEditor?.focus(),
+      },
+    });
+
+    // Studying, in the note the cards were written in. It is handed content
+    // and never the editor, so there is nothing here that could write to the
+    // document even by mistake.
+    flashcardPanel = new FlashcardPanel({
+      mount: appRoot,
+      handlers: {
         onClose: () => noteEditor?.focus(),
       },
     });
@@ -868,6 +938,7 @@ function initUI(): void {
       findBar?.close();
       trashPanel?.close();
       timerPanel?.close();
+      flashcardPanel?.close();
       // The stored timer, resolved against the clock as it is now rather than
       // resumed for whatever was left when this note was last on screen.
       timerPanel?.restore(msg.payload.timer ?? null);

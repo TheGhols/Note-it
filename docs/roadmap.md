@@ -484,7 +484,39 @@ thing people do most.
 - [x] No new keyboard shortcut, no new bridge message, and nothing touched in `assets`, `backup`,
       `storage`, `search`, `timer` or `autopaste`.
 
-### Phase 3.13: Flashcards Core (Planned)
+### Phase 3.13: Flashcards Core (Complete)
+
+- [x] `Pergunta :: Resposta` produces one source card and one review item; `Termo ::: Definição`
+      produces one source and two adjacent directions, in document order and without deduplication.
+- [x] Inline syntax requires whitespace, matches `:::` as a whole before `::`, and declines code,
+      URLs, times, namespaces, technical attributes, `::::` and ambiguous multiple delimiters.
+- [x] A top-level marker paragraph takes exactly the structural block before and after it. Headings,
+      hard breaks, bullet and numbered lists, tasks, quotes, callouts, images and image-plus-text are
+      preserved as the side the note already holds.
+- [x] Extraction reads the ProseMirror tree. Markdown remains the source of truth; there is no
+      flashcard file, database, persistent identifier, metadata or backend protocol.
+- [x] Managed pictures keep the Phase 3.12 node and `note-it-asset:` route. Study creates no copy,
+      thumbnail or second asset and draws no resize or alignment controls.
+- [x] A read-only ProseMirror decoration keeps the delimiter visible and marks recognised cards
+      without a transaction, save, timestamp change or undo entry. Source/review counts update with
+      the live document.
+- [x] *☰ › Estudo* gives a zero-card explanation and opens an internal Study panel only when there
+      is something to study — no permanent toolbar button and no second GTK window.
+- [x] Study has progress, front, reveal, answer, previous, next, shuffle and close. The ends do not
+      wrap; navigation and shuffle hide the answer, and shuffle uses an injectable Fisher-Yates RNG
+      over review items.
+- [x] The sitting is an ephemeral snapshot. Editing and AutoPaste continue underneath, while the
+      current list stays fixed until Study is closed and reopened.
+- [x] Keyboard and focus stay scoped to the panel: `Escape`, `Space`/`Enter`, arrows, named buttons,
+      no double action on a focused button, and focus returned to the invoker on close.
+- [x] The panel excludes menu, search, find, trash and timer popovers, closes on collapse, fits the
+      220–900 px note range and scrolls a long card internally. Closing the timer popover does not
+      stop its countdown.
+- [x] Study holds no editor and renders safe ProseMirror fragments with the note's `DOMSerializer`.
+      Open, reveal, move, shuffle and close leave Markdown and `updated_at` unchanged.
+
+Spaced repetition, scheduling, ratings, statistics, stable card identity and a global deck are not
+part of this phase.
 
 ### Phase 3.14: Capture & Export (Planned)
 

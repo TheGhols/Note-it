@@ -73,6 +73,7 @@ function mountMenu() {
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
+    onOpenStudy: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
@@ -324,11 +325,13 @@ describe('NoteMenu', () => {
     // Captura and Dados sit beside it, because putting a picture in a note,
     // filling it from the clipboard, moving it to the trash, opening the trash
     // and taking a backup are the other things you do with one rather than to
-    // it.
+    // it — and studying the cards a note holds is one more of them, which is
+    // why Estudo sits with that group rather than among the settings.
     expect(panels).toEqual([
       'paperType',
       'paperIntensity',
       'media',
+      'study',
       'capture',
       'data',
       'zoom',

@@ -884,6 +884,48 @@ result, the trash, or what the note reads as: searching an identifier, a width, 
 `assets` finds nothing, and a note holding one picture and no words is still *Nota sem título*. The
 words around a picture stay as findable as they always were.
 
+## Flashcards
+
+Write the card in the note. `Pergunta :: Resposta` is studied in one direction, and
+`Termo ::: Definição` in both. The spaces around an inline delimiter are part of the syntax:
+`A::B`, `namespace::method`, times, URLs, inline code, code blocks and a line with more than one
+possible delimiter stay ordinary content. Four or more colons are not a card either.
+
+For a side that is a whole block, put `::` or `:::` alone in a top-level paragraph between the two
+blocks. Exactly the block immediately before it is the front and exactly the one after it is the
+back. A side may therefore be a heading, paragraph with hard breaks, list, checklist, quote,
+callout, managed image, or image and text together. A marker nested in one of those blocks is just
+text, not structure.
+
+**The document is the deck.** There is no flashcard file, database, hidden identifier or parallel
+copy to synchronize. The detector reads the live ProseMirror document and projects source cards
+from it; Markdown and the existing `assets/` tree remain the only durable source. Deleting the
+delimiter deletes the card, and a backup already carries it because it carries the note and its
+pictures.
+
+Recognised delimiters stay visible and receive a faint editor decoration. The mark is paint over
+the document, never a transaction: it changes no Markdown, timestamp or undo history. The count in
+*☰ › Estudo* follows the live document and states both source cards and review items, because one
+reversible source produces two questions.
+
+**Studying.** *☰ › Estudo › Estudar flashcards* opens an internal panel over the current note. It
+starts on the front with the answer hidden; *Mostrar resposta*, *Anterior*, *Próximo* and
+*Embaralhar* operate on that sitting, with no wrap at either end. `Space` or `Enter` reveals,
+`ArrowLeft` and `ArrowRight` move, and `Escape` closes while the panel has focus. Long cards scroll
+inside the panel, and images use the same `note-it-asset:` reference without editor handles or
+controls.
+
+A sitting is a snapshot of the review items at the instant it opens. Editing or AutoPaste can keep
+changing the note underneath without changing the question currently being studied; close and open
+again to take a new snapshot. Shuffle permutes review items, returns to the first one and hides its
+answer. Nothing about order or progress is persisted.
+
+**Study is read-only.** Opening, revealing, moving, shuffling and closing dispatch no editor
+transaction and write no state. The note's Markdown, `updated_at` and undo history stay exactly as
+they were. A Timer or Pomodoro keeps running when its popover makes room for Study; collapsing the
+note closes the sitting, and hiding or quitting destroys it with the WebView. There is no global
+deck, scheduling, score, due date or spaced repetition in this phase.
+
 ## Clipboard AutoPaste
 
 Copy something anywhere on the machine, and it lands at the end of a note you chose. No window

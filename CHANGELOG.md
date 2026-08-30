@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Phase 3.13 Flashcards Core.** Cards are projections of the note itself: write
+  `Pergunta :: Resposta` for one direction or `Termo ::: Definição` for both, inline with spaces or
+  as a top-level marker between two structural blocks.
+  - Extraction walks the ProseMirror document rather than matching Markdown. Code, URLs, times,
+    namespaces, image attributes, long colon runs and ambiguous lines stay ordinary content, while
+    rich marks, headings, lists, tasks, quotes, callouts and managed images remain intact.
+  - The editor keeps `::` and `:::` visible under a quiet decoration and reports both source-card
+    and review-item counts live. Detection and decoration dispatch no transaction and write no
+    hidden identity, metadata, database or sidecar file.
+  - *☰ › Estudo* opens a read-only panel in the current WebView with progress, reveal, previous,
+    next, deterministic-testable shuffle, keyboard navigation, accessible names, focus restoration
+    and an internal scroll for long cards. A note with no cards says so and opens nothing.
+  - Each sitting snapshots the review items when it opens. Editing and AutoPaste continue without
+    rearranging it; reopening takes the new snapshot. Timer/Pomodoro continues while its popover is
+    closed, and collapsing the note ends the sitting.
+  - Images reuse the Phase 3.12 `noteItImage`, stored reference and `note-it-asset:` route. Study
+    serializes safe document fragments, copies no asset and exposes no editing controls.
+  - Open, reveal, navigation, shuffle and close leave Markdown, `updated_at`, undo history and
+    persisted application state untouched. Scheduling and spaced repetition remain outside 3.13.
+
 ### Fixed
 - **Phase 3.12R — a snapshot now holds the pictures too.** Phase 3.12 put a note's images in
   `assets/<note-uuid>/<asset-uuid>.<ext>` and the backup still copied only `notes/`, `trash/`,

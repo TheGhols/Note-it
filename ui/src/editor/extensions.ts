@@ -12,6 +12,7 @@ import { NoteItBlockquote } from './callout.ts';
 import { NoteItCodeBlock } from './codeBlock.ts';
 import { NoteItComment } from './comment.ts';
 import { NoteItFind } from './find.ts';
+import { NoteItFlashcards } from './flashcardMark.ts';
 import { NoteItImage } from './image.ts';
 import { NoteItMath } from './math.ts';
 import { NoteItTaskItem } from './taskItem.ts';
@@ -287,6 +288,7 @@ export const editorExtensions = [
   NoteItTypography,
   NoteItMath,
   NoteItFind,
+  NoteItFlashcards,
   Placeholder.configure({
     placeholder: 'Type your note here...',
   }),

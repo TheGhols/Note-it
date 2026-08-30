@@ -17,6 +17,15 @@ export interface NoteEditorOptions {
   initialContent?: string;
   onUpdate?: (markdown: string) => void;
   /**
+   * The document changed, said at once rather than after the save debounce.
+   *
+   * For what has to keep up with the text as it is typed and costs nothing to
+   * recompute — the count of flashcards in the note, today. Serializing to
+   * Markdown is what the debounce exists to avoid doing per keystroke, so
+   * nothing here is given the Markdown.
+   */
+  onDocChange?: () => void;
+  /**
    * A picture arrived by paste or by drop. Returning `true` means the editor
    * should leave the event alone: the host is importing it, and the document
    * changes when the reference comes back.
@@ -28,10 +37,12 @@ export class NoteEditor {
   private editor: Editor;
   private debounceTimer: number | null = null;
   private onUpdateCallback?: (markdown: string) => void;
+  private onDocChange?: () => void;
   private onImageTransfer?: (transfer: DataTransfer) => boolean;
 
   constructor(options: NoteEditorOptions) {
     this.onUpdateCallback = options.onUpdate;
+    this.onDocChange = options.onDocChange;
     this.onImageTransfer = options.onImageTransfer;
 
     this.editor = new Editor({
@@ -60,6 +71,7 @@ export class NoteEditor {
         },
       },
       onUpdate: () => {
+        this.onDocChange?.();
         if (this.debounceTimer !== null) {
           window.clearTimeout(this.debounceTimer);
         }
@@ -87,6 +99,10 @@ export class NoteEditor {
       contentType: 'markdown',
       emitUpdate: false,
     });
+    // Loading a note is not an edit — it must not save, and it does not — but
+    // it is a new document, and whatever is showing something about the
+    // document has to be told so.
+    this.onDocChange?.();
   }
 
   /**
