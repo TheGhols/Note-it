@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Phase 3.12R — a snapshot now holds the pictures too.** Phase 3.12 put a note's images in
+  `assets/<note-uuid>/<asset-uuid>.<ext>` and the backup still copied only `notes/`, `trash/`,
+  `config.toml` and `state.json`. A snapshot taken in between restores a note's Markdown and not the
+  file its `![](../assets/…)` points at — half a note, from something whose whole promise is that it
+  holds everything recoverable.
+  - `assets/` is part of every snapshot now, automatic and manual alike, in the same shape it has in
+    the store and byte for byte. No recompression, no conversion, no renaming: a backup copies bytes.
+  - Copied strictly and fail-closed. Two known levels and never a general recursive descent; no
+    symbolic link is followed at either; and anything that is not `<note-uuid>/<asset-uuid>.<ext>`
+    stops the snapshot rather than being quietly left out of one reported as complete. `assets/` is
+    written by Note-it and by nothing else, so an oddity there means the store is not in the state it
+    is believed to be. Scratch left by an interrupted import is skipped, as it is for the notes.
+  - Each name is validated by the same parser the `note-it-asset:` scheme uses, so a snapshot holds
+    exactly the files the application can serve and the two cannot come to disagree.
+  - An image no note points at any more is copied too. Phase 3.12 chose not to collect orphans, and
+    a backup is not the place to start doing it by omission.
+  - A failure copying an image fails the whole snapshot before the commit point: nothing is renamed
+    into place, the scratch directory is removed, and retention does not run — an old backup is never
+    deleted to make room for one that did not happen.
+  - `manifest.json` is version 2 and records how many images the snapshot holds. Version 1 snapshots
+    stay listable and readable, and read back as the zero images they genuinely held.
+  - A store written before images existed has no `assets/` at all, and backs up unchanged.
+  - `docs/storage.md` now includes `assets/` in the manual restore procedure.
+
 ### Added
 - **Phase 3.12 Images & Rich Layout.** A picture in a note, kept as a file rather than smuggled into
   the text. Paste one, drop one on the note, or choose one from *☰ › Mídia › Inserir imagem…*.

@@ -43,9 +43,11 @@ Note-it separates native system integration from document editing through a clea
 - `trash.rs`: recoverable deletion. Moves a note file between `notes/` and `trash/` and lists what
   is in there; it never reads, parses or rewrites a note, which is why a note with damaged front
   matter can still be deleted and recovered. See ADR-028.
-- `backup.rs`: local snapshots. Copies `notes/`, `trash/`, `config.toml` and `state.json` into
-  `backups/<timestamp>/`, atomically, with retention. Pure functions decide when one is owed, so
-  the 24-hour rule is tested without waiting a day. See ADR-029.
+- `backup.rs`: local snapshots. Copies `notes/`, `trash/`, `assets/`, `config.toml` and
+  `state.json` into `backups/<timestamp>/`, atomically, with retention. Pure functions decide when
+  one is owed, so the 24-hour rule is tested without waiting a day. `assets/` is a tree rather than
+  a flat directory, so it has a copy of its own — strict and fail-closed, validated by the same
+  parser the asset scheme uses, and never a general recursive descent. See ADR-029 and ADR-032.
 - `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`). Each note's entry
   also carries its Timer/Pomodoro, for the same reason it carries the zoom: it is state of the
   application, not of the document.

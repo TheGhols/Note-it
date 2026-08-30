@@ -444,6 +444,27 @@ Export moves back, and Flashcards — which needs images to be worth building �
 images by URL, and **automatic collection of orphaned assets** — removing a picture takes it out of
 the note and leaves the file, because deleting bytes on a guess is worse than keeping them.
 
+#### 3.12R: the backup learns about images
+
+Shipped in 3.12 and caught by the audit that followed: the pictures went into `assets/`, and the
+snapshot still copied only `notes/`, `trash/`, `config.toml` and `state.json`. A backup taken in
+between restores a note's Markdown and not the file its `![](../assets/…)` points at, which is not
+what a backup promises.
+
+- [x] `assets/` is part of a snapshot, in the same shape and byte for byte, for automatic and
+      manual backups alike — one routine serves both.
+- [x] Copied strictly and fail-closed: two known levels, never a general recursive descent, never a
+      symbolic link followed, and anything that is not `<note-uuid>/<asset-uuid>.<ext>` stops the
+      snapshot rather than being silently omitted from one reported as complete. Scratch left by an
+      interrupted import is skipped, as it is for the notes.
+- [x] An image no note points at any more is copied too. A backup is not garbage collection.
+- [x] A failure copying an image fails the whole snapshot before the commit point: nothing is
+      renamed into place, and retention does not run — an old backup is never deleted to make room
+      for one that did not happen.
+- [x] Manifest version 2 records the image count. Version 1 snapshots stay listable and readable.
+- [x] Proved by restoring into a second, empty store with the original deleted: both notes come
+      back, both images render through `note-it-asset:`, and every file is byte-identical.
+
 ### Phase 3.13: Flashcards Core (Planned)
 
 ### Phase 3.14: Capture & Export (Planned)

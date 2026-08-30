@@ -1,10 +1,18 @@
 //! Local snapshots of everything that can be recovered.
 //!
 //! A backup is a plain directory of plain files: the notes, the trash, the
-//! configuration and the window state, copied as they are. No archive, no
-//! database, no format of its own. Whatever goes wrong with Note-it, a
-//! snapshot can be read with `ls` and put back with `cp`, and that is the whole
-//! point of it.
+//! images those notes hold, the configuration and the window state, copied as
+//! they are. No archive, no database, no format of its own. Whatever goes
+//! wrong with Note-it, a snapshot can be read with `ls` and put back with
+//! `cp`, and that is the whole point of it.
+//!
+//! **Everything recoverable, or it is not a backup.** A note that says
+//! `![](../assets/…)` is only half a note without the file that reference
+//! points at, so `assets/` is copied with the same guarantees as the notes
+//! themselves and a snapshot that could not copy one is not committed at all.
+//! Phase 3.12 introduced those files and this did not learn about them until
+//! 3.12R; a snapshot taken in between restores the Markdown and not the
+//! pictures. See ADR-032.
 //!
 //! **Nothing leaves the machine.** There is no server, no cloud, no HTTP
 //! client, no upload and nothing to configure that would introduce one. A
@@ -73,6 +81,15 @@ impl SnapshotKind {
     }
 }
 
+/// The manifest format a snapshot taken now is written in.
+///
+/// Version 2 is version 1 plus `assets`. The number is what a snapshot says
+/// about *itself*, so a directory written before images existed keeps saying
+/// version 1 and stays exactly as valid as it was: nothing here branches on
+/// the version, and the field defaults, so an older manifest reads back as the
+/// zero assets it genuinely had.
+pub const MANIFEST_VERSION: u32 = 2;
+
 /// What a snapshot says about itself. Its presence is also what makes the
 /// directory a snapshot rather than a directory someone happened to create.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,6 +99,11 @@ pub struct SnapshotManifest {
     pub kind: String,
     pub notes: usize,
     pub trash: usize,
+    /// How many image files were copied — files, never directories. Absent
+    /// from a manifest written before 3.12R, where it reads as the nought it
+    /// truthfully was.
+    #[serde(default)]
+    pub assets: usize,
     pub config: bool,
     pub state: bool,
 }
@@ -94,12 +116,14 @@ pub struct Snapshot {
     pub created_at: DateTime<Utc>,
 }
 
-/// The four things a snapshot copies. Everything else in the data directory —
+/// The five things a snapshot copies. Everything else in the data directory —
 /// the backups themselves above all — is deliberately not here.
 #[derive(Debug, Clone)]
 pub struct BackupSources {
     pub notes_dir: PathBuf,
     pub trash_dir: PathBuf,
+    /// The images the notes hold, as a tree of `<note-uuid>/<asset-uuid>.<ext>`.
+    pub assets_dir: PathBuf,
     pub config_file: PathBuf,
     pub state_file: PathBuf,
 }
@@ -252,15 +276,19 @@ fn build_snapshot(
 
     let notes = copy_directory(&sources.notes_dir, &temp.join("notes"))?;
     let trash = copy_directory(&sources.trash_dir, &temp.join("trash"))?;
+    let assets = copy_assets_tree(&sources.assets_dir, &temp.join("assets"))?;
     let config = copy_optional_file(&sources.config_file, &temp.join("config.toml"))?;
     let state = copy_optional_file(&sources.state_file, &temp.join("state.json"))?;
 
+    // Written only once every copy above has succeeded, so a manifest can
+    // never claim a file the snapshot does not hold.
     let manifest = SnapshotManifest {
-        version: 1,
+        version: MANIFEST_VERSION,
         created_at: now,
         kind: kind.as_str().to_string(),
         notes,
         trash,
+        assets,
         config,
         state,
     };
@@ -346,6 +374,168 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
         }
         if !metadata.file_type().is_file() {
             continue;
+        }
+
+        fs::copy(&path, destination.join(name))
+            .map_err(|e| format!("Failed to copy {} into the snapshot: {e}", path.display()))?;
+        copied += 1;
+    }
+
+    Ok(copied)
+}
+
+/// Copies the images the notes hold, keeping the shape they are stored in.
+///
+/// `assets/` is not a flat directory, so [`copy_directory`] cannot serve it:
+/// it is one directory per note, holding one file per picture. This walks
+/// exactly those two levels and no more. It is deliberately not a general
+/// recursive copy — a routine that descends wherever it finds a directory is
+/// how a backup ends up following something out of the tree it was asked to
+/// copy, and there is nothing in a correct `assets/` for it to find down there.
+///
+/// **Strict, and fail-closed**, which is where this parts company with the
+/// notes. `notes/` holds files a person may reasonably have put there
+/// themselves, so an oddity is skipped with a warning. `assets/` is written by
+/// Note-it and by nothing else, so an oddity means the store is not in the
+/// state this believes it to be — and quietly omitting managed content while
+/// reporting a complete backup is the one failure a backup may never have.
+/// Anything that is not the expected shape stops the snapshot before it is
+/// committed.
+///
+/// What *is* expected, and skipped rather than refused, is scratch: an
+/// interrupted import leaves a `.tmp.…` beside the file it was writing, the
+/// same way an interrupted note save does. A name beginning with `.` is never
+/// committed content and never part of a snapshot.
+///
+/// Nothing decides here whether a picture is still *used*. An asset no note
+/// points at any more is managed content and is copied like the rest: Phase
+/// 3.12 chose not to collect orphans, and a backup is not the place to start
+/// doing it by omission.
+///
+/// Returns the number of image files copied.
+fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> {
+    fs::create_dir_all(destination).map_err(|e| {
+        format!(
+            "Failed to create {} inside the snapshot: {e}",
+            destination.display()
+        )
+    })?;
+
+    // A store written before images existed has no assets directory at all,
+    // and that is a store with no pictures rather than a broken one.
+    let Ok(metadata) = fs::symlink_metadata(source) else {
+        return Ok(0);
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "Failed to back up the managed images: {} is not a directory",
+            source.display()
+        ));
+    }
+
+    let entries = fs::read_dir(source)
+        .map_err(|e| format!("Failed to read {} for the backup: {e}", source.display()))?;
+
+    let mut copied = 0;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("Failed to read an entry of {}: {e}", source.display()))?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(format!(
+                "Failed to back up the managed images: {} has a name that is not text",
+                path.display()
+            ));
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is a symbolic link, \
+                 and a backup never follows one",
+                path.display()
+            ));
+        }
+        if !metadata.file_type().is_dir() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is not a note's image directory",
+                path.display()
+            ));
+        }
+        if uuid::Uuid::parse_str(name).is_err() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is not named after a note",
+                path.display()
+            ));
+        }
+
+        copied += copy_note_assets(&path, &destination.join(name), name)?;
+    }
+
+    Ok(copied)
+}
+
+/// Copies one note's images. The second and last level of the tree.
+///
+/// Each name is validated by [`crate::assets::parse_asset_request`] — the same
+/// function that decides what the page is allowed to ask the host for — so a
+/// snapshot holds exactly the files the application can serve, and the two can
+/// never come to disagree about what a managed asset is.
+///
+/// The file keeps the name it has on disk. Nothing is renamed into the
+/// canonical spelling on the way into a snapshot, because a note's reference
+/// names the file that exists and a backup that "tidied" it would restore a
+/// broken link.
+fn copy_note_assets(source: &Path, destination: &Path, note: &str) -> Result<usize, String> {
+    fs::create_dir_all(destination).map_err(|e| {
+        format!(
+            "Failed to create {} inside the snapshot: {e}",
+            destination.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source)
+        .map_err(|e| format!("Failed to read {} for the backup: {e}", source.display()))?;
+
+    let mut copied = 0;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("Failed to read an entry of {}: {e}", source.display()))?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(format!(
+                "Failed to back up the managed images: {} has a name that is not text",
+                path.display()
+            ));
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is a symbolic link, \
+                 and a backup never follows one",
+                path.display()
+            ));
+        }
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is not an image file",
+                path.display()
+            ));
+        }
+        if crate::assets::parse_asset_request(&format!("/{note}/{name}")).is_none() {
+            return Err(format!(
+                "Failed to back up the managed images: {} is not a managed asset",
+                path.display()
+            ));
         }
 
         fs::copy(&path, destination.join(name))
@@ -443,6 +633,7 @@ mod tests {
         root: PathBuf,
         notes: PathBuf,
         trash: PathBuf,
+        assets: PathBuf,
         config: PathBuf,
         state: PathBuf,
         backups: PathBuf,
@@ -453,6 +644,7 @@ mod tests {
             BackupSources {
                 notes_dir: self.notes.clone(),
                 trash_dir: self.trash.clone(),
+                assets_dir: self.assets.clone(),
                 config_file: self.config.clone(),
                 state_file: self.state.clone(),
             }
@@ -474,9 +666,11 @@ mod tests {
         let root = tmp.path().to_path_buf();
         let notes = root.join("notes");
         let trash = root.join("trash");
+        let assets = root.join("assets");
         let backups = root.join("backups");
         fs::create_dir_all(&notes).expect("notes");
         fs::create_dir_all(&trash).expect("trash");
+        fs::create_dir_all(&assets).expect("assets");
         Store {
             _tmp: tmp,
             config: root.join("config.toml"),
@@ -484,8 +678,68 @@ mod tests {
             root,
             notes,
             trash,
+            assets,
             backups,
         }
+    }
+
+    /// A store as it was before images existed: no `assets/` at all.
+    fn store_without_assets() -> Store {
+        let store = store();
+        fs::remove_dir_all(&store.assets).expect("remove the assets directory");
+        store
+    }
+
+    /// Bytes that are a real PNG as far as the asset subsystem is concerned.
+    fn png(seed: u8) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[seed; 64]);
+        bytes
+    }
+
+    /// Writes one managed image and returns its bytes.
+    fn put_asset(store: &Store, note: &str, asset: &str, extension: &str, seed: u8) -> Vec<u8> {
+        let directory = store.assets.join(note);
+        fs::create_dir_all(&directory).expect("note asset directory");
+        let bytes = png(seed);
+        fs::write(directory.join(format!("{asset}.{extension}")), &bytes).expect("asset");
+        bytes
+    }
+
+    fn note_uuid(n: u8) -> String {
+        format!("{n:08x}-1111-4111-8111-111111111111")
+    }
+
+    fn asset_uuid(n: u8) -> String {
+        format!("{n:08x}-2222-4222-8222-222222222222")
+    }
+
+    fn manifest_of(snapshot: &Path) -> SnapshotManifest {
+        read_manifest(&snapshot.join(MANIFEST_FILE)).expect("a snapshot has a manifest")
+    }
+
+    /// Copies a snapshot subtree the way a person restoring one with `cp -r`
+    /// would. Test scaffolding: the application never does this.
+    fn copy_tree_for_test(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).expect("destination");
+        let Ok(entries) = fs::read_dir(source) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().expect("name").to_owned();
+            if path.is_dir() {
+                copy_tree_for_test(&path, &destination.join(name));
+            } else {
+                fs::copy(&path, destination.join(name)).expect("copy");
+            }
+        }
+    }
+
+    fn digest(path: &Path) -> Vec<u8> {
+        // Comparing the bytes themselves rather than a hash of them: this is
+        // the strongest statement available and needs no dependency.
+        fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
     fn at(text: &str) -> DateTime<Utc> {
@@ -993,6 +1247,687 @@ mod tests {
         assert_eq!(
             crate::state::AppState::load_from_file(&manager.state_file_path()).active_layer_mode,
             crate::state::LayerMode::Desktop
+        );
+    }
+
+    // ---------------------------------------------------------------- assets
+    //
+    // Phase 3.12 put a note's images in `assets/<note>/<asset>.<ext>` and this
+    // routine did not know about them, so a snapshot restored the Markdown and
+    // not the pictures it pointed at. Everything below is that gap closed.
+
+    #[test]
+    fn a_store_with_no_images_still_backs_up_and_says_so() {
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota sem imagem").expect("note");
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        // The directory is there and empty, so a restore is a copy of the same
+        // five things whether or not the store ever held a picture.
+        assert!(snapshot.join("assets").is_dir());
+        assert!(names_in(&snapshot.join("assets")).is_empty());
+        assert_eq!(manifest_of(&snapshot).assets, 0);
+    }
+
+    #[test]
+    fn a_store_written_before_images_existed_backs_up_unchanged() {
+        // No `assets/` at all, which is every store that predates Phase 3.12.
+        // That is a store with no pictures, not a broken one.
+        let store = store_without_assets();
+        fs::write(store.notes.join("a.md"), "nota antiga").expect("note");
+        assert!(!store.assets.exists());
+
+        let snapshot = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect("a store from before images still backs up");
+
+        assert_eq!(manifest_of(&snapshot).assets, 0);
+        assert_eq!(
+            fs::read_to_string(snapshot.join("notes/a.md")).expect("a"),
+            "nota antiga"
+        );
+        // And the store is not given a directory it did not have.
+        assert!(!store.assets.exists());
+    }
+
+    #[test]
+    fn one_image_travels_with_the_note_that_points_at_it() {
+        let store = store();
+        let note = note_uuid(1);
+        let asset = asset_uuid(1);
+        fs::write(
+            store.notes.join(format!("{note}.md")),
+            format!("![](../assets/{note}/{asset}.png)"),
+        )
+        .expect("note");
+        let bytes = put_asset(&store, &note, &asset, "png", 0xA1);
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        let copied = snapshot
+            .join("assets")
+            .join(&note)
+            .join(format!("{asset}.png"));
+        assert!(copied.is_file(), "the image did not travel with the note");
+        // Byte for byte. A backup copies bytes and does nothing else to them:
+        // no recompression, no conversion, no metadata rewritten.
+        assert_eq!(digest(&copied), bytes);
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+        // The note is not rewritten, so the reference still resolves.
+        assert_eq!(
+            fs::read_to_string(snapshot.join("notes").join(format!("{note}.md"))).expect("note"),
+            format!("![](../assets/{note}/{asset}.png)")
+        );
+    }
+
+    #[test]
+    fn every_image_of_every_note_travels() {
+        // Two notes, three pictures, and one of the notes holds two of them.
+        let store = store();
+        let (first, second) = (note_uuid(1), note_uuid(2));
+        let bytes = [
+            put_asset(&store, &first, &asset_uuid(1), "png", 0x11),
+            put_asset(&store, &first, &asset_uuid(2), "webp", 0x22),
+            put_asset(&store, &second, &asset_uuid(3), "jpg", 0x33),
+        ];
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+        let assets = snapshot.join("assets");
+
+        assert_eq!(manifest_of(&snapshot).assets, 3);
+        assert_eq!(names_in(&assets), vec![first.clone(), second.clone()]);
+        assert_eq!(
+            names_in(&assets.join(&first)),
+            vec![
+                format!("{}.png", asset_uuid(1)),
+                format!("{}.webp", asset_uuid(2)),
+            ]
+        );
+        assert_eq!(
+            names_in(&assets.join(&second)),
+            vec![format!("{}.jpg", asset_uuid(3))]
+        );
+
+        // The shape is kept: one directory per note, never flattened, and the
+        // bytes of each are the bytes that were stored.
+        assert_eq!(
+            digest(&assets.join(&first).join(format!("{}.png", asset_uuid(1)))),
+            bytes[0]
+        );
+        assert_eq!(
+            digest(&assets.join(&first).join(format!("{}.webp", asset_uuid(2)))),
+            bytes[1]
+        );
+        assert_eq!(
+            digest(&assets.join(&second).join(format!("{}.jpg", asset_uuid(3)))),
+            bytes[2]
+        );
+    }
+
+    #[test]
+    fn an_image_no_note_points_at_any_more_is_still_backed_up() {
+        // Phase 3.12 chose not to collect orphans, so an unreferenced picture
+        // is managed content like any other. A backup that quietly left it out
+        // would be collecting them by omission — and deciding a file is
+        // unwanted is not a backup's decision to make.
+        let store = store();
+        let note = note_uuid(1);
+        fs::write(
+            store.notes.join(format!("{note}.md")),
+            "nota sem imagem alguma",
+        )
+        .expect("note");
+        let bytes = put_asset(&store, &note, &asset_uuid(9), "png", 0x99);
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+        assert_eq!(
+            digest(
+                &snapshot
+                    .join("assets")
+                    .join(&note)
+                    .join(format!("{}.png", asset_uuid(9)))
+            ),
+            bytes
+        );
+    }
+
+    #[test]
+    fn scratch_left_by_an_interrupted_import_is_not_snapshot_content() {
+        // An import writes through a temp file in the same directory, exactly
+        // as a note save does. What a crash leaves behind was never committed
+        // content and is not part of a snapshot — and it does not fail one.
+        let store = store();
+        let note = note_uuid(1);
+        put_asset(&store, &note, &asset_uuid(1), "png", 0x44);
+        fs::write(
+            store.assets.join(&note).join(".tmp.partial.png.4242"),
+            png(0),
+        )
+        .expect("scratch beside the asset");
+        fs::create_dir_all(store.assets.join(".tmp.4242")).expect("scratch beside the note");
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+        assert_eq!(
+            names_in(&snapshot.join("assets").join(&note)),
+            vec![format!("{}.png", asset_uuid(1))]
+        );
+        assert_eq!(names_in(&snapshot.join("assets")), vec![note]);
+    }
+
+    #[test]
+    fn an_assets_path_that_is_not_a_directory_fails_the_backup() {
+        // "0 images copied, backup complete" over a store whose managed area
+        // is not what it should be would be a snapshot that looks whole and is
+        // not. Fail closed.
+        let store = store_without_assets();
+        fs::write(&store.assets, "não é um diretório").expect("occupy the assets path");
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+
+        let error = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("a broken managed area must not produce a snapshot");
+        assert!(error.contains("not a directory"), "{error}");
+        assert!(list_snapshots(&store.backups).is_empty());
+    }
+
+    #[test]
+    fn a_symbolic_link_where_a_notes_images_belong_fails_the_backup() {
+        // `assets/<note> -> ~/Pictures`. Following it would copy somebody's
+        // photographs into a Note-it snapshot; ignoring it would report a
+        // complete backup of a store this no longer understands.
+        let store = store();
+        let outside = store.root.join("fora");
+        fs::create_dir_all(&outside).expect("outside");
+        fs::write(outside.join("segredo.png"), png(0xFF)).expect("secret");
+        symlink(&outside, store.assets.join(note_uuid(1))).expect("directory symlink");
+
+        let error = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("a symbolic link in the managed area must fail the backup");
+        assert!(error.contains("symbolic link"), "{error}");
+        assert!(list_snapshots(&store.backups).is_empty());
+        // Nothing from outside the tree was copied, and nothing was left behind.
+        assert!(names_in(&store.backups).is_empty());
+    }
+
+    #[test]
+    fn a_symbolic_link_where_an_image_belongs_fails_the_backup() {
+        let store = store();
+        let note = note_uuid(1);
+        fs::create_dir_all(store.assets.join(&note)).expect("note asset directory");
+        let outside = store.root.join("passwd");
+        fs::write(&outside, "root:x:0:0").expect("outside file");
+        symlink(
+            &outside,
+            store
+                .assets
+                .join(&note)
+                .join(format!("{}.png", asset_uuid(1))),
+        )
+        .expect("file symlink");
+
+        let error = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("a symbolic link in the managed area must fail the backup");
+        assert!(error.contains("symbolic link"), "{error}");
+        assert!(list_snapshots(&store.backups).is_empty());
+    }
+
+    #[test]
+    fn anything_that_is_not_the_expected_shape_fails_the_backup() {
+        // `assets/` is written by Note-it and by nothing else, so an entry
+        // this does not recognise means the store is not in the state it is
+        // believed to be. Each case is checked in a store of its own, because
+        // the first one is meant to stop the backup.
+        /// One way a managed area can be wrong, and how to arrange it.
+        type MalformedCase = (&'static str, Box<dyn Fn(&Store)>);
+
+        let cases: Vec<MalformedCase> = vec![
+            (
+                "a directory not named after a note",
+                Box::new(|store: &Store| {
+                    fs::create_dir_all(store.assets.join("nao-e-uuid")).expect("directory");
+                }),
+            ),
+            (
+                "a loose file where a note's directory belongs",
+                Box::new(|store: &Store| {
+                    fs::write(store.assets.join("solto.png"), png(1)).expect("file");
+                }),
+            ),
+            (
+                "a directory inside a note's images",
+                Box::new(move |store: &Store| {
+                    fs::create_dir_all(store.assets.join(note_uuid(1)).join("subdir"))
+                        .expect("nested directory");
+                }),
+            ),
+            (
+                "a file that is not a managed asset",
+                Box::new(|store: &Store| {
+                    let directory = store.assets.join(note_uuid(1));
+                    fs::create_dir_all(&directory).expect("directory");
+                    fs::write(directory.join("qualquer-coisa.txt.bak"), "lixo").expect("file");
+                }),
+            ),
+            (
+                "an asset in a format the store does not hold",
+                Box::new(|store: &Store| {
+                    let directory = store.assets.join(note_uuid(1));
+                    fs::create_dir_all(&directory).expect("directory");
+                    fs::write(directory.join(format!("{}.svg", asset_uuid(1))), "<svg/>")
+                        .expect("file");
+                }),
+            ),
+            (
+                "an asset whose name is not an identifier",
+                Box::new(|store: &Store| {
+                    let directory = store.assets.join(note_uuid(1));
+                    fs::create_dir_all(&directory).expect("directory");
+                    fs::write(directory.join("bad-name.png"), png(1)).expect("file");
+                }),
+            ),
+        ];
+
+        for (description, arrange) in cases {
+            let store = store();
+            fs::write(store.notes.join("a.md"), "nota").expect("note");
+            arrange(&store);
+
+            let error = store
+                .backup(at("2026-08-30T09:30:00Z"))
+                .expect_err(description);
+            assert!(error.contains("managed images"), "{description}: {error}");
+            assert!(
+                list_snapshots(&store.backups).is_empty(),
+                "{description}: a snapshot was committed anyway"
+            );
+        }
+    }
+
+    #[test]
+    fn an_image_that_cannot_be_read_stops_the_snapshot_before_it_exists() {
+        // The whole transaction, exercised through the one thing that can fail
+        // late: the notes are copied, and then an image cannot be. Nothing may
+        // be committed, nothing swept, and the previous snapshot must survive.
+        use std::os::unix::fs::PermissionsExt;
+
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+        let note = note_uuid(1);
+        put_asset(&store, &note, &asset_uuid(1), "png", 0x55);
+
+        // An earlier snapshot, so there is something a failed run could damage.
+        let earlier = store
+            .backup(at("2026-08-29T09:30:00Z"))
+            .expect("first backup");
+
+        let unreadable = store
+            .assets
+            .join(&note)
+            .join(format!("{}.png", asset_uuid(1)));
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+            .expect("make the asset unreadable");
+
+        // A process that bypasses permission bits — root, which is what CI
+        // runs as — cannot be given an unreadable file, so the premise of this
+        // test does not exist there. The transaction it guards is covered for
+        // every user by the run below, which arranges a failure the filesystem
+        // enforces rather than one the caller is trusted to respect.
+        if fs::read(&unreadable).is_ok() {
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644))
+                .expect("restore permissions");
+            return;
+        }
+
+        let error = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("an image that cannot be copied must fail the snapshot");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644))
+            .expect("restore permissions");
+
+        assert!(error.contains("into the snapshot"), "{error}");
+        // No second snapshot, and no scratch left claiming to be one.
+        let snapshots = list_snapshots(&store.backups);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].path, earlier);
+        assert!(names_in(&store.backups)
+            .iter()
+            .all(|name| !name.starts_with(TEMP_PREFIX)));
+    }
+
+    #[test]
+    fn a_failure_while_copying_the_images_commits_nothing() {
+        // The same transaction as above, arranged so it holds for every user:
+        // the notes and the trash copy, and then the managed area turns out
+        // not to be what it should be. Everything up to the rename can fail
+        // with nothing gained and nothing lost.
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+        fs::write(store.trash.join("b.md"), "na lixeira").expect("trashed note");
+        let earlier = store
+            .backup(at("2026-08-29T09:30:00Z"))
+            .expect("first backup");
+
+        // One good image, and one entry that cannot be part of a snapshot.
+        put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 0x55);
+        fs::create_dir_all(store.assets.join(note_uuid(2)).join("subdir"))
+            .expect("an unexpected directory inside a note's images");
+
+        let error = store
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("a managed area that is not what it should be must fail the snapshot");
+
+        assert!(error.contains("managed images"), "{error}");
+        // Exactly the snapshot that was there before, and no scratch beside it.
+        let snapshots = list_snapshots(&store.backups);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].path, earlier);
+        assert!(names_in(&store.backups)
+            .iter()
+            .all(|name| !name.starts_with(TEMP_PREFIX)));
+        // The store itself is untouched: a backup never edits what it copies.
+        assert_eq!(
+            fs::read_to_string(store.notes.join("a.md")).expect("read"),
+            "nota"
+        );
+    }
+
+    #[test]
+    fn a_failed_image_copy_never_prunes_an_old_snapshot_to_make_room() {
+        // Retention runs after a commit and only after one. A run that fails
+        // while copying the images must not have deleted anything on its way
+        // there — trading protection already on disk for a backup that then
+        // did not happen is the one thing the create-commit-prune order exists
+        // to prevent.
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+        for day in 1..=3 {
+            store
+                .backup(at(&format!("2026-08-{day:02}T09:30:00Z")))
+                .expect("earlier backup");
+        }
+        let before = names_in(&store.backups);
+        assert_eq!(before.len(), 3);
+
+        // A managed area that cannot be snapshotted, arranged so the filesystem
+        // enforces it for every user rather than the caller's permissions.
+        fs::create_dir_all(store.assets.join("nao-e-uuid")).expect("a malformed entry");
+
+        // Two kept, three on disk: a successful run here would prune one.
+        let error = create_snapshot(
+            &store.backups,
+            &store.sources(),
+            SnapshotKind::Automatic,
+            at("2026-08-30T09:30:00Z"),
+            2,
+        )
+        .expect_err("the snapshot must fail");
+
+        assert!(error.contains("managed images"), "{error}");
+        assert_eq!(
+            names_in(&store.backups),
+            before,
+            "a failed backup pruned an old one"
+        );
+    }
+
+    #[test]
+    fn a_manifest_written_before_images_existed_is_still_a_snapshot() {
+        // Every backup on disk today was written by version 1. None of them
+        // may become unreadable, unlistable, or stop counting as the most
+        // recent snapshot.
+        let store = store();
+        fs::create_dir_all(&store.backups).expect("backups");
+        let old = store.backups.join("2026-08-01T09-30-00Z");
+        fs::create_dir_all(old.join("notes")).expect("old snapshot");
+        fs::write(
+            old.join(MANIFEST_FILE),
+            r#"{
+                "version": 1,
+                "created_at": "2026-08-01T09:30:00Z",
+                "kind": "automatic",
+                "notes": 2,
+                "trash": 0,
+                "config": true,
+                "state": true
+            }"#,
+        )
+        .expect("a version 1 manifest");
+
+        let snapshots = list_snapshots(&store.backups);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].created_at, at("2026-08-01T09:30:00Z"));
+        assert_eq!(
+            last_snapshot_time(&store.backups),
+            Some(at("2026-08-01T09:30:00Z"))
+        );
+
+        let manifest = manifest_of(&old);
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.notes, 2);
+        // It said nothing about images because it had none to say anything
+        // about, and it reads back as exactly that.
+        assert_eq!(manifest.assets, 0);
+    }
+
+    #[test]
+    fn a_snapshot_taken_now_says_which_version_it_is_and_what_it_holds() {
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+        put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 0x77);
+        put_asset(&store, &note_uuid(2), &asset_uuid(2), "gif", 0x88);
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+        let manifest = manifest_of(&snapshot);
+
+        assert_eq!(manifest.version, MANIFEST_VERSION);
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.notes, 1);
+        assert_eq!(manifest.assets, 2);
+
+        // The manifest never claims a file the snapshot does not hold: the
+        // count is the files on disk under `assets/`.
+        let mut on_disk = 0;
+        for note in fs::read_dir(snapshot.join("assets")).expect("assets") {
+            on_disk += fs::read_dir(note.expect("entry").path())
+                .expect("note assets")
+                .count();
+        }
+        assert_eq!(on_disk, manifest.assets);
+    }
+
+    #[test]
+    fn an_automatic_snapshot_carries_the_images_too() {
+        // One routine serves both kinds. There is no "backup with pictures"
+        // and "backup without" to fall out of step with each other.
+        let store = store();
+        fs::write(store.notes.join("a.md"), "nota").expect("note");
+        let bytes = put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 0xAB);
+
+        let snapshot = create_snapshot(
+            &store.backups,
+            &store.sources(),
+            SnapshotKind::Automatic,
+            at("2026-08-30T09:30:00Z"),
+            SNAPSHOT_RETENTION,
+        )
+        .expect("automatic backup");
+
+        let manifest = manifest_of(&snapshot);
+        assert_eq!(manifest.kind, "automatic");
+        assert_eq!(manifest.assets, 1);
+        assert_eq!(
+            digest(
+                &snapshot
+                    .join("assets")
+                    .join(note_uuid(1))
+                    .join(format!("{}.png", asset_uuid(1)))
+            ),
+            bytes
+        );
+    }
+
+    #[test]
+    fn a_snapshot_restores_a_note_and_its_picture_into_an_empty_store() {
+        // The whole point of the phase, end to end: a store, a snapshot, and a
+        // second store that gets nothing except what the snapshot holds.
+        let store = store();
+        let note = note_uuid(1);
+        let asset = asset_uuid(1);
+        let markdown = format!("# Biópsia\n\n![](../assets/{note}/{asset}.png)\n\nlegenda");
+        fs::write(store.notes.join(format!("{note}.md")), &markdown).expect("note");
+        let bytes = put_asset(&store, &note, &asset, "png", 0xCD);
+        fs::write(&store.config, "theme = \"dark\"\n").expect("config");
+        fs::write(&store.state, "{\"notes\":{}}").expect("state");
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        // A second store, and nothing of the first reaches it.
+        let restored_tmp = tempdir().expect("tempdir");
+        let restored = restored_tmp.path().join("note-it");
+        for part in ["notes", "trash", "assets"] {
+            copy_tree_for_test(&snapshot.join(part), &restored.join(part));
+        }
+        fs::create_dir_all(&restored).expect("restored root");
+        fs::copy(snapshot.join("config.toml"), restored.join("config.toml")).expect("config");
+        fs::copy(snapshot.join("state.json"), restored.join("state.json")).expect("state");
+
+        // The note came back byte for byte, so its reference is the one it had.
+        assert_eq!(
+            fs::read_to_string(restored.join("notes").join(format!("{note}.md"))).expect("note"),
+            markdown
+        );
+        // ...and the file that reference points at is there, byte for byte.
+        let picture = restored
+            .join("assets")
+            .join(&note)
+            .join(format!("{asset}.png"));
+        assert_eq!(digest(&picture), bytes);
+
+        // Resolved the way the note resolves it: `../assets/…` from `notes/`.
+        let from_note = restored
+            .join("notes")
+            .join(format!("../assets/{note}/{asset}.png"));
+        assert!(
+            from_note.exists(),
+            "the note's own reference does not resolve"
+        );
+        // And the host would serve it: the same parse the URI scheme performs.
+        let request = crate::assets::parse_asset_request(&format!("/{note}/{asset}.png"))
+            .expect("the restored asset is one the application can serve");
+        assert_eq!(request.file_path(&restored.join("assets")), picture);
+    }
+
+    #[test]
+    fn a_note_in_the_trash_keeps_its_picture_through_a_snapshot() {
+        // A trashed note is still recoverable content, and its `../assets/…`
+        // resolves from `trash/` exactly as it does from `notes/` — which is
+        // the reason the reference is relative in the first place.
+        let store = store();
+        let note = note_uuid(1);
+        let asset = asset_uuid(1);
+        let markdown = format!("nota descartada\n\n![](../assets/{note}/{asset}.png)");
+        fs::write(store.trash.join(format!("{note}.md")), &markdown).expect("trashed note");
+        let bytes = put_asset(&store, &note, &asset, "png", 0xEF);
+
+        let snapshot = store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        assert_eq!(manifest_of(&snapshot).trash, 1);
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+
+        let restored_tmp = tempdir().expect("tempdir");
+        let restored = restored_tmp.path().join("note-it");
+        for part in ["notes", "trash", "assets"] {
+            copy_tree_for_test(&snapshot.join(part), &restored.join(part));
+        }
+
+        // It is still in the trash, and its picture is still there.
+        assert_eq!(
+            fs::read_to_string(restored.join("trash").join(format!("{note}.md"))).expect("note"),
+            markdown
+        );
+        assert!(restored
+            .join("trash")
+            .join(format!("../assets/{note}/{asset}.png"))
+            .exists());
+
+        // Bringing it back out is the ordinary restore, and the reference is
+        // untouched by it: the file moves, its text does not.
+        let manager = crate::storage::StorageManager::with_custom_paths(
+            restored.join("notes"),
+            restored.join("config"),
+            restored.join("state"),
+            restored.join("runtime"),
+        )
+        .expect("open the restored store");
+        let id = uuid::Uuid::parse_str(&note).expect("note identifier");
+        manager
+            .restore_note_from_trash(&id)
+            .expect("bring the note back");
+
+        assert_eq!(
+            fs::read_to_string(manager.note_path(&id)).expect("restored note"),
+            markdown
+        );
+        assert_eq!(
+            digest(
+                &restored
+                    .join("assets")
+                    .join(&note)
+                    .join(format!("{asset}.png"))
+            ),
+            bytes
+        );
+    }
+
+    #[test]
+    fn a_backup_never_touches_the_store_it_copies() {
+        // Not the notes, not the pictures, not their modification dates. A
+        // backup reads.
+        let store = store();
+        let note = note_uuid(1);
+        let asset = asset_uuid(1);
+        let markdown = format!("nota\n\n![](../assets/{note}/{asset}.png)");
+        let note_path = store.notes.join(format!("{note}.md"));
+        fs::write(&note_path, &markdown).expect("note");
+        let bytes = put_asset(&store, &note, &asset, "png", 0x12);
+        let asset_path = store.assets.join(&note).join(format!("{asset}.png"));
+
+        let before = (
+            fs::metadata(&note_path)
+                .and_then(|m| m.modified())
+                .expect("note mtime"),
+            fs::metadata(&asset_path)
+                .and_then(|m| m.modified())
+                .expect("asset mtime"),
+        );
+
+        store.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+
+        assert_eq!(fs::read_to_string(&note_path).expect("note"), markdown);
+        assert_eq!(digest(&asset_path), bytes);
+        assert_eq!(
+            (
+                fs::metadata(&note_path)
+                    .and_then(|m| m.modified())
+                    .expect("note mtime"),
+                fs::metadata(&asset_path)
+                    .and_then(|m| m.modified())
+                    .expect("asset mtime"),
+            ),
+            before,
+            "a backup moved a modification date"
+        );
+        // Nothing was added to the store either.
+        assert_eq!(
+            names_in(&store.assets.join(&note)),
+            vec![format!("{asset}.png")]
         );
     }
 

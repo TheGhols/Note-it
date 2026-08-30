@@ -1307,6 +1307,42 @@ the page named. A paste and a drop hand the page a `File`, and the page sends
 its bytes — base64 for the length of one message, never anything that reaches a
 note. In none of the three does the page get to point the host at a file.
 
+### A snapshot holds the pictures too (3.12R)
+
+This did not, when 3.12 shipped. The bytes went to `assets/` and the backup
+went on copying `notes/`, `trash/`, `config.toml` and `state.json`, so a
+snapshot taken in between restores a note's Markdown and not the file its
+`![](../assets/…)` points at. A backup whose promise is "everything
+recoverable" that quietly holds half a note is worse than one that had never
+claimed it, and 3.12 was not accepted until this was closed.
+
+`assets/` is a tree rather than a flat directory, so it gets a copy of its own
+rather than the flat one for notes being loosened into a general recursion —
+a routine that descends wherever it finds a directory is how a backup ends up
+following something out of the tree it was asked to copy, and it would put the
+notes' own guarantees at risk to serve a different shape.
+
+It is strict where the notes' copy is forgiving, and the asymmetry is the
+point. `notes/` holds files a person may reasonably have put there themselves,
+so an oddity is skipped with a warning. `assets/` is written by Note-it and by
+nothing else, so anything that is not `<note-uuid>/<asset-uuid>.<ext>` means the
+store is not in the state this believes it to be — and the one thing a backup
+may never do is omit managed content while reporting success. No symbolic link
+is followed at either level; each name is validated by the same
+`parse_asset_request` the URI scheme uses, so a snapshot holds exactly the files
+the application can serve.
+
+An image no note points at any more is copied like the rest. Deciding it is
+dispensable would be the garbage collection this phase deliberately does not
+do, arrived at by omission instead of by design.
+
+The transaction is the one that was already there: the copy happens inside the
+scratch directory, before the rename that commits, so a failure copying an
+image leaves no snapshot, no manifest and no pruned predecessor. The manifest
+moves to version 2 and records the count; version 1 keeps parsing, because the
+field defaults and nothing branches on the number — every snapshot on disk
+today was written by version 1 and none of them may become unreadable.
+
 ### Removing a picture leaves the file
 
 Taking an image out of a note takes it out of the note. The bytes stay.

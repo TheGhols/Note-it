@@ -6,6 +6,7 @@ Note-it adheres to the XDG Base Directory Specification:
 | --- | --- | --- |
 | `$XDG_DATA_HOME/note-it/notes/` | Persisted Markdown note files (`<uuid>.md`) | `~/.local/share/note-it/notes/` |
 | `$XDG_DATA_HOME/note-it/trash/` | Deleted notes, waiting to be restored | `~/.local/share/note-it/trash/` |
+| `$XDG_DATA_HOME/note-it/assets/` | Images the notes hold, one directory per note | `~/.local/share/note-it/assets/` |
 | `$XDG_DATA_HOME/note-it/backups/` | Local snapshots of the recoverable store | `~/.local/share/note-it/backups/` |
 | `$XDG_CONFIG_HOME/note-it/config.toml` | User configuration options | `~/.config/note-it/config.toml` |
 | `$XDG_STATE_HOME/note-it/state.json` | Window geometry, active mode, and transient UI state | `~/.local/state/note-it/state.json` |
@@ -210,17 +211,39 @@ backups/2026-08-29T09-30-00Z/
   manifest.json
   notes/<uuid>.md …
   trash/<uuid>.md, <uuid>.json …
+  assets/<note-uuid>/<asset-uuid>.<ext> …
   config.toml
   state.json
 ```
 
 `manifest.json` records the version, when the snapshot was taken, whether it was
-automatic or manual, how many notes and trash entries it holds, and whether the
-configuration and window state were present. A directory in `backups/` counts as
-a snapshot only if it is a real directory, its name does not begin with `.`, and
-it holds a readable manifest.
+automatic or manual, how many notes, trash entries and images it holds, and
+whether the configuration and window state were present. A directory in
+`backups/` counts as a snapshot only if it is a real directory, its name does
+not begin with `.`, and it holds a readable manifest.
 
-**What goes in:** `notes/`, `trash/`, `config.toml`, `state.json`.
+Manifest **version 2** is version 1 plus the image count. A snapshot taken
+before images existed keeps saying version 1 and stays exactly as valid as it
+was: nothing branches on the number, and the field defaults, so an older
+manifest reads back as the zero images it genuinely held.
+
+**What goes in:** `notes/`, `trash/`, `assets/`, `config.toml`, `state.json`.
+
+A note that says `![](../assets/…)` is only half a note without the file that
+reference points at, so `assets/` is copied with the same guarantees as the
+notes themselves: the same shape, one directory per note, byte for byte, and a
+snapshot that could not copy one is not committed at all. An image no note
+points at any more is copied too — a backup is a snapshot of the managed store,
+not a decision about which of its files are still wanted.
+
+`assets/` is copied more strictly than `notes/` is, and deliberately. A person
+may reasonably have put something of their own in `notes/`, so an oddity there
+is skipped with a warning; `assets/` is written by Note-it and by nothing else,
+so anything that is not `<note-uuid>/<asset-uuid>.<ext>` means the store is not
+in the state Note-it believes it to be, and the backup fails rather than
+quietly omitting managed content while reporting success. A store written
+before images existed has no `assets/` at all, and that is a store with no
+pictures rather than a broken one.
 
 **What never goes in:** `backups/` itself, so a snapshot can never contain
 snapshots; anything whose name begins with `.`, which is what keeps a `.tmp.…`
@@ -270,18 +293,22 @@ SNAP=~/.local/share/note-it/backups/2026-08-29T09-30-00Z
 cat "$SNAP/manifest.json"          # check it is the snapshot you want
 
 # Keep what is there now, so this step is itself reversible.
-mv ~/.local/share/note-it/notes ~/.local/share/note-it/notes.antes
-mv ~/.local/share/note-it/trash ~/.local/share/note-it/trash.antes
+mv ~/.local/share/note-it/notes  ~/.local/share/note-it/notes.antes
+mv ~/.local/share/note-it/trash  ~/.local/share/note-it/trash.antes
+mv ~/.local/share/note-it/assets ~/.local/share/note-it/assets.antes
 
-cp -a "$SNAP/notes" ~/.local/share/note-it/notes
-cp -a "$SNAP/trash" ~/.local/share/note-it/trash
-cp -a "$SNAP/config.toml" ~/.config/note-it/config.toml     # if present
-cp -a "$SNAP/state.json"  ~/.local/state/note-it/state.json # if present
+cp -a "$SNAP/notes"  ~/.local/share/note-it/notes
+cp -a "$SNAP/trash"  ~/.local/share/note-it/trash
+cp -a "$SNAP/assets" ~/.local/share/note-it/assets            # if present
+cp -a "$SNAP/config.toml" ~/.config/note-it/config.toml       # if present
+cp -a "$SNAP/state.json"  ~/.local/state/note-it/state.json   # if present
 ```
 
 To recover a **single** note, copy just that `<uuid>.md` out of the snapshot's
-`notes/` directory — there is no reason to move the whole store to get one file
-back.
+`notes/` directory — and, if it holds images, the matching
+`assets/<note-uuid>/` directory beside it. The note refers to its pictures by a
+path relative to `notes/`, so the two travel together and neither needs
+editing.
 
 That the result is readable is not a hope: `a_snapshot_round_trips_into_a_fresh_isolated_store`
 copies a snapshot into an empty XDG tree exactly this way, opens it, and checks

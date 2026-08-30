@@ -764,9 +764,16 @@ it yourself, which you can do with any file manager — a note in the trash is a
 
 Note-it keeps local snapshots of everything that can be recovered.
 
-**Where.** `~/.local/share/note-it/backups/<data-e-hora>/`, holding `notes/`, `trash/`,
+**Where.** `~/.local/share/note-it/backups/<data-e-hora>/`, holding `notes/`, `trash/`, `assets/`,
 `config.toml`, `state.json` and a `manifest.json` describing the snapshot. Ordinary directories and
 ordinary files — no archive, no database, no format of Note-it's own.
+
+**Pictures travel with the notes that hold them.** A note saying `![](../assets/…)` is only half a
+note without the file it points at, so `assets/` is copied with the same guarantees and in the same
+shape, byte for byte. A snapshot that could not copy an image is not committed at all — you never
+get a backup that looks whole and is missing pictures. An image no note points at any more is copied
+too: a backup records the store as it is, and is not the place to decide which files are still
+wanted.
 
 **When.** At most one automatic snapshot per 24 hours, taken **before** the first change after that
 window has passed. Taking it first is the point: the state worth being able to go back to is the one

@@ -325,6 +325,7 @@ impl StorageManager {
         BackupSources {
             notes_dir: self.notes_dir.clone(),
             trash_dir: self.trash_dir.clone(),
+            assets_dir: self.assets_dir.clone(),
             config_file: self.config_file_path(),
             state_file: self.state_file_path(),
         }
