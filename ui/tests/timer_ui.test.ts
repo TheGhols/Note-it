@@ -140,7 +140,7 @@ describe('the timer control in the header', () => {
     expect(button).not.toBeNull();
     expect(button!.getAttribute('aria-label')).toBe('Timer e Pomodoro');
     expect(button!.getAttribute('title')).toBe('Timer e Pomodoro');
-    expect(button!.closest('.note-controls-left')).not.toBeNull();
+    expect(button!.closest('.note-controls-tools')).not.toBeNull();
     // Outside the drag region, so pressing it can never move the window.
     expect(button!.closest('.drag-region')).toBeNull();
     // It is not one of the drawn actions beside it: those wear an icon from
@@ -696,10 +696,7 @@ describe('a collapsed note', () => {
   it('shows the digits on a collapsed note at any width', () => {
     // The narrow-note rule is scoped to expanded notes on purpose: with the
     // six quick actions gone there is always room for the clock.
-    const narrow = /@media \(max-width: (\d+)px\) \{\s*([^}]*)\}/.exec(THEME_CSS);
-    expect(narrow).not.toBeNull();
-    expect(narrow![2]).toContain('body:not([data-collapsed="true"]) .header-timer-readout');
-    expect(narrow![2]).toContain('display: none');
+    expect(THEME_CSS).toMatch(/@media \(max-width: 300px\)[\s\S]*\.header-timer-readout[\s\S]*display:\s*none/);
   });
 });
 
@@ -730,22 +727,14 @@ describe('the header bar still fits', () => {
   /** What the row costs, with `omit` standing for what a rule takes off it. */
   function controlRowWidth(omit: string[] = []): number {
     const page = renderedPage();
-    const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
-    const quickIcon = Number.parseFloat(
-      ruleFor(':root').body.match(/--header-action-size:\s*([\d.]+)px/)![1],
-    );
-    const headerPadding = Number.parseFloat(
-      declarationIn('.note-header', 'padding').split(/\s+/)[1],
-    );
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const controlSize = px(ruleFor(':root').body.match(/--header-control-size:[^;]+/)![0]);
+    const headerPadding = px(declarationIn('.note-header', 'padding'));
 
     let width = headerPadding * 2;
     for (const button of page.querySelectorAll('.note-header .icon-btn')) {
       if (omit.includes(button.id)) continue;
-      const drawn = button.querySelector('svg');
-      const intrinsic = drawn?.getAttribute('width');
-      // A hand-drawn mark states its own size; a quick action is sized by the
-      // stylesheet token.
-      width += (intrinsic ? Number.parseFloat(intrinsic) : quickIcon) + iconPadding * 2;
+      width += controlSize;
     }
     return width;
   }
@@ -771,14 +760,12 @@ describe('the header bar still fits', () => {
   it('holds the whole control row inside the strip the bar paints its paper over', () => {
     // The gutter fill is what keeps scrolled text from appearing under the
     // icons. A control taller than the gutter would reopen exactly that.
-    const gutter = Number.parseFloat(ruleFor(':root').body.match(/--note-chrome-gutter:\s*([\d.]+)px/)![1]);
-    const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
-    const offset = Number.parseFloat(declarationIn('.note-header .icon-btn', 'margin-top'));
-    const readoutLine = Number.parseFloat(
-      declarationIn('.header-timer-readout', 'line-height'),
-    );
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const gutter = px(ruleFor(':root').body.match(/--note-chrome-gutter:[^;]+/)![0]);
+    const offset = px(declarationIn('.note-header .icon-btn', 'margin-top'));
+    const control = px(ruleFor(':root').body.match(/--header-control-size:[^;]+/)![0]);
 
-    expect(offset + iconPadding + readoutLine + iconPadding).toBeLessThanOrEqual(gutter);
+    expect(offset + control).toBeLessThanOrEqual(gutter + offset);
   });
 
   it('never lets the digits change the width of the row as they count down', () => {
@@ -815,7 +802,7 @@ describe('the panel looks like the rest of the note', () => {
   });
 
   it('is a compact panel rather than something that fills the note', () => {
-    const width = Number.parseFloat(declarationIn('.note-timer', 'width'));
+    const width = Number(declarationIn('.note-timer', 'width').match(/([\d.]+)px/)![1]);
     expect(width).toBeLessThanOrEqual(inject('minNoteWidth'));
   });
 

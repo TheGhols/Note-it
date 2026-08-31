@@ -55,11 +55,21 @@ describe('zoom scale', () => {
 
   it('clamps to the supported range', () => {
     expect(MIN_ZOOM_PERCENT).toBe(75);
-    expect(MAX_ZOOM_PERCENT).toBe(200);
+    expect(MAX_ZOOM_PERCENT).toBe(300);
+    expect(clampZoom(74)).toBe(75);
+    expect(clampZoom(75)).toBe(75);
+    expect(clampZoom(200)).toBe(200);
+    expect(clampZoom(210)).toBe(210);
+    expect(clampZoom(250)).toBe(250);
+    expect(clampZoom(290)).toBe(290);
+    expect(clampZoom(300)).toBe(300);
+    expect(clampZoom(301)).toBe(300);
     expect(zoomOut(75)).toBe(75);
-    expect(zoomIn(200)).toBe(200);
+    expect(zoomIn(290)).toBe(300);
+    expect(zoomIn(300)).toBe(300);
+    expect(zoomOut(300)).toBe(290);
     expect(clampZoom(10)).toBe(75);
-    expect(clampZoom(5000)).toBe(200);
+    expect(clampZoom(5000)).toBe(300);
   });
 
   it('rejects values that are not real percentages', () => {

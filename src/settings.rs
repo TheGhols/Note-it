@@ -1,6 +1,6 @@
 use crate::atomic_file::write_atomic;
 use crate::autopaste::DEFAULT_CAPTURE_DELIMITER;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -12,6 +12,31 @@ use std::path::Path;
 /// one.
 pub const THEMES: &[&str] = &["system", "light", "dark"];
 pub const DEFAULT_THEME: &str = "system";
+pub const MIN_UI_SCALE_PERCENT: u16 = 90;
+pub const MAX_UI_SCALE_PERCENT: u16 = 160;
+pub const DEFAULT_UI_SCALE_PERCENT: u16 = 100;
+
+pub fn clamp_ui_scale_percent(value: u16) -> u16 {
+    value.clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT)
+}
+
+fn normalize_ui_scale_integer(value: i64) -> u16 {
+    value.clamp(
+        i64::from(MIN_UI_SCALE_PERCENT),
+        i64::from(MAX_UI_SCALE_PERCENT),
+    ) as u16
+}
+
+fn deserialize_ui_scale<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_integer()
+        .map(normalize_ui_scale_integer)
+        .unwrap_or(DEFAULT_UI_SCALE_PERCENT))
+}
 
 /// Resolves a stored theme to the supported set, falling back to following the
 /// environment so a hand-edited `config.toml` cannot leave the UI unstyled.
@@ -38,6 +63,13 @@ pub struct AppConfig {
     /// Appearance of the application chrome, shared by every note.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Scale of application chrome, shared by every note and never applied to
+    /// the Markdown document or its per-note zoom.
+    #[serde(
+        default = "default_ui_scale_percent",
+        deserialize_with = "deserialize_ui_scale"
+    )]
+    pub ui_scale_percent: u16,
     /// What AutoPaste puts between the note's existing content and a capture.
     ///
     /// A preference and not a mode: it says how captures should be laid out,
@@ -71,6 +103,10 @@ fn default_theme() -> String {
     DEFAULT_THEME.to_string()
 }
 
+fn default_ui_scale_percent() -> u16 {
+    DEFAULT_UI_SCALE_PERCENT
+}
+
 fn default_capture_delimiter() -> String {
     DEFAULT_CAPTURE_DELIMITER.to_string()
 }
@@ -84,6 +120,7 @@ impl Default for AppConfig {
             default_height: default_note_height(),
             autosave_interval_ms: default_autosave_interval_ms(),
             theme: default_theme(),
+            ui_scale_percent: default_ui_scale_percent(),
             capture_delimiter: default_capture_delimiter(),
         }
     }
@@ -291,5 +328,51 @@ mod tests {
             // A global preference: it never leaks into a note's own settings.
             assert_eq!(reloaded.default_color, config.default_color);
         }
+    }
+
+    #[test]
+    fn interface_scale_defaults_for_old_configs_and_normalizes_bad_values() {
+        let legacy = concat!(
+            "default_color = \"blue\"\n",
+            "default_font_size = 15\n",
+            "default_width = 360\n",
+            "default_height = 300\n",
+            "autosave_interval_ms = 300\n",
+            "theme = \"dark\"\n",
+        );
+        let parsed: AppConfig = toml::from_str(legacy).expect("old config");
+        assert_eq!(parsed.ui_scale_percent, DEFAULT_UI_SCALE_PERCENT);
+
+        for (stored, expected) in [
+            ("90", 90),
+            ("110", 110),
+            ("120", 120),
+            ("140", 140),
+            ("160", 160),
+            ("0", MIN_UI_SCALE_PERCENT),
+            ("10000", MAX_UI_SCALE_PERCENT),
+            ("\"large\"", DEFAULT_UI_SCALE_PERCENT),
+        ] {
+            let source = format!("ui_scale_percent = {stored}\n");
+            let config: AppConfig = toml::from_str(&source).expect("field is isolated");
+            assert_eq!(config.ui_scale_percent, expected, "stored {stored}");
+        }
+    }
+
+    #[test]
+    fn interface_scale_survives_an_atomic_restart_without_becoming_note_state() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("config.toml");
+        let config = AppConfig {
+            ui_scale_percent: 140,
+            ..AppConfig::default()
+        };
+        config.save_to_file(&path).expect("save config");
+        assert_eq!(AppConfig::load_from_file(&path).ui_scale_percent, 140);
+
+        let written = fs::read_to_string(path).expect("read config");
+        assert!(written.contains("ui_scale_percent = 140"));
+        assert!(!written.contains("zoom_percent"));
+        assert!(!written.contains("updated_at"));
     }
 }

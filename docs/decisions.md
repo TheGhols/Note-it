@@ -199,7 +199,7 @@
   pale paper. The gain pulls all three intensities onto the strength they have everywhere else.
 - **Zoom:** spacing is in pixels and never references `--note-zoom` or `--note-font-size`, so the
   content scales and the background stays put. Verified in the WebView: ruled paper measured
-  exactly 24px between lines at both 75% and 200%.
+  exactly 24px between lines at both 75% and 300%.
 - **Where it is painted:** on the scrolling surface with `background-attachment: local`, so it
   travels with the text, while `#app` keeps its flat colour fill underneath — a fast resize can
   expose paper but never an unpainted strip. Hiding that surface on collapse takes the pattern

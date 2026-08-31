@@ -94,9 +94,12 @@ describe('the Study Hub', () => {
     expect(hub.showCatalog(1, catalog, study)).toBe(true);
 
     expect(stat(hub, 'Para revisar')).toBe('1');
-    expect(stat(hub, 'Novos')).toBe('1');
-    expect(stat(hub, 'Total de cartões')).toBe('3');
-    expect(stat(hub, 'Notas com cartões')).toBe('2');
+    expect(stat(hub, 'Novas revisões')).toBe('1');
+    // One basic source plus one reversible source: two cards, three
+    // independently studyable directions.
+    expect(stat(hub, 'Cartões')).toBe('2');
+    expect(stat(hub, 'Revisões')).toBe('3');
+    expect(stat(hub, 'Notas')).toBe('2');
     expect(stat(hub, 'Revisões hoje')).toBe('2');
     expect(stat(hub, 'Sequência atual')).toBe('2');
     expect(stat(hub, 'Maior sequência')).toBe('2');

@@ -52,8 +52,8 @@ Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
     the cross would cost a control with nowhere else to be.
 - **Settings Menu (`☰`):**
   - A three-line button on the left of the header opens a small popover anchored to the bar.
-  - Entries: **Tipo de papel**, **Intensidade**, **Dados**, **Zoom**, **Tema**, **Camada**, and
-    **Recolher nota** / **Expandir nota**. The six quick actions are not repeated here — one
+  - Entries: **Tipo de papel**, **Intensidade**, **Dados**, **Zoom da nota**, **Interface**,
+    **Tema**, **Camada**, and **Recolher nota** / **Expandir nota**. Formatting quick actions are not repeated here — one
     function, one place to reach it — but the panels they open are the menu's own.
   - The menu shows the current paper, intensity, zoom, theme and layer on their own rows, so none
     of them depends on opening a submenu or knowing a shortcut.
@@ -951,12 +951,15 @@ chooses the UTC instant and local civil day and atomically writes the next state
 ACK advances the panel and increments daily activity; failure leaves the card, heatmap and persisted
 state unchanged, and double clicks cannot send a second rating.
 
-The Hub shows due, new, total review items, notes with cards, today's reviews, current streak and
-longest streak. Its 365-day heatmap uses fixed levels (0, 1–4, 5–9, 10–19, 20+) and every cell names
+The Hub distinguishes source cards from review directions: **Cartões** is the number defined in
+Markdown, while **Revisões** is the number of directions that can be scheduled. Thus `A :: B` plus
+`C ::: D` is 2 cards and 3 reviews. It also shows due and new reviews, notes with cards, today's
+reviews, current streak and longest streak. Its 365-day heatmap uses fixed levels (0, 1–4, 5–9,
+10–19, 20+) and every cell names
 its date and review count. Colour is supplementary. The current streak remains alive today when the
 last study was yesterday; the longest streak is derived from civil dates rather than persisted.
 
-The header also carries Zoom −/+, which use the existing zoom path and 75–200 limits, and a trash
+The header also carries Zoom −/+, which use the existing zoom path and 75–300 limits, and a trash
 icon immediately beside X. Trash only opens the existing recoverable confirmation; X remains Close.
 At measured narrow widths optional deck, image, zoom and trash shortcuts yield before Menu, active
 Timer/AutoPaste or Close, and all are hidden on a collapsed note.
@@ -1097,10 +1100,17 @@ countdown writes nothing at all, once a second or otherwise.
 
 ## View Controls
 
-- **Zoom (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
-  - Scales the note's content between 75% and 200% in 10% steps, without changing the window size,
+- **Zoom da nota (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
+  - Scales the note's content between 75% and 300% in 10% steps, without changing the window size,
     the Markdown, or the note's modification date. The header bar keeps its size.
   - Persisted per note in `state.json`; notes without a stored zoom open at 100%.
+- **Escala da interface (menu):**
+  - Scales the application chrome from 90% to 160% in 10% steps: toolbar hit targets, menu text,
+    SearchPalette, Find, Trash, Timer, Study and image controls all receive real layout metrics.
+  - Shared by every open note and persisted once in `config.toml`; an older configuration defaults
+    to 100%. It does not touch the document, its text-size marks, per-note zoom or `updated_at`.
+  - A collapsed note's host height follows the same scale while its expanded geometry remains
+    stored unchanged.
 - **Tema (menu):**
   - Sistema / Claro / Escuro, applied at once to every open note and persisted globally.
 - **Layer (`Ctrl+Shift+Space`):**

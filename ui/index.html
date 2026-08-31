@@ -7,12 +7,13 @@
   <title>Note-it</title>
 </head>
 <body>
-  <div id="app">
-    <!-- Overlaid chrome. It carries no drawing of its own: the six quick-action
-         spans are filled in at build time from the reviewed icon files, so the
+  <main id="app">
+    <!-- Overlaid chrome. Its quick-action spans are filled in at build time
+         from the reviewed icon files, so the
          icons ship as inline SVG and there is exactly one copy of each. -->
-    <div id="drag-handle" class="note-header">
+    <div id="drag-handle" class="note-header" role="toolbar" aria-label="Ferramentas da nota">
       <div id="note-controls-left" class="note-controls-left">
+        <div class="header-action-group header-note-group" role="group" aria-label="Nota">
         <button id="btn-menu" class="icon-btn" title="Configurações da nota" aria-label="Configurações da nota">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
             <line x1="1.5" y1="3" x2="10.5" y2="3"></line>
@@ -23,6 +24,9 @@
         <button id="btn-note-color" class="icon-btn header-quick-action" title="Cor da nota" aria-label="Cor da nota">
           <span class="header-action-icon" data-quick-icon="note-color"></span>
         </button>
+        </div>
+        <span class="header-group-separator header-separator-note-text" aria-hidden="true"></span>
+        <div class="header-action-group header-text-group" role="group" aria-label="Texto">
         <button id="btn-text-size" class="icon-btn header-quick-action" title="Tamanho do texto" aria-label="Tamanho do texto">
           <span class="header-action-icon" data-quick-icon="text-size"></span>
         </button>
@@ -35,29 +39,44 @@
         <button id="btn-blocks" class="icon-btn header-quick-action" title="Blocos" aria-label="Blocos">
           <span class="header-action-icon" data-quick-icon="blocks"></span>
         </button>
-        <button id="btn-search" class="icon-btn header-quick-action" title="Buscar" aria-label="Buscar">
-          <span class="header-action-icon" data-quick-icon="search"></span>
-        </button>
+        </div>
+        <span class="header-group-separator header-separator-text-content" aria-hidden="true"></span>
+        <div class="header-action-group header-content-group" role="group" aria-label="Conteúdo">
         <!-- The one button in this bar that does something rather than opening
              something: one click and the file chooser is up. Putting a picture
              in a note is the commonest thing anyone does with the Mídia
              section, and a panel to pass through on the way would be a second
              click for nothing to read. That menu entry stays exactly where it
-             is — this is a second way in, which is the rule the six beside it
-             already follow. -->
+             is — this is a second way in, following the other quick actions. -->
         <button id="btn-insert-image" class="icon-btn header-quick-action" title="Inserir imagem" aria-label="Inserir imagem">
           <span class="header-action-icon" data-quick-icon="insert-image"></span>
         </button>
         <button id="btn-flashcards" class="icon-btn header-quick-action header-study-action" title="Central de estudos" aria-label="Central de estudos">
           <span class="header-action-icon" data-quick-icon="flashcards"></span>
         </button>
-        <button id="btn-zoom-out" class="icon-btn header-zoom-action" title="Diminuir zoom" aria-label="Diminuir zoom">
+        </div>
+        <button id="btn-search" class="icon-btn header-quick-action header-search-fallback" title="Buscar notas · Ctrl+K" aria-label="Buscar notas" aria-keyshortcuts="Control+K">
+          <span class="header-action-icon" data-quick-icon="search"></span>
+        </button>
+      </div>
+      <button id="btn-search-pill" class="header-search-pill" title="Buscar notas · Ctrl+K" aria-label="Buscar notas" aria-keyshortcuts="Control+K">
+        <span class="header-action-icon header-search-pill-icon" data-quick-icon="search"></span>
+        <span class="header-search-pill-label header-search-pill-label-full">Pesquisar notas…</span>
+        <span class="header-search-pill-label header-search-pill-label-compact">Pesquisar…</span>
+        <span class="header-search-pill-shortcut" aria-hidden="true">Ctrl+K</span>
+      </button>
+      <div class="drag-region">
+        <span id="note-title" class="note-title">Nota sem título</span>
+      </div>
+      <div class="note-controls-tools">
+        <div class="header-action-group header-view-group" role="group" aria-label="Visualização e ferramentas">
+        <button id="btn-zoom-out" class="icon-btn header-zoom-action" title="Diminuir zoom · Ctrl+-" aria-label="Diminuir zoom" aria-keyshortcuts="Control+-">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="6" x2="10" y2="6"></line></svg>
         </button>
-        <button id="btn-zoom-in" class="icon-btn header-zoom-action" title="Aumentar zoom" aria-label="Aumentar zoom">
+        <button id="btn-zoom-in" class="icon-btn header-zoom-action" title="Aumentar zoom · Ctrl+=" aria-label="Aumentar zoom" aria-keyshortcuts="Control+=">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="6" x2="10" y2="6"></line><line x1="6" y1="2" x2="6" y2="10"></line></svg>
         </button>
-        <!-- The timer is not one of the six quick actions: it opens a panel of
+        <!-- The timer is not one of the formatting quick actions: it opens a panel of
              its own rather than a section of the note menu, and it is the one
              control that stays on a collapsed note, because a countdown you
              cannot see is a countdown you have to expand a note to trust. Its
@@ -87,15 +106,13 @@
             <path d="M4.9 8.3h2.2"></path>
           </svg>
         </button>
-      </div>
-      <div class="drag-region">
-        <span id="note-title" class="note-title">Nota sem título</span>
+        </div>
       </div>
       <div class="note-controls-right">
         <button id="btn-trash-note" class="icon-btn header-trash-action" title="Mover nota para a lixeira" aria-label="Mover nota para a lixeira">
           <span class="header-action-icon" data-quick-icon="trash-note"></span>
         </button>
-        <button id="btn-close" class="icon-btn" title="Fechar (Ctrl+W)" aria-label="Fechar nota">
+        <button id="btn-close" class="icon-btn" title="Fechar nota · Ctrl+W" aria-label="Fechar nota" aria-keyshortcuts="Control+W">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <line x1="1" y1="1" x2="11" y2="11"></line>
             <line x1="11" y1="1" x2="1" y2="11"></line>
@@ -105,7 +122,7 @@
     </div>
     <div id="editor-container" class="editor-wrapper"></div>
     <div id="resize-handle" class="resize-handle" title="Redimensionar" aria-label="Redimensionar"></div>
-  </div>
+  </main>
   <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

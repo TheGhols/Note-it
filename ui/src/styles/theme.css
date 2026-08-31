@@ -3,20 +3,29 @@
   --note-font-size: 15px;
   --note-line-height: 1.55;
   --border-radius: 12px;
-  --transition-fast: 150ms ease;
-  --note-header-height: 28px;
+  --ui-scale: 1;
+  --motion-fast: 100ms;
+  --motion-normal: 150ms;
+  --motion-panel: 180ms;
+  --motion-ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --transition-fast: var(--motion-normal) var(--motion-ease);
+  --note-header-height: calc(28px * var(--ui-scale));
   /* The strip along the top of the note that is always the note's own rather
      than the text's: it summons the chrome, it is what the note is dragged by,
      and it is exactly the editor's top padding so no line ever sits under it.
      Kept in step with REVEAL_ZONE_PX in src/ui/headerReveal.ts, which
      tests/header_ux.test.ts checks rather than assumes. */
-  --note-chrome-gutter: 24px;
+  --note-chrome-gutter: calc(24px * var(--ui-scale));
   /* Long enough to read as a movement, short enough that reaching the top of
      the note and finding the controls there feels immediate. */
-  --note-header-reveal: 120ms ease;
+  --note-header-reveal: var(--motion-fast) var(--motion-ease);
   /* Icon size for the header's quick actions. Larger than the hamburger and
      the close cross because those are drawn with a much heavier stroke. */
-  --header-action-size: 15px;
+  --header-action-size: calc(15px * var(--ui-scale));
+  --header-control-size: calc(24px * var(--ui-scale));
+  --ui-font: calc(13px * var(--ui-scale));
+  --ui-font-small: calc(11px * var(--ui-scale));
+  --ui-radius: calc(8px * var(--ui-scale));
   /* How wide a picture is drawn when nobody has resized it: a fraction of the
      note, with a ceiling so a large photograph does not fill a wide note edge
      to edge. Only a cap — the image keeps its own proportions and never grows
@@ -272,7 +281,7 @@ html, body {
   justify-content: space-between;
   height: var(--note-header-height);
   flex: 0 0 auto;
-  padding: 0 8px;
+  padding: 0 calc(6px * var(--ui-scale));
   user-select: none;
   opacity: 0;
   pointer-events: none;
@@ -291,6 +300,38 @@ body[data-collapsed="true"] .note-header {
   align-items: flex-start;
   flex: 0 0 auto;
   pointer-events: none;
+}
+
+.note-controls-tools {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.header-action-group {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+}
+
+.header-group-separator {
+  align-self: center;
+  width: 1px;
+  height: calc(13px * var(--ui-scale));
+  margin: calc(5px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0;
+  background: color-mix(in srgb, var(--paper-muted) 28%, transparent);
+  pointer-events: none;
+}
+
+.note-controls-tools::before {
+  content: '';
+  align-self: center;
+  width: 1px;
+  height: calc(13px * var(--ui-scale));
+  margin: calc(5px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0;
+  background: color-mix(in srgb, var(--paper-muted) 28%, transparent);
 }
 
 .note-controls-right {
@@ -340,18 +381,20 @@ body[data-collapsed="true"] .drag-region {
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 3px;
+  width: var(--header-control-size);
+  height: var(--header-control-size);
+  padding: calc(4px * var(--ui-scale));
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: calc(5px * var(--ui-scale));
   color: var(--paper-muted);
   transition: color var(--transition-fast), background-color var(--transition-fast);
 }
 
 /* A control is a pointer target only while it can be seen. */
 .note-header .icon-btn {
-  margin-top: 2px;
+  margin-top: calc(2px * var(--ui-scale));
   pointer-events: none;
 }
 
@@ -363,6 +406,17 @@ body[data-collapsed="true"] .note-header .icon-btn {
 .icon-btn:hover {
   color: var(--paper-text);
   background-color: var(--selection-bg);
+}
+
+.note-header .icon-btn:focus-visible,
+.header-search-pill:focus-visible {
+  outline: 2px solid var(--paper-text);
+  outline-offset: -2px;
+}
+
+.note-header .icon-btn > svg {
+  width: calc(12px * var(--ui-scale));
+  height: calc(12px * var(--ui-scale));
 }
 
 /* Quick-action icons. The drawing is inline SVG written into the page from the
@@ -390,12 +444,73 @@ body[data-collapsed="true"] .note-header .icon-btn {
   max-width: 100%;
   overflow: hidden;
   color: var(--paper-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   font-weight: 500;
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.header-search-pill {
+  position: absolute;
+  z-index: 2;
+  top: calc(2px * var(--ui-scale));
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(6px * var(--ui-scale));
+  width: min(calc(230px * var(--ui-scale)), calc(100vw - 420px));
+  min-width: calc(150px * var(--ui-scale));
+  height: var(--header-control-size);
+  padding: 0 calc(9px * var(--ui-scale));
+  border: 1px solid color-mix(in srgb, var(--paper-muted) 30%, transparent);
+  border-radius: calc(999px * var(--ui-scale));
+  background: color-mix(in srgb, var(--paper-bg) 88%, var(--paper-text) 12%);
+  color: var(--paper-muted);
+  font-family: var(--note-font-family);
+  font-size: calc(11px * var(--ui-scale));
+  cursor: pointer;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+body[data-header-revealed="true"] .header-search-pill {
+  pointer-events: auto;
+}
+
+.header-search-pill:hover {
+  border-color: color-mix(in srgb, var(--paper-muted) 55%, transparent);
+  background: color-mix(in srgb, var(--paper-bg) 78%, var(--paper-text) 22%);
+  color: var(--paper-text);
+}
+
+.header-search-pill-icon {
+  flex: 0 0 auto;
+  width: calc(13px * var(--ui-scale));
+  height: calc(13px * var(--ui-scale));
+}
+
+.header-search-pill-label,
+.header-search-pill-shortcut {
+  white-space: nowrap;
+}
+
+.header-search-pill-shortcut {
+  margin-left: auto;
+  color: inherit;
+  font-size: calc(9px * var(--ui-scale));
+  opacity: 0.82;
+}
+
+.header-search-pill-label-compact,
+.header-search-fallback {
+  display: none;
 }
 
 body[data-collapsed="true"] .header-quick-action {
@@ -409,11 +524,13 @@ body[data-collapsed="true"] .note-title {
 /* The timer's control in the header bar.
    Icon alone while the note has no timer, icon plus the remaining time once it
    has one. The digits are the last thing added to the row and the first thing
-   given up, because the row has a hard budget: at MIN_NOTE_WIDTH the six quick
+   given up, because the row has a hard budget: at MIN_NOTE_WIDTH the quick
    actions, the menu, this and the close cross must all still fit, and the close
    cross going off the edge is the failure this is shaped to avoid. */
 .header-timer-action {
-  gap: 3px;
+  width: auto;
+  min-width: var(--header-control-size);
+  gap: calc(3px * var(--ui-scale));
   flex: 0 0 auto;
 }
 
@@ -422,11 +539,11 @@ body[data-collapsed="true"] .note-title {
      the seconds go by. */
   font-family: var(--note-font-family);
   font-variant-numeric: tabular-nums;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
   /* Held to the icon's own height, so the whole control stays inside the
      gutter the header paints its paper over — the 3.9UX.R.2 rule. */
-  line-height: 12px;
+  line-height: calc(12px * var(--ui-scale));
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
@@ -500,10 +617,16 @@ body[data-collapsed="true"] .header-trash-action {
   display: none;
 }
 
+body[data-collapsed="true"] .header-search-pill,
+body[data-collapsed="true"] .header-group-separator,
+body[data-collapsed="true"] .note-controls-tools::before {
+  display: none;
+}
+
 /* A collapsed note keeps this for the same reason it keeps the clock: a note
    recolhida must not have to be expanded to find out that everything copied is
    being filed into it. There is deliberately no `body[data-collapsed]` rule to
-   say so — the six quick actions need one because they are hidden when the note
+   say so — the quick actions need one because they are hidden when the note
    collapses, and this is not one of them. A rule here would out-specify the
    `[hidden]` above and pin the indicator to a note that had *lost* the target,
    which is exactly what it did before this comment replaced it. */
@@ -513,40 +636,168 @@ body[data-collapsed="true"] .header-trash-action {
    reader can still see that the note has a timer, and reading it is one click.
    The viewport here *is* the note, so this is a measurement of the note itself
    rather than of a page inside one. */
-@media (max-width: 300px) {
-  body:not([data-collapsed="true"]) .header-timer-readout {
+@media (max-width: 719px) {
+  .header-search-pill {
+    width: calc(112px * var(--ui-scale));
+    min-width: 0;
+  }
+
+  .header-search-pill-label-full,
+  .header-search-pill-shortcut {
     display: none;
   }
 
-  /* The same reckoning, for the same reason. The bar has a hard budget at
-     MIN_NOTE_WIDTH, and with the clock, the capture indicator and eight
-     buttons on it the close cross would be the thing pushed off the edge. The
-     paperclip is the one that gives way: it is a shortcut to something the
-     menu still offers in full, so losing it on a note this narrow costs a
-     click and nothing else — where losing ☰, the clock, the capture indicator
-     or the close cross would cost a control with nowhere else to be. */
-  body:not([data-collapsed="true"]) #btn-insert-image {
+  .header-search-pill-label-compact {
+    display: inline;
+  }
+}
+
+@media (max-width: 419px) {
+  body:not([data-collapsed="true"]) .header-content-group,
+  body:not([data-collapsed="true"]) .header-separator-text-content {
     display: none;
   }
 }
 
-/* Measurement with the widest H:MM:SS readout showed that the two zoom
-   controls begin fitting without displacing the timer at 380 px. */
-@media (max-width: 379px) {
+@media (max-width: 539px) {
+  body:not([data-collapsed="true"]) .header-search-pill {
+    display: none;
+  }
+
+  body:not([data-collapsed="true"]) .header-search-fallback {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 479px) {
   body:not([data-collapsed="true"]) .header-zoom-action {
     display: none;
   }
 }
 
-@media (max-width: 339px) {
+@media (max-width: 359px) {
+  body:not([data-collapsed="true"]) .header-text-group,
+  body:not([data-collapsed="true"]) .header-content-group,
+  body:not([data-collapsed="true"]) .header-group-separator,
+  body:not([data-collapsed="true"]) .note-controls-tools::before,
+  body:not([data-collapsed="true"]) #btn-text-size,
+  body:not([data-collapsed="true"]) #btn-text-color,
+  body:not([data-collapsed="true"]) #btn-highlight,
+  body:not([data-collapsed="true"]) #btn-blocks,
   body:not([data-collapsed="true"]) #btn-insert-image,
+  body:not([data-collapsed="true"]) #btn-flashcards {
+    display: none;
+  }
+}
+
+@media (max-width: 339px) {
   body:not([data-collapsed="true"]) #btn-trash-note {
     display: none;
   }
 }
 
-@media (max-width: 299px) {
-  body:not([data-collapsed="true"]) #btn-flashcards {
+@media (max-width: 300px) {
+  body:not([data-collapsed="true"]) .header-timer-readout {
+    display: none;
+  }
+}
+
+/* Larger interface metrics consume the same real toolbar budget. The search
+   pill and redundant quick groups yield earlier; Menu, active Timer,
+   AutoPaste and Close never do. */
+@media (max-width: 799px) {
+  body:is([data-ui-scale="120"], [data-ui-scale="130"]) .header-search-pill-label-full,
+  body:is([data-ui-scale="120"], [data-ui-scale="130"]) .header-search-pill-shortcut,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]) .header-search-pill-label-full,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]) .header-search-pill-shortcut {
+    display: none;
+  }
+  body:is([data-ui-scale="120"], [data-ui-scale="130"], [data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]) .header-search-pill-label-compact {
+    display: inline;
+  }
+
+  body:is([data-ui-scale="120"], [data-ui-scale="130"], [data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-zoom-action {
+    display: none;
+  }
+}
+
+@media (max-width: 719px) {
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-search-pill,
+  body:is([data-ui-scale="120"], [data-ui-scale="130"]):not([data-collapsed="true"]) .header-search-pill {
+    display: none;
+  }
+  body:is([data-ui-scale="120"], [data-ui-scale="130"], [data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-search-fallback {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 599px) {
+  body:is([data-ui-scale="120"], [data-ui-scale="130"]):not([data-collapsed="true"]) .header-text-group,
+  body:is([data-ui-scale="120"], [data-ui-scale="130"]):not([data-collapsed="true"]) .header-content-group,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-text-group,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-content-group,
+  body:is([data-ui-scale="120"], [data-ui-scale="130"], [data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-group-separator {
+    display: none;
+  }
+
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) #btn-trash-note {
+    display: none;
+  }
+}
+
+/* At the largest chrome sizes the centred entry gives way before it can touch
+   either action group. The medium form is still available where its measured
+   budget fits; at 160% the compact icon remains the honest narrow fallback. */
+@media (max-width: 1099px) {
+  body[data-ui-scale="160"] .header-search-pill-label-full,
+  body[data-ui-scale="160"] .header-search-pill-shortcut {
+    display: none;
+  }
+
+  body[data-ui-scale="160"] .header-search-pill-label-compact {
+    display: inline;
+  }
+}
+
+@media (max-width: 999px) {
+  body:is([data-ui-scale="140"], [data-ui-scale="150"]) .header-search-pill-label-full,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"]) .header-search-pill-shortcut {
+    display: none;
+  }
+
+  body:is([data-ui-scale="140"], [data-ui-scale="150"]) .header-search-pill-label-compact {
+    display: inline;
+  }
+
+  body[data-ui-scale="160"]:not([data-collapsed="true"]) .header-search-pill {
+    display: none;
+  }
+
+  body[data-ui-scale="160"]:not([data-collapsed="true"]) .header-search-fallback {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 799px) {
+  body:is([data-ui-scale="140"], [data-ui-scale="150"]):not([data-collapsed="true"]) .header-search-pill {
+    display: none;
+  }
+
+  body:is([data-ui-scale="140"], [data-ui-scale="150"]):not([data-collapsed="true"]) .header-search-fallback {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 719px) {
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-content-group,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-separator-text-content,
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) .header-zoom-action {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  body:is([data-ui-scale="140"], [data-ui-scale="150"], [data-ui-scale="160"]):not([data-collapsed="true"]) #btn-note-color {
     display: none;
   }
 }
@@ -562,19 +813,19 @@ body[data-collapsed="true"] .header-trash-action {
      only ever open while the chrome is held out, so it is always visible when
      it is live. */
   pointer-events: auto;
-  min-width: 168px;
-  max-width: calc(100vw - 12px);
+  min-width: calc(168px * var(--ui-scale));
+  max-width: calc(100vw - (12px * var(--ui-scale)));
   max-height: calc(100vh - var(--note-header-height) - 8px);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 4px;
+  padding: calc(4px * var(--ui-scale));
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   background-color: var(--ui-surface);
   box-shadow: var(--ui-shadow);
   color: var(--ui-text);
-  font-size: 13px;
+  font-size: var(--ui-font);
   line-height: 1.4;
 }
 
@@ -596,18 +847,25 @@ body[data-collapsed="true"] .header-trash-action {
 .note-menu-panel {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: calc(2px * var(--ui-scale));
+}
+
+.note-menu-separator {
+  height: 1px;
+  margin: calc(3px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  background: var(--ui-border);
 }
 
 .note-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: calc(12px * var(--ui-scale));
   width: 100%;
-  padding: 6px 8px;
+  min-height: calc(28px * var(--ui-scale));
+  padding: calc(6px * var(--ui-scale)) calc(8px * var(--ui-scale));
   border: none;
-  border-radius: 5px;
+  border-radius: calc(5px * var(--ui-scale));
   background: transparent;
   color: inherit;
   font: inherit;
@@ -650,64 +908,64 @@ body[data-collapsed="true"] .header-trash-action {
 .note-menu-value {
   margin-left: auto;
   color: var(--ui-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
 }
 
 .note-menu-shortcut {
   margin-left: auto;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   white-space: nowrap;
 }
 
 .note-menu-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: calc(2px * var(--ui-scale));
 }
 
 .note-menu-hint {
-  padding: 2px 8px;
+  padding: calc(2px * var(--ui-scale)) calc(8px * var(--ui-scale));
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-style: italic;
 }
 
 .note-menu-option[aria-checked="true"]::before {
   content: '●';
   margin-right: 6px;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-scale));
 }
 
 .note-menu-option[aria-checked="false"]::before {
   content: '';
   margin-right: 6px;
   display: inline-block;
-  width: 9px;
+  width: calc(9px * var(--ui-scale));
 }
 
 .note-menu-zoom-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 2px 8px 6px 8px;
+  gap: calc(8px * var(--ui-scale));
+  padding: calc(2px * var(--ui-scale)) calc(8px * var(--ui-scale)) calc(6px * var(--ui-scale));
 }
 
 .note-menu-zoom-value {
-  min-width: 48px;
+  min-width: calc(48px * var(--ui-scale));
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
 .note-menu-step {
-  width: 26px;
-  height: 26px;
+  width: calc(26px * var(--ui-scale));
+  height: calc(26px * var(--ui-scale));
   border: 1px solid var(--ui-border);
-  border-radius: 5px;
+  border-radius: calc(5px * var(--ui-scale));
   background: transparent;
   color: inherit;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-scale));
   line-height: 1;
   cursor: pointer;
   transition: background-color var(--transition-fast);
@@ -738,7 +996,7 @@ body[data-collapsed="true"] .header-trash-action {
 }
 
 .note-menu-swatches .note-menu-swatch {
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-weight: 700;
   line-height: 1;
 }
@@ -753,23 +1011,23 @@ body[data-collapsed="true"] .header-trash-action {
 }
 
 .note-menu-heading {
-  margin: 2px 8px 6px 8px;
+  margin: calc(2px * var(--ui-scale)) calc(8px * var(--ui-scale)) calc(6px * var(--ui-scale));
   color: var(--ui-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   font-weight: 600;
 }
 
 .note-menu-swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 8px 4px 8px;
-  max-width: 190px;
+  gap: calc(6px * var(--ui-scale));
+  padding: 0 calc(8px * var(--ui-scale)) calc(4px * var(--ui-scale));
+  max-width: calc(190px * var(--ui-scale));
 }
 
 .note-menu-swatch {
-  width: 18px;
-  height: 18px;
+  width: calc(18px * var(--ui-scale));
+  height: calc(18px * var(--ui-scale));
   padding: 0;
   border: 1px solid var(--ui-border);
   border-radius: 50%;
@@ -801,14 +1059,14 @@ body[data-collapsed="true"] .header-trash-action {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px 9px;
+  gap: calc(1px * var(--ui-scale));
+  padding: calc(6px * var(--ui-scale)) calc(9px * var(--ui-scale));
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: calc(6px * var(--ui-scale));
   background-color: var(--ui-surface);
   box-shadow: var(--ui-shadow);
   color: var(--ui-text);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-scale));
   line-height: 1.45;
   white-space: nowrap;
   /* Never intercept the pointer: hovering it must not interrupt a drag. */
@@ -853,6 +1111,8 @@ body[data-collapsed="true"] .header-trash-action {
     var(--paper-pattern-ink),
     calc(var(--paper-pattern-alpha) * var(--paper-pattern-gain))
   );
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* Paper pattern.
@@ -904,7 +1164,10 @@ body[data-paper="grid-large"] .editor-wrapper {
    takes the pattern with it, leaving the collapsed bar as a clean band of the
    note's own colour; expanding brings both back. */
 body[data-collapsed="true"] .editor-wrapper {
-  display: none;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-4px * var(--ui-scale)));
 }
 
 body[data-collapsed="true"] .resize-handle {
@@ -1238,12 +1501,12 @@ body[data-collapsed="true"] .resize-handle {
   background-color: var(--ui-surface);
   color: var(--ui-text);
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   box-shadow: var(--ui-shadow);
   font-family: var(--note-font-family);
   /* Fixed in pixels: this is the application's furniture, so the note's zoom
      scales the text it is searching and leaves the control alone. */
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
 }
 
 .note-search[hidden],
@@ -1252,20 +1515,21 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-search {
-  top: calc(var(--note-header-height) + 4px);
-  left: 8px;
-  right: 8px;
-  max-height: calc(100% - var(--note-header-height) - 16px);
+  top: calc(var(--note-header-height) + (6px * var(--ui-scale)));
+  left: 50%;
+  width: min(calc(520px * var(--ui-scale)), calc(100% - (16px * var(--ui-scale))));
+  max-height: calc(100% - var(--note-header-height) - (18px * var(--ui-scale)));
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transform: translateX(-50%);
 }
 
 .note-search-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: calc(8px * var(--ui-scale));
+  padding: calc(8px * var(--ui-scale)) calc(10px * var(--ui-scale));
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -1278,8 +1542,8 @@ body[data-collapsed="true"] .resize-handle {
   outline: none;
   color: var(--ui-text);
   font-family: inherit;
-  font-size: 12px;
-  padding: 2px 0;
+  font-size: calc(12px * var(--ui-scale));
+  padding: calc(2px * var(--ui-scale)) 0;
 }
 
 .note-search-input::placeholder,
@@ -1291,7 +1555,7 @@ body[data-collapsed="true"] .resize-handle {
 .note-find-counter {
   flex: none;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1303,16 +1567,17 @@ body[data-collapsed="true"] .resize-handle {
 .note-search-results {
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: calc(4px * var(--ui-scale));
   overflow-y: auto;
 }
 
 .note-search-row {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0 8px;
-  padding: 5px 7px;
-  border-radius: 5px;
+  gap: 0 calc(8px * var(--ui-scale));
+  min-height: calc(32px * var(--ui-scale));
+  padding: calc(5px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  border-radius: calc(5px * var(--ui-scale));
   cursor: default;
 }
 
@@ -1342,21 +1607,21 @@ body[data-collapsed="true"] .resize-handle {
   align-self: center;
   color: var(--ui-text-muted);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: var(--ui-font-small);
 }
 
 .note-find {
-  top: calc(var(--note-header-height) + 4px);
-  right: 8px;
-  max-width: calc(100% - 16px);
-  padding: 4px;
+  top: calc(var(--note-header-height) + (4px * var(--ui-scale)));
+  right: calc(8px * var(--ui-scale));
+  max-width: calc(100% - (16px * var(--ui-scale)));
+  padding: calc(4px * var(--ui-scale));
 }
 
 .note-find-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px;
+  gap: calc(4px * var(--ui-scale));
+  padding: calc(2px * var(--ui-scale));
 }
 
 .note-find-row[hidden] {
@@ -1364,21 +1629,21 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-find .note-find-input {
-  width: 130px;
+  width: calc(130px * var(--ui-scale));
   flex: 0 1 auto;
 }
 
 .note-find-button {
   flex: none;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
+  min-width: calc(24px * var(--ui-scale));
+  height: calc(24px * var(--ui-scale));
+  padding: 0 calc(5px * var(--ui-scale));
   background: transparent;
   border: none;
   border-radius: 4px;
   color: var(--ui-text);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   line-height: 1;
   cursor: pointer;
 }
@@ -1552,22 +1817,22 @@ body[data-collapsed="true"] .resize-handle {
   position: absolute;
   z-index: 30;
   box-sizing: border-box;
-  top: calc(var(--note-header-height) + 4px);
-  left: 8px;
-  right: 8px;
-  max-height: calc(100% - var(--note-header-height) - 16px);
+  top: calc(var(--note-header-height) + (4px * var(--ui-scale)));
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  max-height: calc(100% - var(--note-header-height) - (16px * var(--ui-scale)));
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background-color: var(--ui-surface);
   color: var(--ui-text);
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   box-shadow: var(--ui-shadow);
   font-family: var(--note-font-family);
   /* Fixed in pixels: the application's own furniture, so a note's zoom scales
      the note and leaves the control alone. */
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
 }
 
 .note-trash[hidden] {
@@ -1577,8 +1842,8 @@ body[data-collapsed="true"] .resize-handle {
 .note-trash-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: calc(8px * var(--ui-scale));
+  padding: calc(6px * var(--ui-scale)) calc(8px * var(--ui-scale));
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -1590,7 +1855,7 @@ body[data-collapsed="true"] .resize-handle {
   flex: none;
   margin-left: auto;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1599,16 +1864,16 @@ body[data-collapsed="true"] .resize-handle {
 .note-trash-list {
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: calc(4px * var(--ui-scale));
   overflow-y: auto;
 }
 
 .note-trash-row {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0 8px;
-  padding: 5px 7px;
-  border-radius: 5px;
+  gap: 0 calc(8px * var(--ui-scale));
+  padding: calc(5px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  border-radius: calc(5px * var(--ui-scale));
 }
 
 .note-trash-row.selected {
@@ -1633,7 +1898,7 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-trash-date {
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1643,13 +1908,14 @@ body[data-collapsed="true"] .resize-handle {
   grid-row: 1 / span 3;
   grid-column: 2;
   align-self: center;
-  padding: 3px 8px;
+  min-height: calc(24px * var(--ui-scale));
+  padding: calc(3px * var(--ui-scale)) calc(8px * var(--ui-scale));
   background: transparent;
   border: 1px solid var(--ui-border);
-  border-radius: 5px;
+  border-radius: calc(5px * var(--ui-scale));
   color: var(--ui-text);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   cursor: pointer;
   transition: background-color var(--transition-fast);
 }
@@ -1669,18 +1935,18 @@ body[data-collapsed="true"] .resize-handle {
 .note-status {
   position: absolute;
   z-index: 31;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  bottom: calc(8px * var(--ui-scale));
   box-sizing: border-box;
-  padding: 5px 8px;
+  padding: calc(5px * var(--ui-scale)) calc(8px * var(--ui-scale));
   background-color: var(--ui-surface);
   color: var(--ui-text);
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: calc(6px * var(--ui-scale));
   box-shadow: var(--ui-shadow);
   font-family: var(--note-font-family);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   line-height: 1.35;
 }
 
@@ -1700,10 +1966,10 @@ body[data-collapsed="true"] .resize-handle {
    anchored under the button that opened it exactly as the menu is. What is here
    is only what the menu has no equivalent for. */
 .note-timer {
-  width: 178px;
-  min-width: 178px;
-  padding: 8px;
-  gap: 8px;
+  width: calc(178px * var(--ui-scale));
+  min-width: calc(178px * var(--ui-scale));
+  padding: calc(8px * var(--ui-scale));
+  gap: calc(8px * var(--ui-scale));
 }
 
 .note-timer[hidden] {
@@ -1712,21 +1978,22 @@ body[data-collapsed="true"] .resize-handle {
 
 .note-timer-modes {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
+  gap: calc(2px * var(--ui-scale));
+  padding: calc(2px * var(--ui-scale));
+  border-radius: calc(6px * var(--ui-scale));
   background-color: var(--ui-surface-hover);
 }
 
 .note-timer-mode {
   flex: 1;
-  padding: 4px 6px;
+  min-height: calc(24px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(6px * var(--ui-scale));
   border: none;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--ui-scale));
   background: transparent;
   color: var(--ui-text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   cursor: pointer;
   transition: background-color var(--transition-fast), color var(--transition-fast);
 }
@@ -1751,9 +2018,9 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-timer-phase {
-  margin: 6px 0 0;
+  margin: calc(6px * var(--ui-scale)) 0 0;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   text-align: center;
 }
 
@@ -1792,10 +2059,10 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-timer-clock {
-  margin: 6px 0 0;
+  margin: calc(6px * var(--ui-scale)) 0 0;
   color: var(--ui-text);
   font-variant-numeric: tabular-nums;
-  font-size: 26px;
+  font-size: calc(26px * var(--ui-scale));
   font-weight: 600;
   line-height: 1.1;
   letter-spacing: 0.01em;
@@ -1805,7 +2072,7 @@ body[data-collapsed="true"] .resize-handle {
 .note-timer-state {
   margin: 1px 0 0;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   text-align: center;
 }
 
@@ -1835,7 +2102,7 @@ body[data-collapsed="true"] .resize-handle {
   background: transparent;
   color: var(--ui-text);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition: background-color var(--transition-fast);
@@ -1867,7 +2134,7 @@ body[data-collapsed="true"] .resize-handle {
 
 .note-timer-label {
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
 }
 
 .note-timer-input {
@@ -1878,7 +2145,7 @@ body[data-collapsed="true"] .resize-handle {
   background-color: var(--ui-surface);
   color: var(--ui-text);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   font-variant-numeric: tabular-nums;
 }
 
@@ -1892,7 +2159,7 @@ body[data-collapsed="true"] .resize-handle {
 .note-timer-hint {
   margin: 5px 0 0;
   color: var(--callout-caution);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui-scale));
   line-height: 1.35;
 }
 
@@ -1910,7 +2177,8 @@ body[data-collapsed="true"] .resize-handle {
   background: transparent;
   color: var(--ui-text);
   font: inherit;
-  font-size: 12px;
+  min-height: calc(28px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
   cursor: pointer;
   transition: background-color var(--transition-fast);
 }
@@ -2067,13 +2335,14 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-image-control {
-  padding: 3px 6px;
+  min-height: calc(24px * var(--ui-scale));
+  padding: calc(3px * var(--ui-scale)) calc(6px * var(--ui-scale));
   border: none;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--ui-scale));
   background: transparent;
   color: var(--ui-text);
   font-family: var(--note-font-family);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   cursor: pointer;
   transition: background-color var(--transition-fast);
 }
@@ -2154,22 +2423,22 @@ body[data-collapsed="true"] .resize-handle {
   position: absolute;
   z-index: 30;
   box-sizing: border-box;
-  top: calc(var(--note-header-height) + 4px);
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
+  top: calc(var(--note-header-height) + (4px * var(--ui-scale)));
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  bottom: calc(8px * var(--ui-scale));
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background-color: var(--ui-surface);
   color: var(--ui-text);
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   box-shadow: var(--ui-shadow);
   font-family: var(--note-font-family);
   /* Fixed in pixels: the application's own furniture, so a note's zoom scales
      the note and leaves the panel alone. */
-  font-size: 13px;
+  font-size: var(--ui-font);
 }
 
 .note-study[hidden] {
@@ -2184,8 +2453,8 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: calc(8px * var(--ui-scale));
+  padding: calc(6px * var(--ui-scale)) calc(8px * var(--ui-scale));
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -2196,16 +2465,16 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-progress {
   margin-left: auto;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .note-study-summary {
   margin: 0;
-  padding: 4px 8px 0;
+  padding: calc(4px * var(--ui-scale)) calc(8px * var(--ui-scale)) 0;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
 }
 
 /* The card itself scrolls. A long answer must not grow the note: the window
@@ -2215,7 +2484,7 @@ body[data-collapsed="true"] .resize-handle {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px;
+  padding: calc(8px * var(--ui-scale));
 }
 
 .note-study-side {
@@ -2234,8 +2503,8 @@ body[data-collapsed="true"] .resize-handle {
 /* The line between the question and its answer, drawn only once the answer is
    there to be separated from. */
 .note-study-answer {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: calc(8px * var(--ui-scale));
+  padding-top: calc(8px * var(--ui-scale));
   border-top: 1px solid var(--ui-border);
 }
 
@@ -2257,13 +2526,14 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-reveal,
 .note-study-button,
 .note-study-close {
-  padding: 4px 10px;
+  min-height: calc(28px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(10px * var(--ui-scale));
   background: transparent;
   border: 1px solid var(--ui-border);
-  border-radius: 5px;
+  border-radius: calc(5px * var(--ui-scale));
   color: var(--ui-text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   cursor: pointer;
   transition: background-color var(--transition-fast);
 }
@@ -2300,15 +2570,15 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-footer {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: calc(6px * var(--ui-scale));
+  padding: calc(6px * var(--ui-scale)) calc(8px * var(--ui-scale));
   border-top: 1px solid var(--ui-border);
 }
 
 .note-study-origin {
   margin: 0 0 6px;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
 }
 
 .note-study-origin:empty {
@@ -2318,8 +2588,8 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-ratings {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
-  margin-top: 10px;
+  gap: calc(5px * var(--ui-scale));
+  margin-top: calc(10px * var(--ui-scale));
 }
 
 .note-study-ratings[hidden],
@@ -2332,11 +2602,12 @@ body[data-collapsed="true"] .resize-handle {
   min-width: 0;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
-  padding: 5px 3px;
+  gap: calc(1px * var(--ui-scale));
+  min-height: calc(36px * var(--ui-scale));
+  padding: calc(5px * var(--ui-scale)) calc(3px * var(--ui-scale));
   background: transparent;
   border: 1px solid var(--ui-border);
-  border-radius: 5px;
+  border-radius: calc(5px * var(--ui-scale));
   color: var(--ui-text);
   font-family: inherit;
   cursor: pointer;
@@ -2357,13 +2628,13 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-study-rating-name {
-  font-size: 11px;
+  font-size: var(--ui-font-small);
   font-weight: 600;
 }
 
 .note-study-rating-interval {
   color: var(--ui-text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-scale));
   white-space: nowrap;
 }
 
@@ -2372,7 +2643,7 @@ body[data-collapsed="true"] .resize-handle {
   min-height: 1.2em;
   margin: 0;
   color: var(--ui-text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-scale));
 }
 
 .note-study-completion {
@@ -2381,7 +2652,7 @@ body[data-collapsed="true"] .resize-handle {
 
 .note-study-completion h2 {
   margin: 0 0 6px;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-scale));
 }
 
 .note-study-completion p {
@@ -2396,23 +2667,23 @@ body[data-collapsed="true"] .resize-handle {
   position: absolute;
   z-index: 30;
   box-sizing: border-box;
-  top: calc(var(--note-header-height) + 4px);
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
+  top: calc(var(--note-header-height) + (4px * var(--ui-scale)));
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  bottom: calc(8px * var(--ui-scale));
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 7px;
+  gap: calc(7px * var(--ui-scale));
   overflow: hidden;
-  padding: 8px;
+  padding: calc(8px * var(--ui-scale));
   background-color: var(--ui-surface);
   color: var(--ui-text);
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   box-shadow: var(--ui-shadow);
   font-family: var(--note-font-family);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
 }
 
 .note-study-hub[hidden] {
@@ -2427,13 +2698,13 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-hub-header {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: calc(5px * var(--ui-scale));
 }
 
 .note-study-hub-header h1 {
   flex: 1 1 auto;
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-scale));
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -2442,33 +2713,33 @@ body[data-collapsed="true"] .resize-handle {
   min-height: 1.2em;
   margin: 0;
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: var(--ui-font-small);
 }
 
 .note-study-hub-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(calc(72px * var(--ui-scale)), 1fr));
+  gap: calc(4px * var(--ui-scale));
 }
 
 .note-study-stat {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  padding: 4px 5px;
+  padding: calc(4px * var(--ui-scale)) calc(5px * var(--ui-scale));
   background: var(--ui-surface-hover);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--ui-scale));
 }
 
 .note-study-stat strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-scale));
   font-variant-numeric: tabular-nums;
 }
 
 .note-study-stat span {
   overflow: hidden;
   color: var(--ui-text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2520,7 +2791,7 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: calc(4px * var(--ui-scale));
 }
 
 .note-study-filter[aria-pressed="true"] {
@@ -2531,7 +2802,7 @@ body[data-collapsed="true"] .resize-handle {
 
 .note-study-global-list {
   flex: 1 1 auto;
-  min-height: 50px;
+  min-height: calc(50px * var(--ui-scale));
   margin: 0;
   overflow-y: auto;
   padding: 0;
@@ -2539,7 +2810,7 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-study-global-item {
-  padding: 6px 2px;
+  padding: calc(6px * var(--ui-scale)) calc(2px * var(--ui-scale));
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -2554,10 +2825,10 @@ body[data-collapsed="true"] .resize-handle {
 .note-study-global-meta {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 3px;
+  gap: calc(8px * var(--ui-scale));
+  margin-top: calc(3px * var(--ui-scale));
   color: var(--ui-text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-scale));
 }
 
 .note-study-global-meta span {
@@ -2576,4 +2847,125 @@ body[data-collapsed="true"] .resize-handle {
 
 .note-study-start {
   align-self: flex-start;
+}
+
+/* Motion is a single, short language. Entry transitions never delay an
+   action or leave an invisible pointer surface behind: `[hidden]` remains the
+   authority for closing, while these keyframes only make the already-open
+   state arrive continuously. */
+@media (prefers-reduced-motion: no-preference) {
+  .icon-btn,
+  .header-search-pill,
+  .note-menu-item,
+  .note-menu-step,
+  .note-find-button,
+  .note-timer-mode,
+  .note-timer-preset,
+  .note-timer-action,
+  .note-study-button,
+  .note-study-reveal,
+  .note-study-close,
+  .note-study-rating,
+  .note-image-control {
+    transition:
+      color var(--motion-fast) var(--motion-ease),
+      background-color var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      transform var(--motion-fast) var(--motion-ease);
+  }
+
+  .icon-btn:active,
+  .note-menu-item:active,
+  .note-menu-step:active,
+  .note-find-button:active,
+  .note-timer-mode:active,
+  .note-timer-preset:active,
+  .note-timer-action:active,
+  .note-study-button:active,
+  .note-study-reveal:active,
+  .note-study-close:active,
+  .note-study-rating:active,
+  .note-image-control:active {
+    transform: scale(0.975);
+  }
+
+  .note-menu:not([hidden]),
+  .note-find:not([hidden]),
+  .note-trash:not([hidden]),
+  .note-study:not([hidden]),
+  .note-study-hub:not([hidden]),
+  .note-image-controls:not([hidden]) {
+    animation: note-panel-enter var(--motion-panel) var(--motion-ease) both;
+  }
+
+  .note-search:not([hidden]) {
+    animation: note-search-enter var(--motion-panel) var(--motion-ease) both;
+  }
+
+  .editor-wrapper {
+    transition:
+      opacity var(--motion-normal) var(--motion-ease),
+      transform var(--motion-normal) var(--motion-ease),
+      visibility 0s linear var(--motion-normal);
+  }
+
+  body:not([data-collapsed="true"]) .editor-wrapper {
+    transition-delay: 0s;
+  }
+
+  body[data-collapsed="true"] .note-title {
+    animation: note-title-enter var(--motion-normal) var(--motion-ease) both;
+  }
+}
+
+@keyframes note-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes note-search-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-3px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+@keyframes note-title-enter {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .icon-btn:active,
+  .note-menu-item:active,
+  .note-menu-step:active,
+  .note-find-button:active,
+  .note-timer-mode:active,
+  .note-timer-preset:active,
+  .note-timer-action:active,
+  .note-study-button:active,
+  .note-study-reveal:active,
+  .note-study-close:active,
+  .note-study-rating:active,
+  .note-image-control:active {
+    transform: none !important;
+  }
 }

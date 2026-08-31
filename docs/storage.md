@@ -133,7 +133,7 @@ a filesystem timestamp.
 | `monitor` | Connector name the note belongs to |
 | `collapsed` | Whether the note is reduced to its header bar |
 | `expanded_width`, `expanded_height` | Size to restore on expand; only meaningful while `collapsed` |
-| `zoom_percent` | View scale of the note content, 75–200, default 100 |
+| `zoom_percent` | View scale of the note content, 75–300, default 100 |
 
 Every field has a default, so a `state.json` written by an earlier version
 loads unchanged: absent `collapsed` means expanded, and absent expanded

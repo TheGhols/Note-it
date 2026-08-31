@@ -5,6 +5,7 @@ import {
   INLINE_HEADER_ICONS,
   normalizeIconSvg,
   QUICK_ACTIONS,
+  SEARCH,
 } from '../src/ui/icons.ts';
 import { MenuPanel, NoteMenu } from '../src/ui/menu.ts';
 import { PaperColor } from '../src/bridge/types.ts';
@@ -47,6 +48,9 @@ function mountFromPage() {
     onZoomIn: vi.fn(),
     onZoomOut: vi.fn(),
     onResetZoom: vi.fn(),
+    onUiScaleIn: vi.fn(),
+    onUiScaleOut: vi.fn(),
+    onResetUiScale: vi.fn(),
     onSelectLayerMode: vi.fn(),
     onToggleCodeBlock: vi.fn(),
     onSelectCodeLanguage: vi.fn(),
@@ -90,14 +94,13 @@ describe('the header quick actions', () => {
     document.body.innerHTML = '';
   });
 
-  it('there are exactly six that open a panel, in the approved order', () => {
+  it('keeps the five formatting actions grouped in their approved order', () => {
     expect(QUICK_ACTIONS.map((action) => action.label)).toEqual([
       'Cor da nota',
       'Tamanho do texto',
       'Cor do texto',
       'Marca-texto',
       'Blocos',
-      'Buscar',
     ]);
     // Every one of them names the panel it opens, and none has logic of its
     // own. The paperclip beside them is not one: it opens nothing.
@@ -105,16 +108,15 @@ describe('the header quick actions', () => {
     expect(Object.hasOwn(CLIPPER, 'panel')).toBe(false);
   });
 
-  it('the bar carries the six, and then the paperclip, in that order', () => {
+  it('groups formatting, content, and the compact search fallback in DOM order', () => {
     const page = renderedPage();
     const buttons = page.querySelectorAll('.note-header .header-quick-action');
     expect(Array.from(buttons, (button) => button.id)).toEqual(
       HEADER_ICONS.map((icon) => icon.buttonId),
     );
-    // Straight after Buscar and before the clock, which is where a reader
-    // reaching for it will look.
     const ids = Array.from(page.querySelectorAll('.note-header .icon-btn'), (b) => b.id);
-    expect(ids.indexOf('btn-insert-image')).toBe(ids.indexOf('btn-search') + 1);
+    expect(ids.indexOf('btn-insert-image')).toBeGreaterThan(ids.indexOf('btn-blocks'));
+    expect(ids.indexOf(SEARCH.buttonId)).toBeGreaterThan(ids.indexOf('btn-flashcards'));
     expect(ids.indexOf('btn-insert-image')).toBeLessThan(ids.indexOf('btn-timer'));
   });
 
@@ -127,6 +129,9 @@ describe('the header quick actions', () => {
       // Icons only: no permanent text label anywhere in the bar.
       expect(button.textContent?.trim()).toBe('');
     }
+    const search = page.getElementById(SEARCH.buttonId)!;
+    expect(search.getAttribute('aria-label')).toBe(SEARCH.label);
+    expect(search.getAttribute('title')).toContain('Ctrl+K');
   });
 
   it('each one opens the panel the menu already builds, and nothing else', () => {

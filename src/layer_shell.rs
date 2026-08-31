@@ -84,11 +84,15 @@ pub struct WindowGeometry {
     pub collapsed: bool,
 }
 
-/// Minimum window height allowed for a note in the given collapse state.
-/// A collapsed note only needs to fit its header bar.
-pub fn min_note_height(collapsed: bool) -> i32 {
+/// Height of the collapsed bar at the application-wide interface scale.
+/// Rounded upward so the last fractional CSS pixel never clips a control.
+pub fn collapsed_note_height(ui_scale_percent: u16) -> i32 {
+    (COLLAPSED_NOTE_HEIGHT * i32::from(ui_scale_percent) + 99) / 100
+}
+
+pub fn min_note_height_for_scale(collapsed: bool, ui_scale_percent: u16) -> i32 {
     if collapsed {
-        COLLAPSED_NOTE_HEIGHT
+        collapsed_note_height(ui_scale_percent)
     } else {
         MIN_NOTE_HEIGHT
     }
@@ -230,6 +234,7 @@ pub fn setup_layer_shell_window(
     mode: LayerMode,
     geometry: WindowGeometry,
     monitor: Option<&gdk::Monitor>,
+    ui_scale_percent: u16,
 ) {
     if !window.is_layer_window() {
         window.init_layer_shell();
@@ -248,7 +253,7 @@ pub fn setup_layer_shell_window(
     window.set_anchor(Edge::Bottom, false);
     window.set_anchor(Edge::Right, false);
 
-    let min_h = min_note_height(geometry.collapsed);
+    let min_h = min_note_height_for_scale(geometry.collapsed, ui_scale_percent);
     let w = geometry.width.max(MIN_NOTE_WIDTH);
     let h = geometry.height.max(min_h);
 
@@ -425,8 +430,14 @@ pub fn update_window_position(window: &gtk4::Window, x: i32, y: i32) {
     }
 }
 
-pub fn update_window_size(window: &gtk4::Window, width: i32, height: i32, collapsed: bool) {
-    let min_h = min_note_height(collapsed);
+pub fn update_window_size(
+    window: &gtk4::Window,
+    width: i32,
+    height: i32,
+    collapsed: bool,
+    ui_scale_percent: u16,
+) {
+    let min_h = min_note_height_for_scale(collapsed, ui_scale_percent);
     let w = width.max(MIN_NOTE_WIDTH);
     let h = height.max(min_h);
     window.set_size_request(MIN_NOTE_WIDTH, min_h);
@@ -484,7 +495,7 @@ mod tests {
             COLLAPSED_NOTE_HEIGHT,
             1920,
             1080,
-            min_note_height(true),
+            min_note_height_for_scale(true, 100),
         );
         assert_eq!((x, y, w), (300, 200, 400));
         assert_eq!(h, COLLAPSED_NOTE_HEIGHT);
@@ -497,9 +508,20 @@ mod tests {
             COLLAPSED_NOTE_HEIGHT,
             1920,
             1080,
-            min_note_height(false),
+            min_note_height_for_scale(false, 100),
         );
         assert_eq!(expanded_h, MIN_NOTE_HEIGHT);
+    }
+
+    #[test]
+    fn collapsed_height_follows_interface_scale_without_changing_expanded_floor() {
+        assert_eq!(collapsed_note_height(90), 27);
+        assert_eq!(collapsed_note_height(100), 30);
+        assert_eq!(collapsed_note_height(140), 42);
+        assert_eq!(collapsed_note_height(160), 48);
+        for scale in [90, 100, 120, 140, 160] {
+            assert_eq!(min_note_height_for_scale(false, scale), MIN_NOTE_HEIGHT);
+        }
     }
 
     #[test]
@@ -550,8 +572,8 @@ mod tests {
 
     #[test]
     fn the_height_floor_follows_the_collapse_and_never_the_layer() {
-        assert_eq!(min_note_height(true), COLLAPSED_NOTE_HEIGHT);
-        assert_eq!(min_note_height(false), MIN_NOTE_HEIGHT);
+        assert_eq!(min_note_height_for_scale(true, 100), COLLAPSED_NOTE_HEIGHT);
+        assert_eq!(min_note_height_for_scale(false, 100), MIN_NOTE_HEIGHT);
 
         // Collapsing while on the desktop shrinks to the same bar it shrinks to
         // on the overlay: the clamp has no layer input at all.
@@ -563,7 +585,7 @@ mod tests {
                 1,
                 1920,
                 1080,
-                min_note_height(collapsed),
+                min_note_height_for_scale(collapsed, 100),
             );
             assert_eq!(
                 h,

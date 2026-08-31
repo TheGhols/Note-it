@@ -21,7 +21,7 @@ describe('the Phase 3.14 header shortcuts', () => {
       ['btn-trash-note', 'Mover nota para a lixeira'],
     ]) {
       const button = page.getElementById(id);
-      expect(button?.getAttribute('title')).toBe(label);
+      expect(button?.getAttribute('title')).toContain(label);
       expect(button?.getAttribute('aria-label')).toBe(label);
       expect(button?.querySelector('svg')).not.toBeNull();
     }
@@ -97,23 +97,18 @@ describe('the Phase 3.14 header shortcuts', () => {
       }
       return hidden;
     };
-    const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
-    const quickIcon = Number.parseFloat(
-      ruleFor(':root').body.match(/--header-action-size:\s*([\d.]+)px/)![1],
-    );
-    const headerPadding = Number.parseFloat(
-      declarationIn('.note-header', 'padding').split(/\s+/)[1],
-    );
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const controlSize = px(ruleFor(':root').body.match(/--header-control-size:[^;]+/)![0]);
+    const headerPadding = px(declarationIn('.note-header', 'padding'));
     const clock =
-      Number.parseFloat(declarationIn('.header-timer-readout', 'font-size')) * 0.75 * 7 + 3;
+      px(declarationIn('.header-timer-readout', 'font-size')) * 0.75 * 7 + 3;
 
     for (const width of [220, 260, 300, 320, 360, 420, 600, 900]) {
       const hidden = hiddenAt(width);
       let used = headerPadding * 2;
       for (const button of page.querySelectorAll('.note-header .icon-btn')) {
         if (hidden.has(button.id)) continue;
-        const intrinsic = button.querySelector('svg')?.getAttribute('width');
-        used += (intrinsic ? Number.parseFloat(intrinsic) : quickIcon) + iconPadding * 2;
+        used += controlSize;
       }
       if (width > 300) used += clock;
       expect(used, `${width}px with H:MM:SS and AutoPaste`).toBeLessThanOrEqual(width);

@@ -31,6 +31,8 @@ export interface NoteData {
   zoomPercent: number;
   layerMode: NoteLayerMode;
   theme: ThemePreference;
+  /** Global application-chrome scale, independent of this note's zoom. */
+  uiScalePercent: number;
   /**
    * The note's Timer or Pomodoro, or `null` when it has none.
    *
@@ -84,6 +86,7 @@ export type HostToWebviewMessage =
   | { type: 'set_collapsed'; payload: { collapsed: boolean } }
   | { type: 'set_color'; payload: { color: PaperColor } }
   | { type: 'set_theme'; payload: { theme: ThemePreference } }
+  | { type: 'set_ui_scale'; payload: { uiScalePercent: number } }
   /** Whether this note is the AutoPaste target, and how a capture is laid out. */
   | { type: 'set_auto_paste'; payload: { active: boolean; delimiter: CaptureDelimiter } }
   /** One clipboard capture, on its way to the editor. Text and nothing else. */
@@ -133,6 +136,7 @@ export type WebviewToHostMessage =
       payload: { id: string; paperType: PaperType; paperIntensity: PaperIntensity };
     }
   | { type: 'theme_changed'; payload: { theme: ThemePreference } }
+  | { type: 'ui_scale_changed'; payload: { uiScalePercent: number } }
   | { type: 'collapse_changed'; payload: { id: string; collapsed: boolean } }
   | { type: 'zoom_changed'; payload: { id: string; zoomPercent: number } }
   | { type: 'toggle_layer_mode' }

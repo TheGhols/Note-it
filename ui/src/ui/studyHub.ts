@@ -223,9 +223,10 @@ export class StudyHub {
     const today = this.study.days[localDay(now)]?.reviews ?? 0;
     const values: Array<[string, number]> = [
       ['Para revisar', due],
-      ['Novos', fresh],
-      ['Total de cartões', this.catalog.items.length],
-      ['Notas com cartões', this.catalog.notesWithCards],
+      ['Novas revisões', fresh],
+      ['Cartões', this.catalog.sourceCards],
+      ['Revisões', this.catalog.items.length],
+      ['Notas', this.catalog.notesWithCards],
       ['Revisões hoje', today],
       ['Sequência atual', currentStreak(this.study.days, now)],
       ['Maior sequência', longestStreak(this.study.days)],

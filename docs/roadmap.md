@@ -47,7 +47,7 @@
       strip before the WebView repaints.
 - [x] Markdown task lists with square checkboxes, nesting, and automatic strikethrough.
 - [x] Per-task completion timestamps that travel with their task and are never invented.
-- [x] View zoom (75–200%) persisted per note, independent of the document.
+- [x] View zoom (75–300%) persisted per note, independent of the document.
 - [x] Inline text size, text colour and highlight, applied from the settings menu.
 - [x] `Ctrl+Shift+M` collapse, `Ctrl+Shift+Space` layer switch, `Ctrl+Shift+>` / `Ctrl+Shift+<`
       text size, all routed through the single keyboard controller.
@@ -526,7 +526,7 @@ thing people do most.
 - [x] On-demand catalog of every live note, including closed notes and excluding trash, parsed in
       the WebView by the same Tiptap schema and extractor as the visible editor.
 - [x] Internal Study Hub with Review Now, All, Current Note, source labels, compact list, due/new
-      status, seven useful counts, 365-day fixed-scale heatmap and current/longest streak.
+      status, compact useful counts, 365-day fixed-scale heatmap and current/longest streak.
 - [x] Existing FlashcardPanel evolved for ratings, interval previews, persisted ACK/error handling,
       source note and completion summary; safe rich content and managed images remain one renderer.
 - [x] Toolbar deck, recoverable-trash shortcut beside X and Zoom −/+ through existing actions, with
@@ -535,6 +535,22 @@ thing people do most.
       study copy cannot be committed as a complete snapshot.
 
 Capture & Export, OCR and PDF are postponed. They are not part of Phase 3.14.
+
+### Phase 3.14R.1: Interface Polish & Visual Accessibility (Complete)
+
+- [x] Study Hub distinguishes source cards from review directions, including the explicit 2-card /
+      3-review reversible corpus.
+- [x] Header actions grouped by purpose with restrained separators, stable IDs/handlers and a
+      centred wide/compact search pill that opens the existing SearchPalette.
+- [x] Shared short motion tokens for buttons and internal panels, safe content-only collapse motion,
+      immediate hidden-state semantics and full `prefers-reduced-motion` fallback.
+- [x] Per-note zoom extended to 300% through the same frontend/host/state path.
+- [x] Global 90–160% Interface scale in `config.toml`, broadcast to all notes and reflected in real
+      chrome and collapsed geometry without affecting document zoom, text sizing or Markdown.
+- [x] Central shortcut metadata keeps tooltips, menu hints and `aria-keyshortcuts` aligned without
+      inventing shortcuts for actions that have none.
+- [x] Responsive budget verified from 220–900 px at 100/120/140/160%, preserving Menu, active
+      Timer/AutoPaste and Close before optional shortcuts.
 
 ## Phase 4.0: Core & CLI (Planned)
 

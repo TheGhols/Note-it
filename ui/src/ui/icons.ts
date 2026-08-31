@@ -39,11 +39,11 @@ export interface HeaderIcon {
 /** One header button that opens a panel the note menu already builds. */
 export interface QuickAction extends HeaderIcon {
   /** The existing menu panel this action opens. No action has logic of its own. */
-  readonly panel: 'paper' | 'textSize' | 'textColor' | 'highlight' | 'blocks' | 'search';
+  readonly panel: 'paper' | 'textSize' | 'textColor' | 'highlight' | 'blocks';
 }
 
 /**
- * The six approved quick actions, in the order they appear in the bar.
+ * The five formatting quick actions, in the order they appear in the bar.
  *
  * Every asset is single-toned once normalised: none of them relies on a
  * translucent shape sitting under an opaque one of the same colour, so the
@@ -87,14 +87,15 @@ export const QUICK_ACTIONS: readonly QuickAction[] = [
     panel: 'blocks',
     asset: 'Category.svg',
   },
-  {
-    id: 'search',
-    buttonId: 'btn-search',
-    label: 'Buscar',
-    panel: 'search',
-    asset: 'Search.svg',
-  },
 ];
+
+/** The compact fallback for the central search pill. Both open SearchPalette. */
+export const SEARCH: HeaderIcon = {
+  id: 'search',
+  buttonId: 'btn-search',
+  label: 'Buscar notas',
+  asset: 'Search.svg',
+};
 
 /**
  * The one header button that does something rather than opening something.
@@ -140,6 +141,7 @@ export const HEADER_ICONS: readonly HeaderIcon[] = [
   ...QUICK_ACTIONS,
   CLIPPER,
   FLASHCARDS,
+  SEARCH,
 ];
 
 /** Every file-backed drawing in the header, including the separate destructive action. */

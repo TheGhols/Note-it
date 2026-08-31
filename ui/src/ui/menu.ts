@@ -19,6 +19,9 @@ import {
   paperTypeLabel,
 } from './paper.ts';
 import { DEFAULT_THEME, THEMES, themeLabel } from './theme.ts';
+import { HEADER_ACTIONS } from './actionMetadata.ts';
+import { MAX_ZOOM_PERCENT, MIN_ZOOM_PERCENT } from '../editor/zoom.ts';
+import { MAX_UI_SCALE_PERCENT, MIN_UI_SCALE_PERCENT } from './uiScale.ts';
 
 export type LayerMode = 'overlay' | 'desktop' | 'hidden';
 
@@ -34,6 +37,9 @@ export interface NoteMenuHandlers {
   onZoomIn(): void;
   onZoomOut(): void;
   onResetZoom(): void;
+  onUiScaleIn(): void;
+  onUiScaleOut(): void;
+  onResetUiScale(): void;
   onSelectLayerMode(mode: LayerMode): void;
   onToggleCodeBlock(): void;
   onSelectCodeLanguage(language: string | null): void;
@@ -79,6 +85,7 @@ export type MenuPanel =
   | 'textColor'
   | 'highlight'
   | 'zoom'
+  | 'interface'
   | 'theme'
   | 'layer'
   | 'blocks'
@@ -142,6 +149,7 @@ export class NoteMenu {
   private readonly paperTypeValue: HTMLElement;
   private readonly paperIntensityValue: HTMLElement;
   private readonly zoomValue: HTMLElement;
+  private readonly uiScaleValue: HTMLElement;
   private studyItem!: HTMLButtonElement;
   private studyValue!: HTMLElement;
   private studyAction!: HTMLButtonElement;
@@ -162,6 +170,7 @@ export class NoteMenu {
   private open = false;
   private collapsed = false;
   private zoomPercent = 100;
+  private uiScalePercent = 100;
   private layerMode: LayerMode = 'overlay';
   private selectedColor: PaperColor | null = null;
   private paperType: PaperType = DEFAULT_PAPER_TYPE;
@@ -208,10 +217,15 @@ export class NoteMenu {
       paperIntensityItem.lastElementChild,
     );
 
-    const zoomItem = this.createSubmenuItem('Zoom', 'zoom');
+    const zoomItem = this.createSubmenuItem('Zoom da nota', 'zoom');
     this.zoomValue = this.doc.createElement('span');
     this.zoomValue.className = 'note-menu-value';
     zoomItem.insertBefore(this.zoomValue, zoomItem.lastElementChild);
+
+    const interfaceItem = this.createSubmenuItem('Interface', 'interface');
+    this.uiScaleValue = this.doc.createElement('span');
+    this.uiScaleValue.className = 'note-menu-value';
+    interfaceItem.insertBefore(this.uiScaleValue, interfaceItem.lastElementChild);
 
     const themeItem = this.createSubmenuItem('Tema', 'theme');
     this.themeValue = this.doc.createElement('span');
@@ -237,7 +251,11 @@ export class NoteMenu {
     layerItem.insertBefore(this.layerValue, layerItem.lastElementChild);
 
     this.collapseItem = this.createItem('Recolher nota', 'note-menu-item');
-    this.collapseItem.append(this.createShortcutHint('Ctrl+Shift+M'));
+    this.collapseItem.append(this.createShortcutHint(HEADER_ACTIONS.collapse.shortcut.display));
+    this.collapseItem.setAttribute(
+      'aria-keyshortcuts',
+      HEADER_ACTIONS.collapse.shortcut.aria,
+    );
     this.collapseItem.addEventListener('click', () => {
       const next = !this.collapsed;
       this.close();
@@ -258,10 +276,14 @@ export class NoteMenu {
       paperTypeItem,
       paperIntensityItem,
       mediaItem,
+      this.createSeparator(),
       this.studyItem,
       captureItem,
+      this.createSeparator(),
       dataItem,
+      this.createSeparator(),
       zoomItem,
+      interfaceItem,
       themeItem,
       layerItem,
       this.collapseItem,
@@ -321,6 +343,7 @@ export class NoteMenu {
       'highlight',
     ));
     this.panels.set('zoom', this.buildZoomPanel());
+    this.panels.set('interface', this.buildInterfacePanel());
     this.panels.set(
       'theme',
       this.buildChoicePanel(
@@ -374,6 +397,7 @@ export class NoteMenu {
     this.doc.addEventListener('keydown', this.handleKeyDown);
 
     this.setZoomPercent(100);
+    this.setUiScalePercent(100);
     this.setLayerMode('overlay');
     this.setPaper(DEFAULT_PAPER_TYPE, DEFAULT_PAPER_INTENSITY);
     this.setTheme(DEFAULT_THEME);
@@ -494,6 +518,13 @@ export class NoteMenu {
     this.panels.get('zoom')?.refresh?.();
   }
 
+  /** Reflects the one application-wide chrome scale in every note menu. */
+  public setUiScalePercent(percent: number): void {
+    this.uiScalePercent = percent;
+    this.uiScaleValue.textContent = `${percent}%`;
+    this.panels.get('interface')?.refresh?.();
+  }
+
   public setLayerMode(mode: LayerMode): void {
     this.layerMode = mode;
     this.layerValue.textContent =
@@ -543,7 +574,7 @@ export class NoteMenu {
    * Media: putting a picture in the note.
    *
    * Here rather than in the header bar, which is already carrying the menu,
-   * six quick actions, the timer and the close cross. Inserting an image is
+   * quick actions, the timer and the close cross. Inserting an image is
    * something done occasionally and deliberately, so it costs a menu rather
    * than a permanent control — and the two gestures most people will actually
    * use, pasting and dropping, need no control at all.
@@ -946,7 +977,7 @@ export class NoteMenu {
   }
 
   private buildZoomPanel(): PanelEntry {
-    const { panel, body } = this.createPanel('Zoom', 'note-menu-zoom');
+    const { panel, body } = this.createPanel('Zoom da nota', 'note-menu-zoom');
 
     const row = this.doc.createElement('div');
     row.className = 'note-menu-zoom-row';
@@ -956,6 +987,7 @@ export class NoteMenu {
     minus.className = 'note-menu-step';
     minus.setAttribute('role', 'menuitem');
     minus.setAttribute('aria-label', 'Diminuir zoom');
+    minus.setAttribute('aria-keyshortcuts', HEADER_ACTIONS.zoomOut.shortcut.aria);
     minus.textContent = '−';
     minus.addEventListener('click', () => this.options.handlers.onZoomOut());
 
@@ -967,13 +999,15 @@ export class NoteMenu {
     plus.className = 'note-menu-step';
     plus.setAttribute('role', 'menuitem');
     plus.setAttribute('aria-label', 'Aumentar zoom');
+    plus.setAttribute('aria-keyshortcuts', HEADER_ACTIONS.zoomIn.shortcut.aria);
     plus.textContent = '+';
     plus.addEventListener('click', () => this.options.handlers.onZoomIn());
 
     row.append(minus, value, plus);
 
     const reset = this.createItem('Restaurar 100%', 'note-menu-item');
-    reset.append(this.createShortcutHint('Ctrl+0'));
+    reset.append(this.createShortcutHint(HEADER_ACTIONS.resetZoom.shortcut.display));
+    reset.setAttribute('aria-keyshortcuts', HEADER_ACTIONS.resetZoom.shortcut.aria);
     reset.addEventListener('click', () => {
       this.close();
       this.options.handlers.onResetZoom();
@@ -985,6 +1019,52 @@ export class NoteMenu {
       element: panel,
       refresh: () => {
         value.textContent = `${this.zoomPercent}%`;
+        minus.disabled = this.zoomPercent <= MIN_ZOOM_PERCENT;
+        plus.disabled = this.zoomPercent >= MAX_ZOOM_PERCENT;
+      },
+    };
+  }
+
+  private buildInterfacePanel(): PanelEntry {
+    const { panel, body } = this.createPanel('Escala da interface', 'note-menu-interface');
+
+    const row = this.doc.createElement('div');
+    row.className = 'note-menu-zoom-row note-menu-interface-row';
+
+    const minus = this.doc.createElement('button');
+    minus.type = 'button';
+    minus.className = 'note-menu-step';
+    minus.setAttribute('role', 'menuitem');
+    minus.setAttribute('aria-label', 'Diminuir escala da interface');
+    minus.textContent = '−';
+    minus.addEventListener('click', () => this.options.handlers.onUiScaleOut());
+
+    const value = this.doc.createElement('span');
+    value.className = 'note-menu-zoom-value';
+
+    const plus = this.doc.createElement('button');
+    plus.type = 'button';
+    plus.className = 'note-menu-step';
+    plus.setAttribute('role', 'menuitem');
+    plus.setAttribute('aria-label', 'Aumentar escala da interface');
+    plus.textContent = '+';
+    plus.addEventListener('click', () => this.options.handlers.onUiScaleIn());
+
+    row.append(minus, value, plus);
+
+    const reset = this.createItem('Restaurar 100%', 'note-menu-item');
+    reset.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onResetUiScale();
+    });
+
+    body.append(row, reset);
+    return {
+      element: panel,
+      refresh: () => {
+        value.textContent = `${this.uiScalePercent}%`;
+        minus.disabled = this.uiScalePercent <= MIN_UI_SCALE_PERCENT;
+        plus.disabled = this.uiScalePercent >= MAX_UI_SCALE_PERCENT;
       },
     };
   }
@@ -1000,7 +1080,8 @@ export class NoteMenu {
       const button = this.createItem(label, 'note-menu-item note-menu-option');
       button.setAttribute('role', 'menuitemradio');
       button.setAttribute('aria-checked', 'false');
-      button.append(this.createShortcutHint('Ctrl+Shift+Space'));
+      button.append(this.createShortcutHint(HEADER_ACTIONS.layer.shortcut.display));
+      button.setAttribute('aria-keyshortcuts', HEADER_ACTIONS.layer.shortcut.aria);
       button.addEventListener('click', () => {
         this.close();
         this.options.handlers.onSelectLayerMode(mode);
@@ -1051,15 +1132,21 @@ export class NoteMenu {
   private buildSearchPanel(): PanelEntry {
     const { panel, body } = this.createPanel('Buscar', 'note-menu-search');
 
-    const rows: Array<[string, string, () => void]> = [
-      ['Buscar em todas as notas', 'Ctrl+K', () => this.options.handlers.onOpenGlobalSearch()],
-      ['Buscar nesta nota', 'Ctrl+F', () => this.options.handlers.onOpenFind()],
-      ['Localizar e substituir', 'Ctrl+H', () => this.options.handlers.onOpenReplace()],
+    const rows: Array<[string, string, string, () => void]> = [
+      [
+        'Buscar em todas as notas',
+        HEADER_ACTIONS.search.shortcut.display,
+        HEADER_ACTIONS.search.shortcut.aria,
+        () => this.options.handlers.onOpenGlobalSearch(),
+      ],
+      ['Buscar nesta nota', 'Ctrl+F', 'Control+F', () => this.options.handlers.onOpenFind()],
+      ['Localizar e substituir', 'Ctrl+H', 'Control+H', () => this.options.handlers.onOpenReplace()],
     ];
 
-    for (const [label, shortcut, action] of rows) {
+    for (const [label, shortcut, ariaShortcut, action] of rows) {
       const item = this.createItem(label, 'note-menu-item');
       item.append(this.createShortcutHint(shortcut));
+      item.setAttribute('aria-keyshortcuts', ariaShortcut);
       item.addEventListener('click', () => {
         this.close();
         action();
@@ -1145,6 +1232,13 @@ export class NoteMenu {
     item.append(chevron);
     item.addEventListener('click', () => this.showPanel(target));
     return item;
+  }
+
+  private createSeparator(): HTMLElement {
+    const separator = this.doc.createElement('div');
+    separator.className = 'note-menu-separator';
+    separator.setAttribute('role', 'separator');
+    return separator;
   }
 
   private createShortcutHint(text: string): HTMLElement {

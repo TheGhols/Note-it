@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.14R.1 Interface Polish & Visual Accessibility.** The existing header is now grouped as
+  Note, Text, Content and View/Tools, with quiet separators and one centred search pill that opens
+  the established SearchPalette. It compacts or yields to the icon fallback before colliding with
+  Menu, an active Timer/AutoPaste, Trash or Close; button identifiers and handlers are unchanged.
+  - Study Hub language now distinguishes source **Cards** from directional **Reviews**. A basic
+    plus a reversible source therefore reads 2 Cards and 3 Reviews, while session progress remains
+    review progress.
+  - One 100/150/180 ms motion vocabulary gives buttons and internal panels a restrained response;
+    collapse/expand animates only WebView content while GTK remains geometry authority. Reduced
+    motion removes animation, transition and press scaling without delaying any action.
+  - Per-note zoom now spans 75–300% in the existing 10% path and persists the new values in
+    `state.json`. A separate global **Interface scale** spans 90–160%, is stored in `config.toml`,
+    broadcast to every WebView, and changes real chrome metrics and collapsed height without
+    scaling or rewriting note content.
+  - Header and menu shortcut labels come from one metadata table. Tooltips name the action and add
+    only shortcuts actually handled by the WebView; `aria-keyshortcuts` carries the same mapping.
+
 - **Phase 3.14 Study System & Spaced Repetition.** The deck is now every flashcard in every live
   note, including closed notes, with trash excluded and restored notes returning with their prior
   schedule. One on-demand Tiptap editor parses the host's document catalog through the existing
@@ -460,7 +477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nested to any depth, with completed tasks struck through automatically.
 - Per-task completion timestamps, shown as `Concluído dd/MM/aaaa HH:mm` and stored alongside the
   task in Markdown. Reopening a task clears its date; a task completed outside Note-it keeps none.
-- View zoom between 75% and 200% (`Ctrl+=`, `Ctrl+-`, `Ctrl+0`, or the menu), persisted per note
+- View zoom between 75% and 300% (`Ctrl+=`, `Ctrl+-`, `Ctrl+0`, or the menu), persisted per note
   without touching the document.
 - Inline text size, text colour and highlight, applied to a selection or as a stored mark, from
   compact palettes in the settings menu.

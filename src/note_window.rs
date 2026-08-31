@@ -1,13 +1,13 @@
 use crate::autopaste::CaptureDelimiter;
 use crate::diagnostics;
 use crate::layer_shell::{
-    apply_live_layer_mode, apply_paper_color, clamp_geometry_with_min_height, min_note_height,
-    setup_layer_shell_window, show_initial_layer_surface, update_window_position,
-    update_window_size, WindowGeometry, COLLAPSED_NOTE_HEIGHT, DEFAULT_MONITOR_HEIGHT,
-    DEFAULT_MONITOR_WIDTH,
+    apply_live_layer_mode, apply_paper_color, clamp_geometry_with_min_height,
+    collapsed_note_height, min_note_height_for_scale, setup_layer_shell_window,
+    show_initial_layer_surface, update_window_position, update_window_size, WindowGeometry,
+    DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
 use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
-use crate::settings::theme_name;
+use crate::settings::{clamp_ui_scale_percent, theme_name};
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use crate::study::Rating;
@@ -45,6 +45,9 @@ pub struct NoteWindowOptions<'a> {
     /// the window is told about it rather than reading it back from the store.
     pub theme: String,
     pub on_theme_changed: Rc<dyn Fn(String)>,
+    /// Application-chrome scale in force when this note opens.
+    pub ui_scale_percent: u16,
+    pub on_ui_scale_changed: Rc<dyn Fn(u16)>,
     /// Asks the host to search every note. Carries the identifier of the note
     /// that asked, so the answer goes back to the page that is waiting for it.
     pub on_search: Rc<dyn Fn(Uuid, u64, String)>,
@@ -125,6 +128,7 @@ pub struct NoteWindow {
     layer_mode: Rc<Cell<LayerMode>>,
     layer_transition_generation: Rc<Cell<u64>>,
     theme: Rc<RefCell<String>>,
+    ui_scale_percent: Rc<Cell<u16>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
     /// False until the page has said `Ready` and been handed its note. A
@@ -163,6 +167,7 @@ impl NoteWindow {
         // Clamp initial geometry. A note restored collapsed keeps the header
         // bar height instead of being forced back to the expanded minimum.
         let restored_collapsed = options.state.collapsed;
+        let ui_scale_percent = clamp_ui_scale_percent(options.ui_scale_percent);
         let (clamped_x, clamped_y, clamped_w, clamped_h) = clamp_geometry_with_min_height(
             options.state.x,
             options.state.y,
@@ -170,7 +175,7 @@ impl NoteWindow {
             options.state.height,
             mon_w,
             mon_h,
-            min_note_height(restored_collapsed),
+            min_note_height_for_scale(restored_collapsed, ui_scale_percent),
         );
 
         let mut initial_state = options.state;
@@ -178,6 +183,7 @@ impl NoteWindow {
         initial_state.y = clamped_y;
         initial_state.width = clamped_w;
         initial_state.height = clamped_h;
+        initial_state.zoom_percent = clamp_zoom_percent(initial_state.zoom_percent);
         if options.monitor_name.is_some() {
             initial_state.monitor = options.monitor_name;
         }
@@ -186,6 +192,7 @@ impl NoteWindow {
         let state_rc = Rc::new(RefCell::new(initial_state));
         let layer_mode_cell = Rc::new(Cell::new(options.layer_mode));
         let theme_cell = Rc::new(RefCell::new(theme_name(&options.theme).to_string()));
+        let ui_scale_cell = Rc::new(Cell::new(ui_scale_percent));
 
         // Back the surface with the note's paper colour so a fast resize never
         // exposes the default dark window background before the page repaints.
@@ -203,6 +210,7 @@ impl NoteWindow {
                 collapsed: restored_collapsed,
             },
             options.monitor.as_ref(),
+            ui_scale_percent,
         );
 
         // Configure WebKit settings
@@ -253,6 +261,8 @@ impl NoteWindow {
         let layer_mode_clone = Rc::clone(&layer_mode_cell);
         let theme_clone = Rc::clone(&theme_cell);
         let on_theme_changed_clone = Rc::clone(&options.on_theme_changed);
+        let ui_scale_clone = Rc::clone(&ui_scale_cell);
+        let on_ui_scale_changed_clone = Rc::clone(&options.on_ui_scale_changed);
         let on_search_clone = Rc::clone(&options.on_search);
         let on_open_search_result_clone = Rc::clone(&options.on_open_search_result);
         let on_trash_note_clone = Rc::clone(&options.on_trash_note);
@@ -303,6 +313,7 @@ impl NoteWindow {
                                         zoom_percent: state_clone.borrow().zoom_percent,
                                         layer_mode: layer_mode_clone.get().as_str().to_string(),
                                         theme: theme_clone.borrow().clone(),
+                                        ui_scale_percent: ui_scale_clone.get(),
                                         timer: state_clone.borrow().timer,
                                         capture_delimiter: capture_delimiter_clone.get(),
                                     },
@@ -406,6 +417,9 @@ impl NoteWindow {
                         WebviewToHostMessage::ThemeChanged { theme } => {
                             on_theme_changed_clone(theme_name(&theme).to_string());
                         }
+                        WebviewToHostMessage::UiScaleChanged { ui_scale_percent } => {
+                            on_ui_scale_changed_clone(clamp_ui_scale_percent(ui_scale_percent));
+                        }
                         WebviewToHostMessage::SaveAndClose {
                             id: message_id,
                             content,
@@ -432,7 +446,13 @@ impl NoteWindow {
                             }
                             let snapshot = {
                                 let mut st = state_clone.borrow_mut();
-                                if !apply_collapse_to_state(&mut st, collapsed, mon_w, mon_h) {
+                                if !apply_collapse_to_state(
+                                    &mut st,
+                                    collapsed,
+                                    mon_w,
+                                    mon_h,
+                                    ui_scale_clone.get(),
+                                ) {
                                     return;
                                 }
                                 st.clone()
@@ -443,6 +463,7 @@ impl NoteWindow {
                                     snapshot.width,
                                     snapshot.height,
                                     snapshot.collapsed,
+                                    ui_scale_clone.get(),
                                 );
                             }
                             on_geom_clone(id, snapshot);
@@ -607,7 +628,7 @@ impl NoteWindow {
                                 st.height,
                                 mon_w,
                                 mon_h,
-                                min_note_height(st.collapsed),
+                                min_note_height_for_scale(st.collapsed, ui_scale_clone.get()),
                             );
                             st.x = cx;
                             st.y = cy;
@@ -642,12 +663,18 @@ impl NoteWindow {
                                 st.height,
                                 mon_w,
                                 mon_h,
-                                min_note_height(false),
+                                min_note_height_for_scale(false, ui_scale_clone.get()),
                             );
                             st.width = cw;
                             st.height = ch;
                             if let Some(win) = window_weak.upgrade() {
-                                update_window_size(win.upcast_ref(), cw, ch, false);
+                                update_window_size(
+                                    win.upcast_ref(),
+                                    cw,
+                                    ch,
+                                    false,
+                                    ui_scale_clone.get(),
+                                );
                             }
                         }
                         WebviewToHostMessage::ResizeEnd => {
@@ -802,6 +829,7 @@ impl NoteWindow {
             layer_mode: layer_mode_cell,
             layer_transition_generation,
             theme: theme_cell,
+            ui_scale_percent: ui_scale_cell,
             allow_close,
             pending_flushes,
             loaded,
@@ -941,7 +969,13 @@ impl NoteWindow {
         let snapshot = {
             let mut state = self.state.borrow_mut();
             let (monitor_width, monitor_height) = self.monitor_size;
-            if !apply_collapse_to_state(&mut state, collapsed, monitor_width, monitor_height) {
+            if !apply_collapse_to_state(
+                &mut state,
+                collapsed,
+                monitor_width,
+                monitor_height,
+                self.ui_scale_percent.get(),
+            ) {
                 return None;
             }
             state.clone()
@@ -952,6 +986,7 @@ impl NoteWindow {
             snapshot.width,
             snapshot.height,
             snapshot.collapsed,
+            self.ui_scale_percent.get(),
         );
         // The page owns the collapsed presentation, so it has to hear about a
         // change it did not start itself.
@@ -966,6 +1001,40 @@ impl NoteWindow {
 
     pub fn is_collapsed(&self) -> bool {
         self.state.borrow().collapsed
+    }
+
+    /// Applies the global chrome scale. When this note is collapsed only the
+    /// live bar height changes; its remembered expanded geometry is preserved.
+    pub fn set_ui_scale(&self, percent: u16) -> Option<NoteWindowState> {
+        let percent = clamp_ui_scale_percent(percent);
+        self.ui_scale_percent.set(percent);
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::SetUiScale {
+                ui_scale_percent: percent,
+            },
+        );
+
+        let snapshot = {
+            let mut state = self.state.borrow_mut();
+            if !state.collapsed {
+                return None;
+            }
+            let height = collapsed_note_height(percent);
+            if state.height == height {
+                return None;
+            }
+            state.height = height;
+            state.clone()
+        };
+        update_window_size(
+            self.window.upcast_ref(),
+            snapshot.width,
+            snapshot.height,
+            true,
+            percent,
+        );
+        Some(snapshot)
     }
 
     /// Dresses this note's chrome with the shared interface theme. The paper
@@ -1164,8 +1233,9 @@ fn apply_collapse_to_state(
     collapsed: bool,
     monitor_width: i32,
     monitor_height: i32,
+    ui_scale_percent: u16,
 ) -> bool {
-    if !state.apply_collapsed(collapsed, COLLAPSED_NOTE_HEIGHT) {
+    if !state.apply_collapsed(collapsed, collapsed_note_height(ui_scale_percent)) {
         return false;
     }
 
@@ -1176,7 +1246,7 @@ fn apply_collapse_to_state(
         state.height,
         monitor_width,
         monitor_height,
-        min_note_height(collapsed),
+        min_note_height_for_scale(collapsed, ui_scale_percent),
     );
     state.x = x;
     state.y = y;
@@ -1658,7 +1728,7 @@ mod tests {
             ..NoteWindowState::default()
         };
 
-        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080, 100));
         assert!(state.collapsed);
         assert_eq!(state.height, COLLAPSED_NOTE_HEIGHT);
         assert_eq!(state.width, 508);
@@ -1666,10 +1736,32 @@ mod tests {
         // Moving the collapsed bar and expanding restores the previous size in place.
         state.x = 40;
         state.y = 900;
-        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080));
+        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080, 100));
         assert!(!state.collapsed);
         assert_eq!((state.width, state.height), (508, 552));
         assert_eq!((state.x, state.y), (40, 900));
+    }
+
+    #[test]
+    fn scaled_collapse_keeps_the_expanded_geometry_for_the_next_expand() {
+        let mut state = NoteWindowState {
+            x: 80,
+            y: 120,
+            width: 620,
+            height: 540,
+            ..NoteWindowState::default()
+        };
+
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080, 160));
+        assert_eq!(state.height, 48);
+        assert_eq!(
+            (state.expanded_width, state.expanded_height),
+            (Some(620), Some(540))
+        );
+
+        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080, 160));
+        assert_eq!((state.width, state.height), (620, 540));
+        assert_eq!((state.expanded_width, state.expanded_height), (None, None));
     }
 
     #[test]
@@ -1680,11 +1772,11 @@ mod tests {
             ..NoteWindowState::default()
         };
 
-        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
-        assert!(!apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080, 100));
+        assert!(!apply_collapse_to_state(&mut state, true, 1920, 1080, 100));
         assert_eq!(state.expanded_height, Some(500));
 
-        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080));
+        assert!(apply_collapse_to_state(&mut state, false, 1920, 1080, 100));
         assert_eq!(state.height, 500);
     }
 
@@ -1697,10 +1789,10 @@ mod tests {
             height: 900,
             ..NoteWindowState::default()
         };
-        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080));
+        assert!(apply_collapse_to_state(&mut state, true, 1920, 1080, 100));
 
         // The note is expanded again after the display shrank.
-        assert!(apply_collapse_to_state(&mut state, false, 1280, 720));
+        assert!(apply_collapse_to_state(&mut state, false, 1280, 720, 100));
         assert!(state.width <= 1280);
         assert!(state.height <= 720);
         assert!(state.height >= MIN_NOTE_HEIGHT);

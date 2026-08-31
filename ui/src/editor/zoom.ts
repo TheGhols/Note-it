@@ -1,5 +1,5 @@
 export const MIN_ZOOM_PERCENT = 75;
-export const MAX_ZOOM_PERCENT = 200;
+export const MAX_ZOOM_PERCENT = 300;
 export const ZOOM_STEP_PERCENT = 10;
 export const DEFAULT_ZOOM_PERCENT = 100;
 

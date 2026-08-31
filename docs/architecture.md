@@ -68,7 +68,10 @@ Note-it separates native system integration from document editing through a clea
   and rings the bell; it does not run the countdown. Everything arriving from `state.json` or from
   the page goes through `NoteTimerState::sanitize`, so a state that claims to be running with no
   instant to run to comes back idle. See ADR-030.
-- `settings.rs`: Application configuration (`$XDG_CONFIG_HOME/note-it/config.toml`).
+- `settings.rs`: Application configuration (`$XDG_CONFIG_HOME/note-it/config.toml`), including the
+  global theme and 90–160% interface scale. The host commits that preference atomically, broadcasts
+  it to every WebView and adjusts only a collapsed surface's live height; per-note zoom remains in
+  `state.json` and expanded geometry remains unchanged.
 - `layer_shell.rs`: Wayland Layer Shell initialization, anchors, layers, and focus management.
 - `note_window.rs`: GTK4 window wrapper embedding WebKitGTK 6.0 webviews.
 - `webview_bridge.rs`: Bidirectional messaging between Rust host and TypeScript webview.

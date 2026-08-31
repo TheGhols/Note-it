@@ -44,7 +44,8 @@ Tudo listado aqui já está implementado.
   três intensidades.
 - Tema da interface **Sistema**, **Claro** ou **Escuro**, compartilhado por todas as notas. O tema
   veste os menus e as bordas do aplicativo; a nota mantém a cor e o papel que recebeu.
-- Zoom de 75% a 200% por nota, que escala o texto sem alterar o documento.
+- Zoom de 75% a 300% por nota, que escala o conteúdo sem alterar o documento, e escala global da
+  interface de 90% a 160% sem afetar a nota.
 
 **Edição**
 

@@ -48,6 +48,9 @@ function mount() {
     onZoomIn: vi.fn(),
     onZoomOut: vi.fn(),
     onResetZoom: vi.fn(),
+    onUiScaleIn: vi.fn(),
+    onUiScaleOut: vi.fn(),
+    onResetUiScale: vi.fn(),
     onSelectLayerMode: vi.fn(),
     onToggleCodeBlock: vi.fn(),
     onSelectCodeLanguage: vi.fn(),
@@ -262,7 +265,7 @@ describe('the indicator on the note being captured into', () => {
     expect(indicator.getAttribute('aria-pressed')).toBe('true');
     // Outside the drag region, so pressing it can never move the window.
     expect(indicator.closest('.drag-region')).toBeNull();
-    expect(indicator.closest('.note-controls-left')).not.toBeNull();
+    expect(indicator.closest('.note-controls-tools')).not.toBeNull();
   });
 
   it('opens the panel that switches it off', () => {
@@ -354,20 +357,15 @@ describe('the header bar still fits with everything on it', () => {
    */
   function controlRowWidth(options: { includeHidden: boolean; omit?: string[] }): number {
     const page = renderedPage();
-    const iconPadding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
-    const quickIcon = Number.parseFloat(
-      ruleFor(':root').body.match(/--header-action-size:\s*([\d.]+)px/)![1],
-    );
-    const headerPadding = Number.parseFloat(
-      declarationIn('.note-header', 'padding').split(/\s+/)[1],
-    );
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const controlSize = px(ruleFor(':root').body.match(/--header-control-size:[^;]+/)![0]);
+    const headerPadding = px(declarationIn('.note-header', 'padding'));
 
     let width = headerPadding * 2;
     for (const button of page.querySelectorAll('.note-header .icon-btn')) {
       if (!options.includeHidden && button.hasAttribute('hidden')) continue;
       if (options.omit?.includes(button.id)) continue;
-      const intrinsic = button.querySelector('svg')?.getAttribute('width');
-      width += (intrinsic ? Number.parseFloat(intrinsic) : quickIcon) + iconPadding * 2;
+      width += controlSize;
     }
     return width;
   }
@@ -412,9 +410,7 @@ describe('the header bar still fits with everything on it', () => {
     // the breakpoint, so the widest the row ever gets is at that breakpoint
     // and above — where all three are on the bar at once.
     const breakpoint = 420;
-    const readoutFont = Number.parseFloat(
-      declarationIn('.header-timer-readout', 'font-size'),
-    );
+    const readoutFont = Number(declarationIn('.header-timer-readout', 'font-size').match(/([\d.]+)px/)![1]);
     // `H:MM:SS`, at a generous upper bound for a tabular digit's advance.
     const widestClock = readoutFont * 0.75 * 7 + 3;
 
@@ -432,11 +428,10 @@ describe('the header bar still fits with everything on it', () => {
     // The rule, and which control it applies to. The paperclip is the one that
     // gives way because the menu still offers what it does; ☰, the clock, the
     // capture indicator and the close cross have nowhere else to be.
-    const narrow = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
-    expect(narrow).toContain('body:not([data-collapsed="true"]) #btn-insert-image');
-    expect(narrow).toContain('display: none');
+    expect(THEME_CSS).toMatch(/@media \(max-width: 359px\)[\s\S]*#btn-insert-image[\s\S]*display:\s*none/);
     for (const kept of ['btn-menu', 'btn-close', 'btn-timer', 'btn-autopaste']) {
-      expect(narrow, kept).not.toContain(kept);
+      expect(/@media \(max-width: 359px\) \{([\s\S]*?)\n\}/.exec(THEME_CSS)![1], kept)
+        .not.toContain(kept);
     }
   });
 

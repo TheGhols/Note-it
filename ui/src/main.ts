@@ -29,6 +29,7 @@ import { FlashcardPanel } from './ui/flashcardPanel.ts';
 import { flashcardCountsIn } from './editor/flashcardMark.ts';
 import { StudyHub, StudyFilter } from './ui/studyHub.ts';
 import { bindHeaderShortcuts, updateZoomShortcutState } from './ui/headerShortcuts.ts';
+import { applyHeaderActionMetadata } from './ui/actionMetadata.ts';
 import { buildGlobalCatalog } from './study/catalog.ts';
 import { collapseTransition } from './ui/collapse.ts';
 import { HeaderReveal } from './ui/headerReveal.ts';
@@ -36,6 +37,7 @@ import { CLIPPER, FLASHCARDS, QUICK_ACTIONS, TRASH_SHORTCUT } from './ui/icons.t
 import { MenuPanel, NoteMenu } from './ui/menu.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
+import { bindSearchEntries } from './ui/searchEntry.ts';
 import { NoteStatus } from './ui/status.ts';
 import { finishMessage } from './timer/format.ts';
 import { TimerPanel } from './ui/timerPanel.ts';
@@ -50,6 +52,13 @@ import {
 import { DEFAULT_THEME, normalizeTheme, ThemeController } from './ui/theme.ts';
 import { NoteInfoTooltip } from './ui/tooltip.ts';
 import { TextSize } from './editor/textSize.ts';
+import {
+  applyUiScale,
+  clampUiScale,
+  DEFAULT_UI_SCALE_PERCENT,
+  uiScaleIn,
+  uiScaleOut,
+} from './ui/uiScale.ts';
 import {
   clampZoom,
   DEFAULT_ZOOM_PERCENT,
@@ -71,6 +80,7 @@ const PAPER_COLORS: PaperColor[] = [
 
 let activeNoteId = '';
 let currentZoom = DEFAULT_ZOOM_PERCENT;
+let currentUiScale = DEFAULT_UI_SCALE_PERCENT;
 let currentLayerMode: NoteLayerMode = 'overlay';
 let currentPaperType: PaperType = DEFAULT_PAPER_TYPE;
 let currentPaperIntensity: PaperIntensity = DEFAULT_PAPER_INTENSITY;
@@ -235,6 +245,28 @@ function setTheme(theme: ThemePreference, persist: boolean): void {
   if (persist && changed) {
     bridge.sendMessage({ type: 'theme_changed', payload: { theme } });
   }
+}
+
+/**
+ * Scales application chrome, never the note document.
+ *
+ * The host owns and broadcasts this global preference. CSS variables change
+ * real control, type and spacing metrics, while the editor keeps its own
+ * independent `--note-zoom` and document font-size marks.
+ */
+function setUiScale(percent: number, persist: boolean): void {
+  const clamped = clampUiScale(percent);
+  const changed = clamped !== currentUiScale;
+  if (persist && changed) {
+    // The host commits config.toml before broadcasting. Waiting for that
+    // broadcast keeps this WebView honest if the atomic write fails.
+    bridge.sendMessage({ type: 'ui_scale_changed', payload: { uiScalePercent: clamped } });
+    return;
+  }
+  if (persist) return;
+
+  currentUiScale = applyUiScale(document.documentElement, document.body, clamped);
+  noteMenu?.setUiScalePercent(currentUiScale);
 }
 
 /**
@@ -530,6 +562,7 @@ function initUI(): void {
   // the page: under "Sistema" it watches the environment, so a desktop
   // switching to dark reaches an open note without a restart.
   themeController = new ThemeController(document.documentElement);
+  applyHeaderActionMetadata(document);
 
   noteEditor = new NoteEditor({
     element: editorContainer,
@@ -569,8 +602,13 @@ function initUI(): void {
     const button = document.getElementById(action.buttonId);
     if (button) quickTriggers[action.panel] = button;
   }
+
+  bindSearchEntries([
+    document.getElementById('btn-search'),
+    document.getElementById('btn-search-pill'),
+  ], openGlobalSearch);
   // The AutoPaste indicator opens the panel that switches it off. A second way
-  // in, never a second implementation — the same rule the six quick actions
+  // in, never a second implementation — the same rule the quick actions
   // follow.
   const autoPasteIndicator = document.getElementById('btn-autopaste');
   if (autoPasteIndicator) quickTriggers.capture = autoPasteIndicator;
@@ -631,6 +669,9 @@ function initUI(): void {
         onZoomIn: () => applyZoom(zoomIn(currentZoom), true),
         onZoomOut: () => applyZoom(zoomOut(currentZoom), true),
         onResetZoom: () => applyZoom(DEFAULT_ZOOM_PERCENT, true),
+        onUiScaleIn: () => setUiScale(uiScaleIn(currentUiScale), true),
+        onUiScaleOut: () => setUiScale(uiScaleOut(currentUiScale), true),
+        onResetUiScale: () => setUiScale(DEFAULT_UI_SCALE_PERCENT, true),
         onSelectLayerMode: (mode) => {
           // The host owns the shared mode; ask only when it would change.
           if (mode !== currentLayerMode) {
@@ -992,6 +1033,7 @@ function initUI(): void {
         false,
       );
       setTheme(normalizeTheme(msg.payload.theme), false);
+      setUiScale(clampUiScale(msg.payload.uiScalePercent), false);
       setFontSize(msg.payload.fontSize || 15);
       applyZoom(msg.payload.zoomPercent ?? DEFAULT_ZOOM_PERCENT, false);
       setLayerMode(msg.payload.layerMode ?? 'overlay');
@@ -1047,6 +1089,9 @@ function initUI(): void {
     } else if (msg.type === 'set_theme') {
       // A theme chosen from another note's menu.
       setTheme(normalizeTheme(msg.payload.theme), false);
+    } else if (msg.type === 'set_ui_scale') {
+      // A scale chosen from another note's menu.
+      setUiScale(clampUiScale(msg.payload.uiScalePercent), false);
     } else if (msg.type === 'set_font_size') {
       setFontSize(msg.payload.fontSize);
     } else if (msg.type === 'search_results') {

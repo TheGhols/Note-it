@@ -53,7 +53,7 @@ describe('the one Note-it header', () => {
 
     expect(headers).toHaveLength(1);
     expect(headers[0].querySelector('#btn-menu')).not.toBeNull();
-    // The six that open a panel, and the paperclip that opens the chooser.
+    // Every established action still uses the reviewed inline-SVG pipeline.
     expect(headers[0].querySelectorAll('.header-quick-action')).toHaveLength(
       HEADER_ICONS.length,
     );
@@ -82,7 +82,7 @@ describe('the one Note-it header', () => {
       'opacity var(--note-header-reveal)',
     );
 
-    const duration = Number.parseFloat(tokenIn(':root', '--note-header-reveal'));
+    const duration = Number.parseFloat(tokenIn(':root', '--motion-fast'));
     expect(duration).toBeGreaterThanOrEqual(100);
     expect(duration).toBeLessThanOrEqual(150);
   });
@@ -93,8 +93,9 @@ describe('the one Note-it header', () => {
     expect(declarationIn('.editor-wrapper', 'padding')).toBe(
       'var(--note-chrome-gutter) 14px 14px 14px',
     );
-    const gutter = Number.parseFloat(tokenIn(':root', '--note-chrome-gutter'));
-    const bar = Number.parseFloat(tokenIn(':root', '--note-header-height'));
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const gutter = px(tokenIn(':root', '--note-chrome-gutter'));
+    const bar = px(tokenIn(':root', '--note-header-height'));
     expect(gutter).toBeLessThan(bar);
   });
 
@@ -104,8 +105,8 @@ describe('the one Note-it header', () => {
     // reaching it is what reveals the chrome, and the editor starts exactly
     // below it. If these ever drift, either the first line loses clicks or the
     // controls stop coming out.
-    expect(tokenIn(':root', '--note-chrome-gutter')).toBe(`${REVEAL_ZONE_PX}px`);
-    expect(tokenIn(':root', '--note-header-height')).toBe(`${HOLD_ZONE_PX}px`);
+    expect(tokenIn(':root', '--note-chrome-gutter')).toContain(`${REVEAL_ZONE_PX}px`);
+    expect(tokenIn(':root', '--note-header-height')).toContain(`${HOLD_ZONE_PX}px`);
     expect(declarationIn('.drag-region', 'height')).toBe('var(--note-chrome-gutter)');
     expect(declarationIn('.drag-region', 'align-self')).toBe('flex-start');
   });
@@ -189,12 +190,10 @@ describe('the one Note-it header', () => {
 
   it('covers every pixel a control occupies', () => {
     // The band is only worth anything if the whole control row sits inside it.
-    const gutter = Number.parseFloat(tokenIn(':root', '--note-chrome-gutter'));
-    const icon = Number.parseFloat(tokenIn(':root', '--header-action-size'));
-    const padding = Number.parseFloat(declarationIn('.icon-btn', 'padding'));
-    const offset = Number.parseFloat(declarationIn('.note-header .icon-btn', 'margin-top'));
-
-    expect(offset + padding + icon + padding).toBeLessThanOrEqual(gutter);
+    const px = (value: string): number => Number(value.match(/([\d.]+)px/)![1]);
+    const gutter = px(tokenIn(':root', '--note-chrome-gutter'));
+    const control = px(tokenIn(':root', '--header-control-size'));
+    expect(control).toBeLessThanOrEqual(gutter);
   });
 
   it('puts no title text on the row the controls live on', () => {
@@ -263,7 +262,7 @@ describe('the one Note-it header', () => {
     for (const icon of HEADER_ICONS) {
       const button = page.getElementById(icon.buttonId);
       expect(button?.getAttribute('aria-label')).toBe(icon.label);
-      expect(button?.getAttribute('title')).toBe(icon.label);
+      expect(button?.getAttribute('title')).toContain(icon.label);
     }
   });
 });

@@ -43,6 +43,10 @@ pub enum HostToWebviewMessage {
         /// Shared interface theme, so a note dresses its chrome correctly from
         /// the first paint instead of restyling once the first broadcast lands.
         theme: String,
+        /// Shared application-chrome scale. It is deliberately separate from
+        /// this note's document zoom.
+        #[serde(rename = "uiScalePercent")]
+        ui_scale_percent: u16,
         /// The note's Timer or Pomodoro, or `null` when it has none.
         ///
         /// A running one travels as the instant it ends rather than as what
@@ -84,6 +88,11 @@ pub enum HostToWebviewMessage {
     /// dresses its chrome the same way without being reloaded.
     SetTheme {
         theme: String,
+    },
+    /// Broadcast after the global interface scale is durably committed.
+    SetUiScale {
+        #[serde(rename = "uiScalePercent")]
+        ui_scale_percent: u16,
     },
     /// Whether this note is the one AutoPaste is capturing into, and how a
     /// capture would be laid out.
@@ -219,6 +228,11 @@ pub enum WebviewToHostMessage {
     /// owns the layer mode, so the WebView only asks.
     ThemeChanged {
         theme: String,
+    },
+    /// Requests the one global application-chrome scale.
+    UiScaleChanged {
+        #[serde(rename = "uiScalePercent")]
+        ui_scale_percent: u16,
     },
     CollapseChanged {
         id: Uuid,
@@ -630,6 +644,29 @@ mod tests {
     }
 
     #[test]
+    fn interface_scale_requests_and_broadcasts_share_one_explicit_percentage() {
+        let raw = serde_json::json!({
+            "type": "ui_scale_changed",
+            "payload": { "uiScalePercent": 140 }
+        })
+        .to_string();
+
+        match parse_webview_message(&raw).expect("interface scale request") {
+            WebviewToHostMessage::UiScaleChanged { ui_scale_percent } => {
+                assert_eq!(ui_scale_percent, 140);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let encoded = serde_json::to_value(super::HostToWebviewMessage::SetUiScale {
+            ui_scale_percent: 140,
+        })
+        .expect("serialize interface scale broadcast");
+        assert_eq!(encoded["type"], "set_ui_scale");
+        assert_eq!(encoded["payload"]["uiScalePercent"], 140);
+    }
+
+    #[test]
     fn load_note_carries_collapse_state_and_timestamps_to_the_webview() {
         let id = Uuid::new_v4();
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T07:14:00Z")
@@ -649,6 +686,7 @@ mod tests {
             zoom_percent: 130,
             layer_mode: "desktop".to_string(),
             theme: "dark".to_string(),
+            ui_scale_percent: 140,
             timer: None,
             capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
         };
@@ -663,6 +701,7 @@ mod tests {
         assert_eq!(payload["paperType"], "grid-small");
         assert_eq!(payload["paperIntensity"], "subtle");
         assert_eq!(payload["theme"], "dark");
+        assert_eq!(payload["uiScalePercent"], 140);
         // An unknown timestamp travels as null instead of a fabricated date.
         assert!(payload["updatedAt"].is_null());
     }
@@ -682,6 +721,7 @@ mod tests {
             zoom_percent: 100,
             layer_mode: "overlay".to_string(),
             theme: "system".to_string(),
+            ui_scale_percent: 100,
             timer: None,
             capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
         };
@@ -708,6 +748,7 @@ mod tests {
             zoom_percent: 100,
             layer_mode: "overlay".to_string(),
             theme: "system".to_string(),
+            ui_scale_percent: 100,
             timer: Some(crate::timer::NoteTimerState {
                 state: crate::timer::TimerRunState::Running,
                 deadline_ms: Some(deadline),
@@ -977,6 +1018,7 @@ mod tests {
             zoom_percent: 100,
             layer_mode: "overlay".to_string(),
             theme: "system".to_string(),
+            ui_scale_percent: 100,
             timer: None,
             capture_delimiter: crate::autopaste::CaptureDelimiter::Line,
         };

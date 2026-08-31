@@ -12,7 +12,7 @@ use crate::layer_shell::{
 use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
 use crate::search;
-use crate::settings::{theme_name, AppConfig};
+use crate::settings::{clamp_ui_scale_percent, theme_name, AppConfig};
 use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
 use crate::study::Rating;
@@ -602,6 +602,46 @@ impl NoteItAppClone {
 
         for window in windows {
             window.set_theme(resolved);
+        }
+    }
+
+    /// Commits and broadcasts the one application-wide chrome scale.
+    ///
+    /// The config write is the commit point: no WebView or collapsed geometry
+    /// moves until the complete next `config.toml` has replaced the old one.
+    pub fn set_ui_scale(&self, requested: u16) {
+        let resolved = clamp_ui_scale_percent(requested);
+        let windows: Vec<NoteWindow> = {
+            let mut ctx = self.context.borrow_mut();
+            if ctx.config.ui_scale_percent == resolved {
+                return;
+            }
+            let mut next = ctx.config.clone();
+            next.ui_scale_percent = resolved;
+            let config_path = ctx.storage.config_file_path();
+            if let Err(error) = next.save_to_file(&config_path) {
+                eprintln!("Failed to persist the interface scale: {error}");
+                return;
+            }
+            ctx.config = next;
+            ctx.windows.values().cloned().collect()
+        };
+
+        let mut collapsed_updates = Vec::new();
+        for window in &windows {
+            if let Some(snapshot) = window.set_ui_scale(resolved) {
+                collapsed_updates.push((window.id, snapshot));
+            }
+        }
+        if collapsed_updates.is_empty() {
+            return;
+        }
+        let mut ctx = self.context.borrow_mut();
+        for (id, snapshot) in collapsed_updates {
+            ctx.state.notes.insert(id, snapshot);
+        }
+        if let Err(error) = persist_state_now(&mut ctx, "interface-scale") {
+            eprintln!("Failed to persist scaled collapsed geometry: {error}");
         }
     }
 
@@ -1827,6 +1867,11 @@ fn instantiate_note_window(
         app_clone5.set_theme(&theme);
     });
 
+    let app_scale = app_controller.clone();
+    let on_ui_scale_changed = Rc::new(move |percent: u16| {
+        app_scale.set_ui_scale(percent);
+    });
+
     let app_clone6 = app_controller.clone();
     let on_search = Rc::new(move |requester, request_id, query: String| {
         app_clone6.answer_search(requester, request_id, &query);
@@ -1917,6 +1962,8 @@ fn instantiate_note_window(
         on_toggle_layer_mode,
         theme: ctx.config.theme.clone(),
         on_theme_changed,
+        ui_scale_percent: ctx.config.ui_scale_percent,
+        on_ui_scale_changed,
         on_search,
         on_open_search_result,
         on_trash_note,

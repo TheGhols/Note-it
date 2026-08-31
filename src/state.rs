@@ -81,7 +81,7 @@ pub struct NoteWindowState {
 }
 
 pub const MIN_ZOOM_PERCENT: u16 = 75;
-pub const MAX_ZOOM_PERCENT: u16 = 200;
+pub const MAX_ZOOM_PERCENT: u16 = 300;
 
 fn default_zoom_percent() -> u16 {
     100
@@ -531,7 +531,11 @@ mod tests {
     fn zoom_is_clamped_to_the_supported_range() {
         assert_eq!(clamp_zoom_percent(100), 100);
         assert_eq!(clamp_zoom_percent(75), MIN_ZOOM_PERCENT);
-        assert_eq!(clamp_zoom_percent(200), MAX_ZOOM_PERCENT);
+        assert_eq!(clamp_zoom_percent(200), 200);
+        assert_eq!(clamp_zoom_percent(210), 210);
+        assert_eq!(clamp_zoom_percent(250), 250);
+        assert_eq!(clamp_zoom_percent(300), MAX_ZOOM_PERCENT);
+        assert_eq!(clamp_zoom_percent(301), MAX_ZOOM_PERCENT);
         assert_eq!(clamp_zoom_percent(0), MIN_ZOOM_PERCENT);
         assert_eq!(clamp_zoom_percent(1), MIN_ZOOM_PERCENT);
         assert_eq!(clamp_zoom_percent(10_000), MAX_ZOOM_PERCENT);
@@ -564,6 +568,28 @@ mod tests {
             (note.x, note.y, note.width, note.height),
             (200, 150, 420, 380)
         );
+    }
+
+    #[test]
+    fn zoom_values_above_the_old_limit_survive_a_restart() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp.path().join("state.json");
+        for zoom_percent in [250, 300] {
+            let note_id = Uuid::new_v4();
+            let mut state = AppState::default();
+            state.notes.insert(
+                note_id,
+                NoteWindowState {
+                    zoom_percent,
+                    ..NoteWindowState::default()
+                },
+            );
+            state.save_to_file(&state_path).expect("save state");
+            assert_eq!(
+                AppState::load_from_file(&state_path).notes[&note_id].zoom_percent,
+                zoom_percent
+            );
+        }
     }
 
     #[test]

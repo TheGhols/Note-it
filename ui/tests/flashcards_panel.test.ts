@@ -632,6 +632,9 @@ describe('the way in to studying', () => {
       onZoomIn: vi.fn(),
       onZoomOut: vi.fn(),
       onResetZoom: vi.fn(),
+      onUiScaleIn: vi.fn(),
+      onUiScaleOut: vi.fn(),
+      onResetUiScale: vi.fn(),
       onSelectLayerMode: vi.fn(),
       onToggleCodeBlock: vi.fn(),
       onSelectCodeLanguage: vi.fn(),
@@ -810,15 +813,15 @@ describe('the panel fits the note it is in', () => {
     expect(declarationIn('.note-study', 'background-color')).toBe('var(--ui-surface)');
     expect(declarationIn('.note-study', 'color')).toBe('var(--ui-text)');
     // Fixed in pixels: a note's zoom scales the note, not the furniture.
-    expect(declarationIn('.note-study', 'font-size')).toMatch(/px$/);
+    expect(declarationIn('.note-study', 'font-size')).toBe('var(--ui-font)');
   });
 
   it('stays inside the note at every width, with the controls wrapping', () => {
     // 220px is the narrowest a note can be. The panel is positioned from both
     // edges rather than given a width, so there is no width at which it hangs
     // over the side, and the footer wraps instead of pushing a control off.
-    expect(declarationIn('.note-study', 'left')).toBe('8px');
-    expect(declarationIn('.note-study', 'right')).toBe('8px');
+    expect(declarationIn('.note-study', 'left')).toContain('var(--ui-scale)');
+    expect(declarationIn('.note-study', 'right')).toContain('var(--ui-scale)');
     expect(declarationIn('.note-study', 'box-sizing')).toBe('border-box');
     expect(declarationIn('.note-study-footer', 'flex-wrap')).toBe('wrap');
     expect(declarationIn('.note-study', 'top')).toContain('--note-header-height');

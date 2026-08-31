@@ -60,6 +60,9 @@ function mountMenu() {
     onZoomIn: vi.fn(),
     onZoomOut: vi.fn(),
     onResetZoom: vi.fn(),
+    onUiScaleIn: vi.fn(),
+    onUiScaleOut: vi.fn(),
+    onResetUiScale: vi.fn(),
     onSelectLayerMode: vi.fn(),
     onToggleCodeBlock: vi.fn(),
     onSelectCodeLanguage: vi.fn(),
@@ -336,6 +339,7 @@ describe('NoteMenu', () => {
       'capture',
       'data',
       'zoom',
+      'interface',
       'theme',
       'layer',
     ]);
@@ -379,6 +383,32 @@ describe('NoteMenu', () => {
     )!;
     click(reset);
     expect(handlers.onResetZoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps interface scale separate from note zoom and exposes its limits', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+
+    menu.setZoomPercent(250);
+    menu.setUiScalePercent(140);
+    click(trigger);
+    expect(rowValue(menu, 'zoom')).toBe('250%');
+    expect(rowValue(menu, 'interface')).toBe('140%');
+
+    click(menu.element.querySelector('[data-panel="interface"]')!);
+    expect(menu.element.querySelector('.note-menu-interface .note-menu-zoom-value')?.textContent)
+      .toBe('140%');
+    const steps = menu.element.querySelectorAll<HTMLButtonElement>(
+      '.note-menu-interface .note-menu-step',
+    );
+    click(steps[0]);
+    click(steps[1]);
+    expect(handlers.onUiScaleOut).toHaveBeenCalledTimes(1);
+    expect(handlers.onUiScaleIn).toHaveBeenCalledTimes(1);
+
+    menu.setUiScalePercent(160);
+    expect(steps[0].disabled).toBe(false);
+    expect(steps[1].disabled).toBe(true);
   });
 
   it('shows the active layer and offers the other one', () => {
