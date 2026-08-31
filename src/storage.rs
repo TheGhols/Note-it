@@ -2,6 +2,7 @@ use crate::atomic_file::write_atomic;
 use crate::backup::{self, BackupSources, SnapshotKind};
 use crate::diagnostics;
 use crate::model::{NoteDocument, NoteFrontMatterWrapper};
+use crate::study::{self, Rating, StudyState};
 use crate::trash::{self, TrashEntry};
 use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
@@ -232,6 +233,15 @@ impl StorageManager {
         self.state_dir.join("state.json")
     }
 
+    /// Durable review history. A sibling of notes and assets in XDG data,
+    /// never mixed into the operational window state.
+    pub fn study_file_path(&self) -> PathBuf {
+        self.notes_dir
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("study.json")
+    }
+
     pub fn config_file_path(&self) -> PathBuf {
         self.config_dir.join("config.toml")
     }
@@ -321,6 +331,19 @@ impl StorageManager {
         result
     }
 
+    /// Reads study metadata without changing it. Missing is the empty history;
+    /// damaged or newer data fails closed in [`crate::study`].
+    pub fn load_study(&self) -> Result<StudyState, String> {
+        study::load(&self.study_file_path())
+    }
+
+    /// Commits one rating. The clock and local civil date are chosen in the
+    /// host, and the returned value exists only after the atomic write did.
+    pub fn rate_study(&self, review_key: &str, rating: Rating) -> Result<StudyState, String> {
+        self.back_up_before_mutation();
+        study::rate_now(&self.study_file_path(), review_key, rating)
+    }
+
     fn backup_sources(&self) -> BackupSources {
         BackupSources {
             notes_dir: self.notes_dir.clone(),
@@ -328,6 +351,7 @@ impl StorageManager {
             assets_dir: self.assets_dir.clone(),
             config_file: self.config_file_path(),
             state_file: self.state_file_path(),
+            study_file: self.study_file_path(),
         }
     }
 
@@ -1652,5 +1676,57 @@ mod tests {
             snapshots[0].path.join(format!("notes/{id}.md")).is_file(),
             "the snapshot taken before a deletion must still hold the note"
         );
+    }
+
+    #[test]
+    fn study_is_separate_from_state_and_the_catalog_tracks_trash_and_restore() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("store");
+
+        let mut a = NoteDocument::new_empty();
+        a.content = "# A\n\nPergunta :: Resposta".to_string();
+        manager.save_note_atomic(&a).expect("save A");
+        let mut b = NoteDocument::new_empty();
+        b.content = "# B\n\nTermo ::: Definição".to_string();
+        manager.save_note_atomic(&b).expect("save B");
+
+        fs::write(manager.state_file_path(), "{\"notes\":{}}\n").expect("operational state");
+        let note_before = fs::read(manager.note_path(&a.metadata.id)).expect("note bytes");
+        let state_before = fs::read(manager.state_file_path()).expect("state bytes");
+        let key = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        manager
+            .rate_study(key, Rating::Easy)
+            .expect("persist rating");
+
+        assert_eq!(manager.study_file_path(), tmp.path().join("study.json"));
+        assert_ne!(manager.study_file_path(), manager.state_file_path());
+        assert_eq!(
+            fs::read(manager.note_path(&a.metadata.id)).unwrap(),
+            note_before
+        );
+        assert_eq!(fs::read(manager.state_file_path()).unwrap(), state_before);
+        assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
+
+        let live = manager.read_note_bodies_by_recency();
+        assert_eq!(
+            live.len(),
+            2,
+            "closed notes are ordinary catalog candidates"
+        );
+        manager.move_note_to_trash(&b.metadata.id).expect("trash B");
+        assert_eq!(manager.read_note_bodies_by_recency().len(), 1);
+        assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
+
+        manager
+            .restore_note_from_trash(&b.metadata.id)
+            .expect("restore B");
+        assert_eq!(manager.read_note_bodies_by_recency().len(), 2);
+        assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
     }
 }

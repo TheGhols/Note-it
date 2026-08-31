@@ -710,9 +710,21 @@ describe('the header bar still fits', () => {
    * budget below is measured against the row a narrow note actually carries,
    * and a rule that stops hiding something is caught by the arithmetic.
    */
-  function narrowlyHidden(): string[] {
-    const block = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
-    return [...block.matchAll(/#([\w-]+)\s*\{[^}]*display:\s*none/g)].map((match) => match[1]);
+  function hiddenAt(width: number): string[] {
+    const hidden = new Set<string>();
+    const page = renderedPage();
+    for (const media of THEME_CSS.matchAll(/@media \(max-width: (\d+)px\) \{([\s\S]*?)(?=\n\}\n(?:\n|\/\*))/g)) {
+      if (width > Number(media[1])) continue;
+      for (const rule of media[2].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        if (!/display:\s*none/.test(rule[2])) continue;
+        for (const selector of rule[1].split(',').map((part) => part.trim())) {
+          for (const button of page.querySelectorAll(`.note-header .icon-btn${selector.match(/#[\w-]+|\.[\w-]+$/)?.[0] ?? ''}`)) {
+            hidden.add(button.id);
+          }
+        }
+      }
+    }
+    return [...hidden];
   }
 
   /** What the row costs, with `omit` standing for what a rule takes off it. */
@@ -746,15 +758,14 @@ describe('the header bar still fits', () => {
     // note, so what has to fit the floor is the row without it. That is the
     // control that gives way because the menu still offers what it does; the
     // rest of the row has nowhere else to be.
-    expect(controlRowWidth(narrowlyHidden())).toBeLessThan(inject('minNoteWidth'));
+    const floor = inject('minNoteWidth');
+    expect(controlRowWidth(hiddenAt(floor))).toBeLessThan(floor);
   });
 
   it('fits the paperclip too, from the width that keeps it', () => {
     // And above the breakpoint the full row is carried, digits included.
-    const breakpoint = Number.parseFloat(
-      /@media \(max-width: (\d+)px\)/.exec(THEME_CSS)![1],
-    );
-    expect(controlRowWidth()).toBeLessThan(breakpoint);
+    const breakpoint = 420;
+    expect(controlRowWidth(hiddenAt(breakpoint))).toBeLessThan(breakpoint);
   });
 
   it('holds the whole control row inside the strip the bar paints its paper over', () => {

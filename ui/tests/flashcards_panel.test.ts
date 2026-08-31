@@ -22,7 +22,11 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-function mount(markdown: string, random?: () => number) {
+function mount(
+  markdown: string,
+  random?: () => number,
+  studyHandlers?: { onRate?: ReturnType<typeof vi.fn>; onReturnToHub?: ReturnType<typeof vi.fn> },
+) {
   const element = document.createElement('div');
   document.body.append(element);
   const note = new NoteEditor({ element, initialContent: markdown });
@@ -30,7 +34,11 @@ function mount(markdown: string, random?: () => number) {
 
   const host = document.createElement('div');
   document.body.append(host);
-  const handlers = { onClose: vi.fn() };
+  const handlers = {
+    onClose: vi.fn(),
+    onRate: studyHandlers?.onRate,
+    onReturnToHub: studyHandlers?.onReturnToHub,
+  };
   const panel = new FlashcardPanel({ mount: host, handlers, random });
   open.push(panel);
 
@@ -47,6 +55,26 @@ function mount(markdown: string, random?: () => number) {
       schema: state.schema,
     },
   };
+}
+
+function scheduledItems(request: ReturnType<typeof mount>['request'], level: number | null = null) {
+  return request.items.map((item, index) => ({
+    ...item,
+    noteId: NOTE,
+    noteTitle: 'Farmacologia',
+    reviewKey: String(index + 1).padStart(64, '0'),
+    schedule:
+      level === null
+        ? null
+        : {
+            level,
+            due_at: '2026-08-31T12:00:00Z',
+            last_reviewed_at: '2026-08-30T12:00:00Z',
+            review_count: 1,
+            last_rating: 'medium' as const,
+          },
+    documentOrder: index,
+  }));
 }
 
 function press(panel: FlashcardPanel, key: string, target?: HTMLElement): void {
@@ -369,11 +397,145 @@ describe('studying with the keyboard', () => {
     expect(names).toEqual([
       'Fechar',
       'Mostrar resposta',
+      'Difícil',
+      'Médio',
+      'Fácil',
       'Anterior',
       'Próximo',
       'Embaralhar',
     ]);
     for (const name of names) expect(name).not.toBe('');
+  });
+});
+
+describe('scheduled ratings', () => {
+  it('shows the three closed ratings and new-card intervals only after reveal', () => {
+    const onRate = vi.fn();
+    const { panel, request } = mount('Pergunta :: Resposta', undefined, { onRate });
+    panel.openPanel({ ...request, items: scheduledItems(request) });
+
+    expect(panel.element().querySelector<HTMLElement>('.note-study-ratings')!.hidden).toBe(true);
+    button(panel, '.note-study-reveal').click();
+    expect(panel.element().querySelector<HTMLElement>('.note-study-ratings')!.hidden).toBe(false);
+    expect(
+      Array.from(panel.element().querySelectorAll('.note-study-rating-name'), (node) => node.textContent),
+    ).toEqual(['Difícil', 'Médio', 'Fácil']);
+    expect(
+      Array.from(
+        panel.element().querySelectorAll('.note-study-rating-interval'),
+        (node) => node.textContent,
+      ),
+    ).toEqual(['10 min', '1 dia', '3 dias']);
+    expect(panel.element().querySelector('.note-study-origin')?.textContent).toBe('Farmacologia');
+  });
+
+  it('previews the real next levels for an existing schedule', () => {
+    const { panel, request } = mount('Pergunta :: Resposta', undefined, { onRate: vi.fn() });
+    panel.openPanel({ ...request, items: scheduledItems(request, 1) });
+    button(panel, '.note-study-reveal').click();
+    expect(
+      Array.from(
+        panel.element().querySelectorAll('.note-study-rating-interval'),
+        (node) => node.textContent,
+      ),
+    ).toEqual(['10 min', '3 dias', '7 dias']);
+  });
+
+  it('blocks double clicks and advances only after the matching successful host ACK', () => {
+    const onRate = vi.fn();
+    const { panel, request } = mount('A :: B\n\nC :: D', undefined, { onRate });
+    const items = scheduledItems(request);
+    panel.openPanel({ ...request, items });
+    button(panel, '.note-study-reveal').click();
+    const medium = button(panel, '.note-study-rating-medium');
+    medium.click();
+    medium.click();
+
+    expect(onRate).toHaveBeenCalledTimes(1);
+    const sent = onRate.mock.calls[0][0];
+    expect(sent).toEqual({ requestId: expect.any(Number), reviewKey: items[0].reviewKey, rating: 'medium' });
+    expect(question(panel)).toBe('A');
+    expect(Array.from(panel.element().querySelectorAll<HTMLButtonElement>('.note-study-rating')).every((item) => item.disabled)).toBe(true);
+    expect(panel.resolveRating(sent.requestId + 1, sent.reviewKey, true, '')).toBe(false);
+    expect(question(panel)).toBe('A');
+
+    expect(panel.resolveRating(sent.requestId, sent.reviewKey, true, '')).toBe(true);
+    expect(question(panel)).toBe('C');
+    expect(progress(panel)).toBe('2 de 2');
+    expect(panel.isAnswerVisible()).toBe(false);
+  });
+
+  it('keeps the card in place and re-enables ratings when persistence fails', () => {
+    const onRate = vi.fn();
+    const { panel, request } = mount('A :: B\n\nC :: D', undefined, { onRate });
+    const items = scheduledItems(request);
+    panel.openPanel({ ...request, items });
+    button(panel, '.note-study-reveal').click();
+    button(panel, '.note-study-rating-difficult').click();
+    const sent = onRate.mock.calls[0][0];
+
+    panel.resolveRating(sent.requestId, sent.reviewKey, false, 'Não foi possível salvar.');
+    expect(question(panel)).toBe('A');
+    expect(panel.isAnswerVisible()).toBe(true);
+    expect(panel.element().querySelector('.note-study-rating-status')?.textContent).toBe(
+      'Não foi possível salvar.',
+    );
+    expect(Array.from(panel.element().querySelectorAll<HTMLButtonElement>('.note-study-rating')).every((item) => !item.disabled)).toBe(true);
+  });
+
+  it('allows reading an earlier rated card but never rating it twice in one session', () => {
+    const onRate = vi.fn();
+    const { panel, request } = mount('A :: B\n\nC :: D', undefined, { onRate });
+    const items = scheduledItems(request);
+    panel.openPanel({ ...request, items });
+    button(panel, '.note-study-reveal').click();
+    button(panel, '.note-study-rating-easy').click();
+    const sent = onRate.mock.calls[0][0];
+    panel.resolveRating(sent.requestId, sent.reviewKey, true, '');
+
+    button(panel, '.note-study-previous').click();
+    button(panel, '.note-study-reveal').click();
+    expect(panel.element().querySelector('.note-study-rating-status')?.textContent).toBe(
+      'Avaliado: Fácil',
+    );
+    button(panel, '.note-study-rating-easy').click();
+    expect(onRate).toHaveBeenCalledTimes(1);
+  });
+
+  it('summarizes committed ratings and returns to the one Hub', () => {
+    const onRate = vi.fn();
+    const onReturnToHub = vi.fn();
+    const { panel, request } = mount('A :: B', undefined, { onRate, onReturnToHub });
+    const items = scheduledItems(request);
+    panel.openPanel({ ...request, items });
+    button(panel, '.note-study-reveal').click();
+    button(panel, '.note-study-rating-medium').click();
+    const sent = onRate.mock.calls[0][0];
+    panel.resolveRating(sent.requestId, sent.reviewKey, true, '');
+
+    expect(panel.element().querySelector('.note-study-completion h2')?.textContent).toBe(
+      'Revisão concluída',
+    );
+    expect(panel.element().querySelector('.note-study-completion p')?.textContent).toBe(
+      'Difícil: 0 · Médio: 1 · Fácil: 0 · Total: 1',
+    );
+    button(panel, '.note-study-return').click();
+    expect(onReturnToHub).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats reversible directions as two independently ratable review keys', () => {
+    const onRate = vi.fn();
+    const { panel, request } = mount('Metformina ::: Biguanida', undefined, { onRate });
+    const items = scheduledItems(request);
+    expect(items[0].reviewKey).not.toBe(items[1].reviewKey);
+    panel.openPanel({ ...request, items });
+    button(panel, '.note-study-reveal').click();
+    button(panel, '.note-study-rating-easy').click();
+    const first = onRate.mock.calls[0][0];
+    panel.resolveRating(first.requestId, first.reviewKey, true, '');
+    button(panel, '.note-study-reveal').click();
+    button(panel, '.note-study-rating-difficult').click();
+    expect(onRate.mock.calls[1][0].reviewKey).toBe(items[1].reviewKey);
   });
 });
 
@@ -483,7 +645,8 @@ describe('the way in to studying', () => {
       onOpenTrash: vi.fn(),
       onCreateBackup: vi.fn(),
       onInsertImage: vi.fn(),
-      onOpenStudy: vi.fn(),
+    onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
       onToggleAutoPaste: vi.fn(),
       onSelectCaptureDelimiter: vi.fn(),
     };

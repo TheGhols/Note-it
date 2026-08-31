@@ -515,18 +515,26 @@ thing people do most.
 - [x] Study holds no editor and renders safe ProseMirror fragments with the note's `DOMSerializer`.
       Open, reveal, move, shuffle and close leave Markdown and `updated_at` unchanged.
 
-Spaced repetition, scheduling, ratings, statistics, stable card identity and a global deck are not
-part of this phase.
+### Phase 3.14: Study System & Spaced Repetition (Complete)
 
-### Phase 3.14: Capture & Export (Planned)
+- [x] Versioned, atomic `$XDG_DATA_HOME/note-it/study.json`, separate from notes and `state.json`,
+      with corrupt/newer data preserved and Study failing closed.
+- [x] SHA-256 review identity from note UUID, semantic sides, direction and duplicate ordinal;
+      moving or presentation-only formatting/resize/alignment does not reset a card.
+- [x] Deterministic Ladder-v1 with Difficult/Medium/Easy, exact integer intervals, host-owned clock,
+      commit-before-advance, independent reversible directions and one rating per item per sitting.
+- [x] On-demand catalog of every live note, including closed notes and excluding trash, parsed in
+      the WebView by the same Tiptap schema and extractor as the visible editor.
+- [x] Internal Study Hub with Review Now, All, Current Note, source labels, compact list, due/new
+      status, seven useful counts, 365-day fixed-scale heatmap and current/longest streak.
+- [x] Existing FlashcardPanel evolved for ratings, interval previews, persisted ACK/error handling,
+      source note and completion summary; safe rich content and managed images remain one renderer.
+- [x] Toolbar deck, recoverable-trash shortcut beside X and Zoom −/+ through existing actions, with
+      measured responsive fallback and collapsed-note protection.
+- [x] Backup manifest v3 carries optional `study.json`; v1/v2 remain readable and an incomplete
+      study copy cannot be committed as a complete snapshot.
 
-Moved back from 3.12.
-
-- [ ] Text export.
-- [ ] PDF export.
-- [ ] Evaluate offline OCR on Linux.
-- [ ] OCR ships only if there is a local, safe and architecturally acceptable solution. A cloud OCR
-      is not one.
+Capture & Export, OCR and PDF are postponed. They are not part of Phase 3.14.
 
 ## Phase 4.0: Core & CLI (Planned)
 

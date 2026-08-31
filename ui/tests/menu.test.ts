@@ -74,6 +74,7 @@ function mountMenu() {
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),

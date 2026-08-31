@@ -15,7 +15,9 @@ use crate::search;
 use crate::settings::{theme_name, AppConfig};
 use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
+use crate::study::Rating;
 use crate::timer::TimerFinishKind;
+use crate::webview_bridge::StudyCatalogNote;
 use gio::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::*;
@@ -1077,6 +1079,54 @@ impl NoteItAppClone {
         }
     }
 
+    /// Collects documents only. Flashcard syntax is deliberately absent from
+    /// Rust; the requesting WebView parses every item with the one Tiptap
+    /// schema and extractor the current note uses.
+    pub fn answer_study_catalog(&self, requester: Uuid, request_id: u64) {
+        let ctx = self.context.borrow();
+        let mut notes: Vec<StudyCatalogNote> = ctx
+            .storage
+            .read_note_bodies_by_recency()
+            .into_iter()
+            .map(|(id, content)| StudyCatalogNote { id, content })
+            .collect();
+
+        for note in &mut notes {
+            if let Some(window) = ctx.windows.get(&note.id) {
+                note.content = window.document.borrow().content.clone();
+            }
+        }
+
+        let (study_state, error) = match ctx.storage.load_study() {
+            Ok(state) => (Some(state), None),
+            Err(error) => {
+                eprintln!("Study catalog unavailable: {error}");
+                (
+                    None,
+                    Some(
+                        "O histórico de estudos não pôde ser lido. As notas continuam disponíveis."
+                            .to_string(),
+                    ),
+                )
+            }
+        };
+        if let Some(window) = ctx.windows.get(&requester) {
+            window.send_study_catalog(request_id, notes, study_state, error);
+        }
+    }
+
+    pub fn rate_study(&self, requester: Uuid, request_id: u64, review_key: String, rating: Rating) {
+        let result = self
+            .context
+            .borrow()
+            .storage
+            .rate_study(&review_key, rating);
+        let ctx = self.context.borrow();
+        if let Some(window) = ctx.windows.get(&requester) {
+            window.send_study_rating(request_id, review_key, result);
+        }
+    }
+
     /// Says that a timer ran out, once, to the desktop.
     ///
     /// The words come from [`TimerFinishKind::notification`] and from nowhere
@@ -1832,6 +1882,16 @@ fn instantiate_note_window(
         app_clone16.import_image_bytes(id, &data);
     });
 
+    let app_clone17 = app_controller.clone();
+    let on_study_catalog = Rc::new(move |requester, request_id| {
+        app_clone17.answer_study_catalog(requester, request_id);
+    });
+
+    let app_clone18 = app_controller.clone();
+    let on_study_rating = Rc::new(move |requester, request_id, review_key, rating| {
+        app_clone18.rate_study(requester, request_id, review_key, rating);
+    });
+
     NoteWindow::new(NoteWindowOptions {
         app,
         document: doc,
@@ -1863,6 +1923,8 @@ fn instantiate_note_window(
         on_list_trash,
         on_restore_note,
         on_backup,
+        on_study_catalog,
+        on_study_rating,
         on_timer_finished,
         capture_delimiter: delimiter_from_name(&ctx.config.capture_delimiter),
         on_autopaste_requested,

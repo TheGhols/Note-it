@@ -908,7 +908,7 @@ the document, never a transaction: it changes no Markdown, timestamp or undo his
 *☰ › Estudo* follows the live document and states both source cards and review items, because one
 reversible source produces two questions.
 
-**Studying.** *☰ › Estudo › Estudar flashcards* opens an internal panel over the current note. It
+**Studying.** *☰ › Estudo › Estudar esta nota* opens an internal panel over the current note. It
 starts on the front with the answer hidden; *Mostrar resposta*, *Anterior*, *Próximo* and
 *Embaralhar* operate on that sitting, with no wrap at either end. `Space` or `Enter` reveals,
 `ArrowLeft` and `ArrowRight` move, and `Escape` closes while the panel has focus. Long cards scroll
@@ -920,11 +920,46 @@ changing the note underneath without changing the question currently being studi
 again to take a new snapshot. Shuffle permutes review items, returns to the first one and hides its
 answer. Nothing about order or progress is persisted.
 
-**Study is read-only.** Opening, revealing, moving, shuffling and closing dispatch no editor
-transaction and write no state. The note's Markdown, `updated_at` and undo history stay exactly as
+**Study is read-only with respect to notes.** Opening, revealing, moving, shuffling, rating and
+closing dispatch no editor transaction. Markdown, `updated_at` and undo history stay exactly as
 they were. A Timer or Pomodoro keeps running when its popover makes room for Study; collapsing the
-note closes the sitting, and hiding or quitting destroys it with the WebView. There is no global
-deck, scheduling, score, due date or spaced repetition in this phase.
+note closes the sitting, and hiding or quitting destroys it with the WebView.
+
+### Central de estudos and Ladder-v1
+
+The deck button in the header opens every review item from every live note, including notes whose
+windows are closed. The host supplies note documents from `notes/`—never `trash/`—and the WebView
+parses them sequentially with one ephemeral Tiptap editor, the same schema and `extractFlashcards`
+used by the visible note. The current note's live Markdown replaces the stored copy for that pass,
+so opening the Hub never needs to force a save. Closing and reopening takes a new catalog snapshot.
+
+*Revisar agora* shows due items, most overdue first, followed by new items in document order;
+*Todos* also includes future items; *Esta nota* limits the list to the invoking note. Each compact
+row shows the front, projected note title and New/Review Now/future status. Images remain managed
+`note-it-asset:` images and are never copied. The same FlashcardPanel renders local and global
+sessions, now adding the source note, ratings after reveal, interval previews, and a minimal summary.
+
+Progress lives separately in `$XDG_DATA_HOME/note-it/study.json`. A review direction's key is
+SHA-256 over a version, note UUID, semantic front/back, direction and duplicate ordinal. Position,
+bold/italic/highlight/colour/size and image width/alignment do not participate; text, managed image
+source/alt and direction do. Reversible directions therefore schedule independently. Edited or
+removed keys may remain orphaned and naturally reappear if the exact semantic card returns.
+
+The fixed Ladder-v1 levels are 10 minutes, 1, 3, 7, 14, 30, 60, 120 and 240 days. A new card starts
+at level 0/1/2 for Difficult/Medium/Easy; an existing card moves −1/+1/+2 within 0–8. The Rust host
+chooses the UTC instant and local civil day and atomically writes the next state. Only its success
+ACK advances the panel and increments daily activity; failure leaves the card, heatmap and persisted
+state unchanged, and double clicks cannot send a second rating.
+
+The Hub shows due, new, total review items, notes with cards, today's reviews, current streak and
+longest streak. Its 365-day heatmap uses fixed levels (0, 1–4, 5–9, 10–19, 20+) and every cell names
+its date and review count. Colour is supplementary. The current streak remains alive today when the
+last study was yesterday; the longest streak is derived from civil dates rather than persisted.
+
+The header also carries Zoom −/+, which use the existing zoom path and 75–200 limits, and a trash
+icon immediately beside X. Trash only opens the existing recoverable confirmation; X remains Close.
+At measured narrow widths optional deck, image, zoom and trash shortcuts yield before Menu, active
+Timer/AutoPaste or Close, and all are hidden on a collapsed note.
 
 ## Clipboard AutoPaste
 

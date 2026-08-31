@@ -8,9 +8,16 @@ Note-it adheres to the XDG Base Directory Specification:
 | `$XDG_DATA_HOME/note-it/trash/` | Deleted notes, waiting to be restored | `~/.local/share/note-it/trash/` |
 | `$XDG_DATA_HOME/note-it/assets/` | Images the notes hold, one directory per note | `~/.local/share/note-it/assets/` |
 | `$XDG_DATA_HOME/note-it/backups/` | Local snapshots of the recoverable store | `~/.local/share/note-it/backups/` |
+| `$XDG_DATA_HOME/note-it/study.json` | Versioned schedules and aggregate study activity | `~/.local/share/note-it/study.json` |
 | `$XDG_CONFIG_HOME/note-it/config.toml` | User configuration options | `~/.config/note-it/config.toml` |
 | `$XDG_STATE_HOME/note-it/state.json` | Window geometry, active mode, and transient UI state | `~/.local/state/note-it/state.json` |
 | `$XDG_RUNTIME_DIR/note-it/` | Unix domain sockets / IPC runtime files | `/run/user/<uid>/note-it/` |
+
+`study.json` contains only opaque SHA-256 review keys, levels, absolute UTC timestamps, ratings and
+daily counters keyed by local civil date. Questions, answers, Markdown, titles, HTML, image bytes and
+absolute paths never enter it. Missing means an empty history; corrupt or newer data is left byte for
+byte in place and makes Study unavailable rather than being replaced. Each rating builds a next
+state and commits it with the same atomic-write primitive as notes before the application adopts it.
 
 ## Note Appearance Fields
 
@@ -214,20 +221,21 @@ backups/2026-08-29T09-30-00Z/
   assets/<note-uuid>/<asset-uuid>.<ext> …
   config.toml
   state.json
+  study.json
 ```
 
 `manifest.json` records the version, when the snapshot was taken, whether it was
 automatic or manual, how many notes, trash entries and images it holds, and
-whether the configuration and window state were present. A directory in
+whether the configuration, window state and study history were present. A directory in
 `backups/` counts as a snapshot only if it is a real directory, its name does
 not begin with `.`, and it holds a readable manifest.
 
-Manifest **version 2** is version 1 plus the image count. A snapshot taken
-before images existed keeps saying version 1 and stays exactly as valid as it
-was: nothing branches on the number, and the field defaults, so an older
-manifest reads back as the zero images it genuinely held.
+Manifest **version 3** is version 2 plus the optional study-history flag; version 2 is version 1
+plus the image count. Older snapshots remain valid because both later fields default to absent/zero.
 
-**What goes in:** `notes/`, `trash/`, `assets/`, `config.toml`, `state.json`.
+**What goes in:** `notes/`, `trash/`, `assets/`, `config.toml`, `state.json`, and `study.json` when it
+exists. An existing study file is recoverable data: if it cannot be copied as a regular file, the
+snapshot is not committed as complete.
 
 A note that says `![](../assets/…)` is only half a note without the file that
 reference points at, so `assets/` is copied with the same guarantees as the
@@ -296,12 +304,14 @@ cat "$SNAP/manifest.json"          # check it is the snapshot you want
 mv ~/.local/share/note-it/notes  ~/.local/share/note-it/notes.antes
 mv ~/.local/share/note-it/trash  ~/.local/share/note-it/trash.antes
 mv ~/.local/share/note-it/assets ~/.local/share/note-it/assets.antes
+mv ~/.local/share/note-it/study.json ~/.local/share/note-it/study.json.antes  # if present
 
 cp -a "$SNAP/notes"  ~/.local/share/note-it/notes
 cp -a "$SNAP/trash"  ~/.local/share/note-it/trash
 cp -a "$SNAP/assets" ~/.local/share/note-it/assets            # if present
 cp -a "$SNAP/config.toml" ~/.config/note-it/config.toml       # if present
 cp -a "$SNAP/state.json"  ~/.local/state/note-it/state.json   # if present
+cp -a "$SNAP/study.json"  ~/.local/share/note-it/study.json   # if present
 ```
 
 To recover a **single** note, copy just that `<uuid>.md` out of the snapshot's
@@ -312,7 +322,7 @@ editing.
 
 That the result is readable is not a hope: `a_snapshot_round_trips_into_a_fresh_isolated_store`
 copies a snapshot into an empty XDG tree exactly this way, opens it, and checks
-the notes, identifiers, Markdown, trash, configuration and window state all came
+the notes, identifiers, Markdown, trash, configuration, window state and study schedule all came
 back.
 
 ### What a Local Backup Does and Does Not Protect Against

@@ -10,6 +10,7 @@ use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFron
 use crate::settings::theme_name;
 use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
 use crate::storage::StorageManager;
+use crate::study::Rating;
 use crate::timer::TimerFinishKind;
 use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
@@ -61,6 +62,10 @@ pub struct NoteWindowOptions<'a> {
     pub on_restore_note: Rc<dyn Fn(Uuid, Uuid)>,
     /// Asks the host for a snapshot now, and to answer the note that asked.
     pub on_backup: Rc<dyn Fn(Uuid)>,
+    /// Requests every live/stored note document plus the study metadata.
+    pub on_study_catalog: Rc<dyn Fn(Uuid, u64)>,
+    /// Requests one host-timed, atomically persisted rating.
+    pub on_study_rating: Rc<dyn Fn(Uuid, u64, String, Rating)>,
     /// One run reached zero. The host posts the notification; the page only
     /// says which kind of run it was.
     pub on_timer_finished: Rc<dyn Fn(Uuid, TimerFinishKind)>,
@@ -254,6 +259,8 @@ impl NoteWindow {
         let on_list_trash_clone = Rc::clone(&options.on_list_trash);
         let on_restore_note_clone = Rc::clone(&options.on_restore_note);
         let on_backup_clone = Rc::clone(&options.on_backup);
+        let on_study_catalog_clone = Rc::clone(&options.on_study_catalog);
+        let on_study_rating_clone = Rc::clone(&options.on_study_rating);
         let on_timer_finished_clone = Rc::clone(&options.on_timer_finished);
         let on_autopaste_requested_clone = Rc::clone(&options.on_autopaste_requested);
         let on_capture_delimiter_clone = Rc::clone(&options.on_capture_delimiter_changed);
@@ -489,6 +496,16 @@ impl NoteWindow {
                         }
                         WebviewToHostMessage::BackupRequested => {
                             on_backup_clone(id);
+                        }
+                        WebviewToHostMessage::StudyCatalogRequested { request_id } => {
+                            on_study_catalog_clone(id, request_id);
+                        }
+                        WebviewToHostMessage::StudyRatingRequested {
+                            request_id,
+                            review_key,
+                            rating,
+                        } => {
+                            on_study_rating_clone(id, request_id, review_key, rating);
                         }
                         WebviewToHostMessage::TimerChanged {
                             id: message_id,
@@ -864,6 +881,53 @@ impl NoteWindow {
                 action: action.to_string(),
                 ok,
                 message: message.to_string(),
+            },
+        );
+    }
+
+    pub fn send_study_catalog(
+        &self,
+        request_id: u64,
+        notes: Vec<crate::webview_bridge::StudyCatalogNote>,
+        study_state: Option<crate::study::StudyState>,
+        error: Option<String>,
+    ) {
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::StudyCatalogResult {
+                request_id,
+                notes,
+                study_state,
+                error,
+            },
+        );
+    }
+
+    pub fn send_study_rating(
+        &self,
+        request_id: u64,
+        review_key: String,
+        result: Result<crate::study::StudyState, String>,
+    ) {
+        let (ok, study_state, message) = match result {
+            Ok(state) => (true, Some(state), "Avaliação salva.".to_string()),
+            Err(error) => {
+                eprintln!("Study rating could not be persisted: {error}");
+                (
+                    false,
+                    None,
+                    "Não foi possível salvar a avaliação. Tente novamente.".to_string(),
+                )
+            }
+        };
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::StudyRatingResult {
+                request_id,
+                review_key,
+                ok,
+                study_state,
+                message,
             },
         );
     }

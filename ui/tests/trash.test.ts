@@ -35,6 +35,7 @@ function menuHandlers() {
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
@@ -117,6 +118,21 @@ describe('the Dados section of the note menu', () => {
     // this is not.
     expect(question?.textContent).toContain('restaurá-la');
     expect(question?.textContent).toContain('Lixeira');
+  });
+
+  it('gives the toolbar shortcut the same confirmation and no deletion authority', () => {
+    const mounted = mountMenu();
+    menu = mounted.menu;
+    const toolbarTrash = document.createElement('button');
+    document.body.append(toolbarTrash);
+
+    menu.openTrashConfirmation(toolbarTrash);
+    expect(menu.activePanel()).toBe('trashConfirm');
+    expect(mounted.handlers.onTrashNote).not.toHaveBeenCalled();
+    expect(document.activeElement?.textContent).toBe('Cancelar');
+
+    click(row(menu, 'Mover'));
+    expect(mounted.handlers.onTrashNote).toHaveBeenCalledTimes(1);
   });
 
   it('focuses Cancelar, so the key already under the finger is the safe one', () => {

@@ -1,5 +1,6 @@
 import { CaptureDelimiter } from '../capture/autoPaste.ts';
 import { TimerFinishKind, TimerSnapshot } from '../timer/engine.ts';
+import type { StudyCatalogNote, StudyRating, StudyState } from '../study/types.ts';
 
 export type PaperColor = 'yellow' | 'blue' | 'green' | 'pink' | 'purple' | 'gray' | 'black';
 
@@ -97,6 +98,25 @@ export type HostToWebviewMessage =
   | { type: 'reveal_match'; payload: { query: string } }
   | { type: 'trash_entries'; payload: { requestId: number; entries: TrashEntry[] } }
   | { type: 'data_result'; payload: { action: DataAction; ok: boolean; message: string } }
+  | {
+      type: 'study_catalog_result';
+      payload: {
+        requestId: number;
+        notes: StudyCatalogNote[];
+        studyState: StudyState | null;
+        error: string | null;
+      };
+    }
+  | {
+      type: 'study_rating_result';
+      payload: {
+        requestId: number;
+        reviewKey: string;
+        ok: boolean;
+        studyState: StudyState | null;
+        message: string;
+      };
+    }
   | { type: 'request_content' }
   | { type: 'request_save_and_close' }
   | { type: 'request_flush'; payload: { requestId: number } };
@@ -122,6 +142,11 @@ export type WebviewToHostMessage =
   | { type: 'trash_list_requested'; payload: { requestId: number } }
   | { type: 'restore_note_requested'; payload: { noteId: string } }
   | { type: 'backup_requested' }
+  | { type: 'study_catalog_requested'; payload: { requestId: number } }
+  | {
+      type: 'study_rating_requested';
+      payload: { requestId: number; reviewKey: string; rating: StudyRating };
+    }
   /** Asks the host for a file chooser and the image chosen in it. */
   | { type: 'insert_image_requested'; payload: { id: string } }
   /** Bytes of a pasted or dropped image, base64 for the length of one message. */

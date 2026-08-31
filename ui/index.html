@@ -48,6 +48,15 @@
         <button id="btn-insert-image" class="icon-btn header-quick-action" title="Inserir imagem" aria-label="Inserir imagem">
           <span class="header-action-icon" data-quick-icon="insert-image"></span>
         </button>
+        <button id="btn-flashcards" class="icon-btn header-quick-action header-study-action" title="Central de estudos" aria-label="Central de estudos">
+          <span class="header-action-icon" data-quick-icon="flashcards"></span>
+        </button>
+        <button id="btn-zoom-out" class="icon-btn header-zoom-action" title="Diminuir zoom" aria-label="Diminuir zoom">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="6" x2="10" y2="6"></line></svg>
+        </button>
+        <button id="btn-zoom-in" class="icon-btn header-zoom-action" title="Aumentar zoom" aria-label="Aumentar zoom">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="6" x2="10" y2="6"></line><line x1="6" y1="2" x2="6" y2="10"></line></svg>
+        </button>
         <!-- The timer is not one of the six quick actions: it opens a panel of
              its own rather than a section of the note menu, and it is the one
              control that stays on a collapsed note, because a countdown you
@@ -83,6 +92,9 @@
         <span id="note-title" class="note-title">Nota sem título</span>
       </div>
       <div class="note-controls-right">
+        <button id="btn-trash-note" class="icon-btn header-trash-action" title="Mover nota para a lixeira" aria-label="Mover nota para a lixeira">
+          <span class="header-action-icon" data-quick-icon="trash-note"></span>
+        </button>
         <button id="btn-close" class="icon-btn" title="Fechar (Ctrl+W)" aria-label="Fechar nota">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <line x1="1" y1="1" x2="11" y2="11"></line>

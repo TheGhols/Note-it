@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 3.14 Study System & Spaced Repetition.** The deck is now every flashcard in every live
+  note, including closed notes, with trash excluded and restored notes returning with their prior
+  schedule. One on-demand Tiptap editor parses the host's document catalog through the existing
+  ProseMirror extractor; Rust never learns the `::` syntax.
+  - Each review direction receives a SHA-256 identity derived from note UUID, semantic front/back,
+    direction and duplicate ordinal. Formatting, image width/alignment and document position are
+    presentation and do not reset progress; semantic text, managed asset or direction changes do.
+  - `study.json` version 1 lives in `$XDG_DATA_HOME/note-it/`, separate from Markdown and
+    `state.json`. It contains only opaque review keys, Ladder-v1 schedules and daily counters, is
+    committed atomically, and fails closed without replacing corrupt or newer data.
+  - Difficult, Medium and Easy use the fixed 10-minute through 240-day ladder. The Rust host owns
+    the clock and local civil day; the panel advances and updates activity only after the atomic
+    write is acknowledged, and a failed write leaves the card and persisted state unchanged.
+  - The internal Study Hub provides Review Now, All and Current Note, a compact global list, seven
+    useful counts, a fixed-scale accessible 365-day heatmap, current/longest streaks and the same
+    safe FlashcardPanel renderer with source-note labels, interval previews and a minimal summary.
+  - The header adds a one-click deck, Zoom −/+, and a recoverable-trash shortcut immediately beside
+    Close. Zoom reuses `zoom_changed`; trash can only open the existing confirmation. Measured
+    breakpoints hide optional shortcuts before they can displace Menu, active Timer/AutoPaste or X.
+  - Backup manifest version 3 adds optional `study.json`. Versions 1 and 2 remain readable; an
+    existing study file that cannot be copied fails the snapshot before its commit point.
+
 - **Phase 3.13 Flashcards Core.** Cards are projections of the note itself: write
   `Pergunta :: Resposta` for one direction or `Termo ::: Definição` for both, inline with spaces or
   as a top-level marker between two structural blocks.

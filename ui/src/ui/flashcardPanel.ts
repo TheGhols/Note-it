@@ -1,10 +1,23 @@
 import { DOMSerializer, Schema } from '@tiptap/pm/model';
 import { FlashcardSide, ReviewItem } from '../flashcards/extract.ts';
 import { StudySession } from '../flashcards/session.ts';
+import { intervalLabel, nextLevel } from '../study/stats.ts';
+import type { GlobalReviewItem, StudyRating } from '../study/types.ts';
+
+type StudyPanelItem = ReviewItem | GlobalReviewItem;
+
+export interface StudyRatingRequest {
+  requestId: number;
+  reviewKey: string;
+  rating: StudyRating;
+}
 
 export interface FlashcardPanelHandlers {
   /** The panel closed. Whatever opened it should have the keyboard back. */
   onClose(): void;
+  /** Sends one commit request. The panel advances only through resolveRating. */
+  onRate?(request: StudyRatingRequest): void;
+  onReturnToHub?(): void;
 }
 
 export interface FlashcardPanelOptions {
@@ -17,7 +30,7 @@ export interface FlashcardPanelOptions {
 
 export interface StudyRequest {
   /** The questions, as they were when studying started. */
-  readonly items: readonly ReviewItem[];
+  readonly items: readonly StudyPanelItem[];
   /** How many cards those questions came from, for the count line. */
   readonly cards: number;
   /** The note's own schema, which is what the sides are rendered with. */
@@ -58,18 +71,27 @@ export class FlashcardPanel {
   private readonly card: HTMLElement;
   private readonly question: HTMLElement;
   private readonly answer: HTMLElement;
+  private readonly origin: HTMLElement;
   private readonly revealButton: HTMLButtonElement;
   private readonly previousButton: HTMLButtonElement;
   private readonly nextButton: HTMLButtonElement;
   private readonly shuffleButton: HTMLButtonElement;
+  private readonly ratingArea: HTMLElement;
+  private readonly ratingStatus: HTMLElement;
+  private readonly ratingButtons: Record<StudyRating, HTMLButtonElement>;
+  private readonly completion: HTMLElement;
   private readonly handlers: FlashcardPanelHandlers;
   private readonly random: () => number;
 
-  private session: StudySession | null = null;
+  private session: StudySession<StudyPanelItem> | null = null;
   private serializer: DOMSerializer | null = null;
   private cards = 0;
   private invoker: HTMLElement | null = null;
   private open = false;
+  private nextRatingRequest = 1;
+  private pendingRating: StudyRatingRequest | null = null;
+  private readonly rated = new Map<string, StudyRating>();
+  private ratingCounts: Record<StudyRating, number> = { difficult: 0, medium: 0, easy: 0 };
 
   public constructor(options: FlashcardPanelOptions) {
     this.doc = options.document ?? options.mount.ownerDocument;
@@ -117,6 +139,9 @@ export class FlashcardPanel {
     this.question = this.doc.createElement('div');
     this.question.className = 'note-study-side note-study-question';
 
+    this.origin = this.doc.createElement('p');
+    this.origin.className = 'note-study-origin';
+
     this.revealButton = this.doc.createElement('button');
     this.revealButton.type = 'button';
     this.revealButton.className = 'note-study-reveal';
@@ -127,7 +152,36 @@ export class FlashcardPanel {
     this.answer.className = 'note-study-side note-study-answer';
     this.answer.hidden = true;
 
-    this.card.append(this.question, this.revealButton, this.answer);
+    this.ratingArea = this.doc.createElement('div');
+    this.ratingArea.className = 'note-study-ratings';
+    this.ratingArea.hidden = true;
+    this.ratingButtons = {
+      difficult: this.ratingButton('Difícil', 'difficult'),
+      medium: this.ratingButton('Médio', 'medium'),
+      easy: this.ratingButton('Fácil', 'easy'),
+    };
+    this.ratingStatus = this.doc.createElement('p');
+    this.ratingStatus.className = 'note-study-rating-status';
+    this.ratingStatus.setAttribute('role', 'status');
+    this.ratingArea.append(
+      this.ratingButtons.difficult,
+      this.ratingButtons.medium,
+      this.ratingButtons.easy,
+      this.ratingStatus,
+    );
+
+    this.completion = this.doc.createElement('div');
+    this.completion.className = 'note-study-completion';
+    this.completion.hidden = true;
+
+    this.card.append(
+      this.origin,
+      this.question,
+      this.revealButton,
+      this.answer,
+      this.ratingArea,
+      this.completion,
+    );
 
     const footer = this.doc.createElement('div');
     footer.className = 'note-study-footer';
@@ -177,6 +231,9 @@ export class FlashcardPanel {
     this.serializer = DOMSerializer.fromSchema(request.schema);
     this.cards = request.cards;
     this.invoker = request.invoker ?? null;
+    this.pendingRating = null;
+    this.rated.clear();
+    this.ratingCounts = { difficult: 0, medium: 0, easy: 0 };
     this.open = true;
     this.root.hidden = false;
     this.render();
@@ -191,6 +248,8 @@ export class FlashcardPanel {
     this.serializer = null;
     this.question.replaceChildren();
     this.answer.replaceChildren();
+    this.completion.replaceChildren();
+    this.pendingRating = null;
 
     // Back to whatever opened this, when it is still somewhere focusable. The
     // menu that led here has closed, so falling back on the editor is the
@@ -220,6 +279,21 @@ export class FlashcardPanel {
     return button;
   }
 
+  private ratingButton(label: string, rating: StudyRating): HTMLButtonElement {
+    const button = this.doc.createElement('button');
+    button.type = 'button';
+    button.className = `note-study-rating note-study-rating-${rating}`;
+    button.dataset.rating = rating;
+    const name = this.doc.createElement('span');
+    name.className = 'note-study-rating-name';
+    name.textContent = label;
+    const interval = this.doc.createElement('span');
+    interval.className = 'note-study-rating-interval';
+    button.append(name, interval);
+    button.addEventListener('click', () => this.rate(rating));
+    return button;
+  }
+
   private reveal(): void {
     if (!this.session) return;
     this.session.reveal();
@@ -236,6 +310,86 @@ export class FlashcardPanel {
     if (!this.session) return;
     this.session.shuffle();
     this.render();
+  }
+
+  private rate(rating: StudyRating): void {
+    const item = this.session?.current;
+    if (!item || !('reviewKey' in item) || this.pendingRating || this.rated.has(item.reviewKey)) {
+      return;
+    }
+    if (!this.handlers.onRate) return;
+    const request = {
+      requestId: this.nextRatingRequest++,
+      reviewKey: item.reviewKey,
+      rating,
+    };
+    this.pendingRating = request;
+    this.ratingStatus.textContent = 'Salvando avaliação…';
+    this.setRatingButtonsDisabled(true);
+    this.handlers.onRate(request);
+  }
+
+  /** Applies only the ACK for the request and item still pending here. */
+  public resolveRating(
+    requestId: number,
+    reviewKey: string,
+    ok: boolean,
+    message: string,
+  ): boolean {
+    const pending = this.pendingRating;
+    if (!pending || pending.requestId !== requestId || pending.reviewKey !== reviewKey) return false;
+    this.pendingRating = null;
+    if (!ok) {
+      this.ratingStatus.textContent = message;
+      this.setRatingButtonsDisabled(false);
+      return true;
+    }
+
+    this.rated.set(reviewKey, pending.rating);
+    this.ratingCounts[pending.rating] += 1;
+    if (this.session?.hasNext) {
+      this.session.next();
+      this.render();
+    } else {
+      this.renderCompletion();
+    }
+    return true;
+  }
+
+  private setRatingButtonsDisabled(disabled: boolean): void {
+    Object.values(this.ratingButtons).forEach((button) => {
+      button.disabled = disabled;
+    });
+  }
+
+  private renderCompletion(): void {
+    const total =
+      this.ratingCounts.difficult + this.ratingCounts.medium + this.ratingCounts.easy;
+    this.question.replaceChildren();
+    this.answer.replaceChildren();
+    this.origin.textContent = '';
+    this.revealButton.hidden = true;
+    this.answer.hidden = true;
+    this.ratingArea.hidden = true;
+    this.completion.hidden = false;
+
+    const title = this.doc.createElement('h2');
+    title.textContent = 'Revisão concluída';
+    const summary = this.doc.createElement('p');
+    summary.textContent = `Difícil: ${this.ratingCounts.difficult} · Médio: ${this.ratingCounts.medium} · Fácil: ${this.ratingCounts.easy} · Total: ${total}`;
+    const back = this.doc.createElement('button');
+    back.type = 'button';
+    back.className = 'note-study-button note-study-return';
+    back.textContent = 'Voltar à Central';
+    back.addEventListener('click', () => {
+      this.close();
+      this.handlers.onReturnToHub?.();
+    });
+    this.completion.append(title, summary, back);
+    this.previousButton.disabled = true;
+    this.nextButton.disabled = true;
+    this.shuffleButton.disabled = true;
+    back.focus();
   }
 
   /**
@@ -299,6 +453,8 @@ export class FlashcardPanel {
     } · ${total} ${total === 1 ? 'revisão' : 'revisões'}`;
 
     const item = session.current;
+    this.completion.hidden = true;
+    this.origin.textContent = item && 'noteTitle' in item ? item.noteTitle : '';
     this.renderSide(this.question, item?.question ?? null);
 
     const revealed = session.isRevealed;
@@ -309,6 +465,21 @@ export class FlashcardPanel {
     } else {
       this.answer.replaceChildren();
     }
+
+    const scheduled = item && 'reviewKey' in item ? item : null;
+    const priorRating = scheduled ? this.rated.get(scheduled.reviewKey) : undefined;
+    this.ratingArea.hidden = !revealed || !scheduled;
+    this.ratingStatus.textContent = priorRating
+      ? `Avaliado: ${priorRating === 'difficult' ? 'Difícil' : priorRating === 'medium' ? 'Médio' : 'Fácil'}`
+      : '';
+    if (scheduled) {
+      const current = scheduled.schedule?.level ?? null;
+      (Object.keys(this.ratingButtons) as StudyRating[]).forEach((rating) => {
+        const interval = this.ratingButtons[rating].querySelector('.note-study-rating-interval');
+        if (interval) interval.textContent = intervalLabel(nextLevel(current, rating));
+      });
+    }
+    this.setRatingButtonsDisabled(Boolean(this.pendingRating) || Boolean(priorRating));
 
     this.previousButton.disabled = !session.hasPrevious;
     this.nextButton.disabled = !session.hasNext;

@@ -56,6 +56,7 @@ function mount() {
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
@@ -94,7 +95,7 @@ describe('where an image is inserted from', () => {
     // shortcut to has to still be there — a note too narrow for the paperclip
     // still has somewhere to insert a picture from.
     const page = renderedPage();
-    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(10);
+    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(14);
 
     const note = mount();
     const panels = Array.from(

@@ -1,5 +1,6 @@
 use crate::autopaste::CaptureDelimiter;
 use crate::search::SearchResult;
+use crate::study::{Rating, StudyState};
 use crate::timer::{NoteTimerState, TimerFinishKind};
 use crate::trash::TrashEntry;
 use chrono::{DateTime, Utc};
@@ -9,6 +10,12 @@ use webkit6::prelude::*;
 use webkit6::WebView;
 
 const MAX_GEOMETRY_DELTA: f64 = 100_000.0;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StudyCatalogNote {
+    pub id: Uuid,
+    pub content: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -150,6 +157,24 @@ pub enum HostToWebviewMessage {
         ok: bool,
         message: String,
     },
+    StudyCatalogResult {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        notes: Vec<StudyCatalogNote>,
+        #[serde(rename = "studyState")]
+        study_state: Option<StudyState>,
+        error: Option<String>,
+    },
+    StudyRatingResult {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        #[serde(rename = "reviewKey")]
+        review_key: String,
+        ok: bool,
+        #[serde(rename = "studyState")]
+        study_state: Option<StudyState>,
+        message: String,
+    },
     RequestContent,
     RequestSaveAndClose,
     RequestFlush {
@@ -242,6 +267,21 @@ pub enum WebviewToHostMessage {
     },
     /// Asks for a snapshot right now.
     BackupRequested,
+    /// Requests the live/stored note documents and durable metadata. Rust does
+    /// not parse cards; the existing ProseMirror extractor remains authority.
+    StudyCatalogRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+    },
+    /// One opaque review key and one closed rating. The host owns the clock,
+    /// applies Ladder-v1 and commits study.json before acknowledging.
+    StudyRatingRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        #[serde(rename = "reviewKey")]
+        review_key: String,
+        rating: Rating,
+    },
     /// The note's timer changed in a way worth keeping: started, paused,
     /// resumed, cancelled, reset, moved to another phase, or finished.
     ///
@@ -493,6 +533,77 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn study_requests_carry_only_generation_key_and_closed_rating() {
+        match parse_webview_message(
+            r#"{"type":"study_catalog_requested","payload":{"requestId":17}}"#,
+        )
+        .expect("catalog request")
+        {
+            WebviewToHostMessage::StudyCatalogRequested { request_id } => {
+                assert_eq!(request_id, 17)
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let key = "a".repeat(64);
+        let raw = serde_json::json!({
+            "type": "study_rating_requested",
+            "payload": { "requestId": 18, "reviewKey": key, "rating": "difficult" }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("rating request") {
+            WebviewToHostMessage::StudyRatingRequested {
+                request_id,
+                review_key,
+                rating,
+            } => {
+                assert_eq!(request_id, 18);
+                assert_eq!(review_key, "a".repeat(64));
+                assert_eq!(rating, crate::study::Rating::Difficult);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let invalid = raw.replace("difficult", "almost");
+        assert!(parse_webview_message(&invalid).is_err());
+    }
+
+    #[test]
+    fn study_results_keep_request_ids_and_use_the_frontend_field_names() {
+        let catalog = super::HostToWebviewMessage::StudyCatalogResult {
+            request_id: 41,
+            notes: vec![super::StudyCatalogNote {
+                id: Uuid::nil(),
+                content: "A :: B".to_string(),
+            }],
+            study_state: Some(crate::study::StudyState::default()),
+            error: None,
+        };
+        let encoded = serde_json::to_value(catalog).expect("catalog result");
+        assert_eq!(encoded["type"], "study_catalog_result");
+        assert_eq!(encoded["payload"]["requestId"], 41);
+        assert_eq!(
+            encoded["payload"]["notes"][0]["id"],
+            Uuid::nil().to_string()
+        );
+        assert_eq!(encoded["payload"]["notes"][0]["content"], "A :: B");
+        assert_eq!(encoded["payload"]["studyState"]["version"], 1);
+
+        let rating = super::HostToWebviewMessage::StudyRatingResult {
+            request_id: 42,
+            review_key: "b".repeat(64),
+            ok: false,
+            study_state: None,
+            message: "Não foi possível salvar.".to_string(),
+        };
+        let encoded = serde_json::to_value(rating).expect("rating result");
+        assert_eq!(encoded["payload"]["requestId"], 42);
+        assert_eq!(encoded["payload"]["reviewKey"], "b".repeat(64));
+        assert_eq!(encoded["payload"]["ok"], false);
+        assert!(encoded["payload"]["studyState"].is_null());
     }
 
     #[test]

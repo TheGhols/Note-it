@@ -17,15 +17,15 @@ import { ReviewItem } from './extract.ts';
  * the whole of its lifetime. Scheduling is a later phase, and stable identity
  * is its problem, not this one's.
  */
-export class StudySession {
-  private readonly items: readonly ReviewItem[];
+export class StudySession<T extends ReviewItem = ReviewItem> {
+  private readonly items: readonly T[];
   private readonly random: () => number;
   /** Indices into `items`. Shuffling permutes this and never the list. */
   private order: number[];
   private cursor = 0;
   private revealed = false;
 
-  public constructor(items: readonly ReviewItem[], random: () => number = Math.random) {
+  public constructor(items: readonly T[], random: () => number = Math.random) {
     this.items = items;
     this.random = random;
     this.order = items.map((_item, index) => index);
@@ -41,7 +41,7 @@ export class StudySession {
     return this.total === 0 ? 0 : this.cursor + 1;
   }
 
-  public get current(): ReviewItem | null {
+  public get current(): T | null {
     const index = this.order[this.cursor];
     return index === undefined ? null : (this.items[index] ?? null);
   }

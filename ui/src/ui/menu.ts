@@ -51,6 +51,8 @@ export interface NoteMenuHandlers {
   onInsertImage(): void;
   /** The reader wants to study the cards this note holds. */
   onOpenStudy(): void;
+  /** Opens the all-notes Study Hub. */
+  onOpenStudyHub(): void;
   /** Asks for this note to start or stop capturing the clipboard. */
   onToggleAutoPaste(active: boolean): void;
   onSelectCaptureDelimiter(delimiter: CaptureDelimiter): void;
@@ -143,6 +145,7 @@ export class NoteMenu {
   private studyItem!: HTMLButtonElement;
   private studyValue!: HTMLElement;
   private studyAction!: HTMLButtonElement;
+  private studyHubAction!: HTMLButtonElement;
   private studySummary!: HTMLElement;
   private autoPasteItem!: HTMLButtonElement;
   private autoPasteValue!: HTMLElement;
@@ -217,9 +220,9 @@ export class NoteMenu {
 
     const mediaItem = this.createSubmenuItem('Mídia', 'media');
 
-    // Studying is a section rather than a button in the bar. The bar is full,
-    // and a control that opens a panel over the whole note is not something
-    // anyone needs within a pixel of the text they are writing.
+    // Studying remains a menu section so both the current-note route and the
+    // global Hub are discoverable. The deck shortcut in the bar is only the
+    // direct route to the latter; it does not replace either menu action.
     this.studyItem = this.createSubmenuItem('Estudo', 'study');
     this.studyValue = this.doc.createElement('span');
     this.studyValue.className = 'note-menu-value';
@@ -566,11 +569,11 @@ export class NoteMenu {
   /**
    * Study: what the note holds, and the way in to it.
    *
-   * A section rather than a button in the bar, which is already carrying the
-   * menu, seven icons, the timer and the close cross — and studying is not a
-   * thing anyone does mid-sentence. The row above says how many cards there
-   * are before the panel is even opened, because the commonest question about
-   * flashcards in a note is whether there are any.
+   * The section keeps the current-note count and both routes discoverable;
+   * the deck shortcut is simply a second, one-click route to the global Hub.
+   * The row above says how many cards there are before a panel is opened,
+   * because the commonest question about flashcards in a note is whether
+   * there are any.
    *
    * The hint is not decoration. `::` and `:::` are the whole syntax, and a
    * feature whose syntax has to be looked up somewhere else is a feature
@@ -579,12 +582,18 @@ export class NoteMenu {
   private buildStudyPanel(): PanelEntry {
     const { panel, body } = this.createPanel('Estudo', 'note-menu-study');
 
-    this.studyAction = this.createItem('Estudar flashcards', 'note-menu-item');
+    this.studyAction = this.createItem('Estudar esta nota', 'note-menu-item');
     this.studyAction.addEventListener('click', () => {
       // The panel takes the whole note and wants the keyboard; the menu gets
       // out of the way first, exactly as it does for the chooser.
       this.close();
       this.options.handlers.onOpenStudy();
+    });
+
+    this.studyHubAction = this.createItem('Central de estudos', 'note-menu-item');
+    this.studyHubAction.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onOpenStudyHub();
     });
 
     this.studySummary = this.doc.createElement('p');
@@ -595,7 +604,7 @@ export class NoteMenu {
     hint.className = 'note-menu-hint note-menu-study-hint';
     hint.textContent = 'Escreva Pergunta :: Resposta, ou Termo ::: Definição para os dois sentidos.';
 
-    body.append(this.studyAction, this.studySummary, hint);
+    body.append(this.studyAction, this.studyHubAction, this.studySummary, hint);
     return { element: panel };
   }
 
@@ -707,6 +716,18 @@ export class NoteMenu {
       return;
     }
     this.openAt('root', this.options.trigger);
+  }
+
+  /** The toolbar trash icon enters the existing confirmation, and nothing else. */
+  public openTrashConfirmation(invoker?: HTMLElement | null): void {
+    const trigger = invoker ?? this.options.trigger;
+    if (this.open) {
+      this.invoker = trigger;
+      this.syncTriggerState();
+      this.showPanel('trashConfirm');
+      return;
+    }
+    this.openAt('trashConfirm', trigger);
   }
 
   private openAt(panel: MenuPanel, invoker: HTMLElement): void {

@@ -26,11 +26,13 @@ import {
 } from './editor/find.ts';
 import { FindBar } from './ui/findBar.ts';
 import { FlashcardPanel } from './ui/flashcardPanel.ts';
-import { flashcardCountsIn, flashcardsIn } from './editor/flashcardMark.ts';
-import { reviewItems } from './flashcards/extract.ts';
+import { flashcardCountsIn } from './editor/flashcardMark.ts';
+import { StudyHub, StudyFilter } from './ui/studyHub.ts';
+import { bindHeaderShortcuts, updateZoomShortcutState } from './ui/headerShortcuts.ts';
+import { buildGlobalCatalog } from './study/catalog.ts';
 import { collapseTransition } from './ui/collapse.ts';
 import { HeaderReveal } from './ui/headerReveal.ts';
-import { CLIPPER, QUICK_ACTIONS } from './ui/icons.ts';
+import { CLIPPER, FLASHCARDS, QUICK_ACTIONS, TRASH_SHORTCUT } from './ui/icons.ts';
 import { MenuPanel, NoteMenu } from './ui/menu.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
@@ -48,7 +50,14 @@ import {
 import { DEFAULT_THEME, normalizeTheme, ThemeController } from './ui/theme.ts';
 import { NoteInfoTooltip } from './ui/tooltip.ts';
 import { TextSize } from './editor/textSize.ts';
-import { clampZoom, DEFAULT_ZOOM_PERCENT, zoomIn, zoomOut } from './editor/zoom.ts';
+import {
+  clampZoom,
+  DEFAULT_ZOOM_PERCENT,
+  MAX_ZOOM_PERCENT,
+  MIN_ZOOM_PERCENT,
+  zoomIn,
+  zoomOut,
+} from './editor/zoom.ts';
 
 const PAPER_COLORS: PaperColor[] = [
   'yellow',
@@ -82,6 +91,7 @@ let findBar: FindBar | null = null;
 let trashPanel: TrashPanel | null = null;
 let timerPanel: TimerPanel | null = null;
 let flashcardPanel: FlashcardPanel | null = null;
+let studyHub: StudyHub | null = null;
 let noteStatus: NoteStatus | null = null;
 
 /**
@@ -96,6 +106,7 @@ function openGlobalSearch(): void {
   trashPanel?.close();
   timerPanel?.close();
   flashcardPanel?.close();
+  studyHub?.close();
   searchPalette?.openPalette();
 }
 
@@ -111,6 +122,7 @@ function openTrash(): void {
   findBar?.close();
   timerPanel?.close();
   flashcardPanel?.close();
+  studyHub?.close();
   trashPanel?.openPanel();
 }
 
@@ -120,6 +132,7 @@ function openFindBar(replace: boolean): void {
   trashPanel?.close();
   timerPanel?.close();
   flashcardPanel?.close();
+  studyHub?.close();
   findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
 }
 
@@ -136,6 +149,7 @@ function openTimer(): void {
   findBar?.close();
   trashPanel?.close();
   flashcardPanel?.close();
+  studyHub?.close();
   timerPanel?.openPanel();
 }
 
@@ -148,24 +162,15 @@ function openTimer(): void {
  * they were on. The panel is given content and nothing else: it has no editor
  * to write to.
  */
-function openStudy(invoker?: HTMLElement | null): void {
-  if (!noteEditor || !flashcardPanel) return;
+function openStudyHub(filter: StudyFilter, invoker?: HTMLElement | null): void {
+  if (!noteEditor || !studyHub || !activeNoteId) return;
   searchPalette?.close();
   findBar?.close();
   trashPanel?.close();
   timerPanel?.close();
-
-  const state = noteEditor.getView().state;
-  const sources = flashcardsIn(state);
-  const items = reviewItems(sources);
-  if (items.length === 0) return;
-
-  flashcardPanel.openPanel({
-    items,
-    cards: sources.length,
-    schema: state.schema,
-    invoker: invoker ?? document.getElementById('btn-menu'),
-  });
+  flashcardPanel?.close();
+  noteMenu?.close();
+  studyHub.openHub(activeNoteId, invoker ?? document.getElementById('btn-menu'), filter);
 }
 
 /**
@@ -255,6 +260,15 @@ function applyZoom(percent: number, persist: boolean): void {
   currentZoom = clamped;
   document.documentElement.style.setProperty('--note-zoom', String(clamped / 100));
   noteMenu?.setZoomPercent(clamped);
+  const zoomOutButton = document.getElementById('btn-zoom-out') as HTMLButtonElement | null;
+  const zoomInButton = document.getElementById('btn-zoom-in') as HTMLButtonElement | null;
+  updateZoomShortcutState(
+    zoomOutButton,
+    zoomInButton,
+    clamped,
+    MIN_ZOOM_PERCENT,
+    MAX_ZOOM_PERCENT,
+  );
 
   if (persist && changed && activeNoteId) {
     bridge.sendMessage({
@@ -401,6 +415,7 @@ function setCollapsed(collapsed: boolean): void {
     // A collapsed note is a header bar: there is no room to study in, and the
     // sitting is not worth keeping — the cards are still in the note.
     flashcardPanel?.close();
+    studyHub?.close();
     // The popover goes; the countdown does not. A collapsed note keeps its
     // timer running and keeps showing it on the bar — that is the whole reason
     // the readout is up there rather than in the panel.
@@ -569,6 +584,10 @@ function initUI(): void {
     event.stopPropagation();
     requestImageInsert();
   });
+
+  const flashcards = document.getElementById(FLASHCARDS.buttonId);
+  const zoomOutButton = document.getElementById('btn-zoom-out') as HTMLButtonElement | null;
+  const zoomInButton = document.getElementById('btn-zoom-in') as HTMLButtonElement | null;
   if (btnMenu && menuMount) {
     noteMenu = new NoteMenu({
       trigger: btnMenu,
@@ -582,6 +601,7 @@ function initUI(): void {
           // menu is therefore also an explicit end to that sitting; otherwise
           // the two panels would be stacked over the same surface.
           flashcardPanel?.close();
+          studyHub?.close();
           headerReveal?.setHeld(true);
           syncInlineFormatting();
         },
@@ -654,7 +674,8 @@ function initUI(): void {
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
         onInsertImage: requestImageInsert,
-        onOpenStudy: () => openStudy(document.getElementById('btn-menu')),
+        onOpenStudy: () => openStudyHub('current', document.getElementById('btn-menu')),
+        onOpenStudyHub: () => openStudyHub('review', document.getElementById('btn-menu')),
         onToggleAutoPaste: (active) => {
           // A request, not a decision: the host owns the single target, and
           // the answer comes back as `set_auto_paste` to every note affected.
@@ -674,6 +695,26 @@ function initUI(): void {
       },
     });
   }
+
+  const trashShortcut = document.getElementById(TRASH_SHORTCUT.buttonId);
+  bindHeaderShortcuts(
+    {
+      study: flashcards,
+      zoomOut: zoomOutButton,
+      zoomIn: zoomInButton,
+      trash: trashShortcut,
+    },
+    {
+      openStudyHub: (invoker) => openStudyHub('review', invoker),
+      zoomOut: () => applyZoom(zoomOut(currentZoom), true),
+      zoomIn: () => applyZoom(zoomIn(currentZoom), true),
+      openTrashConfirmation: (invoker) => {
+        flashcardPanel?.close();
+        studyHub?.close();
+        noteMenu?.openTrashConfirmation(invoker);
+      },
+    },
+  );
 
   // The note's Timer and Pomodoro. Anchored under its own header button, in
   // the same group the menu is mounted in, so it sits outside the drag region
@@ -745,13 +786,39 @@ function initUI(): void {
       },
     });
 
-    // Studying, in the note the cards were written in. It is handed content
-    // and never the editor, so there is nothing here that could write to the
-    // document even by mistake.
+    studyHub = new StudyHub({
+      mount: appRoot,
+      handlers: {
+        onRequestCatalog: (requestId) => {
+          bridge.sendMessage({ type: 'study_catalog_requested', payload: { requestId } });
+        },
+        onStart: (items, cards, schema) => {
+          studyHub?.close();
+          flashcardPanel?.openPanel({
+            items,
+            cards,
+            schema,
+            invoker: document.getElementById('btn-flashcards'),
+          });
+        },
+        onClose: () => noteEditor?.focus(),
+      },
+    });
+
+    // One renderer for current-note and global study. It holds no editor and
+    // advances after, and only after, the host commits a rating.
     flashcardPanel = new FlashcardPanel({
       mount: appRoot,
       handlers: {
         onClose: () => noteEditor?.focus(),
+        onRate: ({ requestId, reviewKey, rating }) => {
+          bridge.sendMessage({
+            type: 'study_rating_requested',
+            payload: { requestId, reviewKey, rating },
+          });
+        },
+        onReturnToHub: () =>
+          openStudyHub('review', document.getElementById('btn-flashcards')),
       },
     });
 
@@ -939,6 +1006,7 @@ function initUI(): void {
       trashPanel?.close();
       timerPanel?.close();
       flashcardPanel?.close();
+      studyHub?.close();
       // The stored timer, resolved against the clock as it is now rather than
       // resumed for whatever was left when this note was last on screen.
       timerPanel?.restore(msg.payload.timer ?? null);
@@ -985,6 +1053,31 @@ function initUI(): void {
       searchPalette?.showResults(msg.payload.requestId, msg.payload.results);
     } else if (msg.type === 'trash_entries') {
       trashPanel?.showEntries(msg.payload.requestId, msg.payload.entries);
+    } else if (msg.type === 'study_catalog_result') {
+      const { requestId, notes, studyState, error } = msg.payload;
+      if (error || !studyState) {
+        studyHub?.showError(requestId, error ?? 'O histórico de estudos está indisponível.');
+        return;
+      }
+      const current =
+        activeNoteId && noteEditor
+          ? { id: activeNoteId, content: noteEditor.getMarkdown() }
+          : null;
+      void buildGlobalCatalog(notes, studyState, current)
+        .then((catalog) => studyHub?.showCatalog(requestId, catalog, studyState))
+        .catch(() => {
+          studyHub?.showError(requestId, 'Não foi possível montar a Central de estudos.');
+        });
+    } else if (msg.type === 'study_rating_result') {
+      const accepted = flashcardPanel?.resolveRating(
+        msg.payload.requestId,
+        msg.payload.reviewKey,
+        msg.payload.ok,
+        msg.payload.message,
+      );
+      if (accepted && msg.payload.ok && msg.payload.studyState) {
+        studyHub?.updateStudyState(msg.payload.studyState);
+      }
     } else if (msg.type === 'data_result') {
       // The sentence arrives ready to show; the page never composes one.
       noteStatus?.show(msg.payload.message, msg.payload.ok);

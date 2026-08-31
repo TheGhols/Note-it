@@ -62,6 +62,7 @@ function mount() {
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
@@ -125,7 +126,7 @@ describe('where AutoPaste is switched on', () => {
     // quick action, and there is no room for another permanent control.
     const page = renderedPage();
     const permanent = page.querySelectorAll('.note-header .icon-btn:not([hidden])');
-    expect(permanent).toHaveLength(10);
+    expect(permanent).toHaveLength(14);
 
     const note = mount();
     click(note.trigger);
@@ -377,9 +378,21 @@ describe('the header bar still fits with everything on it', () => {
    * budget below is measured against the row a narrow note actually carries,
    * and a rule that stops hiding something is caught by the arithmetic.
    */
-  function narrowlyHidden(): string[] {
-    const block = /@media \(max-width: \d+px\) \{\s*([\s\S]*?)\n\}/.exec(THEME_CSS)![1];
-    return [...block.matchAll(/#([\w-]+)\s*\{[^}]*display:\s*none/g)].map((match) => match[1]);
+  function hiddenAt(width: number): string[] {
+    const hidden = new Set<string>();
+    const page = renderedPage();
+    for (const media of THEME_CSS.matchAll(/@media \(max-width: (\d+)px\) \{([\s\S]*?)(?=\n\}\n(?:\n|\/\*))/g)) {
+      if (width > Number(media[1])) continue;
+      for (const rule of media[2].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        if (!/display:\s*none/.test(rule[2])) continue;
+        for (const selector of rule[1].split(',').map((part) => part.trim())) {
+          for (const button of page.querySelectorAll(`.note-header .icon-btn${selector.match(/#[\w-]+|\.[\w-]+$/)?.[0] ?? ''}`)) {
+            hidden.add(button.id);
+          }
+        }
+      }
+    }
+    return [...hidden];
   }
   it('fits every control, capture included, at the narrowest a note can be', () => {
     // 220 px, and the close cross must still be on the note. Two things buy
@@ -387,10 +400,10 @@ describe('the header bar still fits with everything on it', () => {
     // actually the target, and the paperclip is taken off a note this narrow.
     const floor = inject('minNoteWidth');
     expect(
-      controlRowWidth({ includeHidden: false, omit: narrowlyHidden() }),
+      controlRowWidth({ includeHidden: false, omit: hiddenAt(floor) }),
     ).toBeLessThan(floor);
     expect(
-      controlRowWidth({ includeHidden: true, omit: narrowlyHidden() }),
+      controlRowWidth({ includeHidden: true, omit: hiddenAt(floor) }),
     ).toBeLessThan(floor);
   });
 
@@ -398,22 +411,20 @@ describe('the header bar still fits with everything on it', () => {
     // The digits and the paperclip are both hidden on an expanded note below
     // the breakpoint, so the widest the row ever gets is at that breakpoint
     // and above — where all three are on the bar at once.
-    const breakpoint = Number.parseFloat(
-      /@media \(max-width: (\d+)px\)/.exec(THEME_CSS)![1],
-    );
+    const breakpoint = 420;
     const readoutFont = Number.parseFloat(
       declarationIn('.header-timer-readout', 'font-size'),
     );
     // `H:MM:SS`, at a generous upper bound for a tabular digit's advance.
     const widestClock = readoutFont * 0.75 * 7 + 3;
 
-    expect(controlRowWidth({ includeHidden: true }) + widestClock).toBeLessThanOrEqual(
-      breakpoint,
-    );
+    expect(
+      controlRowWidth({ includeHidden: true, omit: hiddenAt(breakpoint) }) + widestClock,
+    ).toBeLessThanOrEqual(breakpoint);
     // ...and below it, with the digits and the paperclip gone, the row fits
     // the narrowest note there is.
     expect(
-      controlRowWidth({ includeHidden: true, omit: narrowlyHidden() }),
+      controlRowWidth({ includeHidden: true, omit: hiddenAt(inject('minNoteWidth')) }),
     ).toBeLessThan(inject('minNoteWidth'));
   });
 

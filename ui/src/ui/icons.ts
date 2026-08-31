@@ -115,6 +115,20 @@ export const CLIPPER: HeaderIcon = {
   asset: 'attach-svgrepo-com5.svg',
 };
 
+export const FLASHCARDS: HeaderIcon = {
+  id: 'flashcards',
+  buttonId: 'btn-flashcards',
+  label: 'Central de estudos',
+  asset: 'cards-deck.svg',
+};
+
+export const TRASH_SHORTCUT: HeaderIcon = {
+  id: 'trash-note',
+  buttonId: 'btn-trash-note',
+  label: 'Mover nota para a lixeira',
+  asset: 'paper-bin-svgrepo-com.svg',
+};
+
 /**
  * Every button in the bar drawn from the icon files, in the order they appear.
  *
@@ -122,7 +136,17 @@ export const CLIPPER: HeaderIcon = {
  * an icon needs — the asset and the placeholder — belong to this list; what
  * happens on a click belongs to whoever wires the button.
  */
-export const HEADER_ICONS: readonly HeaderIcon[] = [...QUICK_ACTIONS, CLIPPER];
+export const HEADER_ICONS: readonly HeaderIcon[] = [
+  ...QUICK_ACTIONS,
+  CLIPPER,
+  FLASHCARDS,
+];
+
+/** Every file-backed drawing in the header, including the separate destructive action. */
+export const INLINE_HEADER_ICONS: readonly HeaderIcon[] = [
+  ...HEADER_ICONS,
+  TRASH_SHORTCUT,
+];
 
 /** Paint values that mean "no paint" and must survive untouched. */
 const UNPAINTED = new Set(['none', 'currentcolor', 'transparent', 'inherit']);
@@ -200,7 +224,7 @@ export function renderHeaderIcons(html: string, icons: Record<string, string>): 
     },
   );
 
-  const missing = HEADER_ICONS.filter((icon) => !filled.has(icon.id));
+  const missing = INLINE_HEADER_ICONS.filter((icon) => !filled.has(icon.id));
   if (missing.length > 0) {
     throw new Error(
       `the page has no icon placeholder for: ${missing.map((icon) => icon.id).join(', ')}`,

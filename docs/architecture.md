@@ -44,10 +44,14 @@ Note-it separates native system integration from document editing through a clea
   is in there; it never reads, parses or rewrites a note, which is why a note with damaged front
   matter can still be deleted and recovered. See ADR-028.
 - `backup.rs`: local snapshots. Copies `notes/`, `trash/`, `assets/`, `config.toml` and
-  `state.json` into `backups/<timestamp>/`, atomically, with retention. Pure functions decide when
+  `state.json`, plus optional `study.json`, into `backups/<timestamp>/`, atomically, with retention. Pure functions decide when
   one is owed, so the 24-hour rule is tested without waiting a day. `assets/` is a tree rather than
   a flat directory, so it has a copy of its own — strict and fail-closed, validated by the same
   parser the asset scheme uses, and never a general recursive descent. See ADR-029 and ADR-032.
+- `study.rs`: the versioned `study.json` model and Ladder-v1 scheduler. It accepts only opaque
+  SHA-256 review keys and closed ratings, chooses due timestamps and local activity dates on the
+  host clock, and returns a new live state only after the atomic write succeeds. It contains no
+  flashcard parser and no note content.
 - `state.rs`: Window geometry persistence (`$XDG_STATE_HOME/note-it/state.json`). Each note's entry
   also carries its Timer/Pomodoro, for the same reason it carries the zoom: it is state of the
   application, not of the document.
@@ -74,6 +78,10 @@ Note-it separates native system integration from document editing through a clea
 - `ui/src/main.ts`: Webview entry point and bridge bootstrap.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
+- `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.
+- `ui/src/study/`: semantic SHA-256 identities, one reusable on-demand Tiptap catalog parser, and
+  pure due/heatmap/streak projections. `ui/src/ui/studyHub.ts` and the existing
+  `flashcardPanel.ts` render the global catalog and scheduled sitting inside the current WebView.
 - `ui/src/math/`: the math engine, independent of the editor — `lexer.ts`, `parser.ts`,
   `evaluate.ts`, `document.ts` (a note's lines, evaluated top-down) and `format.ts`. It knows
   nothing about ProseMirror; `ui/src/editor/math.ts` is the only thing that joins the two, reading

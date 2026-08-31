@@ -83,12 +83,12 @@ impl SnapshotKind {
 
 /// The manifest format a snapshot taken now is written in.
 ///
-/// Version 2 is version 1 plus `assets`. The number is what a snapshot says
+/// Version 3 is version 2 plus optional `study.json`. The number is what a snapshot says
 /// about *itself*, so a directory written before images existed keeps saying
 /// version 1 and stays exactly as valid as it was: nothing here branches on
 /// the version, and the field defaults, so an older manifest reads back as the
 /// zero assets it genuinely had.
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 
 /// What a snapshot says about itself. Its presence is also what makes the
 /// directory a snapshot rather than a directory someone happened to create.
@@ -106,6 +106,9 @@ pub struct SnapshotManifest {
     pub assets: usize,
     pub config: bool,
     pub state: bool,
+    /// Whether durable review metadata was present. Absent from v1/v2.
+    #[serde(default)]
+    pub study: bool,
 }
 
 /// One committed snapshot on disk.
@@ -116,7 +119,7 @@ pub struct Snapshot {
     pub created_at: DateTime<Utc>,
 }
 
-/// The five things a snapshot copies. Everything else in the data directory —
+/// The recoverable things a snapshot copies. Everything else in the data directory —
 /// the backups themselves above all — is deliberately not here.
 #[derive(Debug, Clone)]
 pub struct BackupSources {
@@ -126,6 +129,7 @@ pub struct BackupSources {
     pub assets_dir: PathBuf,
     pub config_file: PathBuf,
     pub state_file: PathBuf,
+    pub study_file: PathBuf,
 }
 
 /// Whether an automatic backup is owed.
@@ -279,6 +283,7 @@ fn build_snapshot(
     let assets = copy_assets_tree(&sources.assets_dir, &temp.join("assets"))?;
     let config = copy_optional_file(&sources.config_file, &temp.join("config.toml"))?;
     let state = copy_optional_file(&sources.state_file, &temp.join("state.json"))?;
+    let study = copy_optional_file_strict(&sources.study_file, &temp.join("study.json"))?;
 
     // Written only once every copy above has succeeded, so a manifest can
     // never claim a file the snapshot does not hold.
@@ -291,6 +296,7 @@ fn build_snapshot(
         assets,
         config,
         state,
+        study,
     };
     let serialized = serde_json::to_string_pretty(&manifest)
         .map_err(|e| format!("Failed to serialize the snapshot manifest: {e}"))?;
@@ -567,6 +573,35 @@ fn copy_optional_file(source: &Path, destination: &Path) -> Result<bool, String>
     Ok(true)
 }
 
+/// Study history is managed recoverable data. If it exists, anything other
+/// than a readable regular file fails the snapshot rather than silently
+/// producing a backup that claims to be complete without it.
+fn copy_optional_file_strict(source: &Path, destination: &Path) -> Result<bool, String> {
+    let metadata = match fs::symlink_metadata(source) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect {} for the backup: {error}",
+                source.display()
+            ))
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "Failed to back up study history: {} is not a regular file",
+            source.display()
+        ));
+    }
+    fs::copy(source, destination).map_err(|error| {
+        format!(
+            "Failed to copy {} into the snapshot: {error}",
+            source.display()
+        )
+    })?;
+    Ok(true)
+}
+
 /// Removes this routine's own leftovers, and nothing else.
 ///
 /// Only a directory whose name begins with the scratch prefix is touched. A
@@ -636,6 +671,7 @@ mod tests {
         assets: PathBuf,
         config: PathBuf,
         state: PathBuf,
+        study: PathBuf,
         backups: PathBuf,
     }
 
@@ -647,6 +683,7 @@ mod tests {
                 assets_dir: self.assets.clone(),
                 config_file: self.config.clone(),
                 state_file: self.state.clone(),
+                study_file: self.study.clone(),
             }
         }
 
@@ -675,6 +712,7 @@ mod tests {
             _tmp: tmp,
             config: root.join("config.toml"),
             state: root.join("state.json"),
+            study: root.join("study.json"),
             root,
             notes,
             trash,
@@ -799,6 +837,7 @@ mod tests {
         assert_eq!(manifest.trash, 1);
         assert!(manifest.config);
         assert!(manifest.state);
+        assert!(!manifest.study);
         assert_eq!(manifest.kind, "manual");
         assert_eq!(manifest.created_at, at("2026-08-29T09:30:00Z"));
     }
@@ -815,6 +854,7 @@ mod tests {
         let manifest = read_manifest(&snapshot.join(MANIFEST_FILE)).expect("manifest");
         assert!(!manifest.config);
         assert!(!manifest.state);
+        assert!(!manifest.study);
     }
 
     #[test]
@@ -1180,6 +1220,11 @@ mod tests {
         .expect("trashed note");
         fs::write(&store.config, "theme = \"dark\"\n").expect("config");
         fs::write(&store.state, "{\"active_layer_mode\":\"desktop\"}").expect("state");
+        let review_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let study = format!(
+            "{{\n  \"version\": 1,\n  \"algorithm\": \"ladder-v1\",\n  \"cards\": {{\n    \"{review_key}\": {{\n      \"level\": 2,\n      \"due_at\": \"2026-09-02T10:00:00Z\",\n      \"last_reviewed_at\": \"2026-08-30T10:00:00Z\",\n      \"review_count\": 1,\n      \"last_rating\": \"easy\"\n    }}\n  }},\n  \"days\": {{\n    \"2026-08-30\": {{\"reviews\": 1, \"difficult\": 0, \"medium\": 0, \"easy\": 1}}\n  }}\n}}\n"
+        );
+        fs::write(&store.study, &study).expect("study history");
 
         let snapshot = store.backup(at("2026-08-29T09:30:00Z")).expect("backup");
 
@@ -1190,6 +1235,7 @@ mod tests {
         let recovered_trash = recovery.path().join("data/note-it/trash");
         let recovered_config = recovery.path().join("config/note-it/config.toml");
         let recovered_state = recovery.path().join("state/note-it/state.json");
+        let recovered_study = recovery.path().join("data/note-it/study.json");
         fs::create_dir_all(&recovered_notes).expect("notes");
         fs::create_dir_all(&recovered_trash).expect("trash");
         fs::create_dir_all(recovered_config.parent().unwrap()).expect("config dir");
@@ -1204,6 +1250,7 @@ mod tests {
         }
         fs::copy(snapshot.join("config.toml"), &recovered_config).expect("config");
         fs::copy(snapshot.join("state.json"), &recovered_state).expect("state");
+        fs::copy(snapshot.join("study.json"), &recovered_study).expect("study");
 
         // And the application reads the result.
         let manager = crate::storage::StorageManager::with_custom_paths(
@@ -1248,6 +1295,35 @@ mod tests {
             crate::state::AppState::load_from_file(&manager.state_file_path()).active_layer_mode,
             crate::state::LayerMode::Desktop
         );
+        let recovered_study_state = manager.load_study().expect("study state");
+        assert_eq!(recovered_study_state.cards[review_key].level, 2);
+        assert_eq!(
+            recovered_study_state.days[&chrono::NaiveDate::from_ymd_opt(2026, 8, 30).unwrap()].easy,
+            1
+        );
+        assert_eq!(
+            fs::read_to_string(manager.study_file_path()).expect("raw study"),
+            study
+        );
+        assert!(manifest_of(&snapshot).study);
+    }
+
+    #[test]
+    fn study_history_is_optional_but_never_silently_omitted_when_present() {
+        let absent = store();
+        fs::write(absent.notes.join("a.md"), "nota").expect("note");
+        let snapshot = absent.backup(at("2026-08-30T09:30:00Z")).expect("backup");
+        assert!(!snapshot.join("study.json").exists());
+        assert!(!manifest_of(&snapshot).study);
+
+        let malformed = store();
+        fs::write(malformed.notes.join("a.md"), "nota").expect("note");
+        fs::create_dir(&malformed.study).expect("study path occupied by a directory");
+        let error = malformed
+            .backup(at("2026-08-30T09:30:00Z"))
+            .expect_err("an incomplete study backup must not commit");
+        assert!(error.contains("study history"), "{error}");
+        assert!(list_snapshots(&malformed.backups).is_empty());
     }
 
     // ---------------------------------------------------------------- assets
@@ -1714,6 +1790,35 @@ mod tests {
         // It said nothing about images because it had none to say anything
         // about, and it reads back as exactly that.
         assert_eq!(manifest.assets, 0);
+        assert!(!manifest.study);
+    }
+
+    #[test]
+    fn a_version_two_manifest_without_study_is_still_readable() {
+        let store = store();
+        fs::create_dir_all(&store.backups).expect("backups");
+        let old = store.backups.join("2026-08-30T09-30-00Z");
+        fs::create_dir_all(old.join("notes")).expect("old snapshot");
+        fs::write(
+            old.join(MANIFEST_FILE),
+            r#"{
+                "version": 2,
+                "created_at": "2026-08-30T09:30:00Z",
+                "kind": "manual",
+                "notes": 1,
+                "trash": 0,
+                "assets": 2,
+                "config": false,
+                "state": false
+            }"#,
+        )
+        .expect("a version 2 manifest");
+
+        let manifest = manifest_of(&old);
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.assets, 2);
+        assert!(!manifest.study);
+        assert_eq!(list_snapshots(&store.backups).len(), 1);
     }
 
     #[test]
@@ -1727,9 +1832,10 @@ mod tests {
         let manifest = manifest_of(&snapshot);
 
         assert_eq!(manifest.version, MANIFEST_VERSION);
-        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.version, 3);
         assert_eq!(manifest.notes, 1);
         assert_eq!(manifest.assets, 2);
+        assert!(!manifest.study);
 
         // The manifest never claims a file the snapshot does not hold: the
         // count is the files on disk under `assets/`.

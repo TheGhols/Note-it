@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { HEADER_ICONS, renderHeaderIcons } from './src/ui/icons.ts';
+import { INLINE_HEADER_ICONS, renderHeaderIcons } from './src/ui/icons.ts';
 
 /** Every module of the math engine and the unit registry, by path. Read here
  *  for the same reason the stylesheet is: a test asserting what the engine
@@ -23,7 +23,7 @@ function mathSources(): Record<string, string> {
 function headerIcons(): Record<string, string> {
   const directory = fileURLToPath(new URL('../IconesNote-it', import.meta.url));
   const icons: Record<string, string> = {};
-  for (const icon of HEADER_ICONS) {
+  for (const icon of INLINE_HEADER_ICONS) {
     icons[icon.id] = readFileSync(`${directory}/${icon.asset}`, 'utf8');
   }
   return icons;

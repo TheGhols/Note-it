@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, inject, it, vi } from 'vitest';
-import { CLIPPER, HEADER_ICONS, normalizeIconSvg, QUICK_ACTIONS } from '../src/ui/icons.ts';
+import {
+  CLIPPER,
+  HEADER_ICONS,
+  INLINE_HEADER_ICONS,
+  normalizeIconSvg,
+  QUICK_ACTIONS,
+} from '../src/ui/icons.ts';
 import { MenuPanel, NoteMenu } from '../src/ui/menu.ts';
 import { PaperColor } from '../src/bridge/types.ts';
 import { contrastRatio } from './support/color.ts';
@@ -55,6 +61,7 @@ function mountFromPage() {
     onCreateBackup: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
+    onOpenStudyHub: vi.fn(),
     onToggleAutoPaste: vi.fn(),
     onSelectCaptureDelimiter: vi.fn(),
     onOpen: vi.fn(),
@@ -249,15 +256,15 @@ describe('the quick-action icons', () => {
     );
 
     expect(gitignore).toContain('IconesNote-it/*');
-    expect(released.sort()).toEqual(HEADER_ICONS.map((icon) => icon.asset).sort());
+    expect(released.sort()).toEqual(INLINE_HEADER_ICONS.map((icon) => icon.asset).sort());
     // One asset per button, and no asset serving two.
-    expect(new Set(released).size).toBe(HEADER_ICONS.length);
+    expect(new Set(released).size).toBe(INLINE_HEADER_ICONS.length);
   });
 
   it('is drawn in the button colour, on any paper and either theme', () => {
     const icons = inject('headerIcons');
 
-    for (const action of HEADER_ICONS) {
+    for (const action of INLINE_HEADER_ICONS) {
       const normalized = normalizeIconSvg(icons[action.id]);
       // No literal colour survives: the whole drawing inherits the button's.
       expect(normalized).not.toMatch(/(?:fill|stroke)="#/);

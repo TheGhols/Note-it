@@ -12,6 +12,7 @@ mod search;
 mod settings;
 mod state;
 mod storage;
+mod study;
 mod timer;
 mod trash;
 mod visible_text;
