@@ -528,15 +528,14 @@ fn test_terminal_safety_e2e_with_injected_escapes() {
         cache.as_path(),
     ));
 
-    // 1. Injected escape in search query
+    // 1. Injected escape in search query - query is sent raw to Core, presentation neutralizes escapes
     let malicious_query = "\x1b]52;c;AAAA\x07\x1b[2Jnoradrenalina";
     let (code, stdout, stderr) = run_headless(&["buscar", malicious_query], xdg, true);
     assert_eq!(code, 0);
     assert!(!stdout.contains("\x1b]52"));
     assert!(!stdout.contains("\x1b[2J"));
     assert!(!stdout.contains("\x07"));
-    assert!(stdout.contains("Busca: noradrenalina"));
-    assert!(stdout.contains("Choque distributivo"));
+    assert!(stdout.contains("Nenhuma nota encontrada."));
     assert!(stderr.is_empty());
 
     // 2. Injected escape in invalid subcommand
@@ -616,12 +615,28 @@ fn test_corrupted_note_in_store_emits_warning_to_stderr_and_lists_valid_notes_on
         xdg_cache.as_path(),
     ));
 
+    // Listar
     let (code, stdout, stderr) = run_headless(&["listar"], xdg, true);
     assert_eq!(code, 0);
     assert!(stdout.contains("Nota Válida"));
     assert!(!stdout.contains("Quebrada"));
     assert!(stderr.contains("Aviso:"));
     assert!(stderr.contains(&id_bad.as_simple().to_string()[..8]));
+
+    // Unfiltered search
+    let (code_s, stdout_s, stderr_s) = run_headless(&["buscar", "normal"], xdg, true);
+    assert_eq!(code_s, 0);
+    assert!(stdout_s.contains("Nota Válida"));
+    assert!(stderr_s.contains("Aviso:"));
+    assert!(stderr_s.contains(&id_bad.as_simple().to_string()[..8]));
+
+    // Filtered search
+    let (code_f, stdout_f, stderr_f) =
+        run_headless(&["buscar", "normal", "--tag", "NaoExiste"], xdg, true);
+    assert_eq!(code_f, 0);
+    assert!(stdout_f.contains("Nenhuma nota encontrada."));
+    assert!(stderr_f.contains("Aviso:"));
+    assert!(stderr_f.contains(&id_bad.as_simple().to_string()[..8]));
 }
 
 #[test]

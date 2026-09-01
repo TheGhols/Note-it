@@ -71,7 +71,10 @@ fn is_valid_iso_8601_with_zone(candidate: &str) -> bool {
 ///
 /// Complies with the TypeScript `taskMeta.ts` contract:
 /// - Locates `<!--\s*note-it:completed_at=([^\s]+?)\s*-->` anywhere in the line.
-/// - Removes ONLY the Note-it metadata comment and trailing whitespace.
+/// - Requires exactly one non-whitespace timestamp candidate token within the comment.
+/// - Comments with extra garbage (e.g. `<!-- note-it:completed_at=2026-08-27T11:32:00Z lixo -->`)
+///   do not match the Note-it metadata comment regex and are left in the text unmodified.
+/// - Removes ONLY the matched Note-it metadata comment and trailing whitespace.
 /// - Leaves external/other HTML comments intact.
 /// - Validates ISO 8601 with explicit offset or Z. Returns `None` if absent or invalid.
 pub fn extract_completed_at(raw_text: &str) -> (Option<DateTime<Utc>>, String) {
@@ -84,23 +87,29 @@ pub fn extract_completed_at(raw_text: &str) -> (Option<DateTime<Utc>>, String) {
             break;
         };
         let comment_end = comment_start + end_rel + 3;
-        let inside = raw_text[comment_start + 4..comment_end - 3].trim();
+        let inside = &raw_text[comment_start + 4..comment_end - 3];
+        let trimmed_inside = inside.trim_start();
 
-        if let Some(rest_inside) = inside.strip_prefix("note-it:completed_at=") {
-            let candidate = rest_inside.split_whitespace().next().unwrap_or("");
-            let parsed = if is_valid_iso_8601_with_zone(candidate) {
-                DateTime::parse_from_rfc3339(candidate)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            } else {
-                None
-            };
+        if let Some(after_prefix) = trimmed_inside.strip_prefix("note-it:completed_at=") {
+            let mut tokens = after_prefix.split_whitespace();
+            let first = tokens.next();
+            let second = tokens.next();
 
-            let mut cleaned = String::with_capacity(raw_text.len());
-            cleaned.push_str(&raw_text[..comment_start]);
-            cleaned.push_str(&raw_text[comment_end..]);
-            let final_text = cleaned.trim_end().to_string();
-            return (parsed, final_text);
+            if let (Some(candidate), None) = (first, second) {
+                let parsed = if is_valid_iso_8601_with_zone(candidate) {
+                    DateTime::parse_from_rfc3339(candidate)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                } else {
+                    None
+                };
+
+                let mut cleaned = String::with_capacity(raw_text.len());
+                cleaned.push_str(&raw_text[..comment_start]);
+                cleaned.push_str(&raw_text[comment_end..]);
+                let final_text = cleaned.trim_end().to_string();
+                return (parsed, final_text);
+            }
         }
 
         search_from = comment_start + 4;
@@ -286,6 +295,33 @@ mod tests {
             text,
             "Comprar material <!-- importante --> e mais texto <!-- id=123 -->"
         );
+    }
+
+    #[test]
+    fn test_case_09_valid_comment_with_extra_whitespace_parsed() {
+        let raw = "Comprar material <!--   note-it:completed_at=2026-08-27T11:32:00Z   -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert!(dt.is_some());
+        assert_eq!(text, "Comprar material");
+    }
+
+    #[test]
+    fn test_case_10_timestamp_with_extra_garbage_rejected_and_not_stripped() {
+        let raw = "Comprar material <!-- note-it:completed_at=2026-08-27T11:32:00Z lixo -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(
+            text,
+            "Comprar material <!-- note-it:completed_at=2026-08-27T11:32:00Z lixo -->"
+        );
+    }
+
+    #[test]
+    fn test_case_11_empty_timestamp_comment_rejected_and_not_stripped() {
+        let raw = "Comprar material <!-- note-it:completed_at= -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(text, "Comprar material <!-- note-it:completed_at= -->");
     }
 
     #[test]

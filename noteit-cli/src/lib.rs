@@ -133,18 +133,13 @@ where
                         ),
                     )
                 })?;
-                let sanitized_query = output::sanitize_for_terminal(&consulta);
                 let core = NoteItCore::open_read_only();
-                match core.search_notes_filtered(&sanitized_query, &filter, limite) {
+                match core.search_notes_filtered(&consulta, &filter, limite) {
                     Ok(batch) => {
                         for w in &batch.warnings {
                             eprint!("{}", output::render_warning(ctx, w));
                         }
-                        Ok(output::render_search_results(
-                            ctx,
-                            &sanitized_query,
-                            &batch.items,
-                        ))
+                        Ok(output::render_search_results(ctx, &consulta, &batch.items))
                     }
                     Err(err) => {
                         let sanitized = output::sanitize_for_terminal(&err);

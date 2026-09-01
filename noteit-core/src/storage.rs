@@ -688,12 +688,8 @@ impl StorageManager {
     }
 
     fn read_bodies(&self, limit: usize) -> Vec<(Uuid, String)> {
-        let ids = match self.list_notes_by_recency() {
-            Ok(ids) => ids,
-            Err(error) => {
-                eprintln!("Failed to list notes for search: {error}");
-                return Vec::new();
-            }
+        let Ok(ids) = self.list_notes_by_recency() else {
+            return Vec::new();
         };
 
         ids.into_iter()

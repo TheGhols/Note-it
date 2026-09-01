@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0D.2 Read Pipeline Purity & Warning Completeness.** Refined search pipeline warning consistency, eradicated direct output in Core read paths, separated domain query from presentation sanitization, and enforced strict task comment regex matching:
+  - Unified Search Warning Pipeline: `NoteItCore::search_notes_filtered` now uses the identical `load_note` + `ReadWarning` pipeline for both unfiltered and filtered searches, scanning the complete universe of eligible notes before applying result limits.
+  - Zero Direct Prints in Core Read Paths: Removed the legacy `eprintln!` from `StorageManager::read_bodies`, guaranteeing 100% pure headless read operations across Core.
+  - Domain Query Separation: The original user search query is passed unaltered to `noteit-core` for search matching, while terminal sanitization (`output::sanitize_for_terminal`) is applied strictly to displayed strings in the terminal adapter.
+  - Strict Task Comment Regex Validation: `task::extract_completed_at` enforces exactly one candidate token within `<!-- note-it:completed_at=... -->`. Comments with trailing non-whitespace garbage are rejected and preserved unmodified in the note text, matching `/<!--\s*note-it:completed_at=([^\s]+?)\s*-->/`.
+
 - **Phase 4.0D.1 Read API Contract & Terminal Hardening.** Refined presentation contracts, terminal safety, and Core decoupling:
   - Local Timezone Formatting: Human datetime presentation across `noteit-cli` (`listar`, `ler`, `tarefas`, `lixeira`) is standardized in `output::format_datetime_local` to display timestamps in the machine's local timezone (`dd/MM/yyyy HH:mm`) matching the desktop GUI contract. `noteit-core` remains strictly typed with `DateTime<Utc>`.
   - Comprehensive Input Sanitization: Sanitization via `output::sanitize_for_terminal` is applied across all rendered untrusted strings, including search queries in headings, note selectors in error messages, Clap argument contexts in usage errors, and reflected XDG paths in `status`.

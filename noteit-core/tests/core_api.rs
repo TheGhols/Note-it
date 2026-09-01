@@ -703,14 +703,18 @@ fn test_32_performance_1000_notes() {
 #[test]
 fn test_33_read_api_modules_have_zero_print_statements() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let files = [
+    let pure_read_modules = [
         "src/lib.rs",
         "src/filter.rs",
         "src/task.rs",
         "src/warning.rs",
+        "src/model.rs",
+        "src/search.rs",
+        "src/metadata.rs",
+        "src/visible_text.rs",
     ];
 
-    for file in files {
+    for file in pure_read_modules {
         let path = std::path::Path::new(manifest_dir).join(file);
         let content = fs::read_to_string(&path).expect("read module");
         assert!(
@@ -721,5 +725,133 @@ fn test_33_read_api_modules_have_zero_print_statements() {
             !content.contains("eprintln!"),
             "Module {file} must not contain eprintln!"
         );
+    }
+
+    // Verify storage.rs read functions have zero prints
+    let storage_path = std::path::Path::new(manifest_dir).join("src/storage.rs");
+    let storage_content = fs::read_to_string(&storage_path).expect("read storage.rs");
+
+    // The read_bodies function must not contain eprintln
+    if let Some(pos) = storage_content.find("fn read_bodies(") {
+        let snippet = &storage_content[pos..pos + 500.min(storage_content.len() - pos)];
+        assert!(
+            !snippet.contains("eprintln!"),
+            "read_bodies in storage.rs must not contain eprintln!"
+        );
+    }
+}
+
+#[test]
+fn test_34_unfiltered_search_with_unreadable_note_returns_typed_warning_and_valid_results() {
+    let (root, core) = synthetic_core();
+
+    // Valid note A
+    let mut note_a = NoteDocument::new_empty();
+    note_a.content = "# Choque séptico\nTratamento e fisiopatologia de sepse.".to_string();
+    core.storage().save_note_atomic(&note_a).unwrap();
+
+    // Corrupted note
+    let id_bad = Uuid::new_v4();
+    let malformed = "---\nmalformed: [unclosed yaml\n---\n\n# Quebrada\n";
+    let notes_dir = root.path().join("data/note-it/notes");
+    fs::write(notes_dir.join(format!("{id_bad}.md")), malformed).unwrap();
+
+    // Valid note B
+    let mut note_b = NoteDocument::new_empty();
+    note_b.content = "# Protocolo de sepse\nUso precoce de antibióticos na sepse.".to_string();
+    core.storage().save_note_atomic(&note_b).unwrap();
+
+    let batch = core
+        .search_notes_filtered("sepse", &NoteFilter::default(), None)
+        .expect("search batch");
+
+    assert_eq!(
+        batch.items.len(),
+        2,
+        "Both valid notes A and B must be found"
+    );
+    assert_eq!(batch.items[0].note_id, note_b.metadata.id);
+    assert_eq!(batch.items[1].note_id, note_a.metadata.id);
+
+    assert_eq!(
+        batch.warnings.len(),
+        1,
+        "Unreadable note must produce a typed warning"
+    );
+    assert_eq!(batch.warnings[0].note_id, Some(id_bad));
+    assert_eq!(batch.warnings[0].kind, ReadWarningKind::UnreadableNote);
+}
+
+#[test]
+fn test_35_filtered_search_with_unreadable_note_returns_same_warning_policy() {
+    let (root, core) = synthetic_core();
+
+    // Note A with tag Medicina
+    let mut note_a = NoteDocument::new_empty();
+    note_a.content = "# Choque séptico\nFisiopatologia de sepse.".to_string();
+    note_a.user_metadata = NoteMetadata::try_new(["Medicina".into()], []).unwrap();
+    core.storage().save_note_atomic(&note_a).unwrap();
+
+    // Corrupted note
+    let id_bad = Uuid::new_v4();
+    let malformed = "---\nmalformed: [unclosed yaml\n---\n\n# Quebrada\n";
+    let notes_dir = root.path().join("data/note-it/notes");
+    fs::write(notes_dir.join(format!("{id_bad}.md")), malformed).unwrap();
+
+    // Note B with tag Projeto (does not match filter)
+    let mut note_b = NoteDocument::new_empty();
+    note_b.content = "# Projeto sepse\nSepse em software.".to_string();
+    note_b.user_metadata = NoteMetadata::try_new(["Projeto".into()], []).unwrap();
+    core.storage().save_note_atomic(&note_b).unwrap();
+
+    let filter = NoteFilter::new(vec!["Medicina".into()], vec![]);
+    let batch = core
+        .search_notes_filtered("sepse", &filter, None)
+        .expect("search batch");
+
+    assert_eq!(batch.items.len(), 1, "Only note A matches filter Medicina");
+    assert_eq!(batch.items[0].note_id, note_a.metadata.id);
+
+    assert_eq!(
+        batch.warnings.len(),
+        1,
+        "Warning policy must be identical to unfiltered search"
+    );
+    assert_eq!(batch.warnings[0].note_id, Some(id_bad));
+    assert_eq!(batch.warnings[0].kind, ReadWarningKind::UnreadableNote);
+}
+
+#[test]
+fn test_36_search_scans_full_eligible_universe_before_applying_limit() {
+    let (_root, core) = synthetic_core();
+
+    // 10 older notes containing "RaroTermo"
+    let mut rare_ids = Vec::new();
+    for i in 0..10 {
+        let mut note = NoteDocument::new_empty();
+        note.content = format!("# Nota Rara {i}\nContém o RaroTermo especial.");
+        core.storage().save_note_atomic(&note).unwrap();
+        rare_ids.push(note.metadata.id);
+    }
+
+    // 40 newer notes with generic content
+    for i in 0..40 {
+        let mut note = NoteDocument::new_empty();
+        note.content = format!("# Nota Comum {i}\nConteúdo comum sem a palavra.");
+        core.storage().save_note_atomic(&note).unwrap();
+    }
+
+    // If limit occurred before scanning (e.g. taking top 20 notes first), 0 matches would be found
+    let batch = core
+        .search_notes_filtered("RaroTermo", &NoteFilter::default(), Some(5))
+        .expect("search");
+
+    assert_eq!(
+        batch.items.len(),
+        5,
+        "Must find matches across the full universe and limit final results to 5"
+    );
+    for item in &batch.items {
+        assert!(rare_ids.contains(&item.note_id));
     }
 }

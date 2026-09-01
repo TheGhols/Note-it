@@ -213,12 +213,6 @@ impl NoteItCore {
         let max = limit.unwrap_or(20).clamp(1, 100);
         let mut warnings = Vec::new();
 
-        if filter.is_empty() {
-            let results = self.search_notes(query);
-            let items = results.into_iter().take(max).collect();
-            return Ok(ReadBatch::new(items, warnings));
-        }
-
         let ids = self.storage.list_notes_by_recency()?;
         let mut matching_bodies = Vec::new();
 

@@ -573,6 +573,10 @@ future machine interfaces share one domain and persistence authority.
       presentation (`dd/MM/yyyy HH:mm`) matching GUI contracts, universal untrusted input terminal sanitization,
       decoupled typed Core warnings (`ReadBatch<T>`, `ReadWarning`) with zero print statements in Core, and
       faithful TypeScript task metadata comment parsing.
+- [x] **Phase 4.0D.2 — Read Pipeline Purity & Warning Completeness.** Unified search loading and warning
+      pipeline across filtered and unfiltered searches over the full eligible note universe, eradicated
+      direct stderr output in Core storage read paths, separated domain query from presentation sanitization,
+      and strictly enforced task comment token validation.
 - [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
