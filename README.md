@@ -246,7 +246,28 @@ noteit versao                 # mostra a versão do Note-it (alias: noteit versi
 noteit status                 # verifica os diretórios e ambiente XDG de forma estritamente read-only
 ```
 
-Os mesmos comandos funcionam com `./scripts/run-note-it <comando>` durante o desenvolvimento.
+### Durante o desenvolvimento
+
+Para testar o aplicativo desktop durante o desenvolvimento:
+
+```bash
+./scripts/run-note-it
+./scripts/run-note-it new
+./scripts/run-note-it hide
+```
+
+Para executar a CLI headless durante o desenvolvimento:
+
+```bash
+cargo run -p noteit-cli -- ajuda
+cargo run -p noteit-cli -- status
+```
+
+E, após construída ou instalada no sistema (`cargo install --path noteit-cli`):
+
+```bash
+noteit ...
+```
 
 Atalhos dentro de uma nota: `Ctrl+N` cria outra nota, `Ctrl+W` fecha a atual, `Ctrl+=` / `Ctrl+-` /
 `Ctrl+0` controlam o zoom, `Ctrl+Shift+M` recolhe ou expande, `Ctrl+K` busca em todas as notas,

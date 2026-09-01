@@ -1423,3 +1423,15 @@ executables consume `noteit-core` as their shared domain and persistence authori
 6. **Workspace Version Authority.** The project version is centralized in `[workspace.package]` with
    `version.workspace = true` across all crates (`note-it`, `noteit-core`, `noteit-cli`), preventing
    version drift.
+
+## ADR-035: Headless Read API Architecture and Security Boundaries
+
+**Decision.** Implement a strictly read-only, headless inspection API across `noteit-core` and `noteit-cli`, exposing notes listing, individual note retrieval, search, tag/property catalogs, task extraction, and trash inspection.
+
+**Rationale.**
+1. **Core-Centric Read Projections.** All domain read logic (filtering, canonical title derivation via `search::label_for`, task parsing, and metadata matching) lives directly in `noteit-core`. `noteit-cli` remains an adapter focused purely on CLI argument parsing and terminal presentation.
+2. **Strictly Read-Only Open Mode.** `NoteItCore::open_read_only()` and `StorageManager::open_read_only()` inspect paths without calling `ensure_directories()`. Absent stores return clean empty results with exit code 0 rather than creating empty directories or state files.
+3. **Safe Note Selector Resolution.** Note selectors (full UUID or >= 8 hex characters) are validated against path traversal (`..`, `/`, `\`) and non-hex characters before prefix matching against live note IDs. Ambiguous prefixes, non-existent IDs, and symlinks fail closed with exit code 1.
+4. **Terminal Security & Sanitization.** Output rendered to terminals is sanitized (`output::sanitize_for_terminal`) to neutralize ANSI escape codes (CSI, OSC, OSC 52 clipboard hijacking), BEL, backspaces, and control characters, preventing malicious note content from manipulating terminal states.
+5. **Task Parsing & Timestamp Integrity.** Task checkboxes (`- [ ]`, `- [x]`, `- [X]`) and depth nesting are extracted purely from Markdown text outside code fences (`` ``` `` and `~~~`) and front matter. `completed_at` timestamps are extracted only from valid ISO 8601 comment markers without ever inventing timestamps for missing or unparseable dates.
+6. **Zero Store Mutations.** No state files, backups, temporary files, or directory structures are touched during read operations. Byte-for-byte store integrity is proven by test gates.

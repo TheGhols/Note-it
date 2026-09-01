@@ -11,4 +11,9 @@ if grep -Eq '^(gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-))( |$)' 
   exit 1
 fi
 
-printf '%s\n' "CLI boundary OK: noteit-cli has no GTK/GDK/WebKitGTK/layer-shell/Wayland/Niri dependency."
+if grep -En '(serde_yaml|std::fs::read_dir)' noteit-cli/src/*.rs >/dev/null 2>&1; then
+  printf '%s\n' "CLI boundary violation: noteit-cli/src contains direct YAML parsing or directory traversal; all store access must pass through noteit-core." >&2
+  exit 1
+fi
+
+printf '%s\n' "CLI boundary OK: noteit-cli has no UI dependencies and delegates store operations to noteit-core."

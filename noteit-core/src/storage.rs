@@ -58,6 +58,10 @@ fn recorded_edit_time(raw: &str) -> Option<DateTime<Utc>> {
 
 /// Reads only the YAML between exact front-matter delimiter lines.
 fn read_front_matter(path: &Path) -> Option<String> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+        return None;
+    }
     let file = fs::File::open(path).ok()?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -243,6 +247,24 @@ impl StorageManager {
         };
         manager.ensure_directories()?;
         Ok(manager)
+    }
+
+    /// Opens the store in strictly read-only mode without creating missing directories or mutating disk.
+    pub fn open_read_only(paths: StorePaths) -> Self {
+        Self {
+            paths,
+            backup_schedule: Rc::new(RefCell::new(BackupSchedule::default())),
+            #[cfg(any(test, feature = "test-support"))]
+            fail_directory_sync: false,
+        }
+    }
+
+    /// Checks if a note file exists as a regular file on disk without reading its contents.
+    pub fn note_exists(&self, id: &Uuid) -> bool {
+        let path = self.note_path(id);
+        fs::symlink_metadata(&path)
+            .map(|meta| !meta.file_type().is_symlink() && meta.file_type().is_file())
+            .unwrap_or(false)
     }
 
     /// The same store, reached through a handle whose post-commit directory
@@ -482,6 +504,20 @@ impl StorageManager {
 
     pub fn load_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
         let path = self.note_path(id);
+        let meta =
+            fs::symlink_metadata(&path).map_err(|e| format!("Nota {} não encontrada: {e}", id))?;
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "Leitura recusada: o arquivo `{}` é um link simbólico.",
+                path.display()
+            ));
+        }
+        if !meta.file_type().is_file() {
+            return Err(format!(
+                "A nota `{}` não é um arquivo regular.",
+                path.display()
+            ));
+        }
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read note {}: {e}", path.display()))?;
         NoteDocument::parse(&content)
@@ -491,6 +527,9 @@ impl StorageManager {
     /// file's own modification time. Nothing is opened here: this is the
     /// directory and nothing more.
     fn note_files(&self) -> Result<Vec<(Uuid, SystemTime)>, String> {
+        if !self.paths.notes_dir.is_dir() {
+            return Ok(Vec::new());
+        }
         let entries = fs::read_dir(&self.paths.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;
 
@@ -498,6 +537,13 @@ impl StorageManager {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_symlink() || !file_type.is_file() {
+                    continue;
+                }
+            } else {
                 continue;
             }
             let Some(id) = path
@@ -653,7 +699,12 @@ impl StorageManager {
         ids.into_iter()
             .take(limit)
             .filter_map(|id| {
-                let raw = fs::read_to_string(self.note_path(&id)).ok()?;
+                let path = self.note_path(&id);
+                let meta = fs::symlink_metadata(&path).ok()?;
+                if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+                    return None;
+                }
+                let raw = fs::read_to_string(path).ok()?;
                 Some((id, NoteDocument::body_of(&raw).to_string()))
             })
             .collect()

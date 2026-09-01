@@ -4,12 +4,21 @@ pub mod output;
 use clap::error::ErrorKind;
 use clap::Parser;
 use cli::{CliArgs, CliCommand};
-use noteit_core::StorePaths;
+use noteit_core::{NoteFilter, NoteItCore, StorePaths};
 use output::OutputContext;
 
 pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_EXECUTION_ERROR: u8 = 1;
 pub const EXIT_USAGE_ERROR: u8 = 2;
+
+fn parse_filter(tags: Vec<String>, properties_raw: &[String]) -> Result<NoteFilter, String> {
+    let mut properties = Vec::new();
+    for raw in properties_raw {
+        let (k, v) = NoteFilter::parse_property_arg(raw)?;
+        properties.push((k, v));
+    }
+    Ok(NoteFilter::new(tags, properties))
+}
 
 /// Executes the CLI with the provided argument list and output context.
 ///
@@ -19,7 +28,9 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    match CliArgs::try_parse_from(args) {
+    let args_vec: Vec<std::ffi::OsString> = args.into_iter().map(|a| a.into()).collect();
+
+    match CliArgs::try_parse_from(&args_vec) {
         Ok(parsed) => match parsed.command {
             None => Ok(output::render_welcome(ctx)),
             Some(CliCommand::Ajuda) => Ok(output::render_help(ctx)),
@@ -28,9 +39,125 @@ where
                 let paths = StorePaths::resolve();
                 Ok(output::render_status(ctx, &paths))
             }
+            Some(CliCommand::Listar {
+                limite,
+                tag,
+                propriedade,
+            }) => {
+                let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    (
+                        EXIT_USAGE_ERROR,
+                        format!(
+                            "{} {}\n\nUse `{}` para ver o formato correto.\n",
+                            ctx.bold("Erro:"),
+                            err,
+                            ctx.bold("noteit ajuda")
+                        ),
+                    )
+                })?;
+                let core = NoteItCore::open_read_only();
+                match core.list_summaries(&filter, limite) {
+                    Ok(summaries) => Ok(output::render_notes_list(ctx, &summaries)),
+                    Err(err) => Err((
+                        EXIT_EXECUTION_ERROR,
+                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                    )),
+                }
+            }
+            Some(CliCommand::Ler { id }) => {
+                let core = NoteItCore::open_read_only();
+                let resolved_id = core.resolve_note_id(&id).map_err(|err| {
+                    (
+                        EXIT_EXECUTION_ERROR,
+                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                    )
+                })?;
+                match core.read_note(&resolved_id) {
+                    Ok(doc) => Ok(output::render_note_read(ctx, &doc)),
+                    Err(err) => Err((
+                        EXIT_EXECUTION_ERROR,
+                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                    )),
+                }
+            }
+            Some(CliCommand::Buscar {
+                consulta,
+                limite,
+                tag,
+                propriedade,
+            }) => {
+                let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    (
+                        EXIT_USAGE_ERROR,
+                        format!(
+                            "{} {}\n\nUse `{}` para ver o formato correto.\n",
+                            ctx.bold("Erro:"),
+                            err,
+                            ctx.bold("noteit ajuda")
+                        ),
+                    )
+                })?;
+                let core = NoteItCore::open_read_only();
+                match core.search_notes_filtered(&consulta, &filter, limite) {
+                    Ok(results) => Ok(output::render_search_results(ctx, &consulta, &results)),
+                    Err(err) => Err((
+                        EXIT_EXECUTION_ERROR,
+                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                    )),
+                }
+            }
+            Some(CliCommand::Tags) => {
+                let core = NoteItCore::open_read_only();
+                let catalog = core.metadata_catalog();
+                Ok(output::render_tags(ctx, &catalog))
+            }
+            Some(CliCommand::Propriedades) => {
+                let core = NoteItCore::open_read_only();
+                let catalog = core.metadata_catalog();
+                Ok(output::render_properties(ctx, &catalog))
+            }
+            Some(CliCommand::Tarefas {
+                estado,
+                limite,
+                tag,
+                propriedade,
+            }) => {
+                let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    (
+                        EXIT_USAGE_ERROR,
+                        format!(
+                            "{} {}\n\nUse `{}` para ver o formato correto.\n",
+                            ctx.bold("Erro:"),
+                            err,
+                            ctx.bold("noteit ajuda")
+                        ),
+                    )
+                })?;
+                let core = NoteItCore::open_read_only();
+                let state_filter = estado.into();
+                match core.list_tasks(state_filter, &filter, limite) {
+                    Ok(tasks) => Ok(output::render_tasks(ctx, &tasks, state_filter)),
+                    Err(err) => Err((
+                        EXIT_EXECUTION_ERROR,
+                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                    )),
+                }
+            }
+            Some(CliCommand::Lixeira) => {
+                let core = NoteItCore::open_read_only();
+                let trash = core.list_trash();
+                Ok(output::render_trash(ctx, &trash))
+            }
         },
         Err(err) => match err.kind() {
-            ErrorKind::DisplayHelp => Ok(output::render_help(ctx)),
+            ErrorKind::DisplayHelp => {
+                // If the user requested help for a specific subcommand, show clap's subcommand help
+                if args_vec.len() > 2 {
+                    Ok(err.render().to_string())
+                } else {
+                    Ok(output::render_help(ctx))
+                }
+            }
             ErrorKind::DisplayVersion => Ok(output::render_version(ctx)),
             _ => Err((EXIT_USAGE_ERROR, output::render_error(ctx, &err))),
         },

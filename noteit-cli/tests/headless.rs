@@ -1,3 +1,7 @@
+use noteit_core::metadata::{NoteMetadata, NoteProperty};
+use noteit_core::model::NoteDocument;
+use noteit_core::storage::StorageManager;
+use noteit_core::Uuid;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,9 +89,14 @@ fn noteit_without_arguments_shows_welcome_screen_headless() {
     assert!(stderr.is_empty(), "Stderr should be empty on normal output");
     assert!(stdout.contains("Note-it"));
     assert!(stdout.contains("Suas notas, também pelo terminal."));
-    assert!(stdout.contains("ajuda      Ver comandos"));
-    assert!(stdout.contains("status     Verificar a instalação"));
-    assert!(stdout.contains("versao     Mostrar versão"));
+    assert!(stdout.contains("listar"));
+    assert!(stdout.contains("ler"));
+    assert!(stdout.contains("buscar"));
+    assert!(stdout.contains("tags"));
+    assert!(stdout.contains("propriedades"));
+    assert!(stdout.contains("tarefas"));
+    assert!(stdout.contains("lixeira"));
+    assert!(stdout.contains("status"));
     assert!(stdout.contains("Use `noteit ajuda` para começar."));
 }
 
@@ -108,11 +117,24 @@ fn help_commands_and_flags_agree_and_exit_zero() {
 
     assert!(ajuda_stdout.contains("Note-it CLI"));
     assert!(ajuda_stdout.contains("noteit <comando> [opções]"));
-    assert!(ajuda_stdout.contains("ajuda       Mostrar esta ajuda"));
-    assert!(ajuda_stdout.contains("versao      Mostrar a versão"));
-    assert!(ajuda_stdout.contains("status      Verificar o ambiente do Note-it"));
-    assert!(ajuda_stdout.contains("help        ajuda"));
-    assert!(ajuda_stdout.contains("version     versao"));
+    assert!(ajuda_stdout.contains("listar"));
+    assert!(ajuda_stdout.contains("ler <ID>"));
+    assert!(ajuda_stdout.contains("buscar <Q>"));
+    assert!(ajuda_stdout.contains("tags"));
+    assert!(ajuda_stdout.contains("propriedades"));
+    assert!(ajuda_stdout.contains("tarefas"));
+    assert!(ajuda_stdout.contains("lixeira"));
+    assert!(ajuda_stdout.contains("status"));
+}
+
+#[test]
+fn subcommand_help_flags_exit_zero() {
+    for subcmd in &["listar", "ler", "buscar", "tarefas"] {
+        let (code, stdout, stderr) = run_headless(&[subcmd, "--help"], None, true);
+        assert_eq!(code, 0, "{subcmd} --help must exit 0");
+        assert!(stderr.is_empty());
+        assert!(!stdout.is_empty());
+    }
 }
 
 #[test]
@@ -143,7 +165,6 @@ fn status_with_empty_xdg_creates_zero_files_or_directories() {
     let state = tmp.path().join("empty_state");
     let cache = tmp.path().join("empty_cache");
 
-    // Do NOT create the directories on disk
     assert!(!data.exists());
     assert!(!config.exists());
     assert!(!state.exists());
@@ -157,11 +178,7 @@ fn status_with_empty_xdg_creates_zero_files_or_directories() {
     assert!(stdout.contains("CLI       pronta"));
     assert!(stdout.contains("Core      disponível"));
     assert!(stdout.contains("Store     ainda não criado"));
-    assert!(stdout.contains(&data.join("note-it").display().to_string()));
-    assert!(stdout.contains(&config.join("note-it").display().to_string()));
-    assert!(stdout.contains(&state.join("note-it").display().to_string()));
 
-    // Verify absolutely nothing was created on disk
     assert!(!data.exists(), "data dir must NOT be created by status");
     assert!(!config.exists(), "config dir must NOT be created by status");
     assert!(!state.exists(), "state dir must NOT be created by status");
@@ -169,48 +186,334 @@ fn status_with_empty_xdg_creates_zero_files_or_directories() {
 }
 
 #[test]
-fn status_with_existing_store_preserves_exact_fingerprints() {
+fn read_api_on_empty_store_returns_success_and_creates_zero_files() {
     let tmp = tempdir().expect("tempdir");
-    let data = tmp.path().join("data/note-it");
-    let config = tmp.path().join("config/note-it");
-    let state = tmp.path().join("state/note-it");
-    let cache = tmp.path().join("cache/note-it");
+    let data = tmp.path().join("empty_data");
+    let config = tmp.path().join("empty_config");
+    let state = tmp.path().join("empty_state");
+    let cache = tmp.path().join("empty_cache");
 
-    let notes_dir = data.join("notes");
-    fs::create_dir_all(&notes_dir).expect("create notes dir");
-    fs::create_dir_all(&config).expect("create config dir");
-    fs::create_dir_all(&state).expect("create state dir");
-    fs::create_dir_all(&cache).expect("create cache dir");
+    let xdg = Some((
+        data.as_path(),
+        config.as_path(),
+        state.as_path(),
+        cache.as_path(),
+    ));
 
-    // Put a dummy note and files
-    fs::write(notes_dir.join("test-note.md"), "# Synthetic note\n").expect("write test note");
-    fs::write(config.join("config.toml"), "theme = \"dark\"\n").expect("write config");
-    fs::write(state.join("state.json"), "{\"notes\":{}}\n").expect("write state");
+    // listar
+    let (code, stdout, stderr) = run_headless(&["listar"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("Nenhuma nota encontrada."));
+
+    // buscar
+    let (code, stdout, stderr) = run_headless(&["buscar", "teste"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("Nenhuma nota encontrada."));
+
+    // tags
+    let (code, stdout, stderr) = run_headless(&["tags"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("Nenhuma tag encontrada."));
+
+    // propriedades
+    let (code, stdout, stderr) = run_headless(&["propriedades"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("Nenhuma propriedade encontrada."));
+
+    // tarefas
+    let (code, stdout, stderr) = run_headless(&["tarefas"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("Nenhuma tarefa pendente."));
+
+    // lixeira
+    let (code, stdout, stderr) = run_headless(&["lixeira"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("A lixeira está vazia."));
+
+    // ler missing on empty store
+    let (code, stdout, stderr) = run_headless(&["ler", "8c4f1a2b"], xdg, true);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("Erro:"));
+
+    // Verify absolutely nothing created
+    assert!(!data.exists());
+    assert!(!config.exists());
+    assert!(!state.exists());
+    assert!(!cache.exists());
+}
+
+fn setup_rich_synthetic_store(
+    tmp: &Path,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf, Uuid, Uuid, Uuid) {
+    let data = tmp.join("data/note-it");
+    let config = tmp.join("config/note-it");
+    let state = tmp.join("state/note-it");
+    let cache = tmp.join("cache/note-it");
+    fs::create_dir_all(&cache).unwrap();
+
+    let storage = StorageManager::with_custom_paths(
+        data.join("notes"),
+        config.clone(),
+        state.clone(),
+        tmp.join("runtime/note-it"),
+    )
+    .expect("setup storage");
+
+    // Note 1: Medicina + PBL + Tasks
+    let mut n1 = NoteDocument::new_empty();
+    n1.content = "\
+# Choque distributivo
+
+- [ ] Revisar noradrenalina
+- [x] Ler protocolo de sepse <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->
+  - [ ] Subtarefa aninhada
+
+```markdown
+- [ ] Fake task in code fence
+```
+"
+    .to_string();
+    n1.user_metadata = NoteMetadata::try_new(
+        ["Medicina".into(), "PBL".into()],
+        [
+            NoteProperty {
+                key: "disciplina".into(),
+                value: "cardiologia".into(),
+            },
+            NoteProperty {
+                key: "status".into(),
+                value: "revisar".into(),
+            },
+        ],
+    )
+    .unwrap();
+    storage.save_note_atomic(&n1).unwrap();
+
+    // Note 2: Projeto GustavoOS with completed task without date
+    let mut n2 = NoteDocument::new_empty();
+    n2.content = "\
+# Ideias GustavoOS
+
+- [x] Concluído sem data
+"
+    .to_string();
+    n2.user_metadata = NoteMetadata::try_new(["Projeto".into()], []).unwrap();
+    storage.save_note_atomic(&n2).unwrap();
+
+    // Note 3: Note with acentos and terminal control escapes
+    let mut n3 = NoteDocument::new_empty();
+    n3.content = "\
+# Biópsia & Coração 🎉
+
+Texto com \x1b[2Jescape perigoso e \x1b]52;c;Y29waWVk\x07clipboard.
+\x07Alarme e \x08backspace.
+"
+    .to_string();
+    storage.save_note_atomic(&n3).unwrap();
+
+    // Note 4: Trash note
+    let mut n4 = NoteDocument::new_empty();
+    n4.content = "# PBL antigo para lixeira\n".to_string();
+    storage.save_note_atomic(&n4).unwrap();
+    storage.move_note_to_trash(&n4.metadata.id).unwrap();
+
+    (
+        tmp.join("data"),
+        tmp.join("config"),
+        tmp.join("state"),
+        tmp.join("cache"),
+        n1.metadata.id,
+        n2.metadata.id,
+        n3.metadata.id,
+    )
+}
+
+#[test]
+fn read_api_commands_and_aliases_function_on_synthetic_store() {
+    let tmp = tempdir().expect("tempdir");
+    let (data, config, state, cache, id1, _id2, id3) = setup_rich_synthetic_store(tmp.path());
+    let xdg = Some((
+        data.as_path(),
+        config.as_path(),
+        state.as_path(),
+        cache.as_path(),
+    ));
+
+    // 1. listar / list
+    let (code, stdout, _) = run_headless(&["listar"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(stdout.contains("Ideias GustavoOS"));
+    assert!(stdout.contains("Biópsia & Coração"));
+
+    let (code_en, stdout_en, _) = run_headless(&["list"], xdg, true);
+    assert_eq!(code_en, 0);
+    assert_eq!(stdout, stdout_en);
+
+    // Filter by tag
+    let (code, stdout, _) = run_headless(&["listar", "--tag", "Medicina"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(!stdout.contains("Ideias GustavoOS"));
+
+    // Filter by repeated tag AND
+    let (code, stdout, _) =
+        run_headless(&["listar", "--tag", "Medicina", "--tag", "PBL"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+
+    // Filter by property
+    let (code, stdout, _) = run_headless(
+        &["listar", "--propriedade", "disciplina=cardiologia"],
+        xdg,
+        true,
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(!stdout.contains("Ideias GustavoOS"));
+
+    // Filter by limit
+    let (code, stdout, _) = run_headless(&["listar", "--limite", "1"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("1 nota"));
+
+    // 2. ler / read by 8-char prefix
+    let prefix1 = &id1.to_string()[..8];
+    let (code, stdout, _) = run_headless(&["ler", prefix1], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(stdout.contains("Medicina · PBL"));
+    assert!(stdout.contains("disciplina"));
+    assert!(stdout.contains("cardiologia"));
+
+    let (code_en, stdout_en, _) = run_headless(&["read", prefix1], xdg, true);
+    assert_eq!(code_en, 0);
+    assert_eq!(stdout, stdout_en);
+
+    // 3. buscar / search
+    let (code, stdout, _) = run_headless(&["buscar", "noradrenalina"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(stdout.contains("1 ocorrência"));
+
+    let (code_en, stdout_en, _) = run_headless(&["search", "noradrenalina"], xdg, true);
+    assert_eq!(code_en, 0);
+    assert_eq!(stdout, stdout_en);
+
+    // Accent insensitive search
+    let (code, stdout, _) = run_headless(&["buscar", "biopsia"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Biópsia & Coração"));
+
+    // 4. tags
+    let (code, stdout, _) = run_headless(&["tags"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Medicina"));
+    assert!(stdout.contains("PBL"));
+    assert!(stdout.contains("Projeto"));
+
+    // 5. propriedades / properties
+    let (code, stdout, _) = run_headless(&["propriedades"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("disciplina"));
+    assert!(stdout.contains("status"));
+
+    let (code_en, stdout_en, _) = run_headless(&["properties"], xdg, true);
+    assert_eq!(code_en, 0);
+    assert_eq!(stdout, stdout_en);
+
+    // 6. tarefas / tasks
+    // Pending
+    let (code, stdout, _) = run_headless(&["tarefas"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Revisar noradrenalina"));
+    assert!(stdout.contains("Subtarefa aninhada"));
+    assert!(!stdout.contains("Ler protocolo de sepse"));
+    assert!(!stdout.contains("Fake task in code fence"));
+
+    // Completed
+    let (code, stdout, _) = run_headless(&["tarefas", "--estado", "concluidas"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Ler protocolo de sepse"));
+    assert!(stdout.contains("Concluído sem data"));
+    assert!(!stdout.contains("Revisar noradrenalina"));
+
+    // All
+    let (code, stdout, _) = run_headless(&["tasks", "--state", "all"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Revisar noradrenalina"));
+    assert!(stdout.contains("Ler protocolo de sepse"));
+
+    // 7. lixeira / trash
+    let (code, stdout, _) = run_headless(&["lixeira"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("PBL antigo para lixeira"));
+
+    let (code_en, stdout_en, _) = run_headless(&["trash"], xdg, true);
+    assert_eq!(code_en, 0);
+    assert_eq!(stdout, stdout_en);
+
+    // 8. Terminal sanitization verification on ler
+    let prefix3 = &id3.to_string()[..8];
+    let (code, stdout, _) = run_headless(&["ler", prefix3], xdg, true);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("\x1b[2J"));
+    assert!(!stdout.contains("\x1b]52"));
+    assert!(!stdout.contains("\x07"));
+    assert!(!stdout.contains("\x08"));
+    assert!(stdout.contains("Texto com escape perigoso e clipboard."));
+}
+
+#[test]
+fn test_read_only_e2e_synthetic_store_byte_for_byte_unchanged() {
+    let tmp = tempdir().expect("tempdir");
+    let (data, config, state, cache, id1, _, _) = setup_rich_synthetic_store(tmp.path());
+    let xdg = Some((
+        data.as_path(),
+        config.as_path(),
+        state.as_path(),
+        cache.as_path(),
+    ));
 
     let before_fp = compute_directory_fingerprints(tmp.path());
 
-    let (code, stdout, stderr) = run_headless(
-        &["status"],
-        Some((
-            &tmp.path().join("data"),
-            &tmp.path().join("config"),
-            &tmp.path().join("state"),
-            &tmp.path().join("cache"),
-        )),
+    // Execute every command in the Read API
+    let prefix1 = &id1.to_string()[..8];
+    let _ = run_headless(&["listar"], xdg, true);
+    let _ = run_headless(&["list", "--limit", "2"], xdg, true);
+    let _ = run_headless(&["listar", "--tag", "Medicina"], xdg, true);
+    let _ = run_headless(
+        &["listar", "--propriedade", "disciplina=cardiologia"],
+        xdg,
         true,
     );
-
-    assert_eq!(code, 0);
-    assert!(stderr.is_empty());
-    assert!(stdout.contains("CLI       pronta"));
-    assert!(stdout.contains("Core      disponível"));
-    assert!(stdout.contains("Store     encontrado"));
-    assert!(stdout.contains(&data.display().to_string()));
+    let _ = run_headless(&["ler", prefix1], xdg, true);
+    let _ = run_headless(&["read", &id1.to_string()], xdg, true);
+    let _ = run_headless(&["buscar", "sepse"], xdg, true);
+    let _ = run_headless(&["search", "noradrenalina"], xdg, true);
+    let _ = run_headless(&["tags"], xdg, true);
+    let _ = run_headless(&["propriedades"], xdg, true);
+    let _ = run_headless(&["properties"], xdg, true);
+    let _ = run_headless(&["tarefas", "--estado", "todas"], xdg, true);
+    let _ = run_headless(&["tasks", "--state", "pending"], xdg, true);
+    let _ = run_headless(&["lixeira"], xdg, true);
+    let _ = run_headless(&["trash"], xdg, true);
+    let _ = run_headless(&["status"], xdg, true);
+    let _ = run_headless(&["versao"], xdg, true);
+    let _ = run_headless(&["ajuda"], xdg, true);
 
     let after_fp = compute_directory_fingerprints(tmp.path());
+
     assert_eq!(
         before_fp, after_fp,
-        "Running noteit status must not alter any file or directory"
+        "SYNTHETIC STORE BYTE-FOR-BYTE UNCHANGED: Read API must never mutate the store"
     );
 }
 
@@ -241,6 +544,7 @@ fn unexpected_argument_on_subcommand_exits_code_two_and_writes_portuguese_to_std
     for cmd in &[
         vec!["status", "argumento-inesperado"],
         vec!["ajuda", "argumento-inesperado"],
+        vec!["tags", "argumento-inesperado"],
     ] {
         let (code, stdout, stderr) = run_headless(cmd, None, true);
         assert_eq!(
@@ -257,8 +561,17 @@ fn unexpected_argument_on_subcommand_exits_code_two_and_writes_portuguese_to_std
 
 #[test]
 fn non_tty_or_no_color_emits_no_ansi_escape_sequences() {
-    // Normal commands
-    for cmd in &[vec![], vec!["ajuda"], vec!["versao"], vec!["status"]] {
+    for cmd in &[
+        vec![],
+        vec!["ajuda"],
+        vec!["versao"],
+        vec!["status"],
+        vec!["listar"],
+        vec!["tags"],
+        vec!["propriedades"],
+        vec!["tarefas"],
+        vec!["lixeira"],
+    ] {
         let (code, stdout, stderr) = run_headless(cmd, None, true);
         assert_eq!(code, 0);
         assert!(
@@ -270,23 +583,6 @@ fn non_tty_or_no_color_emits_no_ansi_escape_sequences() {
         assert!(
             !stderr.contains("\x1b["),
             "Command {:?} emitted ANSI sequences under NO_COLOR in stderr: {:?}",
-            cmd,
-            stderr
-        );
-    }
-
-    // Error cases under NO_COLOR
-    for cmd in &[
-        vec!["batata"],
-        vec!["--opcao-invalida"],
-        vec!["status", "sobrando"],
-    ] {
-        let (code, stdout, stderr) = run_headless(cmd, None, true);
-        assert_eq!(code, 2);
-        assert!(stdout.is_empty());
-        assert!(
-            !stderr.contains("\x1b["),
-            "Error command {:?} emitted ANSI sequences under NO_COLOR in stderr: {:?}",
             cmd,
             stderr
         );

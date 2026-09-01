@@ -252,6 +252,38 @@ impl NoteDocument {
     }
 }
 
+/// A projection summary of a note for listing and presentation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteSummary {
+    pub id: Uuid,
+    pub label: String,
+    pub snippet: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub tags: Vec<String>,
+    pub properties: Vec<(String, String)>,
+}
+
+impl NoteSummary {
+    pub fn from_document(doc: &NoteDocument) -> Self {
+        Self {
+            id: doc.metadata.id,
+            label: crate::search::label_for(&doc.content),
+            snippet: crate::search::opening_of(&doc.content),
+            created_at: doc.metadata.created_at,
+            updated_at: doc.metadata.updated_at,
+            tags: doc.user_metadata.tags.as_slice().to_vec(),
+            properties: doc
+                .user_metadata
+                .properties
+                .as_slice()
+                .iter()
+                .map(|p| (p.key.clone(), p.value.clone()))
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

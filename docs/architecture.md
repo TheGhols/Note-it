@@ -38,13 +38,15 @@ and purely resolving store paths (`StorePaths`). Its write and lifecycle consume
 `StorageManager` held by that facade, so there is still one implementation of atomic writes, recency,
 trash, backup and Study persistence.
 
-- `noteit-core/src/model.rs`: Note data models and metadata parsing. `split_front_matter` and
+- `noteit-core/src/model.rs`: Note data models, metadata parsing, and `NoteSummary` projection. `split_front_matter` and
   `body_of` are shared with search, so "the note's body" means the same thing everywhere.
+- `noteit-core/src/filter.rs`: typed `NoteFilter` with tag/property AND matching via `semantic_identity`, and safe `NoteSelectorError`.
+- `noteit-core/src/task.rs`: task parsing, checkbox states, depth hierarchy, and ISO 8601 `completed_at` timestamp extraction.
 - `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
   with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
   `serde_yaml::Value`.
-- `noteit-core/src/storage.rs`: pure XDG directory resolution (`StorePaths`), Markdown disk I/O, atomic
-  saving and the storage operations used by GUI and CLI adapters.
+- `noteit-core/src/storage.rs`: pure XDG directory resolution (`StorePaths`), strictly read-only store opening (`open_read_only`),
+  Markdown disk I/O, atomic saving and the storage operations used by GUI and CLI adapters.
 - `noteit-core/src/search.rs`: accent folding, matching, snippets, labels and ordering — pure
   functions over `(Uuid, &str)`.
 - `noteit-core/src/trash.rs`: recoverable deletion and read-only trash listing. See ADR-028.
@@ -69,9 +71,9 @@ scripts/check-core-boundary
 ## CLI Adapter Components (`noteit-cli`, Rust)
 
 - `main.rs`: Entry point for the `noteit` binary, dispatching arguments and mapping standard exit codes.
-- `cli.rs`: Command line parsing using Clap with bilingual aliases (`ajuda`/`help`, `versao`/`version`, `status`).
-- `output.rs`: Terminal presentation, NO_COLOR/non-TTY detection, and status rendering.
-- `lib.rs`: Programmatic interface (`run_with_args`) and exit code definitions.
+- `cli.rs`: Command line parsing using Clap with PT-BR primary commands and international aliases (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`).
+- `output.rs`: Terminal presentation, ANSI styling, NO_COLOR/non-TTY detection, and terminal security sanitization (`sanitize_for_terminal`).
+- `lib.rs`: Programmatic interface (`run_with_args`), filter parsing, read-only Core dispatch, and standard exit code definitions.
 
 The CLI binary has zero graphical dependencies and is tested headless:
 

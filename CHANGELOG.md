@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0D Headless Read API.** Implemented the initial programmatic and human-facing read API in `noteit-cli`, backed by centralized `noteit-core` authorities:
+  - Read-only store opening: `NoteItCore::open_read_only()` and `StorageManager::open_read_only()` inspect and open the store without calling `ensure_directories()`, creating missing directories or files, or triggering backups. An absent store returns clean empty collections with exit code 0.
+  - Commands & Aliases: Portuguese primary commands (`listar`, `ler`, `buscar`, `tags`, `propriedades`, `tarefas`, `lixeira`) with standard international aliases (`list`, `read`, `search`, `properties`, `tasks`, `trash`).
+  - Note Summary & Canonical Labels: `NoteSummary` projection in `noteit-core` reuses canonical label (`search::label_for`) and snippet logic without creating parallel parsing authorities.
+  - Safe ID / Prefix Resolution: `NoteItCore::resolve_note_id` resolves selectors (full UUID or unique hex prefix >= 8 characters) against live note identifiers. Path traversals (`..`, `/`), non-hex characters, ambiguous prefixes, and symlink note files are rejected.
+  - Metadata Filtering: Typed `NoteFilter` supports single and repeated `--tag` and `--propriedade` (`--property`) options with AND semantics, reusing `semantic_identity` for case and accent insensitivity. `--limite` (`--limit`) bounds output (1 to 100).
+  - Task Projection & Markdown Parser: `noteit_core::task` extracts tasks with depth nesting, checkbox states (`- [ ]`, `- [x]`, `- [X]`), and valid `<!-- note-it:completed_at=... -->` timestamps without inventing timestamps for unknown/missing dates. Fenced code blocks (``` and ~~~) and front matter are strictly protected. Tasks are filterable by `--estado` / `--state` (`pendentes`, `concluidas`, `todas` / `pending`, `completed`, `all`).
+  - Terminal Security & Sanitization: `output::sanitize_for_terminal` neutralizes ANSI escape sequences (CSI, OSC, clipboard injection), BEL, backspace, and dangerous control characters from untrusted note content before presentation.
+  - Strictly Read-Only: All Read API operations are strictly read-only and leave on-disk store byte-for-byte unchanged.
+
 - **Phase 4.0C.1 CLI Foundation Contract Hardening.** Refined version authority and error presentation:
   - Centralized project version in `[workspace.package]` with Cargo workspace inheritance (`version.workspace = true`) across `note-it`, `noteit-core`, and `noteit-cli`.
   - Added typed Clap error translation in `output::render_error`, outputting clear Portuguese messages to stderr for unknown commands, options, and unexpected arguments without replacing Clap as the parser authority.

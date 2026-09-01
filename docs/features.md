@@ -1202,14 +1202,24 @@ countdown writes nothing at all, once a second or otherwise.
   WebKitGTK, Wayland or display server dependencies.
 - **Orientation & Guidance:** running `noteit` without arguments renders a concise welcome screen with
   guidance for available commands.
-- **Bilingual Interface & Human Errors:** primary commands in Portuguese (`ajuda`, `versao`, `status`)
-  with canonical international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
-  Usage errors are presented as friendly Portuguese messages on stderr while maintaining exit code 2.
-- **Single Version Source:** the CLI and desktop binaries share a single version authority defined
-  in `[workspace.package]`.
-- **Strictly Read-Only Status:** `noteit status` inspects resolved XDG directories and store
-  availability without reading note files, parsing Markdown, or creating directories on disk.
-- **Presentation & Terminal Compatibility:** clean, elegant formatting with ANSI styling on interactive
-  terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
-- **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and
-  `1` for execution errors.
+- **Bilingual Interface & Human Errors:** primary commands in Portuguese (`listar`, `ler`, `buscar`,
+  `tags`, `propriedades`, `tarefas`, `lixeira`, `status`, `ajuda`, `versao`) with canonical international
+  aliases (`list`, `read`, `search`, `properties`, `tasks`, `trash`, `help`, `version`, `status`, `--help`,
+  `-h`, `--version`, `-V`). Usage errors are presented as friendly Portuguese messages on stderr with exit code 2.
+- **Headless Read API Subcommands:**
+  - `noteit listar` / `noteit list`: lists live notes in canonical recency order with identifiers, labels, tags, and timestamps.
+  - `noteit ler <ID>` / `noteit read <ID>`: reads and renders note header, metadata, properties and body by full UUID or unique prefix (>= 8 hex characters).
+  - `noteit buscar <Q>` / `noteit search <Q>`: case and accent-insensitive body search returning matching labels, snippets, and occurrence counts.
+  - `noteit tags`: lists derived tag catalog with live note usage counts.
+  - `noteit propriedades` / `noteit properties`: lists derived property key catalog with live note usage counts.
+  - `noteit tarefas` / `noteit tasks`: extracts tasks grouped by note, preserving depth hierarchy, checkbox state, and ISO 8601 completion dates.
+  - `noteit lixeira` / `noteit trash`: lists recoverable deleted notes in trash with deletion timestamps.
+- **Filtering & Limiting:**
+  - `--limite N` / `--limit N`: clamps output to 1..=100 results (default 20).
+  - `--tag <TAG>`: repeatable filter applying boolean AND across tags (case and accent insensitive).
+  - `--propriedade <K=V>` / `--property <K=V>`: repeatable filter applying boolean AND across properties.
+  - `--estado <ESTADO>` / `--state <STATE>`: task filtering by state (`pendentes`, `concluidas`, `todas` / `pending`, `completed`, `all`).
+- **Terminal Security Sanitization:** untrusted note content is sanitized prior to rendering, neutralizing ANSI escape sequences (CSI, OSC, clipboard injection), BEL, backspace, and control characters while preserving valid Unicode and Markdown.
+- **Strictly Read-Only:** all Read API operations inspect the store purely without creating missing directories, state files, or backups.
+- **Presentation & Terminal Compatibility:** clean formatting with discreet ANSI styling on interactive terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
+- **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and `1` for execution errors.

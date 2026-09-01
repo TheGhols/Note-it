@@ -564,11 +564,11 @@ future machine interfaces share one domain and persistence authority.
       note's Markdown front matter, validated and persisted by Core; derived live-note catalogs,
       transactional writes over the current WebView document, responsive pills and one compact
       metadata panel. No sidecar, index, database or CLI command.
-- [x] **Phase 4.0C — Headless CLI Foundation.** Dedicated `noteit-cli` crate and standalone `noteit`
-      binary; pure `StorePaths` resolution in Core ensuring read-only `status` without disk mutation,
-      bilingual interface (`ajuda`/`help`, `versao`/`version`, `status`), TTY/NO_COLOR detection,
-      standard exit codes, and dependency gate `scripts/check-cli-boundary`.
-- [ ] **Phase 4.0D — Read API.** Reserved.
+- [x] **Phase 4.0D — Read API.** Headless read-only CLI interface backed by `noteit-core` authorities;
+      subcommands `listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`,
+      `tarefas`/`tasks`, `lixeira`/`trash`; metadata filtering (`--tag`, `--propriedade`/`--property`,
+      `--limite`/`--limit`), task parsing with state filter (`--estado`/`--state`), safe note selector
+      resolution, terminal security sanitization, and strictly zero store mutations.
 - [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
