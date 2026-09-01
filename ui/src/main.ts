@@ -1,5 +1,6 @@
 import './styles/theme.css';
 import { bridge } from './bridge/bridge.ts';
+import { ExternalWriteBarrier } from './bridge/externalWrite.ts';
 import { NoteEditor } from './editor/editor.ts';
 import { NoteKeyboardController } from './editor/keyboard.ts';
 import {
@@ -39,7 +40,7 @@ import { MetadataPanel, NoteTagStrip } from './ui/metadataPanel.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
 import { bindSearchEntries } from './ui/searchEntry.ts';
-import { NoteStatus } from './ui/status.ts';
+import { NoteStatus, SyncIndicator } from './ui/status.ts';
 import { finishMessage } from './timer/format.ts';
 import { TimerPanel } from './ui/timerPanel.ts';
 import { TrashPanel } from './ui/trashPanel.ts';
@@ -106,6 +107,14 @@ let timerPanel: TimerPanel | null = null;
 let flashcardPanel: FlashcardPanel | null = null;
 let studyHub: StudyHub | null = null;
 let noteStatus: NoteStatus | null = null;
+let syncIndicator: SyncIndicator | null = null;
+/**
+ * The page's half of an external write.
+ *
+ * Created before the editor exists so nothing can arrive before there is
+ * somewhere to hold it, and consulted by every path that changes the document.
+ */
+let externalWrite: ExternalWriteBarrier | null = null;
 
 /**
  * Opens the global search palette, or brings the caret back to it.
@@ -402,9 +411,16 @@ function setAutoPaste(active: boolean, delimiter: CaptureDelimiter): void {
  * autosave writes the note. There is no second save channel here.
  */
 function applyCapture(text: string): void {
-  const view = noteEditor?.getView();
-  if (!view || !autoPasteActive) return;
-  appendCapture(view, text, captureDelimiter);
+  if (!autoPasteActive) return;
+  // A capture happens while the reader is in another application, so it is the
+  // one edit nobody is watching arrive. Dropping it because a write happened
+  // to be in flight would lose something they can never get back — the
+  // clipboard has moved on. It waits and is filed the moment editing resumes.
+  deferDocumentEdit(() => {
+    const view = noteEditor?.getView();
+    if (!view || !autoPasteActive) return;
+    appendCapture(view, text, captureDelimiter);
+  });
 }
 
 function setLayerMode(mode: NoteLayerMode): void {
@@ -547,24 +563,52 @@ function handleCollapsedClick(event: MouseEvent): void {
   }
 }
 
+/** The run of the document everything the page sends is composed against. */
+function currentGeneration(): number {
+  return externalWrite?.currentGeneration() ?? 0;
+}
+
+/**
+ * Runs an edit now, or holds it until an external write has finished.
+ *
+ * Returns true when it was held. The barrier exists before anything can send
+ * an edit, so the fallback is only ever taken in a page that has not finished
+ * starting; it runs the action rather than dropping it, because losing an edit
+ * is never the safer half of that choice.
+ */
+function deferDocumentEdit(action: () => void): boolean {
+  if (!externalWrite) {
+    action();
+    return false;
+  }
+  return externalWrite.defer(action);
+}
+
 function flushSave(): void {
+  // While the document is held still there is nothing to flush: the text has
+  // already been handed to the host, and sending it again under the old
+  // generation would only be refused.
+  if (externalWrite?.active) return;
   if (activeNoteId && noteEditor) {
     const markdown = noteEditor.getMarkdown();
     noteEditor.cancelPendingSave();
     bridge.sendMessage({
       type: 'content_changed',
-      payload: { id: activeNoteId, content: markdown },
+      payload: { id: activeNoteId, content: markdown, generation: currentGeneration() },
     });
   }
 }
 
 function saveAndClose(): void {
   if (!activeNoteId || !noteEditor) return;
+  // Closing during an external write would race the commit. It is held until
+  // the document is released, and then closes normally.
+  if (deferDocumentEdit(() => saveAndClose())) return;
   const content = noteEditor.getMarkdown();
   noteEditor.cancelPendingSave();
   bridge.sendMessage({
     type: 'save_and_close',
-    payload: { id: activeNoteId, content },
+    payload: { id: activeNoteId, content, generation: currentGeneration() },
   });
 }
 
@@ -578,6 +622,34 @@ function initUI(): void {
   themeController = new ThemeController(document.documentElement);
   applyHeaderActionMetadata(document);
 
+  // Built before the editor, so nothing can arrive with nowhere to be held.
+  // Every hook here is about the *document* and only the document: the window,
+  // the rendering and the rest of the chrome carry on untouched for the length
+  // of a write.
+  externalWrite = new ExternalWriteBarrier({
+    freeze: () => noteEditor?.setEditable(false),
+    thaw: () => noteEditor?.setEditable(true),
+    snapshot: () => noteEditor?.getMarkdown() ?? '',
+    adopt: (committed) => {
+      // `setMarkdown` replaces the document without emitting an update, so
+      // adopting the committed note does not turn straight round and autosave
+      // the text that has just been superseded.
+      noteEditor?.setMarkdown(committed.content);
+      setNoteTitle(committed.content);
+      metadataPanel?.setMetadata(committed.metadata);
+      noteTagStrip?.setMetadata(committed.metadata, window.innerWidth, window.innerHeight);
+      infoTooltip?.setTimestamps({
+        createdAt: committed.createdAt,
+        updatedAt: committed.updatedAt,
+      });
+      syncFlashcardCounts();
+    },
+    send: (message) => bridge.sendMessage(message),
+    indicate: (active) => syncIndicator?.setActive(active),
+    setTimer: (callback, ms) => window.setTimeout(callback, ms),
+    clearTimer: (handle) => window.clearTimeout(handle),
+  });
+
   noteEditor = new NoteEditor({
     element: editorContainer,
     initialContent: '',
@@ -587,10 +659,14 @@ function initUI(): void {
     onDocChange: syncFlashcardCounts,
     onUpdate: (markdown) => {
       setNoteTitle(markdown);
-      if (activeNoteId) {
+      // The editor is not editable while the document is held, so this cannot
+      // normally fire then; if anything ever changes the document
+      // programmatically it must still not be written under the old
+      // generation.
+      if (activeNoteId && !externalWrite?.active) {
         bridge.sendMessage({
           type: 'content_changed',
-          payload: { id: activeNoteId, content: markdown },
+          payload: { id: activeNoteId, content: markdown, generation: currentGeneration() },
         });
       }
     },
@@ -653,6 +729,28 @@ function initUI(): void {
       },
       save: (requestId, draft) => {
         if (!activeNoteId || !noteEditor) return;
+        // Metadata travels with the body it was composed against, so saving it
+        // in the middle of an external write would carry the pre-commit text
+        // back with the tag. It waits instead — nothing is lost and nothing
+        // arrives late enough to undo the commit.
+        if (
+          deferDocumentEdit(() => {
+            if (!activeNoteId || !noteEditor) return;
+            bridge.sendMessage({
+              type: 'metadata_changed',
+              payload: {
+                requestId,
+                id: activeNoteId,
+                content: noteEditor.getMarkdown(),
+                generation: currentGeneration(),
+                tags: draft.tags,
+                properties: draft.properties,
+              },
+            });
+          })
+        ) {
+          return;
+        }
         noteEditor.cancelPendingSave();
         bridge.sendMessage({
           type: 'metadata_changed',
@@ -660,6 +758,7 @@ function initUI(): void {
             requestId,
             id: activeNoteId,
             content: noteEditor.getMarkdown(),
+            generation: currentGeneration(),
             tags: draft.tags,
             properties: draft.properties,
           },
@@ -932,6 +1031,7 @@ function initUI(): void {
     });
 
     noteStatus = new NoteStatus({ mount: appRoot });
+    syncIndicator = new SyncIndicator(appRoot);
 
     findBar = new FindBar({
       mount: appRoot,
@@ -1080,6 +1180,9 @@ function initUI(): void {
   bridge.onMessage((msg) => {
     if (msg.type === 'load_note') {
       activeNoteId = msg.payload.id;
+      // The run this document starts on. Everything the page sends back
+      // quotes it, and the host refuses anything quoting an older one.
+      externalWrite?.setGeneration(msg.payload.generation ?? 0);
       setPaperColor(msg.payload.color);
       setPaper(
         normalizePaperType(msg.payload.paperType),
@@ -1135,8 +1238,12 @@ function initUI(): void {
     } else if (msg.type === 'image_inserted') {
       // The picture is in the store and this is how the note refers to it.
       // Inserting it is an ordinary edit: the editor's own update path sends
-      // `content_changed` and the existing autosave writes the note.
-      noteEditor?.insertImage(msg.payload.src);
+      // `content_changed` and the existing autosave writes the note. If a
+      // write is holding the document, the insertion waits rather than being
+      // lost — the file is already in the store either way, and a reference
+      // dropped here would leave it there with nothing pointing at it.
+      const src = msg.payload.src;
+      deferDocumentEdit(() => noteEditor?.insertImage(src));
     } else if (msg.type === 'image_import_failed') {
       // A line at the foot of the note, not a dialog over it.
       noteStatus?.show(msg.payload.message, false);
@@ -1222,7 +1329,11 @@ function initUI(): void {
       if (activeNoteId && noteEditor) {
         bridge.sendMessage({
           type: 'content_changed',
-          payload: { id: activeNoteId, content: noteEditor.getMarkdown() },
+          payload: {
+            id: activeNoteId,
+            content: noteEditor.getMarkdown(),
+            generation: currentGeneration(),
+          },
         });
       }
     } else if (msg.type === 'request_save_and_close') {
@@ -1238,8 +1349,25 @@ function initUI(): void {
           id: activeNoteId,
           requestId: msg.payload.requestId,
           content,
+          generation: currentGeneration(),
         },
       });
+    } else if (msg.type === 'begin_external_write') {
+      // Something outside this window is about to change the note. The
+      // document stops being editable *before* its text is read; see
+      // `ExternalWriteBarrier`.
+      if (activeNoteId) {
+        externalWrite?.begin(activeNoteId, msg.payload.requestId, msg.payload.generation);
+      }
+    } else if (msg.type === 'apply_external_document') {
+      externalWrite?.apply(msg.payload.requestId, msg.payload.generation, {
+        content: msg.payload.content,
+        metadata: msg.payload.metadata,
+        createdAt: msg.payload.createdAt ?? null,
+        updatedAt: msg.payload.updatedAt ?? null,
+      });
+    } else if (msg.type === 'abort_external_write') {
+      externalWrite?.abort(msg.payload.requestId);
     }
   });
 

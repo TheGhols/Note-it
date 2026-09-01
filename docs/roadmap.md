@@ -577,7 +577,19 @@ future machine interfaces share one domain and persistence authority.
       pipeline across filtered and unfiltered searches over the full eligible note universe, eradicated
       direct stderr output in Core storage read paths, separated domain query from presentation sanitization,
       and strictly enforced task comment token validation.
-- [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
+- [x] **Phase 4.0E — Write API + GUI/CLI concurrency.** Exactly one Note-it writer per store, enforced
+      by an advisory `flock` lease in a per-store runtime directory: the desktop instance takes it at
+      startup and holds it for the whole session, the CLI takes it for one command when it is free,
+      and sends the change over a private local Unix socket when it is not — never writing around
+      another writer. Typed Core write operations (`WriteOperation`, `NoteMutation`, `WriteOutcome`,
+      `WriteError`) shared by both paths; commands `criar`/`create`, `adicionar`/`append`,
+      `editar`/`edit`, `tags adicionar|remover`, `propriedades definir|remover`,
+      `tarefas concluir|reabrir`, `lixeira restaurar`, with `--stdin` and `--vazio`. A note open on
+      screen is changed behind an external-write barrier that freezes the editor *before* reading it,
+      so unsaved text is folded into the same commit rather than overwritten; a runtime generation per
+      window makes every message still in flight from the previous run refusable. Optimistic
+      `TaskRef` snapshot tokens with no sidecar and no persistent task identity. Read API stays
+      read-only; note writes never touch `config.toml` or `state.json`.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
 - [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.

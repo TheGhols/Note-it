@@ -53,6 +53,33 @@ fail() {
 skip() { printf '  skip  %s\n' "$1"; }
 step() { printf '\n%s\n' "$1"; }
 
+# Every runtime coordination directory belonging to a store under `$WORK`.
+#
+# The writer lease and the control socket live in the runtime directory, and
+# `XDG_RUNTIME_DIR` is deliberately not isolated — `WAYLAND_DISPLAY` resolves
+# inside it. Note-it keeps stores apart by naming each coordination directory
+# after the store it serves, so nothing here ever contended with the real one;
+# what is left is a directory belonging to a store this test invented, and a
+# test may not leave anything behind. Removed by reading the marker file Note-it
+# writes inside each one, so only directories naming *this* test's throwaway
+# stores are touched.
+# shellcheck disable=SC2329  # invoked by the EXIT trap below.
+cleanup_coordination_runtime() {
+  local runtime_root="${XDG_RUNTIME_DIR:-}/note-it"
+  [[ -n "$WORK" && -d "$runtime_root" ]] || return 0
+
+  local candidate marker store
+  for candidate in "$runtime_root"/*/; do
+    marker="$candidate/store"
+    [[ -f "$marker" ]] || continue
+    store="$(<"$marker")"
+    if [[ "$store" == "$WORK"/* ]]; then
+      rm -rf "$candidate"
+    fi
+  done
+  return 0
+}
+
 # shellcheck disable=SC2329  # invoked by the EXIT trap below.
 cleanup() {
   if [[ -n "$STANDIN_DAEMON_PID" ]]; then kill "$STANDIN_DAEMON_PID" 2>/dev/null || true; fi
@@ -60,6 +87,7 @@ cleanup() {
   if [[ -n "$AMBIENT_BUS_DIR" && "$AMBIENT_BUS_DIR" == /tmp/note-it-ambient-bus-* ]]; then
     rm -rf "$AMBIENT_BUS_DIR"
   fi
+  cleanup_coordination_runtime
   if [[ -n "$WORK" && "$WORK" == /tmp/note-it-isolation-test-* ]]; then
     rm -rf "$WORK"
   fi

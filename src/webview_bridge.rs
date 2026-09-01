@@ -104,6 +104,12 @@ pub enum HostToWebviewMessage {
         /// because nothing survives the destruction of the previous one.
         #[serde(rename = "captureDelimiter")]
         capture_delimiter: CaptureDelimiter,
+        /// Which run of this document the page is being handed.
+        ///
+        /// See [`WebviewToHostMessage::ContentChanged`]: everything the page
+        /// sends back that carries content quotes this number, and the host
+        /// refuses anything quoting an older one.
+        generation: u64,
     },
     /// Sent when the host changes a note's collapse state, so the page and its
     /// menu follow a request that did not start in the WebView.
@@ -248,6 +254,46 @@ pub enum HostToWebviewMessage {
         #[serde(rename = "requestId")]
         request_id: u64,
     },
+    /// Hold the document still: something outside this window is about to
+    /// change the note.
+    ///
+    /// The page must stop every path that can change the document *before* it
+    /// reads its own text, and only then answer with
+    /// [`WebviewToHostMessage::ExternalWriteReady`]. Taking the snapshot first
+    /// and freezing after would leave a keystroke between the two, and that
+    /// keystroke would be written over by the very commit this exists to make
+    /// safe.
+    ///
+    /// It is deliberately not a modal and not a freeze of the interface. Only
+    /// what edits the note stops; the window, the compositor and the rendering
+    /// carry on exactly as they were.
+    BeginExternalWrite {
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+        generation: u64,
+    },
+    /// The change was committed; this is the note as it now stands on disk.
+    ///
+    /// The page adopts it without emitting an edit of its own, takes the new
+    /// generation, and starts editing again. Never YAML, never a path, and
+    /// never anything the page has to parse front matter out of.
+    ApplyExternalDocument {
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+        generation: u64,
+        content: String,
+        metadata: MetadataView,
+        #[serde(rename = "createdAt")]
+        created_at: Option<DateTime<Utc>>,
+        #[serde(rename = "updatedAt")]
+        updated_at: Option<DateTime<Utc>>,
+    },
+    /// Nothing was written after all. The page simply starts editing again,
+    /// with the document exactly as it left it.
+    AbortExternalWrite {
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,12 +301,39 @@ pub enum HostToWebviewMessage {
 #[serde(rename_all = "snake_case")]
 pub enum WebviewToHostMessage {
     Ready,
+    /// The editor's text, on the ordinary autosave path.
+    ///
+    /// `generation` is the run of the document this text belongs to. A note
+    /// changed from outside the window gets a new generation, and anything
+    /// still in flight from the old one is refused rather than written: it was
+    /// composed against a document that no longer exists, and letting it
+    /// through would undo the change that has just been committed.
+    ///
+    /// It defaults to zero so a page that predates the field is treated as
+    /// being on the first run, which is exactly what it is until the first
+    /// external write happens.
     ContentChanged {
         id: Uuid,
         content: String,
+        #[serde(default)]
+        generation: u64,
     },
     SaveAndClose {
         id: Uuid,
+        content: String,
+        #[serde(default)]
+        generation: u64,
+    },
+    /// The page has stopped editing and this is what it held.
+    ///
+    /// Sent only in answer to [`HostToWebviewMessage::BeginExternalWrite`],
+    /// and only after every path that could change the document is closed.
+    ExternalWriteReady {
+        id: Uuid,
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+        #[serde(default)]
+        generation: u64,
         content: String,
     },
     NewNoteRequested,
@@ -289,6 +362,8 @@ pub enum WebviewToHostMessage {
         request_id: u64,
         id: Uuid,
         content: String,
+        #[serde(default)]
+        generation: u64,
         tags: Vec<String>,
         properties: Vec<NoteProperty>,
     },
@@ -443,14 +518,44 @@ pub enum WebviewToHostMessage {
         #[serde(rename = "requestId")]
         request_id: u64,
         content: String,
+        #[serde(default)]
+        generation: u64,
     },
 }
 
 pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
-    if let Ok(json_str) = serde_json::to_string(message) {
-        let script = format!("window.handleHostMessage && window.handleHostMessage({json_str});");
-        webview.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, |_| {});
-    }
+    send_to_webview_confirmed(webview, message, |_| {});
+}
+
+/// The same, for a message whose arrival the host actually needs to know about.
+///
+/// Almost nothing needs this. Handing a committed note back to a page does:
+/// "the write did not happen" and "the write happened and the window may not
+/// be showing it" are opposite facts that look identical from outside, and
+/// telling a caller the first when the second is true invites them to repeat a
+/// change that is already on disk.
+///
+/// The callback fires once, with what evaluating the script actually did.
+pub fn send_to_webview_confirmed<F: FnOnce(Result<(), String>) + 'static>(
+    webview: &WebView,
+    message: &HostToWebviewMessage,
+    done: F,
+) {
+    let json_str = match serde_json::to_string(message) {
+        Ok(json_str) => json_str,
+        Err(error) => {
+            done(Err(format!("a mensagem não pôde ser serializada: {error}")));
+            return;
+        }
+    };
+    let script = format!("window.handleHostMessage && window.handleHostMessage({json_str});");
+    webview.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, move |result| {
+        done(
+            result
+                .map(|_| ())
+                .map_err(|error| format!("a página não confirmou a atualização: {error}")),
+        )
+    });
 }
 
 pub fn parse_webview_message(raw_json: &str) -> Result<WebviewToHostMessage, String> {
@@ -519,6 +624,7 @@ mod tests {
             WebviewToHostMessage::SaveAndClose {
                 id: parsed_id,
                 content,
+                ..
             } => {
                 assert_eq!(parsed_id, id);
                 assert_eq!(content, "latest character: x");
@@ -625,6 +731,7 @@ mod tests {
                 id: parsed_id,
                 request_id,
                 content,
+                ..
             } => {
                 assert_eq!(parsed_id, id);
                 assert_eq!(request_id, 42);
@@ -770,6 +877,7 @@ mod tests {
                 request_id,
                 id: parsed_id,
                 content,
+                generation: _,
                 tags,
                 properties,
             } => {
@@ -829,6 +937,7 @@ mod tests {
             ui_scale_percent: 140,
             timer: None,
             capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
+            generation: 0,
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -865,6 +974,7 @@ mod tests {
             ui_scale_percent: 100,
             timer: None,
             capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
+            generation: 0,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         assert!(encoded["payload"]["timer"].is_null());
@@ -897,6 +1007,7 @@ mod tests {
                 ..noteit_core::timer::NoteTimerState::default()
             }),
             capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
+            generation: 0,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         let timer = &encoded["payload"]["timer"];
@@ -1164,6 +1275,7 @@ mod tests {
             ui_scale_percent: 100,
             timer: None,
             capture_delimiter: noteit_core::autopaste::CaptureDelimiter::Line,
+            generation: 0,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         let payload = encoded["payload"].as_object().expect("an object");

@@ -49,9 +49,30 @@ enum LifecycleOperation {
     Quit,
 }
 
+/// What may happen at once, and what may not.
+///
+/// Hiding, quitting, deleting a note and an external write all reach into the
+/// same windows and the same files, and two of them overlapping is how a note
+/// gets written by one and destroyed by another. There is one coordinator and
+/// everything structural asks it first.
+///
+/// The rule is symmetric and deliberately small:
+///
+/// - a lifecycle operation refuses to start while an external write is in
+///   flight, so the window holding the editor still is not destroyed
+///   underneath it;
+/// - an external write refuses to start while a lifecycle operation is in
+///   flight, and the writer that asked is told the store is busy — which is
+///   true, and which it can act on.
 #[derive(Debug, Default)]
 struct LifecycleCoordinator {
     active: Option<LifecycleOperation>,
+    /// External writes currently holding a note's editor still.
+    ///
+    /// A count rather than a flag so nothing can clear someone else's claim,
+    /// though the control server serialises requests and it is never above
+    /// one in practice.
+    external_writes: usize,
 }
 
 impl LifecycleCoordinator {
@@ -60,6 +81,9 @@ impl LifecycleCoordinator {
             return Err(format!(
                 "lifecycle operation {active:?} is already in progress"
             ));
+        }
+        if self.external_writes > 0 {
+            return Err("an external write is in progress".to_string());
         }
         self.active = Some(operation);
         Ok(())
@@ -72,13 +96,32 @@ impl LifecycleCoordinator {
     }
 
     fn is_active(&self) -> bool {
-        self.active.is_some()
+        self.active.is_some() || self.external_writes > 0
+    }
+
+    fn begin_external_write(&mut self) -> Result<(), String> {
+        if let Some(active) = self.active {
+            return Err(format!(
+                "o Note-it está ocupado ({active:?}) e nada foi alterado"
+            ));
+        }
+        self.external_writes += 1;
+        Ok(())
+    }
+
+    fn finish_external_write(&mut self) {
+        self.external_writes = self.external_writes.saturating_sub(1);
     }
 
     fn ensure_structural_action_allowed(&self, action: &str) -> Result<(), String> {
         if let Some(active) = self.active {
             return Err(format!(
                 "{action} is unavailable while lifecycle operation {active:?} is in progress"
+            ));
+        }
+        if self.external_writes > 0 {
+            return Err(format!(
+                "{action} is unavailable while an external write is in progress"
             ));
         }
         Ok(())
@@ -233,6 +276,13 @@ pub struct AppContext {
     /// clipboard, so nothing can observe it however the rest of the code
     /// behaves.
     clipboard_watch: Option<gdk::glib::SignalHandlerId>,
+    /// The writer lease and the control socket, held for the whole session.
+    ///
+    /// `None` when this instance could not take the store — another Note-it
+    /// writer already holds it. The application still runs and still edits its
+    /// open notes; it simply is not the process other Note-it commands are
+    /// routed through.
+    write_authority: Option<crate::write_authority::WriteAuthority>,
 }
 
 pub struct NoteItApp {
@@ -273,6 +323,7 @@ impl NoteItApp {
             layer_state_persistence: StatePersistenceDebouncer::default(),
             autopaste: AutoPaste::new(),
             clipboard_watch: None,
+            write_authority: None,
         }));
 
         let action = gio::SimpleAction::new("toggle-layer", None);
@@ -289,6 +340,17 @@ impl NoteItApp {
             .toggle_layer_mode_from("gaction");
         });
         app.add_action(&action);
+
+        // Taken before this instance can save anything at all, and held until
+        // the process ends. From here on, every other Note-it writer that
+        // wants this store has to come through the socket it opened.
+        let controller = NoteItAppClone {
+            app: app.clone(),
+            context: Rc::clone(&context),
+        };
+        let store_paths = context.borrow().core.paths().clone();
+        let authority = crate::write_authority::start(controller, &store_paths);
+        context.borrow_mut().write_authority = authority;
 
         Self {
             app: app.clone(),
@@ -820,6 +882,23 @@ impl NoteItAppClone {
                 self_clone.finish_lifecycle(LifecycleOperation::Quit);
             }
         });
+    }
+
+    /// Claims the right to change a note from outside the interface.
+    ///
+    /// Refused while the application is hiding or quitting: those destroy
+    /// WebViews, and a WebView destroyed in the middle of a barrier takes an
+    /// unsaved paragraph with it. The writer that asked is told the store is
+    /// busy and nothing is changed.
+    pub fn begin_external_write(&self) -> Result<(), String> {
+        self.context.borrow_mut().lifecycle.begin_external_write()
+    }
+
+    /// Releases that claim. Called on every path out of an external write —
+    /// committed, refused, timed out — so a failure can never leave the
+    /// application unable to hide or quit.
+    pub fn finish_external_write(&self) {
+        self.context.borrow_mut().lifecycle.finish_external_write();
     }
 
     fn begin_lifecycle(&self, operation: LifecycleOperation) -> Result<(), String> {
@@ -2668,5 +2747,95 @@ mod tests {
             }
             other => panic!("unexpected plan: {other:?}"),
         }
+    }
+    // Lifecycle against external writes -----------------------------------------
+    //
+    // Hiding, quitting, deleting a note and an external write all reach into
+    // the same windows and the same files. Two of them overlapping is how a
+    // note gets written by one and destroyed by another, so there is one
+    // coordinator and the rule is symmetric.
+
+    #[test]
+    fn hiding_or_quitting_is_refused_while_an_external_write_holds_a_note() {
+        // The window is holding its editor still and its unsaved text has been
+        // handed to a writer. Destroying the WebView now would take that text
+        // with it.
+        let mut coordinator = LifecycleCoordinator::default();
+        coordinator
+            .begin_external_write()
+            .expect("nothing else is happening");
+
+        assert!(coordinator.begin(LifecycleOperation::Hide).is_err());
+        assert!(coordinator.begin(LifecycleOperation::Quit).is_err());
+        assert!(coordinator.is_active());
+        assert!(coordinator
+            .ensure_structural_action_allowed("moving a note to the trash")
+            .is_err());
+
+        coordinator.finish_external_write();
+        assert!(coordinator.begin(LifecycleOperation::Hide).is_ok());
+    }
+
+    #[test]
+    fn an_external_write_is_refused_while_the_application_is_hiding_or_quitting() {
+        // The other direction. The writer is told the store is busy, which is
+        // true and which it can act on — rather than being allowed to start a
+        // barrier on a window that is about to go away.
+        for operation in [LifecycleOperation::Hide, LifecycleOperation::Quit] {
+            let mut coordinator = LifecycleCoordinator::default();
+            coordinator.begin(operation).expect("start the lifecycle");
+
+            let refusal = coordinator
+                .begin_external_write()
+                .expect_err("an external write must not start here");
+            assert!(refusal.contains("ocupado"), "{refusal}");
+
+            coordinator.finish(operation);
+            assert!(coordinator.begin_external_write().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_failed_external_write_never_leaves_the_application_unable_to_quit() {
+        // Every path out of an external write releases the claim: committed,
+        // refused, or timed out. A claim left behind would make Note-it
+        // impossible to close.
+        let mut coordinator = LifecycleCoordinator::default();
+        coordinator.begin_external_write().expect("claim");
+        coordinator.finish_external_write();
+        assert!(!coordinator.is_active());
+        assert!(coordinator.begin(LifecycleOperation::Quit).is_ok());
+    }
+
+    #[test]
+    fn releasing_a_claim_that_is_not_held_cannot_unlock_someone_else_s() {
+        let mut coordinator = LifecycleCoordinator::default();
+        coordinator.finish_external_write();
+        coordinator.begin_external_write().expect("claim");
+        coordinator.finish_external_write();
+        coordinator.finish_external_write();
+        assert!(!coordinator.is_active());
+    }
+
+    #[test]
+    fn structural_actions_wait_for_an_external_write_rather_than_racing_it() {
+        let mut coordinator = LifecycleCoordinator::default();
+        coordinator.begin_external_write().expect("claim");
+        for action in [
+            "new note creation",
+            "collapsing every note",
+            "moving a note to the trash",
+        ] {
+            assert!(
+                coordinator
+                    .ensure_structural_action_allowed(action)
+                    .is_err(),
+                "{action} was allowed during an external write"
+            );
+        }
+        coordinator.finish_external_write();
+        assert!(coordinator
+            .ensure_structural_action_allowed("new note creation")
+            .is_ok());
     }
 }

@@ -1222,6 +1222,49 @@ countdown writes nothing at all, once a second or otherwise.
 - **Terminal Security Sanitization:** all untrusted strings rendered to stdout/stderr (note content, search queries, selectors, reflected argument contexts, and XDG paths) are sanitized prior to styling and output, neutralizing ANSI escape sequences (CSI, OSC, OSC 52 clipboard injection), BEL, backspace, and control characters while preserving valid Unicode and Markdown.
 - **Local Timezone Consistency:** human timestamps across all CLI subcommands (`listar`, `ler`, `tarefas`, `lixeira`) are formatted in the machine's local timezone (`dd/MM/yyyy HH:mm`) matching the desktop GUI contract, while Core models remain strictly UTC (`DateTime<Utc>`).
 - **Typed Warnings Decoupling:** non-fatal read anomalies produce typed `ReadWarning` items inside `ReadBatch<T>` in `noteit-core` without printing. The CLI renders these cleanly to stderr in Portuguese (`Aviso: ...`).
-- **Strictly Read-Only:** all Read API operations inspect the store purely without creating missing directories, state files, or backups.
+- **Strictly Read-Only Reads:** all Read API operations inspect the store purely without creating
+  missing directories, state files, backups — or any write-coordination file. Reading never takes a
+  lease and never opens a socket.
+- **Coordinated Write API Subcommands:**
+  - `noteit criar [TEXTO]` / `noteit create`: creates a note and answers with its UUID. Accepts
+    `--stdin` for multi-line Markdown, and `--tag` / `--propriedade` to apply metadata at creation.
+    Opens no window, takes no focus and records nothing as open — with or without Note-it running.
+  - `noteit adicionar <ID> <TEXTO>` / `noteit append`: appends Markdown to the end of the body. The
+    join rule is fixed and documented: an empty body becomes the payload; otherwise exactly one line
+    break is inserted first. The payload is never trimmed or reflowed.
+  - `noteit editar <ID> <TEXTO>` / `noteit edit`: replaces the whole body. Not an `$EDITOR` — the text
+    comes from the argument or `--stdin`, never both. Emptying a note requires `--vazio`, so an
+    accidental empty pipe cannot destroy one.
+  - `noteit tags adicionar|remover <ID> <TAG>` / `tags add|remove`: tag identity stays case- and
+    accent-insensitive; adding one already present or removing one absent is a no-op success that
+    rewrites nothing.
+  - `noteit propriedades definir|remover <ID> <K=V>` / `properties set|remove`: same no-op rules, with
+    all limits, Unicode handling and key identity decided by Core. The CLI never parses YAML.
+  - `noteit tarefas concluir|reabrir <ID> <REF>` / `tasks complete|reopen`: completing writes the
+    canonical `<!-- note-it:completed_at=... -->` comment with an explicit timezone; reopening removes
+    only that comment, preserving indentation, bullet, nesting and anyone else's HTML comments.
+  - `noteit lixeira restaurar <ID>` / `trash restore`: restores data and nothing else — no window, no
+    focus, no layer or geometry change. A live note carrying the same identifier is never overwritten.
+- **Task References:** `noteit tarefas` shows an eight-character reference beside each task. It is an
+  *optimistic snapshot token*, not an identity: nothing is stored, no sidecar is created, and it is
+  recomputed against the note at the moment of the write. If the task changed in between, the command
+  is refused and you list the tasks again — far better than quietly ticking off a different one.
+- **Exactly One Writer per Store:** writes are serialised by an advisory lock. With Note-it running,
+  the change is carried out by the running instance; without it, the CLI writes directly through Core.
+  Two simultaneous commands both survive. If the store is held and its owner cannot be reached,
+  nothing at all is written and the CLI says so — it never writes around another writer.
+- **Nothing Unsaved Is Ever Lost:** changing a note that is open on screen freezes its editor *before*
+  reading it, folds the text you have typed but not yet saved into the same commit, and hands the
+  committed note back to the window. An edit that had not reached disk yet is never overwritten, and
+  an autosave already in flight cannot undo the change once it lands.
+- **Timestamps Follow Meaning:** appending, editing and toggling a task move `updated_at` only when
+  the body really changed. Tags and properties move neither timestamp — they say what a note is
+  *about*, not that it was edited. `created_at` never moves.
+- **Honest Outcomes:** a write that failed before the commit point changed nothing and can be safely
+  repeated. A write that committed but could not refresh the window reports a warning, never a
+  failure, so nobody appends the same paragraph twice. A connection that dropped after the request
+  went out is reported as unknown rather than guessed at.
+- **Note Writes Touch Only Notes:** no write command modifies `config.toml`, `state.json`, the cache,
+  geometry, layer, theme or zoom.
 - **Presentation & Terminal Compatibility:** clean formatting with discreet ANSI styling on interactive terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
 - **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and `1` for execution errors.

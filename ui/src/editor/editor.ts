@@ -2,6 +2,7 @@ import { Editor } from '@tiptap/core';
 import { handleLinkPaste } from './linkPaste.ts';
 import { isImagePaste } from './imageTransfer.ts';
 import { editorExtensions } from './extensions.ts';
+import { DocumentLock } from './documentLock.ts';
 import { CalloutType, calloutType } from './callout.ts';
 import { sanitizeHtml, sanitizeMarkdown } from '../markdown/sanitizer.ts';
 import { isValidHexColor } from '../markdown/sanitizer.ts';
@@ -36,6 +37,21 @@ export interface NoteEditorOptions {
 export class NoteEditor {
   private editor: Editor;
   private debounceTimer: number | null = null;
+  /**
+   * While true, nothing may change the document. Anything at all.
+   *
+   * `setEditable(false)` alone is not enough: it stops the *reader* — typing,
+   * pasting, dropping — and it does not stop a command the page itself runs,
+   * such as inserting an image the host has just imported or a replace from
+   * the find bar. During an external write the document has been handed to the
+   * host and is about to be replaced by the committed version, so a change
+   * from any source would either be lost or would overwrite the commit.
+   *
+   * The gate itself is [`DocumentLock`], a plugin whose `filterTransaction` is
+   * the one place every document change in ProseMirror passes through — user
+   * input, commands, plugins, and whatever a later version adds.
+   */
+  private documentLocked = false;
   private onUpdateCallback?: (markdown: string) => void;
   private onDocChange?: () => void;
   private onImageTransfer?: (transfer: DataTransfer) => boolean;
@@ -47,7 +63,7 @@ export class NoteEditor {
 
     this.editor = new Editor({
       element: options.element,
-      extensions: editorExtensions,
+      extensions: [...editorExtensions, DocumentLock(() => this.documentLocked)],
       content: sanitizeMarkdown(options.initialContent || ''),
       contentType: 'markdown',
       autofocus: true,
@@ -95,10 +111,16 @@ export class NoteEditor {
 
   public setMarkdown(content: string): void {
     this.cancelPendingSave();
+    // Adopting a document is the one change allowed to land while the document
+    // is locked, because it *is* what the lock was taken for: the host has
+    // committed, and this is the committed text arriving.
+    const wasLocked = this.documentLocked;
+    this.documentLocked = false;
     this.editor.commands.setContent(sanitizeMarkdown(content), {
       contentType: 'markdown',
       emitUpdate: false,
     });
+    this.documentLocked = wasLocked;
     // Loading a note is not an edit — it must not save, and it does not — but
     // it is a new document, and whatever is showing something about the
     // document has to be told so.
@@ -116,6 +138,33 @@ export class NoteEditor {
     (this.editor.commands as unknown as {
       setNoteItImage: (attrs: { src: string; alt?: string }) => boolean;
     }).setNoteItImage({ src, alt: '' });
+  }
+
+  /**
+   * Lets the document be edited, or stops it being changed at all.
+   *
+   * Turning it off does two things and needs both. ProseMirror's own
+   * editability goes, which is what stops the reader typing, pasting and
+   * dropping; and every transaction that would change the document is refused,
+   * which is what stops the *page* changing it — a command, a shortcut, an
+   * image arriving from the host. Editability alone leaves that second half
+   * open, and that half is where an external write would be overwritten.
+   *
+   * The pending autosave is cancelled with it. Its text is not lost: whatever
+   * froze the editor reads the document immediately afterwards and that text
+   * is what gets committed.
+   */
+  public setEditable(editable: boolean): void {
+    if (!editable) {
+      this.cancelPendingSave();
+    }
+    this.documentLocked = !editable;
+    this.editor.setEditable(editable, false);
+  }
+
+  /** Whether the document can currently be edited. */
+  public isEditable(): boolean {
+    return this.editor.isEditable;
   }
 
   public cancelPendingSave(): void {

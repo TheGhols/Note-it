@@ -76,3 +76,48 @@ export class NoteStatus {
     }
   }
 }
+
+/**
+ * The note is being changed by something outside this window.
+ *
+ * Deliberately almost nothing. An external write is normally over in a few
+ * milliseconds, and flashing a message for every one of them would be worse
+ * than saying nothing at all — so this element exists the whole time and is
+ * only *shown* by CSS after a delay long enough that the reader would have
+ * noticed the pause anyway.
+ *
+ * It is not a modal, it takes no focus, and it dismisses nothing. The editor
+ * underneath is held still for the length of the write and the window,
+ * rendering and compositor carry on exactly as before.
+ */
+export class SyncIndicator {
+  private readonly root: HTMLElement;
+
+  public constructor(mount: HTMLElement, label = 'Sincronizando…') {
+    const doc = mount.ownerDocument;
+    this.root = doc.createElement('div');
+    this.root.className = 'note-syncing';
+    this.root.textContent = label;
+    this.root.hidden = true;
+    // Announced politely when it does appear, without taking the keyboard.
+    this.root.setAttribute('role', 'status');
+    this.root.setAttribute('aria-live', 'polite');
+    mount.append(this.root);
+  }
+
+  public element(): HTMLElement {
+    return this.root;
+  }
+
+  public isVisible(): boolean {
+    return !this.root.hidden;
+  }
+
+  public setActive(active: boolean): void {
+    this.root.hidden = !active;
+  }
+
+  public destroy(): void {
+    this.root.remove();
+  }
+}

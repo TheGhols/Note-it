@@ -176,6 +176,41 @@ resolve_binary() {
   fi
 }
 
+# ------------------------------------------------- runtime write coordination
+
+# The writer lease and the control socket live in the runtime directory, and
+# `XDG_RUNTIME_DIR` is deliberately *not* isolated — `WAYLAND_DISPLAY` resolves
+# inside it, so an isolated one would leave the compositor unreachable and the
+# GUI unable to open at all.
+#
+# Note-it keeps them apart the other way instead: the coordination directory is
+# named after the store it belongs to, so the isolated instance and the real one
+# never contend for the same lease. That is what makes the isolation correct.
+# It still leaves a directory behind under the real runtime tree when the
+# session ends, and a test may not leave anything behind anywhere — so this
+# removes exactly the one belonging to this throwaway store, found by the marker
+# file Note-it writes inside it naming the store it serves.
+#
+# Nothing here guesses. A directory is removed only when its marker names *this*
+# root, so the real store's coordination directory cannot be touched however
+# this script is invoked.
+cleanup_coordination_runtime() {
+  local runtime_root="${XDG_RUNTIME_DIR:-}/note-it"
+  local isolated_notes="$XDG_DATA_HOME/note-it/notes"
+  [[ -d "$runtime_root" ]] || return 0
+
+  local candidate marker
+  for candidate in "$runtime_root"/*/; do
+    [[ -d "$candidate" ]] || continue
+    marker="$candidate/store"
+    [[ -f "$marker" ]] || continue
+    if [[ "$(<"$marker")" == "$isolated_notes" ]]; then
+      rm -rf "$candidate"
+      echo "note-it-isolated: removed the runtime coordination directory for $isolated_notes" >&2
+    fi
+  done
+}
+
 # ---------------------------------------------------------------- private bus
 
 # Whether a pid names a process that is still *running*.
@@ -321,6 +356,7 @@ if [[ "$STOP" -eq 1 ]]; then
   else
     echo "note-it-isolated: no live isolated session for $ROOT"
   fi
+  cleanup_coordination_runtime
   if [[ "$KEEP" -eq 0 && "$ROOT" == "${TMPDIR:-/tmp}"/note-it-test-* ]]; then
     rm -rf "$ROOT"
   fi
@@ -364,6 +400,7 @@ fi
 cleanup() {
   if [[ "$OWNS_BUS" -eq 1 ]]; then
     stop_private_bus
+    cleanup_coordination_runtime
   fi
   if [[ "$KEEP" -eq 1 ]]; then
     echo "note-it-isolated: kept $ROOT" >&2

@@ -15,7 +15,7 @@ fn noteit_bin() -> PathBuf {
 /// Runs the `noteit` binary in a sanitized environment without graphical/session variables.
 fn run_headless(
     args: &[&str],
-    xdg_dirs: Option<(&Path, &Path, &Path, &Path)>,
+    xdg_dirs: Option<(&Path, &Path, &Path, &Path, &Path)>,
     no_color: bool,
 ) -> (i32, String, String) {
     let mut cmd = Command::new(noteit_bin());
@@ -32,11 +32,17 @@ fn run_headless(
         cmd.env_remove("NO_COLOR");
     }
 
-    if let Some((data, config, state, cache)) = xdg_dirs {
+    if let Some((data, config, state, cache, runtime)) = xdg_dirs {
         cmd.env("XDG_DATA_HOME", data);
         cmd.env("XDG_CONFIG_HOME", config);
         cmd.env("XDG_STATE_HOME", state);
         cmd.env("XDG_CACHE_HOME", cache);
+        // The writer lease and the control socket live in the runtime
+        // directory, so a test that writes must be given a throwaway one too.
+        // Without this, a synthetic store would leave a lock and a socket in
+        // the real `$XDG_RUNTIME_DIR` — test debris in the session the person
+        // is actually using.
+        cmd.env("XDG_RUNTIME_DIR", runtime);
     }
 
     let output = cmd.output().expect("execute noteit binary");
@@ -164,14 +170,18 @@ fn status_with_empty_xdg_creates_zero_files_or_directories() {
     let config = tmp.path().join("empty_config");
     let state = tmp.path().join("empty_state");
     let cache = tmp.path().join("empty_cache");
+    let runtime = tmp.path().join("runtime");
 
     assert!(!data.exists());
     assert!(!config.exists());
     assert!(!state.exists());
     assert!(!cache.exists());
 
-    let (code, stdout, stderr) =
-        run_headless(&["status"], Some((&data, &config, &state, &cache)), true);
+    let (code, stdout, stderr) = run_headless(
+        &["status"],
+        Some((&data, &config, &state, &cache, &runtime)),
+        true,
+    );
 
     assert_eq!(code, 0, "status should exit 0 even on missing store");
     assert!(stderr.is_empty(), "stderr should be empty");
@@ -192,12 +202,14 @@ fn read_api_on_empty_store_returns_success_and_creates_zero_files() {
     let config = tmp.path().join("empty_config");
     let state = tmp.path().join("empty_state");
     let cache = tmp.path().join("empty_cache");
+    let runtime = tmp.path().join("runtime");
 
     let xdg = Some((
         data.as_path(),
         config.as_path(),
         state.as_path(),
         cache.as_path(),
+        runtime.as_path(),
     ));
 
     // listar
@@ -251,11 +263,21 @@ fn read_api_on_empty_store_returns_success_and_creates_zero_files() {
 
 fn setup_rich_synthetic_store(
     tmp: &Path,
-) -> (PathBuf, PathBuf, PathBuf, PathBuf, Uuid, Uuid, Uuid) {
+) -> (
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    Uuid,
+    Uuid,
+    Uuid,
+) {
     let data = tmp.join("data/note-it");
     let config = tmp.join("config/note-it");
     let state = tmp.join("state/note-it");
     let cache = tmp.join("cache/note-it");
+    let runtime = tmp.join("runtime");
     fs::create_dir_all(&cache).unwrap();
 
     let storage = StorageManager::with_custom_paths(
@@ -329,6 +351,7 @@ Texto com \x1b[2Jescape perigoso e \x1b]52;c;Y29waWVk\x07clipboard.
         tmp.join("config"),
         tmp.join("state"),
         tmp.join("cache"),
+        runtime,
         n1.metadata.id,
         n2.metadata.id,
         n3.metadata.id,
@@ -338,12 +361,14 @@ Texto com \x1b[2Jescape perigoso e \x1b]52;c;Y29waWVk\x07clipboard.
 #[test]
 fn read_api_commands_and_aliases_function_on_synthetic_store() {
     let tmp = tempdir().expect("tempdir");
-    let (data, config, state, cache, id1, _id2, id3) = setup_rich_synthetic_store(tmp.path());
+    let (data, config, state, cache, runtime, id1, _id2, id3) =
+        setup_rich_synthetic_store(tmp.path());
     let xdg = Some((
         data.as_path(),
         config.as_path(),
         state.as_path(),
         cache.as_path(),
+        runtime.as_path(),
     ));
 
     // 1. listar / list
@@ -474,12 +499,13 @@ fn read_api_commands_and_aliases_function_on_synthetic_store() {
 #[test]
 fn test_read_only_e2e_synthetic_store_byte_for_byte_unchanged() {
     let tmp = tempdir().expect("tempdir");
-    let (data, config, state, cache, id1, _, _) = setup_rich_synthetic_store(tmp.path());
+    let (data, config, state, cache, runtime, id1, _, _) = setup_rich_synthetic_store(tmp.path());
     let xdg = Some((
         data.as_path(),
         config.as_path(),
         state.as_path(),
         cache.as_path(),
+        runtime.as_path(),
     ));
 
     let before_fp = compute_directory_fingerprints(tmp.path());
@@ -520,12 +546,13 @@ fn test_read_only_e2e_synthetic_store_byte_for_byte_unchanged() {
 #[test]
 fn test_terminal_safety_e2e_with_injected_escapes() {
     let tmp = tempdir().expect("tempdir");
-    let (data, config, state, cache, _id1, _, _) = setup_rich_synthetic_store(tmp.path());
+    let (data, config, state, cache, runtime, _id1, _, _) = setup_rich_synthetic_store(tmp.path());
     let xdg = Some((
         data.as_path(),
         config.as_path(),
         state.as_path(),
         cache.as_path(),
+        runtime.as_path(),
     ));
 
     // 1. Injected escape in search query - query is sent raw to Core, presentation neutralizes escapes
@@ -571,6 +598,7 @@ fn test_terminal_safety_e2e_with_injected_escapes() {
             config.as_path(),
             state.as_path(),
             cache.as_path(),
+            runtime.as_path(),
         )),
         true,
     );
@@ -608,11 +636,13 @@ fn test_corrupted_note_in_store_emits_warning_to_stderr_and_lists_valid_notes_on
     let xdg_config = tmp.path().join("config");
     let xdg_state = tmp.path().join("state");
     let xdg_cache = tmp.path().join("cache");
+    let xdg_runtime = tmp.path().join("runtime");
     let xdg = Some((
         xdg_data.as_path(),
         xdg_config.as_path(),
         xdg_state.as_path(),
         xdg_cache.as_path(),
+        xdg_runtime.as_path(),
     ));
 
     // Listar
@@ -666,7 +696,7 @@ fn unexpected_argument_on_subcommand_exits_code_two_and_writes_portuguese_to_std
     for cmd in &[
         vec!["status", "argumento-inesperado"],
         vec!["ajuda", "argumento-inesperado"],
-        vec!["tags", "argumento-inesperado"],
+        vec!["versao", "argumento-inesperado"],
     ] {
         let (code, stdout, stderr) = run_headless(cmd, None, true);
         assert_eq!(
@@ -677,6 +707,28 @@ fn unexpected_argument_on_subcommand_exits_code_two_and_writes_portuguese_to_std
         assert!(stdout.is_empty(), "Stdout must be empty on invalid usage");
         assert!(stderr.contains("Erro: argumento inesperado `argumento-inesperado`."));
         assert!(stderr.contains("Use `noteit ajuda` para ver o formato correto de uso."));
+        assert!(!stderr.contains("\x1b["));
+    }
+}
+
+#[test]
+fn a_word_that_is_not_a_subcommand_of_a_grouped_command_is_named_as_such() {
+    // `tags`, `propriedades`, `tarefas` and `lixeira` list when given nothing
+    // and write when given a subcommand, so a word they do not know is an
+    // unknown command rather than a stray argument — and it still costs
+    // exactly nothing but exit code 2.
+    for cmd in &[
+        vec!["tags", "palavra-desconhecida"],
+        vec!["propriedades", "palavra-desconhecida"],
+        vec!["lixeira", "palavra-desconhecida"],
+    ] {
+        let (code, stdout, stderr) = run_headless(cmd, None, true);
+        assert_eq!(code, 2, "{cmd:?} must exit with code 2");
+        assert!(stdout.is_empty(), "Stdout must be empty on invalid usage");
+        assert!(
+            stderr.contains("Erro: comando desconhecido `palavra-desconhecida`."),
+            "{stderr}"
+        );
         assert!(!stderr.contains("\x1b["));
     }
 }

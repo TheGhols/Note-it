@@ -9,8 +9,10 @@
 //! Completed tasks without a valid completion comment have `completed_at: None`
 //! and never invent a timestamp.
 
+use crate::hashing::fnv1a_64_of_parts;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
 /// Filter for selecting tasks based on their completion state.
@@ -42,6 +44,11 @@ pub struct TaskEntry {
     pub completed_at: Option<DateTime<Utc>>,
     pub depth: usize,
     pub line_number: usize,
+    /// The optimistic reference a write command names this task by.
+    ///
+    /// See [`TaskRef`]: it identifies the task *in the note as it is right
+    /// now*, and stops matching as soon as the task itself changes.
+    pub task_ref: TaskRef,
 }
 
 /// ISO 8601 validation matching the TypeScript taskMeta.ts specification.
@@ -78,14 +85,52 @@ fn is_valid_iso_8601_with_zone(candidate: &str) -> bool {
 /// - Leaves external/other HTML comments intact.
 /// - Validates ISO 8601 with explicit offset or Z. Returns `None` if absent or invalid.
 pub fn extract_completed_at(raw_text: &str) -> (Option<DateTime<Utc>>, String) {
+    match find_completion_comment(raw_text) {
+        Some(found) => {
+            let mut cleaned = String::with_capacity(raw_text.len());
+            cleaned.push_str(&raw_text[..found.start]);
+            cleaned.push_str(&raw_text[found.end..]);
+            (found.completed_at, cleaned.trim_end().to_string())
+        }
+        None => (None, raw_text.trim_end().to_string()),
+    }
+}
+
+/// Removes Note-it's own completion comment, and nothing else.
+///
+/// Answers `None` when there is no such comment, so reopening a task that has
+/// none rewrites nothing. Comments belonging to other tools, indentation, the
+/// bullet, the nesting and the task's own text are all left exactly as they
+/// were — the only thing this is allowed to take out of a line is the marker
+/// Note-it itself put there.
+pub fn remove_completion_comment(raw_text: &str) -> Option<String> {
+    let found = find_completion_comment(raw_text)?;
+    let mut cleaned = String::with_capacity(raw_text.len());
+    cleaned.push_str(&raw_text[..found.start]);
+    cleaned.push_str(&raw_text[found.end..]);
+    Some(cleaned.trim_end().to_string())
+}
+
+/// Where Note-it's completion comment sits in a line, and what it says.
+struct CompletionComment {
+    start: usize,
+    end: usize,
+    completed_at: Option<DateTime<Utc>>,
+}
+
+/// The one scanner for the completion comment.
+///
+/// Reading a task and rewriting one have to agree exactly on what counts as
+/// Note-it's marker, so there is a single implementation and both go through
+/// it. A comment with anything other than one timestamp token in it is not
+/// Note-it's, is not found here, and therefore is never removed.
+fn find_completion_comment(raw_text: &str) -> Option<CompletionComment> {
     let mut search_from = 0;
 
     while let Some(rel_start) = raw_text[search_from..].find("<!--") {
         let comment_start = search_from + rel_start;
         let rest = &raw_text[comment_start..];
-        let Some(end_rel) = rest.find("-->") else {
-            break;
-        };
+        let end_rel = rest.find("-->")?;
         let comment_end = comment_start + end_rel + 3;
         let inside = &raw_text[comment_start + 4..comment_end - 3];
         let trimmed_inside = inside.trim_start();
@@ -96,26 +141,25 @@ pub fn extract_completed_at(raw_text: &str) -> (Option<DateTime<Utc>>, String) {
             let second = tokens.next();
 
             if let (Some(candidate), None) = (first, second) {
-                let parsed = if is_valid_iso_8601_with_zone(candidate) {
+                let completed_at = if is_valid_iso_8601_with_zone(candidate) {
                     DateTime::parse_from_rfc3339(candidate)
                         .ok()
                         .map(|dt| dt.with_timezone(&Utc))
                 } else {
                     None
                 };
-
-                let mut cleaned = String::with_capacity(raw_text.len());
-                cleaned.push_str(&raw_text[..comment_start]);
-                cleaned.push_str(&raw_text[comment_end..]);
-                let final_text = cleaned.trim_end().to_string();
-                return (parsed, final_text);
+                return Some(CompletionComment {
+                    start: comment_start,
+                    end: comment_end,
+                    completed_at,
+                });
             }
         }
 
         search_from = comment_start + 4;
     }
 
-    (None, raw_text.trim_end().to_string())
+    None
 }
 
 /// Checks if a line opens or closes a fenced code block (``` or ~~~).
@@ -166,19 +210,38 @@ fn calculate_indent_depth(line: &str) -> usize {
     tabs + (spaces / 2)
 }
 
-/// Parses task lines from Markdown body content.
-pub fn parse_tasks(note_id: Uuid, note_label: &str, content: &str) -> Vec<TaskEntry> {
-    let mut tasks = Vec::new();
+/// One task line, exactly as the shared scanner found it.
+///
+/// Everything that has an opinion about tasks reads them through this: the
+/// listing projection, the reference that names one, and the rewrite that
+/// completes or reopens one. There is deliberately one scanner, so a fenced
+/// code block that is invisible to the listing is equally invisible to a
+/// write — a fake task inside a fence can never be mutated because nothing
+/// ever sees it as a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScannedTask<'a> {
+    /// Zero-based index into `content.lines()`.
+    line_index: usize,
+    depth: usize,
+    checked: bool,
+    /// Everything after the `- [ ] ` marker, with trailing whitespace kept.
+    raw_text: &'a str,
+}
+
+/// Every real task in a body, in document order.
+///
+/// Front matter never reaches here — callers pass the note's body — and lines
+/// inside a fenced code block are skipped, so `- [ ] ` written as an example
+/// is text and stays text.
+fn scan_tasks(content: &str) -> Vec<ScannedTask<'_>> {
+    let mut found = Vec::new();
     let mut code_fence: Option<(char, usize)> = None;
 
-    for (line_idx, line) in content.lines().enumerate() {
-        let line_number = line_idx + 1;
-
+    for (line_index, line) in content.lines().enumerate() {
         if let Some(new_fence) = check_code_fence(line, code_fence) {
             code_fence = new_fence;
             continue;
         }
-
         if code_fence.is_some() {
             continue;
         }
@@ -186,7 +249,7 @@ pub fn parse_tasks(note_id: Uuid, note_label: &str, content: &str) -> Vec<TaskEn
         let depth = calculate_indent_depth(line);
         let trimmed = line.trim_start();
 
-        let (checked, task_text) = if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
+        let (checked, raw_text) = if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
             (false, rest)
         } else if let Some(rest) = trimmed.strip_prefix("- [x] ") {
             (true, rest)
@@ -202,21 +265,243 @@ pub fn parse_tasks(note_id: Uuid, note_label: &str, content: &str) -> Vec<TaskEn
             continue;
         };
 
-        let (completed_at, clean_text) = extract_completed_at(task_text);
-        let final_completed_at = if checked { completed_at } else { None };
-
-        tasks.push(TaskEntry {
-            note_id,
-            note_label: note_label.to_string(),
-            text: clean_text,
-            checked,
-            completed_at: final_completed_at,
+        found.push(ScannedTask {
+            line_index,
             depth,
-            line_number,
+            checked,
+            raw_text,
         });
     }
 
-    tasks
+    found
+}
+
+/// An optimistic reference to one task in one note.
+///
+/// **This is a snapshot token, not an identity.** Nothing about it is stored,
+/// nothing carries it inside the Markdown, and it is not meant to survive the
+/// note changing. It exists to answer one question safely: *is the task I am
+/// about to write still the task I was shown?*
+///
+/// Phase 4.0D deliberately gave tasks no persistent identifier, and this does
+/// not smuggle one in. A reference is recomputed from the note as it is at the
+/// moment of the write and compared with the one the caller quoted. If the
+/// task moved in the tree, was reworded, or was completed by someone else in
+/// between, the reference stops matching and the write is refused. Listing the
+/// tasks again is then the correct next step — and it is a far better outcome
+/// than the alternative, which is quietly ticking off a different task.
+///
+/// It is derived from, in this order and with each part length-prefixed so two
+/// different tasks can never be spelled the same way:
+///
+/// 1. the note's identifier;
+/// 2. how deeply the task is nested;
+/// 3. whether it is done;
+/// 4. the exact text of the line after the checkbox, completion comment
+///    included;
+/// 5. how many earlier tasks in the same note are identical in all of the
+///    above — which is what tells two literally identical tasks apart.
+///
+/// The line number is deliberately *not* part of it: inserting a paragraph
+/// somewhere else in the note would otherwise invalidate every reference below
+/// it, for a note whose tasks did not change at all.
+///
+/// The digest is [`crate::hashing`] — deterministic, documented, and never
+/// seeded — shown as its first eight hexadecimal characters. Eight characters
+/// can collide, so a reference matching more than one task in a note is
+/// reported as ambiguous and refused; it is never resolved by choosing one.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskRef(String);
+
+/// The number of characters a task reference is written with.
+pub const TASK_REF_LENGTH: usize = 8;
+
+/// Why a string is not a task reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRefError(String);
+
+impl fmt::Display for TaskRefError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TaskRefError {}
+
+impl TaskRef {
+    /// Reads a reference a person or an agent typed.
+    ///
+    /// Case-insensitive on input and lowercase from here on, so `A71BC920`
+    /// and `a71bc920` are the same reference. Anything that is not exactly
+    /// eight hexadecimal characters is refused as invalid usage rather than
+    /// tried against the note.
+    pub fn parse(raw: &str) -> Result<Self, TaskRefError> {
+        let trimmed = raw.trim();
+        if trimmed.chars().count() != TASK_REF_LENGTH
+            || !trimmed.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(TaskRefError(format!(
+                "`{trimmed}` is not a task reference; it is {TASK_REF_LENGTH} hexadecimal characters"
+            )));
+        }
+        Ok(Self(trimmed.to_ascii_lowercase()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TaskRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+fn task_ref_for(note_id: Uuid, task: &ScannedTask<'_>, occurrence: usize) -> TaskRef {
+    let note = note_id.as_simple().to_string();
+    let depth = task.depth.to_string();
+    let checked = if task.checked { "1" } else { "0" };
+    let occurrence = occurrence.to_string();
+    let digest = fnv1a_64_of_parts(&[
+        note.as_bytes(),
+        depth.as_bytes(),
+        checked.as_bytes(),
+        task.raw_text.as_bytes(),
+        occurrence.as_bytes(),
+    ]);
+    TaskRef(format!("{:08x}", (digest >> 32) as u32))
+}
+
+/// The reference for every task in a body, in document order.
+fn task_refs(note_id: Uuid, content: &str) -> Vec<(usize, TaskRef)> {
+    let scanned = scan_tasks(content);
+    let mut seen: Vec<(usize, bool, &str)> = Vec::new();
+    let mut refs = Vec::with_capacity(scanned.len());
+
+    for task in &scanned {
+        let key = (task.depth, task.checked, task.raw_text);
+        let occurrence = seen.iter().filter(|entry| **entry == key).count();
+        seen.push(key);
+        refs.push((task.line_index, task_ref_for(note_id, task, occurrence)));
+    }
+
+    refs
+}
+
+/// Why a task reference did not name exactly one task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskResolution {
+    /// The note changed: nothing in it answers to this reference any more.
+    Stale,
+    /// More than one task answers to it. Never resolved by guessing.
+    Ambiguous,
+}
+
+/// Finds the one task a reference names, or refuses.
+///
+/// Recomputed against the content handed in, which is the content that is
+/// about to be written — not the content the reference was produced from. That
+/// is the whole guarantee: the reference is checked against reality at the
+/// moment of the write.
+pub fn resolve_task_ref(
+    note_id: Uuid,
+    content: &str,
+    wanted: &TaskRef,
+) -> Result<usize, TaskResolution> {
+    let matches: Vec<usize> = task_refs(note_id, content)
+        .into_iter()
+        .filter(|(_, candidate)| candidate == wanted)
+        .map(|(line_index, _)| line_index)
+        .collect();
+
+    match matches.len() {
+        0 => Err(TaskResolution::Stale),
+        1 => Ok(matches[0]),
+        _ => Err(TaskResolution::Ambiguous),
+    }
+}
+
+/// Rewrites one task line as done or not done.
+///
+/// Answers `None` when the line already says exactly that, so completing an
+/// already completed task writes nothing and moves no timestamp.
+///
+/// Everything that is not the checkbox and Note-it's own completion comment
+/// survives untouched: the indentation, the bullet character, the nesting, the
+/// text, and any HTML comment belonging to another tool.
+pub fn rewrite_task_line(
+    content: &str,
+    line_index: usize,
+    complete: bool,
+    completed_at: &str,
+) -> Option<String> {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let line = lines.get(line_index)?;
+
+    let indent_len = line.len() - line.trim_start().len();
+    let (indent, trimmed) = line.split_at(indent_len);
+    let bullet = trimmed.chars().next()?;
+    if bullet != '-' && bullet != '*' {
+        return None;
+    }
+    let after_marker = trimmed
+        .strip_prefix(&format!("{bullet} [ ] "))
+        .map(|rest| (false, rest))
+        .or_else(|| {
+            trimmed
+                .strip_prefix(&format!("{bullet} [x] "))
+                .map(|rest| (true, rest))
+        })
+        .or_else(|| {
+            trimmed
+                .strip_prefix(&format!("{bullet} [X] "))
+                .map(|rest| (true, rest))
+        });
+    let (checked, text) = after_marker?;
+
+    if checked == complete {
+        return None;
+    }
+
+    let rewritten = if complete {
+        // A completion Note-it made records when it made it. This is a real
+        // act of completing something, so the instant is legitimately created
+        // here rather than invented for a note that was already ticked.
+        let body = text.trim_end();
+        format!("{indent}{bullet} [x] {body} <!-- note-it:completed_at={completed_at} -->")
+    } else {
+        let body = remove_completion_comment(text).unwrap_or_else(|| text.trim_end().to_string());
+        format!("{indent}{bullet} [ ] {body}")
+    };
+
+    lines[line_index] = rewritten;
+    Some(lines.join("\n"))
+}
+
+/// Parses task lines from Markdown body content.
+pub fn parse_tasks(note_id: Uuid, note_label: &str, content: &str) -> Vec<TaskEntry> {
+    let scanned = scan_tasks(content);
+    let refs = task_refs(note_id, content);
+
+    scanned
+        .into_iter()
+        .zip(refs)
+        .map(|(task, (_, task_ref))| {
+            let (completed_at, clean_text) = extract_completed_at(task.raw_text);
+            TaskEntry {
+                note_id,
+                note_label: note_label.to_string(),
+                text: clean_text,
+                checked: task.checked,
+                completed_at: if task.checked { completed_at } else { None },
+                depth: task.depth,
+                line_number: task.line_index + 1,
+                task_ref,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

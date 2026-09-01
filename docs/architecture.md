@@ -41,7 +41,20 @@ trash, backup and Study persistence.
 - `noteit-core/src/model.rs`: Note data models, metadata parsing, and `NoteSummary` projection. `split_front_matter` and
   `body_of` are shared with search, so "the note's body" means the same thing everywhere.
 - `noteit-core/src/filter.rs`: typed `NoteFilter` with tag/property AND matching via `semantic_identity`, and safe `NoteSelectorError`.
-- `noteit-core/src/task.rs`: task parsing, checkbox states, depth hierarchy, and ISO 8601 `completed_at` timestamp extraction.
+- `noteit-core/src/task.rs`: one task scanner shared by reading and writing — checkbox states, depth
+  hierarchy, fenced-code exclusion, ISO 8601 `completed_at` extraction, the optimistic `TaskRef`, and
+  the line rewrite that completes or reopens a task. A fake task inside a fence is invisible to both,
+  because there is only one scanner.
+- `noteit-core/src/write.rs`: every mutation as a typed domain operation — `WriteOperation`,
+  `NoteMutation`, `WriteOutcome`, `WriteError` — plus `apply_over_live_body`, the rule for applying a
+  mutation on top of text an editor is holding but has not saved. Both adapters run this one
+  implementation.
+- `noteit-core/src/coordination.rs`: the writer lease. One advisory `flock` per store, in a runtime
+  directory named after that store, with ownership and permission checks that fail closed.
+- `noteit-core/src/control.rs`: the private control protocol — length-prefixed JSON over a local Unix
+  socket, versioned and bounded. **Not a public interface**; see ADR-038.
+- `noteit-core/src/hashing.rs`: one deterministic, documented digest (FNV-1a 64) for the store key and
+  the task reference. Never `DefaultHasher`, whose stability is not promised.
 - `noteit-core/src/warning.rs`: typed, structured non-fatal read anomalies (`ReadWarning`, `ReadBatch<T>`) returned by Core operations without terminal printing.
 - `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
   with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
@@ -74,7 +87,12 @@ scripts/check-core-boundary
 - `main.rs`: Entry point for the `noteit` binary, dispatching arguments and mapping standard exit codes.
 - `cli.rs`: Command line parsing using Clap with PT-BR primary commands and international aliases (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`).
 - `output.rs`: Terminal presentation, ANSI styling, NO_COLOR/non-TTY detection, and terminal security sanitization (`sanitize_for_terminal`).
-- `lib.rs`: Programmatic interface (`run_with_args`), filter parsing, read-only Core dispatch, and standard exit code definitions.
+- `authority.rs`: the decision of who writes. Takes the writer lease when it is free and writes
+  through the Core; when it is held, sends the change to whoever holds it over the private socket;
+  when it is held and unreachable, fails closed and changes nothing. Never falls back to writing
+  around another writer.
+- `lib.rs`: Programmatic interface (`run_with_args`), filter parsing, Core dispatch, standard exit
+  codes, and standard input handling for `--stdin`.
 
 The CLI binary has zero graphical dependencies and is tested headless:
 
@@ -92,10 +110,37 @@ scripts/check-cli-boundary
 - `note_window.rs`: GTK4 window wrapper embedding WebKitGTK 6.0 webviews.
 - `webview_bridge.rs`: Bidirectional messaging between Rust host and TypeScript WebView. Message
   types reuse Core domain types, while the actual WebView send path remains desktop-specific.
+- `write_authority.rs`: the desktop instance as the store's writer. Takes the lease at startup, holds
+  it for the whole session, listens on the private socket, and runs the external-write pipeline —
+  freeze the editor, collect its live text, mutate, commit, adopt, move the generation on, hand the
+  committed note back.
+
+### The write path when a note is open
+
+```text
+noteit adicionar        lease held by the desktop instance
+      │                        │
+      └── control socket ──────┤
+                               ├─ 1. refuse if hiding, quitting or deleting
+                               ├─ 2. freeze the editor  ── then ──▶ read its text
+                               ├─ 3. fold that text into the committed document
+                               ├─ 4. apply the mutation to *that*
+                               ├─ 5. commit through the atomic writer
+                               ├─ 6. adopt it, generation += 1
+                               └─ 7. hand it back to the page and unfreeze
+```
+
+Step 2 is in that order and no other: reading first leaves a gap in which a keystroke lands, and that
+keystroke is then written over. Step 6 is what makes every message still in flight from the previous
+run refusable. See ADR-038.
 
 ## Frontend Components (TypeScript / Vite / Tiptap)
 
 - `ui/src/main.ts`: Webview entry point and bridge bootstrap.
+- `ui/src/bridge/externalWrite.ts`: the page's half of an external write — freeze, snapshot, adopt,
+  and a queue that holds every edit arriving meanwhile so none is lost.
+- `ui/src/editor/documentLock.ts`: one ProseMirror `filterTransaction` gate. While a write is in
+  flight nothing changes the document — not typing, not a command, not a plugin.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
 - `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.

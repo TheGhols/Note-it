@@ -90,13 +90,19 @@ pub enum CliCommand {
         propriedade: Vec<String>,
     },
 
-    /// Listar catálogo de tags derivadas
+    /// Listar catálogo de tags derivadas, ou alterar as tags de uma nota
     #[command(name = "tags")]
-    Tags,
+    Tags {
+        #[command(subcommand)]
+        command: Option<TagsCommand>,
+    },
 
-    /// Listar catálogo de propriedades
+    /// Listar catálogo de propriedades, ou alterar as de uma nota
     #[command(name = "propriedades", alias = "properties")]
-    Propriedades,
+    Propriedades {
+        #[command(subcommand)]
+        command: Option<PropertiesCommand>,
+    },
 
     /// Listar tarefas das notas
     #[command(name = "tarefas", alias = "tasks")]
@@ -116,11 +122,150 @@ pub enum CliCommand {
         /// Filtrar notas de origem por propriedade chave=valor (repetível com AND)
         #[arg(long = "propriedade", alias = "property", action = clap::ArgAction::Append)]
         propriedade: Vec<String>,
+
+        #[command(subcommand)]
+        command: Option<TasksCommand>,
     },
 
-    /// Listar notas na lixeira
+    /// Listar notas na lixeira, ou restaurar uma nota dela
     #[command(name = "lixeira", alias = "trash")]
-    Lixeira,
+    Lixeira {
+        #[command(subcommand)]
+        command: Option<TrashCommand>,
+    },
+
+    /// Criar uma nota nova e devolver o identificador dela
+    ///
+    /// A nota é criada no repositório e nada é aberto: nenhuma janela, nenhum
+    /// foco, nenhuma mudança de estado. O comportamento é o mesmo com o
+    /// Note-it aberto ou fechado.
+    #[command(name = "criar", alias = "create")]
+    Criar {
+        /// Markdown inicial da nota
+        texto: Option<String>,
+
+        /// Ler o Markdown inicial da entrada padrão
+        #[arg(long = "stdin")]
+        stdin: bool,
+
+        /// Tag a aplicar já na criação (repetível)
+        #[arg(long = "tag", action = clap::ArgAction::Append)]
+        tag: Vec<String>,
+
+        /// Propriedade chave=valor a aplicar já na criação (repetível)
+        #[arg(long = "propriedade", alias = "property", action = clap::ArgAction::Append)]
+        propriedade: Vec<String>,
+    },
+
+    /// Acrescentar Markdown ao final de uma nota
+    #[command(name = "adicionar", alias = "append")]
+    Adicionar {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+
+        /// Markdown a acrescentar
+        texto: Option<String>,
+
+        /// Ler o Markdown a acrescentar da entrada padrão
+        #[arg(long = "stdin")]
+        stdin: bool,
+    },
+
+    /// Substituir todo o corpo Markdown de uma nota
+    ///
+    /// Não abre um editor: o novo corpo vem do argumento ou da entrada padrão.
+    #[command(name = "editar", alias = "edit")]
+    Editar {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+
+        /// Novo corpo Markdown da nota
+        texto: Option<String>,
+
+        /// Ler o novo corpo da entrada padrão
+        #[arg(long = "stdin")]
+        stdin: bool,
+
+        /// Esvaziar o corpo da nota, declarando a intenção explicitamente
+        #[arg(long = "vazio", alias = "empty")]
+        vazio: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum TagsCommand {
+    /// Adicionar uma tag a uma nota
+    #[command(name = "adicionar", alias = "add")]
+    Adicionar {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A tag a adicionar
+        tag: String,
+    },
+
+    /// Remover uma tag de uma nota
+    #[command(name = "remover", alias = "remove")]
+    Remover {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A tag a remover
+        tag: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum PropertiesCommand {
+    /// Definir uma propriedade de uma nota
+    #[command(name = "definir", alias = "set")]
+    Definir {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A propriedade no formato chave=valor
+        atribuicao: String,
+    },
+
+    /// Remover uma propriedade de uma nota
+    #[command(name = "remover", alias = "remove")]
+    Remover {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A chave da propriedade a remover
+        chave: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum TasksCommand {
+    /// Concluir uma tarefa
+    #[command(name = "concluir", alias = "complete")]
+    Concluir {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A referência de 8 caracteres mostrada por `noteit tarefas`
+        referencia: String,
+    },
+
+    /// Reabrir uma tarefa concluída
+    #[command(name = "reabrir", alias = "reopen")]
+    Reabrir {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+        /// A referência de 8 caracteres mostrada por `noteit tarefas`
+        referencia: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum TrashCommand {
+    /// Restaurar uma nota da lixeira
+    ///
+    /// Restaura os dados e nada mais: nenhuma janela é aberta, nenhum foco
+    /// muda e nenhuma geometria é alterada.
+    #[command(name = "restaurar", alias = "restore")]
+    Restaurar {
+        /// UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais
+        id: String,
+    },
 }
 
 #[cfg(test)]
@@ -184,13 +329,19 @@ mod tests {
         );
 
         let tags = CliArgs::try_parse_from(["noteit", "tags"]).expect("tags");
-        assert_eq!(tags.command, Some(CliCommand::Tags));
+        assert_eq!(tags.command, Some(CliCommand::Tags { command: None }));
 
         let props = CliArgs::try_parse_from(["noteit", "propriedades"]).expect("propriedades");
-        assert_eq!(props.command, Some(CliCommand::Propriedades));
+        assert_eq!(
+            props.command,
+            Some(CliCommand::Propriedades { command: None })
+        );
 
         let props_en = CliArgs::try_parse_from(["noteit", "properties"]).expect("properties alias");
-        assert_eq!(props_en.command, Some(CliCommand::Propriedades));
+        assert_eq!(
+            props_en.command,
+            Some(CliCommand::Propriedades { command: None })
+        );
 
         let tarefas = CliArgs::try_parse_from(["noteit", "tarefas", "--estado", "concluidas"])
             .expect("tarefas");
@@ -213,10 +364,10 @@ mod tests {
         ));
 
         let lixeira = CliArgs::try_parse_from(["noteit", "lixeira"]).expect("lixeira");
-        assert_eq!(lixeira.command, Some(CliCommand::Lixeira));
+        assert_eq!(lixeira.command, Some(CliCommand::Lixeira { command: None }));
 
         let trash = CliArgs::try_parse_from(["noteit", "trash"]).expect("trash alias");
-        assert_eq!(trash.command, Some(CliCommand::Lixeira));
+        assert_eq!(trash.command, Some(CliCommand::Lixeira { command: None }));
     }
 
     #[test]

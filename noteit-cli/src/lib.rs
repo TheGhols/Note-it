@@ -1,11 +1,14 @@
+pub mod authority;
 pub mod cli;
 pub mod output;
 
 use clap::error::ErrorKind;
 use clap::Parser;
-use cli::{CliArgs, CliCommand};
-use noteit_core::{NoteFilter, NoteItCore, NoteSelectorError, StorePaths};
+use cli::{CliArgs, CliCommand, PropertiesCommand, TagsCommand, TasksCommand, TrashCommand};
+use noteit_core::write::{NoteDraft, NoteMutation, WriteOperation};
+use noteit_core::{NoteFilter, NoteItCore, NoteProperty, NoteSelectorError, StorePaths};
 use output::OutputContext;
+use std::io::Read;
 
 pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_EXECUTION_ERROR: u8 = 1;
@@ -20,10 +23,30 @@ fn parse_filter(tags: Vec<String>, properties_raw: &[String]) -> Result<NoteFilt
     Ok(NoteFilter::new(tags, properties))
 }
 
+/// Where `--stdin` gets its text.
+///
+/// A parameter rather than a direct read of the process's own input, so the
+/// tests can hand a command its standard input without a pipe and without a
+/// child process. The real one is [`read_process_stdin`].
+pub type StdinSource<'a> = &'a dyn Fn() -> Result<String, String>;
+
 /// Executes the CLI with the provided argument list and output context.
 ///
 /// Returns `Ok(stdout_string)` on success, or `Err((exit_code, stderr_string))` on failure.
 pub fn run_with_args<I, T>(args: I, ctx: &OutputContext) -> Result<String, (u8, String)>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    run_with_args_and_stdin(args, ctx, &read_process_stdin)
+}
+
+/// The whole dispatcher, with standard input supplied explicitly.
+pub fn run_with_args_and_stdin<I, T>(
+    args: I,
+    ctx: &OutputContext,
+    stdin: StdinSource<'_>,
+) -> Result<String, (u8, String)>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
@@ -150,12 +173,12 @@ where
                     }
                 }
             }
-            Some(CliCommand::Tags) => {
+            Some(CliCommand::Tags { command: None }) => {
                 let core = NoteItCore::open_read_only();
                 let catalog = core.metadata_catalog();
                 Ok(output::render_tags(ctx, &catalog))
             }
-            Some(CliCommand::Propriedades) => {
+            Some(CliCommand::Propriedades { command: None }) => {
                 let core = NoteItCore::open_read_only();
                 let catalog = core.metadata_catalog();
                 Ok(output::render_properties(ctx, &catalog))
@@ -165,6 +188,7 @@ where
                 limite,
                 tag,
                 propriedade,
+                command: None,
             }) => {
                 let filter = parse_filter(tag, &propriedade).map_err(|err| {
                     let sanitized = output::sanitize_for_terminal(&err);
@@ -196,11 +220,178 @@ where
                     }
                 }
             }
-            Some(CliCommand::Lixeira) => {
+            Some(CliCommand::Lixeira { command: None }) => {
                 let core = NoteItCore::open_read_only();
                 let trash = core.list_trash();
                 Ok(output::render_trash(ctx, &trash))
             }
+
+            // ---- Write API. Everything below changes the store, and every
+            // one of them goes through the same authority decision.
+            Some(CliCommand::Criar {
+                texto,
+                stdin: from_stdin,
+                tag,
+                propriedade,
+            }) => {
+                // A note with nothing in it is a legitimate thing to ask for,
+                // and is exactly what the interface's own new note is.
+                let content: String =
+                    read_payload(ctx, texto, from_stdin, stdin)?.unwrap_or_default();
+                let mut properties = Vec::new();
+                for raw in &propriedade {
+                    let (key, value) =
+                        NoteFilter::parse_property_arg(raw).map_err(|err| usage(ctx, &err))?;
+                    properties.push(NoteProperty { key, value });
+                }
+                perform(
+                    ctx,
+                    WriteOperation::CreateNote {
+                        draft: NoteDraft {
+                            content,
+                            tags: tag,
+                            properties,
+                        },
+                    },
+                )
+            }
+
+            Some(CliCommand::Adicionar {
+                id,
+                texto,
+                stdin: from_stdin,
+            }) => {
+                let Some(payload) = read_payload(ctx, texto, from_stdin, stdin)? else {
+                    return Err(usage(
+                        ctx,
+                        "informe o texto a acrescentar, como argumento ou com `--stdin`.",
+                    ));
+                };
+                perform(
+                    ctx,
+                    WriteOperation::MutateNote {
+                        selector: id,
+                        mutation: NoteMutation::Append { payload },
+                    },
+                )
+            }
+
+            Some(CliCommand::Editar {
+                id,
+                texto,
+                stdin: from_stdin,
+                vazio,
+            }) => {
+                // Emptying a note is asked for by name and never by accident.
+                // An empty pipe is a mistake far more often than it is an
+                // instruction, and the note it would destroy is not
+                // recoverable from the command line.
+                if vazio && (texto.is_some() || from_stdin) {
+                    return Err(usage(
+                        ctx,
+                        "`--vazio` esvazia a nota e por isso não aceita texto junto.",
+                    ));
+                }
+                let mutation = if vazio {
+                    NoteMutation::ClearBody
+                } else {
+                    let Some(body) = read_payload(ctx, texto, from_stdin, stdin)? else {
+                        return Err(usage(
+                            ctx,
+                            "informe o novo corpo, como argumento ou com `--stdin`. \
+                             Para esvaziar a nota use `--vazio`.",
+                        ));
+                    };
+                    if noteit_core::NoteDocument::canonical_content(&body).is_empty() {
+                        return Err(usage(
+                            ctx,
+                            "o novo corpo está vazio. Para esvaziar a nota de propósito use `--vazio`.",
+                        ));
+                    }
+                    NoteMutation::ReplaceBody { body }
+                };
+                perform(
+                    ctx,
+                    WriteOperation::MutateNote {
+                        selector: id,
+                        mutation,
+                    },
+                )
+            }
+
+            Some(CliCommand::Tags {
+                command: Some(TagsCommand::Adicionar { id, tag }),
+            }) => perform(
+                ctx,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::AddTag { tag },
+                },
+            ),
+
+            Some(CliCommand::Tags {
+                command: Some(TagsCommand::Remover { id, tag }),
+            }) => perform(
+                ctx,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::RemoveTag { tag },
+                },
+            ),
+
+            Some(CliCommand::Propriedades {
+                command: Some(PropertiesCommand::Definir { id, atribuicao }),
+            }) => {
+                let (key, value) =
+                    NoteFilter::parse_property_arg(&atribuicao).map_err(|err| usage(ctx, &err))?;
+                perform(
+                    ctx,
+                    WriteOperation::MutateNote {
+                        selector: id,
+                        mutation: NoteMutation::SetProperty { key, value },
+                    },
+                )
+            }
+
+            Some(CliCommand::Propriedades {
+                command: Some(PropertiesCommand::Remover { id, chave }),
+            }) => perform(
+                ctx,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::RemoveProperty { key: chave },
+                },
+            ),
+
+            Some(CliCommand::Tarefas {
+                command: Some(TasksCommand::Concluir { id, referencia }),
+                ..
+            }) => perform(
+                ctx,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::CompleteTask {
+                        task_ref: referencia,
+                    },
+                },
+            ),
+
+            Some(CliCommand::Tarefas {
+                command: Some(TasksCommand::Reabrir { id, referencia }),
+                ..
+            }) => perform(
+                ctx,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::ReopenTask {
+                        task_ref: referencia,
+                    },
+                },
+            ),
+
+            Some(CliCommand::Lixeira {
+                command: Some(TrashCommand::Restaurar { id }),
+            }) => perform(ctx, WriteOperation::RestoreFromTrash { selector: id }),
         },
         Err(err) => match err.kind() {
             ErrorKind::DisplayHelp => {
@@ -214,6 +405,75 @@ where
             ErrorKind::DisplayVersion => Ok(output::render_version(ctx)),
             _ => Err((EXIT_USAGE_ERROR, output::render_error(ctx, &err))),
         },
+    }
+}
+
+/// Reads everything on standard input, as bytes that are text.
+///
+/// Nothing is trimmed, reflowed or sanitized here. What arrives is what the
+/// person piped in, and Markdown is allowed to contain anything Markdown
+/// contains — see [`output::sanitize_for_terminal`], which is about *showing*
+/// text and is deliberately not applied to text on its way into a note.
+pub fn read_process_stdin() -> Result<String, String> {
+    let mut buffer = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buffer)
+        .map_err(|error| format!("não foi possível ler a entrada padrão: {error}"))?;
+    Ok(buffer)
+}
+
+/// A usage error, spelled the way every other one in this CLI is.
+fn usage(ctx: &OutputContext, message: &str) -> (u8, String) {
+    (
+        EXIT_USAGE_ERROR,
+        format!(
+            "{} {}\n\nUse `{}` para ver o formato correto.\n",
+            ctx.bold("Erro:"),
+            output::sanitize_for_terminal(message),
+            ctx.bold("noteit ajuda")
+        ),
+    )
+}
+
+/// The text a write command was given, from an argument or from standard input.
+///
+/// The two are mutually exclusive on purpose: a command given both has been
+/// asked for two different things, and picking one silently is how the wrong
+/// text ends up in a note. `None` means neither was supplied, which each
+/// command answers for itself.
+fn read_payload(
+    ctx: &OutputContext,
+    argument: Option<String>,
+    from_stdin: bool,
+    stdin: StdinSource<'_>,
+) -> Result<Option<String>, (u8, String)> {
+    match (argument, from_stdin) {
+        (Some(_), true) => Err(usage(
+            ctx,
+            "informe o texto como argumento ou com `--stdin`, nunca os dois.",
+        )),
+        (Some(text), false) => Ok(Some(text)),
+        (None, true) => stdin().map(Some).map_err(|error| usage(ctx, &error)),
+        (None, false) => Ok(None),
+    }
+}
+
+/// Runs one write operation and turns its outcome into what a person reads.
+fn perform(ctx: &OutputContext, operation: WriteOperation) -> Result<String, (u8, String)> {
+    match authority::perform(&operation) {
+        Ok(performed) => {
+            // A committed write whose window could not be refreshed is still a
+            // committed write. The warning goes to stderr and the success line
+            // to stdout, so nothing about it reads as "try that again".
+            if let Some(warning) = &performed.outcome.ui_sync_warning {
+                eprint!("{}", output::render_write_warning(ctx, warning));
+            }
+            Ok(output::render_write_outcome(ctx, &performed.outcome))
+        }
+        Err(error) => Err((
+            output::exit_code_for_write_error(&error),
+            output::render_write_error(ctx, &error),
+        )),
     }
 }
 

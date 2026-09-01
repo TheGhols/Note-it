@@ -52,6 +52,15 @@ export interface NoteData {
    * a WebView that has just been created is never the capture target.
    */
   captureDelimiter: CaptureDelimiter;
+  /**
+   * Which run of this document the page is being handed.
+   *
+   * Everything the page sends back that carries content quotes this number,
+   * and the host refuses anything quoting an older one. A note changed from
+   * outside this window gets a new generation, so an autosave already in
+   * flight cannot put the previous body back.
+   */
+  generation: number;
 }
 
 export interface TagView {
@@ -153,12 +162,34 @@ export type HostToWebviewMessage =
     }
   | { type: 'request_content' }
   | { type: 'request_save_and_close' }
-  | { type: 'request_flush'; payload: { requestId: number } };
+  | { type: 'request_flush'; payload: { requestId: number } }
+  /** Hold the document still: something outside this window is about to change it. */
+  | { type: 'begin_external_write'; payload: { requestId: string; generation: number } }
+  /** The change is committed; this is the note as it now stands on disk. */
+  | {
+      type: 'apply_external_document';
+      payload: {
+        requestId: string;
+        generation: number;
+        content: string;
+        metadata: MetadataView;
+        createdAt: string | null;
+        updatedAt: string | null;
+      };
+    }
+  /** Nothing was written after all; carry on exactly where you left off. */
+  | { type: 'abort_external_write'; payload: { requestId: string } };
 
 export type WebviewToHostMessage =
   | { type: 'ready' }
-  | { type: 'content_changed'; payload: { id: string; content: string } }
-  | { type: 'save_and_close'; payload: { id: string; content: string } }
+  | { type: 'content_changed'; payload: { id: string; content: string; generation: number } }
+  | { type: 'save_and_close'; payload: { id: string; content: string; generation: number } }
+  /** The document is held still and this is what it held. Only ever sent in
+   *  answer to `begin_external_write`, and only after freezing. */
+  | {
+      type: 'external_write_ready';
+      payload: { id: string; requestId: string; generation: number; content: string };
+    }
   | { type: 'new_note_requested' }
   | { type: 'color_changed'; payload: { id: string; color: PaperColor } }
   | { type: 'font_size_changed'; payload: { id: string; fontSize: number } }
@@ -172,6 +203,7 @@ export type WebviewToHostMessage =
         requestId: number;
         id: string;
         content: string;
+        generation: number;
         tags: string[];
         properties: NoteProperty[];
       };
@@ -216,7 +248,10 @@ export type WebviewToHostMessage =
   | { type: 'resize_start' }
   | { type: 'resize_update'; payload: { dx: number; dy: number } }
   | { type: 'resize_end' }
-  | { type: 'flush_response'; payload: { id: string; requestId: number; content: string } };
+  | {
+      type: 'flush_response';
+      payload: { id: string; requestId: number; content: string; generation: number };
+    };
 
 declare global {
   interface Window {

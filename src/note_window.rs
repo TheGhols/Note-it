@@ -5,8 +5,8 @@ use crate::layer_shell::{
     DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
 use crate::webview_bridge::{
-    parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
-    MetadataView, WebviewToHostMessage,
+    parse_webview_message, send_to_webview, send_to_webview_confirmed, validate_external_url,
+    HostToWebviewMessage, MetadataView, WebviewToHostMessage,
 };
 use gtk4::gdk;
 use gtk4::prelude::*;
@@ -88,9 +88,22 @@ pub struct NoteWindowOptions<'a> {
 
 type FlushCallback = Box<dyn FnOnce(Result<(), String>)>;
 type PendingFlushes = Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>;
+/// What the host is waiting for while an external write holds the editor.
+type ExternalWriteCallback = Box<dyn FnOnce(Result<String, String>)>;
+type PendingExternalWrite = Rc<RefCell<Option<(Uuid, ExternalWriteCallback)>>>;
 
 const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content";
+
+/// How long the page is given to stop editing and hand back its text.
+///
+/// Longer than the ordinary flush, because this one has a person's unsaved
+/// paragraph in it and giving up on that is expensive. Bounded all the same: a
+/// page that never answers must not leave the editor held for ever, and it
+/// must not leave the writer that asked waiting for ever either.
+const EXTERNAL_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(4000);
+const EXTERNAL_WRITE_TIMEOUT_ERROR: &str =
+    "a nota aberta não respondeu a tempo. Nada foi alterado.";
 const CLICK_FOCUS_RESTORE_DELAY: std::time::Duration = std::time::Duration::from_millis(60);
 
 #[derive(Default)]
@@ -132,6 +145,23 @@ pub struct NoteWindow {
     ui_scale_percent: Rc<Cell<u16>>,
     allow_close: Rc<Cell<bool>>,
     pending_flushes: PendingFlushes,
+    /// Which run of this note's document the page is currently on.
+    ///
+    /// Starts at zero when the note is loaded and goes up by one every time
+    /// something outside the window commits a change. Every message from the
+    /// page that carries content quotes the generation it was composed
+    /// against, and one quoting an older number is refused — that is the whole
+    /// mechanism that stops an autosave already in flight from writing over a
+    /// commit that has just landed.
+    ///
+    /// Runtime only: it is never stored, never in the front matter, and
+    /// meaningless once the window is gone.
+    external_generation: Rc<Cell<u64>>,
+    /// The external write this window is currently holding still for.
+    ///
+    /// At most one at a time. Two of them would each snapshot the same text
+    /// and the second commit would silently undo the first.
+    pending_external_write: PendingExternalWrite,
     /// False until the page has said `Ready` and been handed its note. A
     /// message that assumes a loaded document has to wait for this.
     loaded: Rc<Cell<bool>>,
@@ -283,6 +313,10 @@ impl NoteWindow {
         let pending_reveal: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let loaded_clone = Rc::clone(&loaded);
         let pending_reveal_clone = Rc::clone(&pending_reveal);
+        let external_generation = Rc::new(Cell::new(0u64));
+        let generation_clone = Rc::clone(&external_generation);
+        let pending_external_write: PendingExternalWrite = Rc::new(RefCell::new(None));
+        let pending_external_clone = Rc::clone(&pending_external_write);
         let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
         let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
@@ -318,6 +352,7 @@ impl NoteWindow {
                                         ui_scale_percent: ui_scale_clone.get(),
                                         timer: state_clone.borrow().timer,
                                         capture_delimiter: capture_delimiter_clone.get(),
+                                        generation: generation_clone.get(),
                                     },
                                 );
                                 loaded_clone.set(true);
@@ -335,9 +370,15 @@ impl NoteWindow {
                         WebviewToHostMessage::ContentChanged {
                             id: message_id,
                             content,
+                            generation,
                         } => {
                             if message_id != id {
                                 eprintln!("Autosave rejected a mismatched note identifier");
+                            } else if !accepts_generation(&generation_clone, generation, "autosave")
+                            {
+                                // Composed against a document that has since
+                                // been replaced from outside this window.
+                                // Writing it would undo that change.
                             } else if let Err(error) =
                                 save_content(&storage_clone, &doc_clone, id, content)
                             {
@@ -455,11 +496,21 @@ impl NoteWindow {
                             request_id,
                             id: message_id,
                             content,
+                            generation,
                             tags,
                             properties,
                         } => {
                             let result = if message_id != id {
                                 Err("a nota da solicitação não corresponde à janela".to_string())
+                            } else if !accepts_generation(
+                                &generation_clone,
+                                generation,
+                                "metadata save",
+                            ) {
+                                // The body travelling with this metadata is
+                                // older than the note is. Applying it would
+                                // bring the previous text back with the tag.
+                                Err("a nota mudou; reabra o painel de metadados".to_string())
                             } else {
                                 NoteMetadata::try_new(tags, properties)
                                     .map_err(|error| error.to_string())
@@ -497,9 +548,20 @@ impl NoteWindow {
                         WebviewToHostMessage::SaveAndClose {
                             id: message_id,
                             content,
+                            generation,
                         } => {
                             if message_id != id {
                                 eprintln!("Save-and-close rejected a mismatched note identifier");
+                            } else if !accepts_generation(
+                                &generation_clone,
+                                generation,
+                                "save-and-close",
+                            ) {
+                                // The window still closes; what it must not do
+                                // is take an older body down with it.
+                                if let Err(error) = on_close_clone(id) {
+                                    eprintln!("Close finalization failed for note {id}: {error}");
+                                }
                             } else if let Err(error) = save_and_close(
                                 &storage_clone,
                                 &doc_clone,
@@ -762,8 +824,22 @@ impl NoteWindow {
                             id: message_id,
                             request_id,
                             content,
+                            generation,
                         } => {
-                            if !complete_flush_response(
+                            if !accepts_generation(&generation_clone, generation, "flush") {
+                                // A flush answer from a superseded run of the
+                                // document. The request is still resolved, so
+                                // whatever is waiting on it is not left
+                                // hanging — it is simply told, rather than
+                                // handed an old body to write.
+                                if let Some(callback) =
+                                    flushes_clone.borrow_mut().remove(&request_id)
+                                {
+                                    callback(Err(
+                                        "a nota mudou enquanto o texto era recolhido".to_string()
+                                    ));
+                                }
+                            } else if !complete_flush_response(
                                 &storage_clone,
                                 &doc_clone,
                                 id,
@@ -774,6 +850,31 @@ impl NoteWindow {
                             ) {
                                 eprintln!(
                                     "Rejected inactive or invalid flush response for note {id} and request {request_id}"
+                                );
+                            }
+                        }
+                        WebviewToHostMessage::ExternalWriteReady {
+                            id: message_id,
+                            request_id,
+                            generation,
+                            content,
+                        } => {
+                            if !settle_external_write(
+                                &pending_external_clone,
+                                &generation_clone,
+                                id,
+                                message_id,
+                                request_id,
+                                generation,
+                                content,
+                            ) {
+                                // Either the host already gave up on this
+                                // request, or the answer belongs to another
+                                // note or another run of this one. A host that
+                                // has declared a timeout must never be able to
+                                // commit the late answer it timed out on.
+                                eprintln!(
+                                    "Rejected a stale or unknown external-write answer for note {id}"
                                 );
                             }
                         }
@@ -909,6 +1010,8 @@ impl NoteWindow {
             loaded,
             capture_delimiter: capture_delimiter_cell,
             pending_reveal,
+            external_generation,
+            pending_external_write,
         }
     }
 
@@ -1269,10 +1372,179 @@ impl NoteWindow {
         });
     }
 
+    /// Whether the page has been handed its document yet.
+    ///
+    /// A window whose page has not said `Ready` holds no text of its own, so
+    /// asking it for a snapshot would answer with an empty document and an
+    /// external write would store that. Nothing asks.
+    pub fn is_loaded(&self) -> bool {
+        self.loaded.get()
+    }
+
+    /// Which run of the document the page is on.
+    pub fn external_generation(&self) -> u64 {
+        self.external_generation.get()
+    }
+
+    /// Asks the page to stop editing and hand back exactly what it holds.
+    ///
+    /// This is the barrier, and the order inside it is the whole point. The
+    /// page freezes *before* it reads its own text; from the moment it answers
+    /// until the write is committed or abandoned, nothing can change the
+    /// document. A plain flush cannot do this job: it asks for the text and
+    /// the reader keeps typing, so the answer is already out of date when it
+    /// arrives and the character typed in between is written over.
+    ///
+    /// The callback is given the page's Markdown, or the reason there is none.
+    /// It runs exactly once: a second answer to the same request, or one that
+    /// arrives after the timeout has already fired, is ignored.
+    pub fn begin_external_write<F: FnOnce(Result<String, String>) + 'static>(
+        &self,
+        request_id: Uuid,
+        callback: F,
+    ) {
+        if self.pending_external_write.borrow().is_some() {
+            callback(Err(
+                "a nota já está sendo alterada por outra solicitação".to_string()
+            ));
+            return;
+        }
+        if !self.loaded.get() {
+            callback(Err("a nota ainda não terminou de abrir".to_string()));
+            return;
+        }
+
+        *self.pending_external_write.borrow_mut() = Some((request_id, Box::new(callback)));
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::BeginExternalWrite {
+                request_id,
+                generation: self.external_generation.get(),
+            },
+        );
+
+        let pending = Rc::clone(&self.pending_external_write);
+        let webview = self.webview.downgrade();
+        glib::timeout_add_local_once(EXTERNAL_WRITE_TIMEOUT, move || {
+            let expired = take_external_write(&pending, request_id);
+            if let Some(callback) = expired {
+                // The request is dropped here, so the page's late answer finds
+                // nothing waiting and cannot be committed afterwards.
+                callback(Err(EXTERNAL_WRITE_TIMEOUT_ERROR.to_string()));
+                if let Some(webview) = webview.upgrade() {
+                    send_to_webview(
+                        &webview,
+                        &HostToWebviewMessage::AbortExternalWrite { request_id },
+                    );
+                }
+            }
+        });
+    }
+
+    /// Hands the committed note back to the page and lets it edit again.
+    ///
+    /// Called only after the atomic write returned, so what the page adopts is
+    /// what is on disk. The generation goes up here and nowhere else: from
+    /// this moment anything still in flight from the previous run is refused.
+    pub fn finish_external_write<F: FnOnce(Result<(), String>) + 'static>(
+        &self,
+        request_id: Uuid,
+        committed: &NoteDocument,
+        done: F,
+    ) {
+        let generation = self.external_generation.get().wrapping_add(1);
+        self.external_generation.set(generation);
+        send_to_webview_confirmed(
+            &self.webview,
+            &HostToWebviewMessage::ApplyExternalDocument {
+                request_id,
+                generation,
+                content: committed.content.clone(),
+                metadata: MetadataView::from(&committed.user_metadata),
+                created_at: committed.metadata.created_at,
+                updated_at: committed.metadata.updated_at,
+            },
+            done,
+        );
+    }
+
+    /// Nothing was written; the page simply carries on where it left off.
+    pub fn abort_external_write(&self, request_id: Uuid) {
+        let _ = take_external_write(&self.pending_external_write, request_id);
+        send_to_webview(
+            &self.webview,
+            &HostToWebviewMessage::AbortExternalWrite { request_id },
+        );
+    }
+
+    /// Replaces the document this window holds with one already on disk.
+    ///
+    /// Used when a note is changed from outside while its window exists but
+    /// its page has not loaded yet: there is no live text to lose, and the
+    /// document in memory must keep describing the file.
+    pub fn adopt_committed_document(&self, committed: NoteDocument) {
+        *self.document.borrow_mut() = committed;
+        self.external_generation
+            .set(self.external_generation.get().wrapping_add(1));
+    }
+
     pub fn close_after_save(&self) {
         self.allow_close.set(true);
         self.window.close();
     }
+}
+
+/// Whether a message from the page belongs to the run of the document the
+/// window is actually on.
+///
+/// Anything older is refused rather than written. It was composed against text
+/// that has since been replaced by a committed external change, and storing it
+/// would put the old body back — which is exactly the failure the generation
+/// exists to prevent.
+fn accepts_generation(current: &Rc<Cell<u64>>, quoted: u64, what: &str) -> bool {
+    let live = current.get();
+    if quoted == live {
+        return true;
+    }
+    eprintln!("Rejected a stale {what}: it quotes generation {quoted} and the note is on {live}");
+    false
+}
+
+/// Takes the waiting external write out, if it is the one named.
+fn take_external_write(
+    pending: &PendingExternalWrite,
+    request_id: Uuid,
+) -> Option<ExternalWriteCallback> {
+    let mut slot = pending.borrow_mut();
+    match slot.as_ref() {
+        Some((waiting, _)) if *waiting == request_id => slot.take().map(|(_, callback)| callback),
+        _ => None,
+    }
+}
+
+/// Resolves one external-write answer from the page.
+///
+/// Answers `false` — and does nothing at all — when the message is not the one
+/// being waited for: another note, another run of this note, or a request the
+/// host has already given up on. That last case is the one that matters: once
+/// a timeout has fired, the late answer must not be able to commit anything.
+fn settle_external_write(
+    pending: &PendingExternalWrite,
+    generation: &Rc<Cell<u64>>,
+    expected_note_id: Uuid,
+    message_note_id: Uuid,
+    request_id: Uuid,
+    quoted_generation: u64,
+    content: String,
+) -> bool {
+    if message_note_id != expected_note_id || quoted_generation != generation.get() {
+        return false;
+    }
+    let Some(callback) = take_external_write(pending, request_id) else {
+        return false;
+    };
+    callback(Ok(content));
+    true
 }
 
 fn schedule_click_focus_restore(
@@ -1516,9 +1788,10 @@ fn file_uri_for_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_collapse_to_state, complete_flush_response, expire_flush_request, file_uri_for_path,
-        save_and_close, save_content, save_metadata, save_user_metadata, PendingFlushes,
-        SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
+        accepts_generation, apply_collapse_to_state, complete_flush_response, expire_flush_request,
+        file_uri_for_path, save_and_close, save_content, save_metadata, save_user_metadata,
+        settle_external_write, take_external_write, ExternalWriteCallback, PendingExternalWrite,
+        PendingFlushes, SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
     use noteit_core::metadata::{NoteMetadata, NoteProperty};
@@ -3279,5 +3552,222 @@ mod tests {
         assert_eq!(reloaded.metadata.created_at, created_at);
         assert!(reloaded.metadata.updated_at >= updated_at);
         assert!(reloaded.metadata.updated_at.is_some());
+    }
+    // The runtime generation ---------------------------------------------------
+    //
+    // A note changed from outside its window gets a new generation. Everything
+    // the page sends that carries content quotes the generation it was
+    // composed against, and anything quoting an older one is refused. That is
+    // the whole mechanism that stops an autosave already in flight from
+    // putting the previous body back over a commit that has just landed.
+
+    fn generation(start: u64) -> Rc<Cell<u64>> {
+        Rc::new(Cell::new(start))
+    }
+
+    #[test]
+    fn a_message_from_the_current_run_of_the_document_is_accepted() {
+        let live = generation(0);
+        assert!(accepts_generation(&live, 0, "autosave"));
+
+        live.set(8);
+        assert!(accepts_generation(&live, 8, "autosave"));
+    }
+
+    #[test]
+    fn a_message_from_a_superseded_run_is_refused() {
+        // 4.0E §28. An external write committed generation 8; an autosave
+        // composed against 7 arrives afterwards. It was written against a
+        // document that no longer exists and must not reach the file.
+        let live = generation(8);
+        assert!(!accepts_generation(&live, 7, "autosave"));
+        assert!(!accepts_generation(&live, 0, "save-and-close"));
+        assert!(!accepts_generation(&live, 6, "metadata save"));
+        assert!(!accepts_generation(&live, 5, "flush"));
+    }
+
+    #[test]
+    fn a_message_quoting_a_run_that_does_not_exist_yet_is_refused_too() {
+        // Nothing legitimate can be ahead of the host: the host is what moves
+        // the generation on. Anything claiming to be is not from this window.
+        let live = generation(3);
+        assert!(!accepts_generation(&live, 4, "autosave"));
+    }
+
+    #[test]
+    fn a_stale_autosave_cannot_undo_an_external_commit() {
+        // The acceptance criterion, end to end over the two pieces that decide
+        // it: disk holds A, the page still has B from before, and an external
+        // write has committed A+C. The stale B is refused, so the file keeps
+        // A+C. Without the generation, B would be written and C would vanish.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "A");
+        let id = document.borrow().metadata.id;
+        let live = generation(0);
+
+        // The external write: A becomes A+C, and the generation moves on.
+        let committed = {
+            let mut candidate = document.borrow().clone();
+            candidate.content = "A\nC".to_string();
+            candidate.touch_content_modified();
+            candidate
+        };
+        storage.save_note_atomic(&committed).expect("commit");
+        *document.borrow_mut() = committed;
+        live.set(live.get() + 1);
+
+        // The autosave that was already in flight, carrying B.
+        assert!(
+            !accepts_generation(&live, 0, "autosave"),
+            "a stale autosave was accepted"
+        );
+
+        // Refused, so nothing writes it. The file is still the committed one.
+        let on_disk = storage.load_note(&id).expect("load");
+        assert_eq!(on_disk.content, "A\nC");
+        assert_eq!(document.borrow().content, "A\nC");
+
+        // And an edit composed against the new run persists normally.
+        assert!(accepts_generation(&live, 1, "autosave"));
+        save_content(&storage, &document, id, "A\nC\nD".to_string()).expect("save");
+        assert_eq!(storage.load_note(&id).expect("load").content, "A\nC\nD");
+    }
+
+    // The external write barrier -----------------------------------------------
+
+    fn pending_slot() -> PendingExternalWrite {
+        Rc::new(RefCell::new(None))
+    }
+
+    fn park(
+        pending: &PendingExternalWrite,
+        request_id: Uuid,
+        answer: Rc<RefCell<Option<Result<String, String>>>>,
+    ) {
+        let callback: ExternalWriteCallback = Box::new(move |result| {
+            *answer.borrow_mut() = Some(result);
+        });
+        *pending.borrow_mut() = Some((request_id, callback));
+    }
+
+    #[test]
+    fn the_page_s_answer_resolves_the_write_that_asked_for_it() {
+        let pending = pending_slot();
+        let live = generation(2);
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        park(&pending, request_id, Rc::clone(&answer));
+
+        assert!(settle_external_write(
+            &pending,
+            &live,
+            note_id,
+            note_id,
+            request_id,
+            2,
+            "ABCD".to_string(),
+        ));
+        assert_eq!(answer.borrow().clone(), Some(Ok("ABCD".to_string())));
+        assert!(pending.borrow().is_none(), "the request was not taken out");
+    }
+
+    #[test]
+    fn an_answer_the_host_has_already_given_up_on_can_never_commit() {
+        // 4.0E §26. The host times out, drops the request and tells the writer
+        // nothing was changed. A late answer must then find nothing waiting:
+        // committing it afterwards would write text on behalf of a command
+        // that has already been told it failed.
+        let pending = pending_slot();
+        let live = generation(0);
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        park(&pending, request_id, Rc::clone(&answer));
+
+        // The timeout fires and takes the request.
+        let expired = take_external_write(&pending, request_id).expect("the timeout takes it");
+        expired(Err("timed out".to_string()));
+        assert!(answer.borrow().is_some());
+        *answer.borrow_mut() = None;
+
+        assert!(
+            !settle_external_write(
+                &pending,
+                &live,
+                note_id,
+                note_id,
+                request_id,
+                0,
+                "tarde demais".to_string(),
+            ),
+            "a late answer was accepted after the host gave up"
+        );
+        assert!(answer.borrow().is_none());
+    }
+
+    #[test]
+    fn an_answer_for_another_note_or_another_run_is_ignored() {
+        let pending = pending_slot();
+        let live = generation(3);
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        park(&pending, request_id, Rc::clone(&answer));
+
+        // Another note's window.
+        assert!(!settle_external_write(
+            &pending,
+            &live,
+            note_id,
+            Uuid::new_v4(),
+            request_id,
+            3,
+            "x".to_string(),
+        ));
+        // The right note, a superseded run.
+        assert!(!settle_external_write(
+            &pending,
+            &live,
+            note_id,
+            note_id,
+            request_id,
+            2,
+            "x".to_string(),
+        ));
+        // The right note and run, a request nobody is waiting for.
+        assert!(!settle_external_write(
+            &pending,
+            &live,
+            note_id,
+            note_id,
+            Uuid::new_v4(),
+            3,
+            "x".to_string(),
+        ));
+
+        assert!(answer.borrow().is_none());
+        assert!(
+            pending.borrow().is_some(),
+            "a mismatched answer consumed the pending request"
+        );
+    }
+
+    #[test]
+    fn only_one_external_write_can_hold_a_note_at_a_time() {
+        // Two of them would each take their own snapshot of the same text and
+        // the second commit would silently undo the first.
+        let pending = pending_slot();
+        let first = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        park(&pending, first, Rc::clone(&answer));
+
+        assert!(pending.borrow().is_some());
+        assert!(
+            take_external_write(&pending, Uuid::new_v4()).is_none(),
+            "another request took the one that was waiting"
+        );
+        assert!(take_external_write(&pending, first).is_some());
     }
 }

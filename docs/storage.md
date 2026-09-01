@@ -11,13 +11,42 @@ Note-it adheres to the XDG Base Directory Specification:
 | `$XDG_DATA_HOME/note-it/study.json` | Versioned schedules and aggregate study activity | `~/.local/share/note-it/study.json` |
 | `$XDG_CONFIG_HOME/note-it/config.toml` | User configuration options | `~/.config/note-it/config.toml` |
 | `$XDG_STATE_HOME/note-it/state.json` | Window geometry, active mode, and transient UI state | `~/.local/state/note-it/state.json` |
-| `$XDG_RUNTIME_DIR/note-it/` | Unix domain sockets / IPC runtime files | `/run/user/<uid>/note-it/` |
+| `$XDG_RUNTIME_DIR/note-it/<store>/` | Writer lease and control socket for one store | `/run/user/<uid>/note-it/<store>/` |
 
 `study.json` contains only opaque SHA-256 review keys, levels, absolute UTC timestamps, ratings and
 daily counters keyed by local civil date. Questions, answers, Markdown, titles, HTML, image bytes and
 absolute paths never enter it. Missing means an empty history; corrupt or newer data is left byte for
 byte in place and makes Study unavailable rather than being replaced. Each rating builds a next
 state and commits it with the same atomic-write primitive as notes before the application adopts it.
+
+## Write Coordination Runtime
+
+Exactly one Note-it process may write a store at a time. The claim is an advisory `flock` on a lock
+file in the runtime directory, never the existence of a file: a process that crashes releases it the
+moment the kernel closes its descriptors, and a lock file left behind by a dead process blocks
+nobody.
+
+```text
+$XDG_RUNTIME_DIR/note-it/            0700
+  <store key>/                       0700
+    store                            0600   the notes directory this key stands for
+    writer.lock                      0600   the lease
+    control.sock                     0600   the authority's private socket
+```
+
+`<store key>` is the FNV-1a 64 digest of the notes directory path, written as sixteen lowercase
+hexadecimal characters. Keying by store is what lets an isolated test store and the real store have
+one legitimate writer each at the same time, without either waiting for the other.
+
+Nothing here belongs to the store. It describes this boot, is meaningless after a restart, and is
+never backed up. When the session has no `$XDG_RUNTIME_DIR` at all the fallback is
+`/tmp/note-it-<uid>`, scoped to the user rather than a name anyone could take first — and either way
+both directories are refused if they are a symlink, belong to another user, or are reachable by one.
+
+The desktop instance takes the lease before it can save anything and holds it until the process ends.
+`noteit` takes it for the length of one command when it is free; when it is held it sends the change
+to the holder over `control.sock`; when it is held and unreachable it changes nothing and says so.
+See ADR-038.
 
 ## Note Appearance Fields
 

@@ -8,8 +8,11 @@
 pub mod assets;
 pub mod autopaste;
 pub mod backup;
+pub mod control;
+pub mod coordination;
 pub mod diagnostics;
 pub mod filter;
+pub mod hashing;
 pub mod metadata;
 pub mod model;
 pub mod search;
@@ -21,6 +24,7 @@ pub mod task;
 pub mod timer;
 pub mod trash;
 pub mod warning;
+pub mod write;
 
 mod atomic_file;
 mod visible_text;
@@ -49,6 +53,35 @@ pub use warning::{ReadBatch, ReadWarning, ReadWarningKind};
 #[derive(Debug, Clone)]
 pub struct NoteItCore {
     storage: StorageManager,
+}
+
+/// The hexadecimal form of a selector, or a refusal.
+///
+/// One place decides what a selector may look like, so the live directory and
+/// the trash cannot drift apart on it: never a path, never a fragment too
+/// short to be meant, and hexadecimal characters with the hyphens of a UUID
+/// allowed as punctuation.
+fn normalize_selector(selector: &str) -> Result<String, NoteSelectorError> {
+    let trimmed = selector.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains("..")
+        || !trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    {
+        return Err(NoteSelectorError::InvalidFormat(trimmed.to_string()));
+    }
+
+    let hex_only: String = trimmed
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+
+    if hex_only.len() < 8 {
+        return Err(NoteSelectorError::InvalidFormat(trimmed.to_string()));
+    }
+    Ok(hex_only)
 }
 
 impl NoteItCore {
@@ -88,31 +121,46 @@ impl NoteItCore {
         self.storage.paths()
     }
 
-    /// Resolves a human-provided note selector (UUID or >= 8 hex prefix) to a unique live note UUID.
-    pub fn resolve_note_id(&self, selector: &str) -> Result<Uuid, NoteSelectorError> {
+    /// Resolves a human-provided selector (UUID or >= 8 hex prefix) against the trash.
+    ///
+    /// The same guarantees the live selector gives, applied to the other
+    /// directory: at least eight hexadecimal characters, a path refused
+    /// outright, and ambiguity reported rather than resolved. It is a separate
+    /// method rather than a flag because pointing the live resolver at the
+    /// trash — or the other way round — would restore, or overwrite, the wrong
+    /// note without anything looking wrong at the call site.
+    pub fn resolve_trash_id(&self, selector: &str) -> Result<Uuid, NoteSelectorError> {
+        let hex_only = normalize_selector(selector)?;
         let trimmed = selector.trim();
-        if trimmed.is_empty()
-            || trimmed.contains('/')
-            || trimmed.contains('\\')
-            || trimmed.contains("..")
-        {
-            return Err(NoteSelectorError::InvalidFormat(trimmed.to_string()));
-        }
-
-        // Must consist only of hex characters and optional hyphens
-        if !trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-            return Err(NoteSelectorError::InvalidFormat(trimmed.to_string()));
-        }
-
-        let hex_only: String = trimmed
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .map(|c| c.to_ascii_lowercase())
+        let candidates: Vec<Uuid> = self
+            .storage
+            .list_trash()
+            .into_iter()
+            .map(|entry| entry.note_id)
             .collect();
 
-        if hex_only.len() < 8 {
-            return Err(NoteSelectorError::InvalidFormat(trimmed.to_string()));
+        if let Ok(full_uuid) = Uuid::parse_str(trimmed) {
+            if candidates.contains(&full_uuid) {
+                return Ok(full_uuid);
+            }
         }
+
+        let matches: Vec<Uuid> = candidates
+            .into_iter()
+            .filter(|id| id.as_simple().to_string().starts_with(&hex_only))
+            .collect();
+
+        match matches.len() {
+            0 => Err(NoteSelectorError::NotFound(trimmed.to_string())),
+            1 => Ok(matches[0]),
+            _ => Err(NoteSelectorError::Ambiguous(trimmed.to_string(), matches)),
+        }
+    }
+
+    /// Resolves a human-provided note selector (UUID or >= 8 hex prefix) to a unique live note UUID.
+    pub fn resolve_note_id(&self, selector: &str) -> Result<Uuid, NoteSelectorError> {
+        let hex_only = normalize_selector(selector)?;
+        let trimmed = selector.trim();
 
         // If it parses as a full UUID directly, check if it exists
         if let Ok(full_uuid) = Uuid::parse_str(trimmed) {

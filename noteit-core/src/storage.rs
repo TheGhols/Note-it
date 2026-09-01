@@ -125,6 +125,20 @@ pub struct StorePaths {
     pub runtime_dir: PathBuf,
 }
 
+/// The `/tmp` name used when the session provides no runtime directory.
+///
+/// Named after the user, so two people on one machine never resolve to the
+/// same path. The identity is taken from the ownership of the home directory
+/// rather than from `$USER`, which anyone can set to anything; when even that
+/// cannot be read the bare name is used and `crate::coordination` refuses it
+/// unless it already belongs to this user.
+fn fallback_runtime_directory_name() -> String {
+    match dirs::home_dir().and_then(|home| fs::metadata(home).ok()) {
+        Some(metadata) => format!("note-it-{}", std::os::unix::fs::MetadataExt::uid(&metadata)),
+        None => "note-it".to_string(),
+    }
+}
+
 impl StorePaths {
     /// Purely resolves canonical Note-it paths according to XDG base directory specifications.
     ///
@@ -143,9 +157,16 @@ impl StorePaths {
             .unwrap_or_else(|| PathBuf::from("~/.local/state"))
             .join("note-it");
 
-        let runtime_dir = dirs::runtime_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("note-it");
+        // `/tmp` is shared by every user on the machine, so the fallback is
+        // scoped to this one rather than being a name anybody could take
+        // first. It is only ever reached when the session has no
+        // `XDG_RUNTIME_DIR` at all; whoever ends up using it still has the
+        // ownership and permission checks in `crate::coordination` between
+        // them and a lease.
+        let runtime_dir = match dirs::runtime_dir() {
+            Some(runtime) => runtime.join("note-it"),
+            None => PathBuf::from("/tmp").join(fallback_runtime_directory_name()),
+        };
 
         Self::from_custom_paths(notes_dir, config_dir, state_dir, runtime_dir)
     }

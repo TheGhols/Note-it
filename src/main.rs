@@ -3,6 +3,7 @@ mod cli;
 mod layer_shell;
 mod note_window;
 mod webview_bridge;
+mod write_authority;
 
 use app::NoteItApp;
 use clap::error::ErrorKind;

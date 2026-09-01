@@ -246,6 +246,49 @@ noteit versao                 # mostra a versão do Note-it (alias: noteit versi
 noteit status                 # verifica os diretórios e ambiente XDG de forma estritamente read-only
 ```
 
+Leitura (nunca escreve nada no repositório):
+
+```bash
+noteit listar                 # notas vivas, mais recentes primeiro   (alias: list)
+noteit ler 8c4f1a2b           # uma nota, pelo UUID ou prefixo        (alias: read)
+noteit buscar "choque"        # busca no corpo das notas              (alias: search)
+noteit tags                   # catálogo de tags
+noteit propriedades           # catálogo de propriedades              (alias: properties)
+noteit tarefas                # tarefas pendentes, com a referência de cada uma (alias: tasks)
+noteit lixeira                # notas excluídas recuperáveis          (alias: trash)
+```
+
+Escrita:
+
+```bash
+noteit criar "Comprar material"                    # devolve o UUID da nota criada
+printf '# Choque\n\nTexto...' | noteit criar --stdin --tag Medicina
+noteit adicionar 8c4f1a2b "Mais um parágrafo"      # acrescenta ao final  (alias: append)
+noteit editar 8c4f1a2b --stdin                     # substitui o corpo    (alias: edit)
+noteit editar 8c4f1a2b --vazio                     # esvazia, de propósito
+
+noteit tags adicionar 8c4f1a2b Medicina
+noteit tags remover 8c4f1a2b Medicina
+noteit propriedades definir 8c4f1a2b fonte=Harrison
+noteit propriedades remover 8c4f1a2b fonte
+
+noteit tarefas concluir 8c4f1a2b a71bc920          # a referência vem de `noteit tarefas`
+noteit tarefas reabrir 8c4f1a2b a71bc920
+noteit lixeira restaurar 8c4f1a2b
+```
+
+Nenhum comando de escrita abre uma janela, muda o foco ou altera a configuração — só as notas mudam.
+
+**Um escritor por vez.** Com o Note-it aberto, a alteração é feita *por ele*: a nota na tela é
+congelada, o texto que você digitou e ainda não foi salvo entra na mesma gravação, e a janela recebe
+a versão já gravada. Sem o Note-it aberto, a CLI grava direto. Se o repositório estiver em uso por
+outro escritor que não pode ser contatado, nada é alterado e a CLI diz isso — ela nunca escreve por
+cima de outro. Dois comandos simultâneos não perdem alteração nenhuma.
+
+A referência de tarefa mostrada por `noteit tarefas` é uma referência ao estado atual da nota, não um
+identificador permanente: se a tarefa mudar entre listar e concluir, o comando é recusado e basta
+listar de novo. É melhor do que concluir a tarefa errada.
+
 ### Durante o desenvolvimento
 
 Para testar o aplicativo desktop durante o desenvolvimento:
@@ -322,7 +365,11 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 
 ## Estado atual
 
-A Fase 4.0C (Headless CLI Foundation) está completa. A CLI headless `noteit` compartilha `noteit-core` com o aplicativo gráfico `note-it`. As próximas subfases da Fase 4 (Read API, Write API, Machine Interface/JSON e TUI interativa) estão planejadas no [roadmap](docs/roadmap.md).
+A Fase 4.0E (Write API + concorrência GUI/CLI) está completa. A CLI headless `noteit` lê e escreve o
+mesmo repositório que o aplicativo gráfico `note-it`, com exatamente um escritor por vez e sem perder
+texto que ainda não foi salvo em uma nota aberta. As próximas subfases da Fase 4 (Machine
+Interface/JSON, TUI interativa e ferramentas de automação) estão planejadas no
+[roadmap](docs/roadmap.md).
 
 ## Licença
 

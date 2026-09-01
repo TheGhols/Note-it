@@ -102,6 +102,14 @@ The real daemon never has to be stopped, and never notices.
 replacing it would break the display connection. Setting `DBUS_SESSION_BUS_ADDRESS` is what decides
 the bus, and it always wins over the runtime directory's socket.
 
+The writer lease and the control socket live in that same runtime directory, and they are kept apart
+the other way: each store gets its own coordination directory, named after a digest of its notes
+path. So an isolated instance and the real one never contend for a lease, and neither can block the
+other. What is left afterwards is a directory belonging to a store the test invented, and both
+harnesses remove exactly that one on the way out — found by the marker file Note-it writes inside it
+naming the store it serves, so the real store's directory can never be touched. After any isolated
+run, `find "$XDG_RUNTIME_DIR/note-it" -mindepth 1` should list nothing but the real store's own.
+
 ### Fail-closed
 
 Every check runs *before* Note-it is started, and there is no path that falls back to "well, at

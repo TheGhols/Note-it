@@ -1456,3 +1456,74 @@ executables consume `noteit-core` as their shared domain and persistence authori
 3. **Eradication of Direct Prints in Read Paths.** Removed the remaining `eprintln!` in `StorageManager::read_bodies`. All Core read methods return pure data, errors, or typed warnings.
 4. **Domain Query Separation.** The raw user query is provided directly to `noteit-core` without alteration, ensuring search logic operates on the intended search term. Terminal sanitization is applied strictly during presentation rendering.
 5. **Strict Task Comment Regex Matching.** Task metadata extraction validates that `<!-- note-it:completed_at=... -->` contains exactly one non-whitespace timestamp token. Comments with trailing garbage (e.g. `<!-- note-it:completed_at=2026-08-27T11:32:00Z lixo -->`) do not match the Note-it metadata regex and are left unmodified in the note text.
+
+## ADR-038: One Note-it Writer per Store, and the Barrier That Makes It True
+
+**Decision.** Exactly one Note-it process may write a store at a time, enforced by an advisory
+`flock` on a lock file in the runtime directory. The desktop instance takes that lease at startup and
+holds it until the process ends; the CLI takes it for the length of one command when it is free, and
+when it is not, sends the change to whoever holds it over a private Unix domain socket rather than
+writing the file itself. A note that is open in a window is changed only after its editor has been
+frozen and its live text collected, and everything the page sends afterwards carries a runtime
+generation the host checks.
+
+**Rationale.**
+
+1. **An atomic write is not enough.** `write_atomic` keeps a *file* whole; it says nothing about two
+   processes that each read a note, each change their own copy and each write it back. Both writes
+   succeed, both files are intact, and one person's edit is gone — and nothing in the storage layer
+   can see it happen, because from where it stands both writes were correct. The exclusion therefore
+   has to live above the file, and it has to be the same mechanism in both adapters or it is not
+   exclusion at all.
+
+2. **A lock, not a file.** The lease is `flock` on a lock file, never the existence of that file. A
+   process that crashes releases it immediately, because the kernel closes its descriptors; a lock
+   file left behind by a dead process blocks nobody. No PID is trusted, no timestamp is compared and
+   no staleness is guessed — all three are ways of being wrong about whether anyone is there. Rust's
+   standard library provides this since 1.89, so it costs no dependency.
+
+3. **Keyed by store, not by machine.** An isolated test store and the real store are two different
+   stores with two legitimate writers at the same time. The coordination directory is named after a
+   deterministic digest of the notes directory, so they never contend — and a test can never deadlock
+   against the application its author is using.
+
+4. **Runtime, not store.** A lock and a socket describe this boot. They are meaningless after a
+   restart, must never be backed up, and have no business sitting next to the notes.
+   `$XDG_RUNTIME_DIR` is the directory the specification defines for exactly this. Both directories
+   are created `0700` and refused if they are a symlink or belong to another user; the socket is
+   `0600` inside them.
+
+5. **The desktop instance is the authority because only it can be.** A note open in a window may hold
+   a paragraph the file does not have yet. The only process that can safely write that note is the one
+   that can ask the window for it, so while Note-it is running everything goes through it. The lease
+   is held for the whole session and released only when the process ends, because that is the moment
+   it stops being able to save.
+
+6. **A flush is not a barrier.** Asking the page for its text and then writing has a gap: the reader
+   keeps typing, the answer is already out of date when it arrives, and the character typed in
+   between is written over. So the page stops being editable *first* and reads its own text second.
+   Freezing is at the transaction, not at editability alone — editability stops the reader, and the
+   page itself changes documents through commands that do not care about it.
+
+7. **A generation, so nothing in flight can undo a commit.** Each committed external write moves a
+   runtime counter. Every message from the page that carries content quotes the generation it was
+   composed against, and the host refuses anything older. Without it, an autosave that left the page
+   before the commit would land after it and put the previous body back.
+
+8. **Refused and committed are never confused.** A write that failed before the commit point changed
+   nothing and may be repeated. A write that committed but could not refresh the window is *not* a
+   failure, and reporting it as one would have someone append the same paragraph twice. A connection
+   that dropped after the request went out is neither, and is reported as unknown — because guessing
+   either way is how a note ends up with duplicated text.
+
+9. **Task references are optimistic snapshots, not identity.** Phase 4.0D deliberately gave tasks no
+   persistent identifier and this does not smuggle one in: no sidecar, no database, nothing written
+   into the Markdown. A reference is recomputed from the note at the moment of the write and refused
+   if it no longer names exactly one task. Being told to list the tasks again is a far better outcome
+   than quietly ticking off a different one.
+
+10. **Private, and staying that way.** The control protocol is a local Unix socket carrying
+    length-prefixed JSON. There is no TCP, no HTTP, no port and no localhost server, and a request
+    cannot carry a filesystem path because there is no field to put one in. It is an implementation
+    detail of the handover — not the machine-readable interface Phase 4.0F is reserved for — and
+    nothing outside this repository may depend on it.

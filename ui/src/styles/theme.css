@@ -2173,6 +2173,47 @@ body[data-collapsed="true"] .resize-handle {
 
 /* One line at the foot of the note. It reports and disappears; it never takes
    the keyboard and there is nothing to dismiss. */
+/* The note is being changed from outside this window.
+ *
+ * Held back by a delayed fade so a write that takes twenty milliseconds — which
+ * is nearly all of them — is never seen at all. It appears only when the pause
+ * would have been noticeable anyway, which is the only time saying anything is
+ * an improvement on saying nothing. */
+.note-syncing {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--note-status-fg, currentColor);
+  background: var(--note-status-bg, rgba(0, 0, 0, 0.06));
+  pointer-events: none;
+  opacity: 0;
+  animation: note-syncing-appear 160ms ease-out 400ms forwards;
+}
+
+.note-syncing[hidden] {
+  display: none;
+}
+
+@keyframes note-syncing-appear {
+  to {
+    opacity: 0.7;
+  }
+}
+
+/* Someone who has asked for less motion still gets the information, without
+ * the fade. */
+@media (prefers-reduced-motion: reduce) {
+  .note-syncing {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .note-status {
   position: absolute;
   z-index: 31;

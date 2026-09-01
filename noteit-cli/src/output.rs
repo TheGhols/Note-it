@@ -1,4 +1,5 @@
 use noteit_core::chrono::{DateTime, Utc};
+use noteit_core::write::{WriteError, WriteOutcome, WriteOutcomeKind};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSummary, ReadWarning, SearchResult, StorePaths, TaskEntry,
     TaskStateFilter, TrashEntry, Uuid,
@@ -200,12 +201,48 @@ pub fn render_welcome(ctx: &OutputContext) -> String {
 pub fn render_help(ctx: &OutputContext) -> String {
     let title = ctx.bold("Note-it CLI");
     let section_usage = ctx.bold("Uso:");
-    let section_commands = ctx.bold("Comandos:");
+    let section_reading = ctx.bold("Leitura:");
+    let section_writing = ctx.bold("Escrita:");
     let section_options = ctx.bold("Opções comuns:");
     let section_aliases = ctx.bold("Aliases internacionais:");
 
     format!(
-        "{title}\n\n{section_usage}\n  noteit <comando> [opções]\n\n{section_commands}\n  listar       Listar notas vivas em ordem de atualização\n  ler <ID>     Ler uma nota pelo UUID ou prefixo de 8 caracteres\n  buscar <Q>   Buscar notas pelo conteúdo de texto\n  tags         Listar tags e contagem de notas\n  propriedades Listar propriedades e contagem de notas\n  tarefas      Listar tarefas (pendentes por padrão)\n  lixeira      Listar notas excluídas recuperáveis\n  status       Verificar o ambiente e store do Note-it\n  ajuda        Mostrar esta ajuda\n  versao       Mostrar a versão\n\n{section_options}\n  --limite, --limit N              Limitar quantidade de resultados (1-100)\n  --tag <TAG>                      Filtrar por tag (repetível com AND)\n  --propriedade, --property K=V    Filtrar por propriedade (repetível com AND)\n  --estado, --state <E>            Estado das tarefas: pendentes, concluidas, todas\n\n{section_aliases}\n  list, read, search, properties, tasks, trash, help, version\n"
+        "{title}\n\n\
+         {section_usage}\n  noteit <comando> [opções]\n\n\
+         {section_reading}\n\
+         \x20 listar       Listar notas vivas em ordem de atualização\n\
+         \x20 ler <ID>     Ler uma nota pelo UUID ou prefixo de 8 caracteres\n\
+         \x20 buscar <Q>   Buscar notas pelo conteúdo de texto\n\
+         \x20 tags         Listar tags e contagem de notas\n\
+         \x20 propriedades Listar propriedades e contagem de notas\n\
+         \x20 tarefas      Listar tarefas (pendentes por padrão), com a referência de cada uma\n\
+         \x20 lixeira      Listar notas excluídas recuperáveis\n\
+         \x20 status       Verificar o ambiente e store do Note-it\n\
+         \x20 ajuda        Mostrar esta ajuda\n\
+         \x20 versao       Mostrar a versão\n\n\
+         {section_writing}\n\
+         \x20 criar [TEXTO]                      Criar uma nota e devolver o identificador dela\n\
+         \x20 adicionar <ID> <TEXTO>             Acrescentar Markdown ao final de uma nota\n\
+         \x20 editar <ID> <TEXTO>                Substituir todo o corpo Markdown da nota\n\
+         \x20 tags adicionar <ID> <TAG>          Adicionar uma tag\n\
+         \x20 tags remover <ID> <TAG>            Remover uma tag\n\
+         \x20 propriedades definir <ID> K=V      Definir uma propriedade\n\
+         \x20 propriedades remover <ID> K        Remover uma propriedade\n\
+         \x20 tarefas concluir <ID> <REF>        Concluir a tarefa que a referência nomeia\n\
+         \x20 tarefas reabrir <ID> <REF>         Reabrir uma tarefa concluída\n\
+         \x20 lixeira restaurar <ID>             Restaurar uma nota da lixeira\n\n\
+         \x20 Nenhum comando de escrita abre uma janela, muda o foco ou altera a configuração.\n\
+         \x20 Com o Note-it aberto, a alteração passa por ele; sem o Note-it, é feita direto.\n\n\
+         {section_options}\n\
+         \x20 --limite, --limit N              Limitar quantidade de resultados (1-100)\n\
+         \x20 --tag <TAG>                      Filtrar por tag, ou aplicar uma em `criar`\n\
+         \x20 --propriedade, --property K=V    Filtrar por propriedade, ou aplicar uma em `criar`\n\
+         \x20 --estado, --state <E>            Estado das tarefas: pendentes, concluidas, todas\n\
+         \x20 --stdin                          Ler o texto da entrada padrão (criar, adicionar, editar)\n\
+         \x20 --vazio, --empty                 Esvaziar o corpo da nota, de propósito (editar)\n\n\
+         {section_aliases}\n\
+         \x20 list, read, search, properties, tasks, trash, help, version\n\
+         \x20 create, append, edit, add, remove, set, complete, reopen, restore\n"
     )
 }
 
@@ -478,6 +515,10 @@ pub fn render_tasks(ctx: &OutputContext, tasks: &[TaskEntry], state: TaskStateFi
 
         for task in note_tasks {
             let indent = "  ".repeat(task.depth.saturating_add(1));
+            // The reference the write commands name this task by. Dimmed and
+            // in front, exactly as the note's own identifier is above it, so
+            // the listing stays a listing rather than becoming a table.
+            let reference = ctx.dim(task.task_ref.as_str());
             let check_box = if task.checked {
                 ctx.green("[x]")
             } else {
@@ -494,7 +535,9 @@ pub fn render_tasks(ctx: &OutputContext, tasks: &[TaskEntry], state: TaskStateFi
                 String::new()
             };
 
-            out.push_str(&format!("{indent}{check_box} {text}{completed_suffix}\n"));
+            out.push_str(&format!(
+                "{indent}{reference}  {check_box} {text}{completed_suffix}\n"
+            ));
         }
 
         out.push('\n');
@@ -510,6 +553,140 @@ pub fn render_tasks(ctx: &OutputContext, tasks: &[TaskEntry], state: TaskStateFi
     out.push('\n');
 
     out
+}
+
+/// What a person reads after a write that went through.
+///
+/// Two successful outcomes are told apart here: something changed, or the note
+/// already said exactly that and was left alone. Both are successes and
+/// neither is a warning — repeating a command that made no difference is not a
+/// mistake, and being told nothing happened is more useful than being told it
+/// worked.
+///
+/// No path is ever printed. A note is named by its identifier, the way every
+/// other command in this CLI names one.
+pub fn render_write_outcome(ctx: &OutputContext, outcome: &WriteOutcome) -> String {
+    if !outcome.changed {
+        let sentence = match outcome.kind {
+            WriteOutcomeKind::TagAdded => "A nota já tem essa tag. Nada foi alterado.",
+            WriteOutcomeKind::TagRemoved => "A nota não tem essa tag. Nada foi alterado.",
+            WriteOutcomeKind::PropertySet => "A propriedade já tem esse valor. Nada foi alterado.",
+            WriteOutcomeKind::PropertyRemoved => {
+                "A nota não tem essa propriedade. Nada foi alterado."
+            }
+            WriteOutcomeKind::TaskCompleted => "A tarefa já estava concluída. Nada foi alterado.",
+            WriteOutcomeKind::TaskReopened => "A tarefa já estava aberta. Nada foi alterado.",
+            _ => "A nota já estava assim. Nada foi alterado.",
+        };
+        return format!("{sentence}\n");
+    }
+
+    let prefix = ctx.dim(&id_prefix(&outcome.note_id));
+    match outcome.kind {
+        // The one place the whole identifier is printed: a note that has just
+        // been created has no other name yet, and whoever asked for it needs
+        // something they can address it by.
+        WriteOutcomeKind::NoteCreated => {
+            format!("Nota criada: {}\n", ctx.bold(&outcome.note_id.to_string()))
+        }
+        WriteOutcomeKind::ContentAppended | WriteOutcomeKind::ContentReplaced => {
+            format!("Nota atualizada: {prefix}\n")
+        }
+        WriteOutcomeKind::ContentCleared => format!("Nota esvaziada: {prefix}\n"),
+        WriteOutcomeKind::TagAdded => "Tag adicionada.\n".to_string(),
+        WriteOutcomeKind::TagRemoved => "Tag removida.\n".to_string(),
+        WriteOutcomeKind::PropertySet => "Propriedade atualizada.\n".to_string(),
+        WriteOutcomeKind::PropertyRemoved => "Propriedade removida.\n".to_string(),
+        WriteOutcomeKind::TaskCompleted => "Tarefa concluída.\n".to_string(),
+        WriteOutcomeKind::TaskReopened => "Tarefa reaberta.\n".to_string(),
+        WriteOutcomeKind::NoteRestored => format!("Nota restaurada: {prefix}\n"),
+    }
+}
+
+/// A warning about a write that *did* happen.
+///
+/// Deliberately worded so nobody reads it as a failure and runs the command
+/// again: the change is on disk, and only the open window is behind.
+pub fn render_write_warning(ctx: &OutputContext, detail: &str) -> String {
+    format!(
+        "{} A alteração foi gravada, mas a janela aberta pode não estar \
+         mostrando o texto novo. Não repita o comando: {}\n",
+        ctx.yellow("Aviso:"),
+        sanitize_for_terminal(detail)
+    )
+}
+
+/// The sentence for a write that did not happen.
+///
+/// Every branch says what the store is now, because that is the question the
+/// person actually has. The one that cannot answer it — an indeterminate
+/// result — says so instead of guessing, and asks them to look rather than
+/// inviting a retry that could duplicate the text.
+pub fn render_write_error(ctx: &OutputContext, error: &WriteError) -> String {
+    let message = match error {
+        WriteError::InvalidInput { detail } | WriteError::Validation { detail } => {
+            sanitize_for_terminal(detail)
+        }
+        WriteError::NotFound { selector } => format!(
+            "nenhuma nota encontrada para o seletor `{}`.",
+            sanitize_for_terminal(selector)
+        ),
+        WriteError::AmbiguousSelector { selector, matches } => format!(
+            "seletor ambíguo `{}` corresponde a {matches} notas.",
+            sanitize_for_terminal(selector)
+        ),
+        WriteError::StaleTaskRef { task_ref } => format!(
+            "a referência `{}` não corresponde mais a uma tarefa desta nota. \
+             A nota mudou; liste as tarefas de novo. Nada foi alterado.",
+            sanitize_for_terminal(task_ref)
+        ),
+        WriteError::AmbiguousTaskRef { task_ref } => format!(
+            "a referência `{}` corresponde a mais de uma tarefa. Nada foi alterado.",
+            sanitize_for_terminal(task_ref)
+        ),
+        WriteError::WriterBusy { detail } => format!(
+            "o repositório está sendo usado por outro escritor do Note-it. \
+             Nenhuma alteração foi feita: {}",
+            sanitize_for_terminal(detail)
+        ),
+        WriteError::AuthorityUnavailable { .. } => {
+            "o repositório está sendo usado por outro escritor do Note-it, mas a \
+             autoridade não pôde ser contatada. Nenhuma alteração foi feita."
+                .to_string()
+        }
+        WriteError::Indeterminate { .. } => {
+            "a conexão caiu antes da resposta, então não é possível dizer se a \
+             alteração foi gravada. Verifique a nota antes de repetir o comando."
+                .to_string()
+        }
+        WriteError::TrashTargetOccupied { note_id } => format!(
+            "já existe uma nota ativa com o identificador {}. Nada foi alterado.",
+            id_prefix(note_id)
+        ),
+        WriteError::Persistence { detail } => format!(
+            "a alteração não pôde ser gravada e a nota continua como estava: {}",
+            sanitize_for_terminal(detail)
+        ),
+        WriteError::StoreUnavailable { detail } => format!(
+            "repositório indisponível: {}",
+            sanitize_for_terminal(detail)
+        ),
+    };
+    format!("{} {message}\n", ctx.bold("Erro:"))
+}
+
+/// Which exit code a refusal carries.
+///
+/// The split is the one the rest of the CLI already uses: `2` is "you asked
+/// for something that is not a valid request", `1` is "the request was
+/// understood and could not be carried out". A stale task reference is
+/// deliberately the second — the command was well formed and the note simply
+/// moved on.
+pub fn exit_code_for_write_error(error: &WriteError) -> u8 {
+    match error {
+        WriteError::InvalidInput { .. } | WriteError::Validation { .. } => 2,
+        _ => 1,
+    }
 }
 
 pub fn render_trash(ctx: &OutputContext, entries: &[TrashEntry]) -> String {
