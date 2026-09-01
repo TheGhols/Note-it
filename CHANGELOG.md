@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0A Core Boundary.** The Rust domain and persistence modules now live in the internal,
+  headless `noteit-core` crate. `NoteItCore` exposes the existing canonical list, read, search,
+  trash-list and Study-query paths, and the GTK/WebKit application consumes that crate rather than
+  owning parallel implementations.
+  - Core has its own small Cargo manifest with no GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri or
+    compositor dependency. `scripts/check-core-boundary` enforces that dependency rule, and CI runs
+    the Core tests with `DISPLAY` and `WAYLAND_DISPLAY` removed.
+  - Existing domain, storage, backup, trash, assets, Study, settings, operational state, timer and
+    AutoPaste policy tests moved with their implementations; new facade tests use only temporary
+    synthetic stores.
+  - The lifecycle CLI (`--background`, `new`, `toggle`, `show`, `hide`, `quit`) and the TypeScript
+    editor remain desktop-adapter concerns and retain their behavior.
+
 - **Phase 3.14R.1 Interface Polish & Visual Accessibility.** The existing header is now grouped as
   Note, Text, Content and View/Tools, with quiet separators and one centred search pill that opens
   the established SearchPalette. It compacts or yields to the icon fallback before colliding with

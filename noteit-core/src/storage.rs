@@ -112,7 +112,7 @@ pub struct StorageManager {
     /// outside the process: once the rename has returned, nothing a test can do
     /// to the filesystem reaches back into the sync that follows it. Compiled
     /// out of every real build.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fail_directory_sync: bool,
 }
 
@@ -179,15 +179,16 @@ impl StorageManager {
             state_dir,
             runtime_dir,
             backup_schedule: Rc::new(RefCell::new(BackupSchedule::default())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             fail_directory_sync: false,
         }
     }
 
     /// The same store, reached through a handle whose post-commit directory
     /// sync always fails.
-    #[cfg(test)]
-    pub(crate) fn failing_directory_sync(mut self) -> Self {
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn failing_directory_sync(mut self) -> Self {
         self.fail_directory_sync = true;
         self
     }
@@ -269,7 +270,7 @@ impl StorageManager {
         let target_path = self.note_path(&doc.metadata.id);
         let what = format!("note {}", doc.metadata.id);
 
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.fail_directory_sync {
             crate::atomic_file::write_atomic_with_failing_sync(
                 &target_path,

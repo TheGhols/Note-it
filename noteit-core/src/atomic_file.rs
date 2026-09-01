@@ -54,7 +54,7 @@ pub fn sync_directory_after_commit(directory: &Path, what: &str) {
 /// That failure cannot be provoked from outside the process: once the rename
 /// has returned, nothing a test can do to the filesystem reaches back into the
 /// sync that follows it. Compiled out of every real build.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_atomic_with_failing_sync(path: &Path, bytes: &[u8], what: &str) -> Result<(), String> {
     write_atomic_inner(path, bytes, what, true)
 }

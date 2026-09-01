@@ -25,10 +25,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Core Dependency Boundary
+        run: scripts/check-core-boundary
+
+      - name: Headless Core Tests
+        run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
 
       - name: Run Rust Unit Tests
-        run: cargo test
+        run: cargo test --workspace
 
   frontend-check:
     name: Frontend Checks & Tests

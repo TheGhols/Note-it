@@ -552,15 +552,26 @@ Capture & Export, OCR and PDF are postponed. They are not part of Phase 3.14.
 - [x] Responsive budget verified from 220–900 px at 100/120/140/160%, preserving Menu, active
       Timer/AutoPaste and Close before optional shortcuts.
 
-## Phase 4.0: Core & CLI (Planned)
+## Phase 4: Programmable Note-it
 
-Architectural evolution rather than more editor surface. Reserved, not started.
+Architectural evolution from an application into a local programmable platform. GUI, CLI and
+future machine interfaces share one domain and persistence authority.
 
-- [ ] A safe, shareable core the CLI and the application both build on.
-- [ ] A complete CLI: list, search, read, create, append, and edit tasks and notes.
-- [ ] Structured output such as `--json`, so the CLI composes with other tools.
-- [ ] Filters over text, dates and tasks.
-- [ ] The foundation for AI / second-brain integration on top of that core.
+- [x] **Phase 4.0A — Core Boundary.** Dedicated headless `noteit-core` crate; the GUI consumes its
+      shared note/search/trash/Study/storage capabilities, with a Cargo dependency gate preventing
+      GTK, GDK, WebKitGTK, layer-shell, Wayland and Niri from entering Core.
+- [ ] **Phase 4.0B — Metadata Foundation: Tags + Properties.** Reserved; not started.
+- [ ] **Phase 4.0C — CLI Foundation.** Reserved; the existing lifecycle CLI remains compatible.
+- [ ] **Phase 4.0D — Read API.** Reserved.
+- [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
+- [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
+- [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
+- [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.
+- [ ] **Phase 4.0R — Security & Regression Audit.** Reserved.
+- [ ] **Phase 4.1 — MCP.** Reserved.
+- [ ] **Phase 4.2 — AI / Second Brain.** Reserved.
+
+Capture & Export, OCR and PDF remain postponed and are not pulled into Phase 4.0A.
 
 **Recency and the CLI.** Since Phase 3.8R, "most recent" is the note's own `updated_at` — the last
 change to its text — with the file's `mtime` as the fallback for a note that has none. It is what

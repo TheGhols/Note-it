@@ -33,3 +33,36 @@ pub enum CliCommand {
     /// Save all notes and terminate the Note-it daemon
     Quit,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_lifecycle_commands_keep_their_public_spelling() {
+        for (name, expected) in [
+            ("new", CliCommand::New),
+            ("toggle", CliCommand::Toggle),
+            ("show", CliCommand::Show),
+            ("hide", CliCommand::Hide),
+            ("toggle-collapse-all", CliCommand::ToggleCollapseAll),
+            ("quit", CliCommand::Quit),
+        ] {
+            let parsed = CliArgs::try_parse_from(["note-it", name]).expect("existing command");
+            assert_eq!(parsed.command, Some(expected));
+            assert!(!parsed.background);
+        }
+    }
+
+    #[test]
+    fn background_and_commandless_summon_remain_accepted() {
+        let background =
+            CliArgs::try_parse_from(["note-it", "--background"]).expect("background mode");
+        assert!(background.background);
+        assert_eq!(background.command, None);
+
+        let summon = CliArgs::try_parse_from(["note-it"]).expect("commandless summon");
+        assert!(!summon.background);
+        assert_eq!(summon.command, None);
+    }
+}

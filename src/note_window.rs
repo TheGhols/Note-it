@@ -1,17 +1,9 @@
-use crate::autopaste::CaptureDelimiter;
-use crate::diagnostics;
 use crate::layer_shell::{
     apply_live_layer_mode, apply_paper_color, clamp_geometry_with_min_height,
     collapsed_note_height, min_note_height_for_scale, setup_layer_shell_window,
     show_initial_layer_surface, update_window_position, update_window_size, WindowGeometry,
     DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
-use crate::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
-use crate::settings::{clamp_ui_scale_percent, theme_name};
-use crate::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
-use crate::storage::StorageManager;
-use crate::study::Rating;
-use crate::timer::TimerFinishKind;
 use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
     WebviewToHostMessage,
@@ -19,6 +11,14 @@ use crate::webview_bridge::{
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4_layer_shell::LayerShell;
+use noteit_core::autopaste::CaptureDelimiter;
+use noteit_core::diagnostics;
+use noteit_core::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
+use noteit_core::settings::{clamp_ui_scale_percent, theme_name};
+use noteit_core::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
+use noteit_core::storage::StorageManager;
+use noteit_core::study::Rating;
+use noteit_core::timer::TimerFinishKind;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
@@ -876,7 +876,11 @@ impl NoteWindow {
     }
 
     /// Hands the page the answer to the search it asked for.
-    pub fn send_search_results(&self, request_id: u64, results: Vec<crate::search::SearchResult>) {
+    pub fn send_search_results(
+        &self,
+        request_id: u64,
+        results: Vec<noteit_core::search::SearchResult>,
+    ) {
         send_to_webview(
             &self.webview,
             &HostToWebviewMessage::SearchResults {
@@ -887,7 +891,11 @@ impl NoteWindow {
     }
 
     /// Hands the page the contents of the trash it asked for.
-    pub fn send_trash_entries(&self, request_id: u64, entries: Vec<crate::trash::TrashEntry>) {
+    pub fn send_trash_entries(
+        &self,
+        request_id: u64,
+        entries: Vec<noteit_core::trash::TrashEntry>,
+    ) {
         send_to_webview(
             &self.webview,
             &HostToWebviewMessage::TrashEntries {
@@ -917,7 +925,7 @@ impl NoteWindow {
         &self,
         request_id: u64,
         notes: Vec<crate::webview_bridge::StudyCatalogNote>,
-        study_state: Option<crate::study::StudyState>,
+        study_state: Option<noteit_core::study::StudyState>,
         error: Option<String>,
     ) {
         send_to_webview(
@@ -935,7 +943,7 @@ impl NoteWindow {
         &self,
         request_id: u64,
         review_key: String,
-        result: Result<crate::study::StudyState, String>,
+        result: Result<noteit_core::study::StudyState, String>,
     ) {
         let (ok, study_state, message) = match result {
             Ok(state) => (true, Some(state), "Avaliação salva.".to_string()),
@@ -1405,9 +1413,9 @@ mod tests {
         FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
-    use crate::model::NoteDocument;
-    use crate::state::NoteWindowState;
-    use crate::storage::StorageManager;
+    use noteit_core::model::NoteDocument;
+    use noteit_core::state::NoteWindowState;
+    use noteit_core::storage::StorageManager;
     use std::cell::{Cell, RefCell};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2356,8 +2364,8 @@ mod tests {
     /// the note's window state and hands that to the geometry callback, which
     /// is the ordinary `state.json` write. Nothing in that path opens a note
     /// file, which is the property the tests below turn into an assertion.
-    fn timer_run() -> [Option<crate::timer::NoteTimerState>; 5] {
-        use crate::timer::{NoteTimerState, TimerRunState};
+    fn timer_run() -> [Option<noteit_core::timer::NoteTimerState>; 5] {
+        use noteit_core::timer::{NoteTimerState, TimerRunState};
         let deadline = 1_800_000_000_000_i64 + 25 * 60_000;
         [
             Some(NoteTimerState {
@@ -2398,7 +2406,7 @@ mod tests {
         let file_before = fs::read(storage.note_path(&id)).expect("read the stored note");
 
         let state_path = storage.state_file_path();
-        let mut app_state = crate::state::AppState::default();
+        let mut app_state = noteit_core::state::AppState::default();
         app_state.notes.insert(id, NoteWindowState::default());
 
         for timer in timer_run() {
@@ -2466,7 +2474,10 @@ mod tests {
 
         let bodies = storage.read_note_bodies_by_recency();
         let search = |query: &str| {
-            crate::search::search_notes(query, bodies.iter().map(|(id, text)| (*id, text.as_str())))
+            noteit_core::search::search_notes(
+                query,
+                bodies.iter().map(|(id, text)| (*id, text.as_str())),
+            )
         };
 
         // None of the plumbing is findable.
@@ -2538,7 +2549,7 @@ mod tests {
             // that no part of how the picture is stored became its name.
             assert_eq!(
                 entry.label,
-                crate::search::EMPTY_LABEL,
+                noteit_core::search::EMPTY_LABEL,
                 "a note that is one picture was given a name from its plumbing",
             );
             assert!(entry.snippet.is_empty(), "a picture became a preview");
@@ -2581,13 +2592,13 @@ mod tests {
         // twenty-five minute Pomodoro on it. That holds structurally: search
         // reads `notes/`, the timer lives in `state.json`, and the two never
         // meet — this is the assertion that the arrangement really is that.
-        use crate::timer::{NoteTimerState, PomodoroPhase, TimerMode, TimerRunState};
+        use noteit_core::timer::{NoteTimerState, PomodoroPhase, TimerMode, TimerRunState};
         let tmp = tempdir().expect("tempdir");
         let storage = storage_in(&tmp);
         let document = stored_note(&storage, "Comprar pão e café");
         let id = document.borrow().metadata.id;
 
-        let mut app_state = crate::state::AppState::default();
+        let mut app_state = noteit_core::state::AppState::default();
         app_state.notes.insert(
             id,
             NoteWindowState {
@@ -2609,7 +2620,7 @@ mod tests {
 
         let bodies = storage.read_note_bodies_by_recency();
         for query in ["25:00", "pomodoro", "timer", "foco", "deadline"] {
-            let results = crate::search::search_notes(
+            let results = noteit_core::search::search_notes(
                 query,
                 bodies.iter().map(|(id, body)| (*id, body.as_str())),
             );
@@ -2620,7 +2631,7 @@ mod tests {
         }
         // The note is still found by what it actually says.
         assert_eq!(
-            crate::search::search_notes(
+            noteit_core::search::search_notes(
                 "café",
                 bodies.iter().map(|(id, body)| (*id, body.as_str())),
             )
@@ -2642,14 +2653,14 @@ mod tests {
     fn two_notes_keep_their_own_timers() {
         // The record hangs off the note's identifier, so there is no shared
         // slot for one note's countdown to appear on another.
-        use crate::timer::{NoteTimerState, TimerRunState};
+        use noteit_core::timer::{NoteTimerState, TimerRunState};
         let tmp = tempdir().expect("tempdir");
         let storage = storage_in(&tmp);
         let first = stored_note(&storage, "nota A").borrow().metadata.id;
         let second = stored_note(&storage, "nota B").borrow().metadata.id;
         let state_path = storage.state_file_path();
 
-        let mut app_state = crate::state::AppState::default();
+        let mut app_state = noteit_core::state::AppState::default();
         app_state.notes.insert(
             first,
             NoteWindowState {
@@ -2665,7 +2676,7 @@ mod tests {
         app_state.notes.insert(second, NoteWindowState::default());
         app_state.save_to_file(&state_path).expect("persist");
 
-        let reloaded = crate::state::AppState::load_from_file(&state_path);
+        let reloaded = noteit_core::state::AppState::load_from_file(&state_path);
         assert!(reloaded.notes[&first].timer.is_some());
         assert!(
             reloaded.notes[&second].timer.is_none(),
@@ -2681,7 +2692,7 @@ mod tests {
         .sanitize();
         app_state.save_to_file(&state_path).expect("persist");
 
-        let reloaded = crate::state::AppState::load_from_file(&state_path);
+        let reloaded = noteit_core::state::AppState::load_from_file(&state_path);
         assert_eq!(
             reloaded.notes[&first]
                 .timer

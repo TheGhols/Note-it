@@ -1,9 +1,9 @@
-use crate::autopaste::CaptureDelimiter;
-use crate::search::SearchResult;
-use crate::study::{Rating, StudyState};
-use crate::timer::{NoteTimerState, TimerFinishKind};
-use crate::trash::TrashEntry;
 use chrono::{DateTime, Utc};
+use noteit_core::autopaste::CaptureDelimiter;
+use noteit_core::search::SearchResult;
+use noteit_core::study::{Rating, StudyState};
+use noteit_core::timer::{NoteTimerState, TimerFinishKind};
+use noteit_core::trash::TrashEntry;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webkit6::prelude::*;
@@ -576,7 +576,7 @@ mod tests {
             } => {
                 assert_eq!(request_id, 18);
                 assert_eq!(review_key, "a".repeat(64));
-                assert_eq!(rating, crate::study::Rating::Difficult);
+                assert_eq!(rating, noteit_core::study::Rating::Difficult);
             }
             other => panic!("unexpected message: {other:?}"),
         }
@@ -593,7 +593,7 @@ mod tests {
                 id: Uuid::nil(),
                 content: "A :: B".to_string(),
             }],
-            study_state: Some(crate::study::StudyState::default()),
+            study_state: Some(noteit_core::study::StudyState::default()),
             error: None,
         };
         let encoded = serde_json::to_value(catalog).expect("catalog result");
@@ -688,7 +688,7 @@ mod tests {
             theme: "dark".to_string(),
             ui_scale_percent: 140,
             timer: None,
-            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
+            capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
         };
 
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
@@ -723,7 +723,7 @@ mod tests {
             theme: "system".to_string(),
             ui_scale_percent: 100,
             timer: None,
-            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
+            capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         assert!(encoded["payload"]["timer"].is_null());
@@ -749,12 +749,12 @@ mod tests {
             layer_mode: "overlay".to_string(),
             theme: "system".to_string(),
             ui_scale_percent: 100,
-            timer: Some(crate::timer::NoteTimerState {
-                state: crate::timer::TimerRunState::Running,
+            timer: Some(noteit_core::timer::NoteTimerState {
+                state: noteit_core::timer::TimerRunState::Running,
                 deadline_ms: Some(deadline),
-                ..crate::timer::NoteTimerState::default()
+                ..noteit_core::timer::NoteTimerState::default()
             }),
-            capture_delimiter: crate::autopaste::CaptureDelimiter::BlankLine,
+            capture_delimiter: noteit_core::autopaste::CaptureDelimiter::BlankLine,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         let timer = &encoded["payload"]["timer"];
@@ -792,7 +792,7 @@ mod tests {
             } => {
                 assert_eq!(parsed_id, id);
                 let timer = timer.expect("a paused run travels");
-                assert_eq!(timer.state, crate::timer::TimerRunState::Paused);
+                assert_eq!(timer.state, noteit_core::timer::TimerRunState::Paused);
                 assert_eq!(timer.remaining_ms, Some(742_000));
                 assert_eq!(timer.focus_completed, 1);
             }
@@ -821,7 +821,7 @@ mod tests {
                 kind,
             } => {
                 assert_eq!(parsed_id, id);
-                assert_eq!(kind, crate::timer::TimerFinishKind::Focus);
+                assert_eq!(kind, noteit_core::timer::TimerFinishKind::Focus);
             }
             other => panic!("unexpected message: {other:?}"),
         }
@@ -854,7 +854,7 @@ mod tests {
                 Ok(WebviewToHostMessage::TimerFinished { kind, .. }) => {
                     // An extra field is ignored rather than carried: whatever
                     // was smuggled alongside is simply not part of the message.
-                    assert_eq!(kind, crate::timer::TimerFinishKind::Timer);
+                    assert_eq!(kind, noteit_core::timer::TimerFinishKind::Timer);
                 }
                 Ok(other) => panic!("unexpected message: {other:?}"),
             }
@@ -885,15 +885,15 @@ mod tests {
                 // As it arrives it is nonsense: running, with nothing to run
                 // to, for a duration outside the supported range. Sanitising
                 // is what the window does before any of it is stored.
-                assert_eq!(arrived.state, crate::timer::TimerRunState::Running);
+                assert_eq!(arrived.state, noteit_core::timer::TimerRunState::Running);
                 let stored = arrived
                     .sanitize()
                     .expect("clamped values still say something");
-                assert_eq!(stored.state, crate::timer::TimerRunState::Idle);
-                assert_eq!(stored.timer_minutes, crate::timer::MAX_TIMER_MINUTES);
+                assert_eq!(stored.state, noteit_core::timer::TimerRunState::Idle);
+                assert_eq!(stored.timer_minutes, noteit_core::timer::MAX_TIMER_MINUTES);
                 assert_eq!(
                     stored.focus_completed,
-                    crate::timer::FOCUS_SESSIONS_PER_CYCLE
+                    noteit_core::timer::FOCUS_SESSIONS_PER_CYCLE
                 );
             }
             other => panic!("unexpected message: {other:?}"),
@@ -907,7 +907,7 @@ mod tests {
         for active in [true, false] {
             let encoded = serde_json::to_value(super::HostToWebviewMessage::SetAutoPaste {
                 active,
-                delimiter: crate::autopaste::CaptureDelimiter::Separator,
+                delimiter: noteit_core::autopaste::CaptureDelimiter::Separator,
             })
             .expect("serialize set_autopaste");
             assert_eq!(encoded["type"], "set_auto_paste");
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn the_delimiter_is_a_choice_from_a_closed_set() {
-        for name in crate::autopaste::CAPTURE_DELIMITERS {
+        for name in noteit_core::autopaste::CAPTURE_DELIMITERS {
             let raw = serde_json::json!({
                 "type": "capture_delimiter_changed",
                 "payload": { "delimiter": name }
@@ -1020,7 +1020,7 @@ mod tests {
             theme: "system".to_string(),
             ui_scale_percent: 100,
             timer: None,
-            capture_delimiter: crate::autopaste::CaptureDelimiter::Line,
+            capture_delimiter: noteit_core::autopaste::CaptureDelimiter::Line,
         };
         let encoded = serde_json::to_value(&message).expect("serialize load_note");
         let payload = encoded["payload"].as_object().expect("an object");
@@ -1219,13 +1219,13 @@ mod tests {
         let encoded = serde_json::to_value(super::HostToWebviewMessage::TrashEntries {
             request_id: 3,
             entries: vec![
-                crate::trash::TrashEntry {
+                noteit_core::trash::TrashEntry {
                     note_id,
                     label: "Uma nota".to_string(),
                     snippet: "<script>alert(1)</script>".to_string(),
                     deleted_at: Some(deleted_at),
                 },
-                crate::trash::TrashEntry {
+                noteit_core::trash::TrashEntry {
                     note_id: Uuid::new_v4(),
                     label: "Sem data".to_string(),
                     snippet: String::new(),

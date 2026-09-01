@@ -777,18 +777,30 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
- "dirs",
  "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
+ "noteit-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "webkit6",
+]
+
+[[package]]
+name = "noteit-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "toml 0.8.23",
  "uuid",
- "webkit6",
 ]
 
 [[package]]

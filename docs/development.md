@@ -30,15 +30,24 @@ run a session bus of its own. See **Running Against a Throwaway Store** below.
 3. **Run Tests:**
    ```bash
    cargo test
+   env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+   scripts/check-core-boundary
    cd ui && pnpm test
    ```
 
 4. **Code Quality Checks:**
    ```bash
-   cargo fmt --check
-   cargo clippy -- -D warnings
+   cargo fmt --all -- --check
+   cargo check
+   cargo clippy --all-targets --all-features -- -D warnings
    cd ui && pnpm lint
    ```
+
+The dedicated `noteit-core` crate is the domain and persistence boundary. It must remain usable
+without GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri or a graphical session.
+`scripts/check-core-boundary` checks its Cargo dependency tree for forbidden desktop libraries;
+compilation independently prevents Core source from importing libraries not declared by its own
+manifest.
 
 ## Running Against a Throwaway Store
 
@@ -179,4 +188,3 @@ scripts/note-it-isolated --root /tmp/t -- new     # the next change takes a fres
 A cold `XDG_CACHE_HOME` makes GTK rebuild its compose table, which produces the one-off
 `Can't handle >16bit keyvals` warning burst described in ADR-006. It is expected on the first run
 against a fresh tree and disappears on the next one.
-

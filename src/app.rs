@@ -1,26 +1,27 @@
-use crate::assets::{decode_base64, import_image, parse_asset_request, ImportError, ASSET_SCHEME};
-use crate::autopaste::{
-    delimiter_from_name, delimiter_name, is_capturable, AutoPaste, CaptureDelimiter,
-    CaptureSession, ChangeDecision, IgnoreReason,
-};
 use crate::cli::CliCommand;
-use crate::diagnostics::{self, LayerToggleTrace};
 use crate::layer_shell::{
     calculate_cascade_position, find_monitor_by_connector, install_paper_color_styles,
     DEFAULT_MONITOR_HEIGHT, DEFAULT_MONITOR_WIDTH,
 };
-use crate::model::NoteDocument;
 use crate::note_window::{NoteWindow, NoteWindowOptions};
-use crate::search;
-use crate::settings::{clamp_ui_scale_percent, theme_name, AppConfig};
-use crate::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
-use crate::storage::StorageManager;
-use crate::study::Rating;
-use crate::timer::TimerFinishKind;
 use crate::webview_bridge::StudyCatalogNote;
 use gio::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::*;
+use noteit_core::assets::{
+    decode_base64, import_image, parse_asset_request, ImportError, ASSET_SCHEME,
+};
+use noteit_core::autopaste::{
+    delimiter_from_name, delimiter_name, is_capturable, AutoPaste, CaptureDelimiter,
+    CaptureSession, ChangeDecision, IgnoreReason,
+};
+use noteit_core::diagnostics::{self, LayerToggleTrace};
+use noteit_core::model::NoteDocument;
+use noteit_core::settings::{clamp_ui_scale_percent, theme_name, AppConfig};
+use noteit_core::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
+use noteit_core::study::Rating;
+use noteit_core::timer::TimerFinishKind;
+use noteit_core::NoteItCore;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -207,7 +208,7 @@ impl FlushBatch {
 }
 
 pub struct AppContext {
-    pub storage: StorageManager,
+    pub core: NoteItCore,
     pub config: AppConfig,
     pub state: AppState,
     pub windows: HashMap<Uuid, NoteWindow>,
@@ -253,14 +254,15 @@ impl NoteItApp {
             install_paper_color_styles(&display);
         }
 
-        let storage = StorageManager::new().expect("Failed to initialize XDG storage");
+        let core = NoteItCore::new().expect("Failed to initialize XDG storage");
+        let storage = core.storage();
         register_asset_scheme(storage.assets_dir().to_path_buf());
         let config = AppConfig::load_from_file(&storage.config_file_path());
         let state = AppState::load_from_file(&storage.state_file_path());
         let ui_dist_path = find_ui_dist_path();
 
         let context = Rc::new(RefCell::new(AppContext {
-            storage,
+            core,
             config,
             state,
             windows: HashMap::new(),
@@ -436,7 +438,7 @@ impl NoteItAppClone {
 
         let plan = {
             let ctx = self.context.borrow();
-            let ids_by_recency = match ctx.storage.list_notes_by_recency() {
+            let ids_by_recency = match ctx.core.list_notes() {
                 Ok(ids) => ids,
                 Err(error) => {
                     eprintln!("Failed to list saved notes: {error}");
@@ -484,7 +486,7 @@ impl NoteItAppClone {
 
         {
             let ctx = self.context.borrow();
-            if let Err(error) = ctx.storage.save_note_atomic(&doc) {
+            if let Err(error) = ctx.core.storage().save_note_atomic(&doc) {
                 eprintln!("Failed to save new note {note_id}: {error}");
                 return;
             }
@@ -593,7 +595,7 @@ impl NoteItAppClone {
                 return;
             }
             ctx.config.theme = resolved.to_string();
-            let config_path = ctx.storage.config_file_path();
+            let config_path = ctx.core.storage().config_file_path();
             if let Err(error) = ctx.config.save_to_file(&config_path) {
                 eprintln!("Failed to persist the interface theme: {error}");
             }
@@ -618,7 +620,7 @@ impl NoteItAppClone {
             }
             let mut next = ctx.config.clone();
             next.ui_scale_percent = resolved;
-            let config_path = ctx.storage.config_file_path();
+            let config_path = ctx.core.storage().config_file_path();
             if let Err(error) = next.save_to_file(&config_path) {
                 eprintln!("Failed to persist the interface scale: {error}");
                 return;
@@ -683,7 +685,7 @@ impl NoteItAppClone {
                 Ok(()) => {
                     let mut ctx = self_clone.context.borrow_mut();
                     let AppContext {
-                        storage,
+                        core,
                         state,
                         windows,
                         lifecycle,
@@ -691,7 +693,7 @@ impl NoteItAppClone {
                         layer_state_persistence,
                         ..
                     } = &mut *ctx;
-                    let state_path = storage.state_file_path();
+                    let state_path = core.storage().state_file_path();
                     *summon_restore = None;
                     layer_state_persistence.cancel();
                     let commit_result = commit_hidden_transition(
@@ -768,7 +770,7 @@ impl NoteItAppClone {
         if needs_instantiation {
             let plan = {
                 let ctx = self.context.borrow();
-                let ids_by_recency = ctx.storage.list_notes_by_recency().unwrap_or_default();
+                let ids_by_recency = ctx.core.list_notes().unwrap_or_default();
                 plan_startup(false, ids_by_recency, &ctx.state)
             };
             match plan {
@@ -857,7 +859,9 @@ impl NoteItAppClone {
                     ),
                 );
             }
-            let result = ctx.state.save_to_file(&ctx.storage.state_file_path());
+            let result = ctx
+                .state
+                .save_to_file(&ctx.core.storage().state_file_path());
             if let Some(trace) = trace {
                 trace.phase(
                     "T5",
@@ -891,14 +895,14 @@ impl NoteItAppClone {
     /// Answers a search, and writes nothing at all.
     ///
     /// The note bodies come off disk in the store's own recency order and go
-    /// straight into [`crate::search`]. No window is created, no timestamp
+    /// straight into [`noteit_core::search`]. No window is created, no timestamp
     /// moves and no file is opened for writing — a thousand notes are searched
     /// with zero additional WebViews, because a WebView is how a note is
     /// *edited* and nobody is editing.
     ///
     /// A query is asked of **every** note. The two paths differ only in how
     /// much has to be read: a listing shows at most
-    /// [`search::MAX_RESULTS`](crate::search::MAX_RESULTS) notes, so reading
+    /// [`search::MAX_RESULTS`](noteit_core::search::MAX_RESULTS) notes, so reading
     /// past that would answer no question, while a search cannot know which
     /// note holds the word until it has looked.
     ///
@@ -906,19 +910,7 @@ impl NoteItAppClone {
     /// which is what makes the same control a way to move between them.
     pub fn answer_search(&self, requester: Uuid, request_id: u64, query: &str) {
         let ctx = self.context.borrow();
-        let listing = query.trim().is_empty();
-
-        let bodies = if listing {
-            ctx.storage.read_recent_note_bodies(search::MAX_RESULTS)
-        } else {
-            ctx.storage.read_note_bodies_by_recency()
-        };
-        let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
-        let results = if listing {
-            search::recent_notes(notes)
-        } else {
-            search::search_notes(query, notes)
-        };
+        let results = ctx.core.search_notes(query);
 
         if let Some(window) = ctx.windows.get(&requester) {
             window.send_search_results(request_id, results);
@@ -944,7 +936,7 @@ impl NoteItAppClone {
         // The file may have been removed between the search and the choice.
         let exists = {
             let ctx = self.context.borrow();
-            ctx.storage.note_path(&target).is_file()
+            ctx.core.storage().note_path(&target).is_file()
         };
         if !exists {
             let ctx = self.context.borrow();
@@ -1026,7 +1018,7 @@ impl NoteItAppClone {
         window.request_flush(request_id, move |flush| {
             let outcome = commit_trash(
                 flush,
-                || app.context.borrow().storage.move_note_to_trash(&id),
+                || app.context.borrow().core.storage().move_note_to_trash(&id),
                 || {
                     let mut ctx = app.context.borrow_mut();
                     // Closed rather than forgotten: the geometry stays, so a
@@ -1054,7 +1046,7 @@ impl NoteItAppClone {
     /// is opened for writing, no timestamp moves and no window is created.
     pub fn answer_trash_list(&self, requester: Uuid, request_id: u64) {
         let ctx = self.context.borrow();
-        let entries = ctx.storage.list_trash();
+        let entries = ctx.core.list_trash();
         if let Some(window) = ctx.windows.get(&requester) {
             window.send_trash_entries(request_id, entries);
         }
@@ -1071,7 +1063,8 @@ impl NoteItAppClone {
         let result = self
             .context
             .borrow()
-            .storage
+            .core
+            .storage()
             .restore_note_from_trash(&target);
         match result {
             Ok(()) => {
@@ -1081,11 +1074,13 @@ impl NoteItAppClone {
             Err(error) => {
                 eprintln!("Restore failed for note {target}: {error}");
                 let message = match error {
-                    crate::trash::RestoreError::Occupied => {
+                    noteit_core::trash::RestoreError::Occupied => {
                         "Já existe uma nota ativa com esse identificador. Nada foi alterado."
                     }
-                    crate::trash::RestoreError::Missing => "Essa nota não está mais na lixeira.",
-                    crate::trash::RestoreError::Failed(_) => {
+                    noteit_core::trash::RestoreError::Missing => {
+                        "Essa nota não está mais na lixeira."
+                    }
+                    noteit_core::trash::RestoreError::Failed(_) => {
                         "Não foi possível restaurar a nota. Nada foi alterado."
                     }
                 };
@@ -1098,7 +1093,7 @@ impl NoteItAppClone {
     /// happened. Unlike the automatic backup this is never silent: someone is
     /// waiting to know whether they have a safety point.
     pub fn create_backup(&self, requester: Uuid) {
-        let result = self.context.borrow().storage.create_backup_now();
+        let result = self.context.borrow().core.storage().create_backup_now();
         match result {
             Ok(path) => {
                 diagnostics::log(format_args!(
@@ -1125,7 +1120,8 @@ impl NoteItAppClone {
     pub fn answer_study_catalog(&self, requester: Uuid, request_id: u64) {
         let ctx = self.context.borrow();
         let mut notes: Vec<StudyCatalogNote> = ctx
-            .storage
+            .core
+            .storage()
             .read_note_bodies_by_recency()
             .into_iter()
             .map(|(id, content)| StudyCatalogNote { id, content })
@@ -1137,7 +1133,7 @@ impl NoteItAppClone {
             }
         }
 
-        let (study_state, error) = match ctx.storage.load_study() {
+        let (study_state, error) = match ctx.core.study_state() {
             Ok(state) => (Some(state), None),
             Err(error) => {
                 eprintln!("Study catalog unavailable: {error}");
@@ -1159,7 +1155,8 @@ impl NoteItAppClone {
         let result = self
             .context
             .borrow()
-            .storage
+            .core
+            .storage()
             .rate_study(&review_key, rating);
         let ctx = self.context.borrow();
         if let Some(window) = ctx.windows.get(&requester) {
@@ -1275,7 +1272,7 @@ impl NoteItAppClone {
                 return;
             }
             ctx.config.capture_delimiter = resolved.to_string();
-            let config_path = ctx.storage.config_file_path();
+            let config_path = ctx.core.storage().config_file_path();
             if let Err(error) = ctx.config.save_to_file(&config_path) {
                 eprintln!("Failed to persist the capture delimiter: {error}");
             }
@@ -1352,7 +1349,7 @@ impl NoteItAppClone {
         }
     }
 
-    /// One clipboard change, decided by [`crate::autopaste`].
+    /// One clipboard change, decided by [`noteit_core::autopaste`].
     ///
     /// Two gates before anything is read. `is_local` is GDK's own answer to
     /// "did this application put that there", and it is the loop protection: a
@@ -1516,7 +1513,13 @@ impl NoteItAppClone {
     /// autosave writes the file — one authority over the document, the same
     /// rule a clipboard capture follows.
     fn import_image_for(&self, note_id: Uuid, bytes: &[u8]) {
-        let assets_dir = self.context.borrow().storage.assets_dir().to_path_buf();
+        let assets_dir = self
+            .context
+            .borrow()
+            .core
+            .storage()
+            .assets_dir()
+            .to_path_buf();
         match import_image(&assets_dir, note_id, bytes) {
             Ok(asset) => {
                 diagnostics::log(format_args!(
@@ -1558,7 +1561,7 @@ impl NoteItAppClone {
 
         let (doc_res, win_state) = {
             let ctx = self.context.borrow();
-            let doc = ctx.storage.load_note(&id);
+            let doc = ctx.core.read_note(&id);
             let win_state = ctx
                 .state
                 .notes
@@ -1658,7 +1661,8 @@ fn clipboard_offers_text(clipboard: &gdk::Clipboard) -> bool {
 fn persist_state_now(ctx: &mut AppContext, reason: &str) -> Result<(), String> {
     ctx.layer_state_persistence.cancel();
     diagnostics::log(format_args!("event=state-persist-now reason={reason}"));
-    ctx.state.save_to_file(&ctx.storage.state_file_path())
+    ctx.state
+        .save_to_file(&ctx.core.storage().state_file_path())
 }
 
 fn apply_shared_layer_transition<T>(
@@ -1942,7 +1946,7 @@ fn instantiate_note_window(
         document: doc,
         state: win_state,
         layer_mode,
-        storage: ctx.storage.clone(),
+        storage: ctx.core.storage().clone(),
         ui_dist_path: &ctx.ui_dist_path,
         monitor,
         monitor_name,
@@ -2019,8 +2023,8 @@ mod tests {
         preferred_layer_after_new_note, prepare_new_note, FlushBatch, LifecycleCoordinator,
         LifecycleOperation, StartupPlan, StatePersistenceDebouncer, SummonLayerPlan,
     };
-    use crate::settings::AppConfig;
-    use crate::state::{AppState, LayerMode};
+    use noteit_core::settings::AppConfig;
+    use noteit_core::state::{AppState, LayerMode};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use uuid::Uuid;
@@ -2595,14 +2599,14 @@ mod tests {
         let mut state = AppState::default();
         state.notes.insert(
             trashed,
-            crate::state::NoteWindowState {
+            noteit_core::state::NoteWindowState {
                 is_open: false,
                 ..Default::default()
             },
         );
         state.notes.insert(
             live,
-            crate::state::NoteWindowState {
+            noteit_core::state::NoteWindowState {
                 is_open: true,
                 ..Default::default()
             },
@@ -2629,7 +2633,7 @@ mod tests {
         let mut only_trashed = AppState::default();
         only_trashed.notes.insert(
             trashed,
-            crate::state::NoteWindowState {
+            noteit_core::state::NoteWindowState {
                 is_open: true,
                 ..Default::default()
             },
@@ -2652,7 +2656,7 @@ mod tests {
         let mut state = AppState::default();
         state.notes.insert(
             known,
-            crate::state::NoteWindowState {
+            noteit_core::state::NoteWindowState {
                 is_open: true,
                 ..Default::default()
             },

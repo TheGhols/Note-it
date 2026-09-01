@@ -1,7 +1,7 @@
-use crate::state::LayerMode;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use noteit_core::state::LayerMode;
 
 pub const MIN_NOTE_WIDTH: i32 = 220;
 pub const MIN_NOTE_HEIGHT: i32 = 160;

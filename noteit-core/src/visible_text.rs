@@ -610,7 +610,7 @@ mod tests {
     /// WebView each carry an implementation and two implementations that are
     /// only *described* as equivalent drift. Every case is a stored note and
     /// the text a reader sees in it.
-    const CASES: &str = include_str!("../tests/visible_text_cases.json");
+    const CASES: &str = include_str!("../../tests/visible_text_cases.json");
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
