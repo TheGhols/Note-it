@@ -1,25 +1,29 @@
 use crate::atomic_file::write_atomic;
 use crate::backup::{self, BackupSources, SnapshotKind};
 use crate::diagnostics;
+use crate::metadata::{
+    semantic_identity, MetadataCatalog, PropertyKeyCatalogEntry, TagCatalogEntry,
+};
 use crate::model::{NoteDocument, NoteFrontMatterWrapper};
 use crate::study::{self, Rating, StudyState};
 use crate::trash::{self, TrashEntry};
 use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// How much of a note is read to find out when it was last written in.
+/// Hard ceiling for the front matter needed by recency and metadata catalogs.
 ///
-/// Front matter is a handful of short lines at the very top of the file, so
-/// reading the whole note to see them would make listing cost what searching
-/// costs. A note whose header does not fit in this falls back to the file's
-/// own timestamp, exactly as a note written before `updated_at` existed does.
-const FRONT_MATTER_PROBE_BYTES: u64 = 4096;
+/// Valid Tags + Properties fit comfortably below this even at every V1 limit.
+/// The reader stops at the real closing delimiter and never reads the body.
+/// A hand-written header beyond the ceiling falls back to `mtime` for recency
+/// rather than turning an unbounded file into listing work.
+pub const MAX_FRONT_MATTER_BYTES: usize = 256 * 1024;
 
 /// One note as the ordering sees it: which note, and when it was last written
 /// in.
@@ -46,27 +50,38 @@ fn newest_first(notes: &mut [Listed]) {
 /// whose ordering falls back to the file's modification time — the rule every
 /// note followed before there was a field to read.
 fn recorded_edit_time(raw: &str) -> Option<DateTime<Utc>> {
-    let front_matter = NoteDocument::split_front_matter(raw).0?;
-    serde_yaml::from_str::<NoteFrontMatterWrapper>(front_matter)
+    serde_yaml::from_str::<NoteFrontMatterWrapper>(raw)
         .ok()?
         .note_it
         .updated_at
 }
 
-/// The opening of a file, as text, or `None` if it cannot be read.
-///
-/// Bounded, and lossy on purpose: the cut lands wherever
-/// [`FRONT_MATTER_PROBE_BYTES`] falls, which is deep in the body of any note
-/// long enough to reach it. Refusing the whole probe because a character was
-/// split far past the header would silently demote every accented note.
-fn read_head(path: &Path) -> Option<String> {
-    let mut head = Vec::new();
-    fs::File::open(path)
-        .ok()?
-        .take(FRONT_MATTER_PROBE_BYTES)
-        .read_to_end(&mut head)
-        .ok()?;
-    Some(String::from_utf8_lossy(&head).into_owned())
+/// Reads only the YAML between exact front-matter delimiter lines.
+fn read_front_matter(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut consumed = reader.read_line(&mut line).ok()?;
+    if line.trim_end_matches(['\r', '\n']) != "---" {
+        return None;
+    }
+
+    let mut yaml = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line).ok()?;
+        if read == 0 {
+            return None;
+        }
+        consumed = consumed.checked_add(read)?;
+        if consumed > MAX_FRONT_MATTER_BYTES {
+            return None;
+        }
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some(yaml);
+        }
+        yaml.push_str(&line);
+    }
 }
 
 /// When the last automatic snapshot happened, as this process knows it.
@@ -480,7 +495,7 @@ impl StorageManager {
             .into_iter()
             .map(|(id, modified)| Listed {
                 id,
-                edited_at: read_head(&self.note_path(&id))
+                edited_at: read_front_matter(&self.note_path(&id))
                     .as_deref()
                     .and_then(recorded_edit_time)
                     .map(SystemTime::from)
@@ -490,6 +505,64 @@ impl StorageManager {
 
         newest_first(&mut notes);
         Ok(notes.into_iter().map(|note| note.id).collect())
+    }
+
+    /// Derives autocomplete catalogs from live note front matter.
+    ///
+    /// There is no sidecar or index to invalidate. Trash is excluded because
+    /// only `notes_dir` is traversed; restoring a file makes it appear again.
+    pub fn metadata_catalog(&self) -> MetadataCatalog {
+        let mut tags: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        let mut keys: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        let ids = self.list_notes_by_recency().unwrap_or_default();
+
+        for id in ids {
+            let Some(front_matter) = read_front_matter(&self.note_path(&id)) else {
+                continue;
+            };
+            let Ok(wrapper) = serde_yaml::from_str::<NoteFrontMatterWrapper>(&front_matter) else {
+                continue;
+            };
+            for tag in wrapper.tags.as_slice() {
+                let identity = semantic_identity(tag);
+                tags.entry(identity)
+                    .and_modify(|entry| entry.1 += 1)
+                    .or_insert_with(|| (tag.clone(), 1));
+            }
+            for property in wrapper.properties.as_slice() {
+                let identity = semantic_identity(&property.key);
+                keys.entry(identity)
+                    .and_modify(|entry| entry.1 += 1)
+                    .or_insert_with(|| (property.key.clone(), 1));
+            }
+        }
+
+        let mut tags: Vec<_> = tags
+            .into_values()
+            .map(|(tag, note_count)| TagCatalogEntry { tag, note_count })
+            .collect();
+        tags.sort_by(|left, right| {
+            right
+                .note_count
+                .cmp(&left.note_count)
+                .then_with(|| semantic_identity(&left.tag).cmp(&semantic_identity(&right.tag)))
+        });
+
+        let mut property_keys: Vec<_> = keys
+            .into_values()
+            .map(|(key, note_count)| PropertyKeyCatalogEntry { key, note_count })
+            .collect();
+        property_keys.sort_by(|left, right| {
+            right
+                .note_count
+                .cmp(&left.note_count)
+                .then_with(|| semantic_identity(&left.key).cmp(&semantic_identity(&right.key)))
+        });
+
+        MetadataCatalog {
+            tags,
+            property_keys,
+        }
     }
 
     /// **Every** note's own text, newest first, ready to be searched.
@@ -543,6 +616,7 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{NoteMetadata, NoteProperty};
     use tempfile::tempdir;
 
     /// Temp files a save should never leave behind.
@@ -766,6 +840,14 @@ mod tests {
 
         let mut doc = NoteDocument::new_empty();
         doc.content = "# Biópsia hepática\n\ncorpo da nota".to_string();
+        doc.user_metadata = NoteMetadata::try_new(
+            ["Medicina".into()],
+            [NoteProperty {
+                key: "fonte".into(),
+                value: "Harrison".into(),
+            }],
+        )
+        .expect("metadata");
         manager.save_note_atomic(&doc).expect("save");
 
         let bodies = manager.read_note_bodies_by_recency();
@@ -783,6 +865,213 @@ mod tests {
                 "{internal} reached the searchable body"
             );
         }
+        assert!(!bodies[0].1.contains("Medicina"));
+        assert!(!bodies[0].1.contains("Harrison"));
+    }
+
+    #[test]
+    fn front_matter_beyond_4096_bytes_still_uses_updated_at_for_recency() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut older = NoteDocument::new_empty();
+        older.content = "older body".into();
+        older.metadata.updated_at = Some(at(1_000));
+        let older_id = older.metadata.id;
+        let mut raw = older.serialize().expect("serialize");
+        raw = raw.replacen(
+            "---\n\nolder body",
+            &format!("future_blob: {}\n---\n\nolder body", "x".repeat(8_000)),
+            1,
+        );
+        assert!(
+            NoteDocument::split_front_matter(&raw)
+                .0
+                .expect("header")
+                .len()
+                > 4096
+        );
+        fs::write(manager.note_path(&older_id), raw).expect("write large header");
+
+        let mut newer = NoteDocument::new_empty();
+        newer.content = "newer body".into();
+        newer.metadata.updated_at = Some(at(2_000));
+        let newer_id = newer.metadata.id;
+        place(&manager, &newer);
+
+        // Make mtime say the opposite. Falling back at 4096 would put `older`
+        // first; reading through the delimiter keeps the semantic timestamp.
+        stamp(&manager.note_path(&newer_id), 10);
+        stamp(&manager.note_path(&older_id), 20);
+        assert_eq!(
+            manager.list_notes_by_recency().expect("list"),
+            [newer_id, older_id]
+        );
+    }
+
+    #[test]
+    fn catalogs_are_derived_from_live_notes_and_restore_naturally() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+
+        let mut first = NoteDocument::new_empty();
+        first.user_metadata = NoteMetadata::try_new(
+            ["Medicina".into(), "PBL".into()],
+            [NoteProperty {
+                key: "Status".into(),
+                value: "revisando".into(),
+            }],
+        )
+        .expect("metadata");
+        manager.save_note_atomic(&first).expect("save first");
+
+        let mut second = NoteDocument::new_empty();
+        second.user_metadata = NoteMetadata::try_new(
+            ["medicina".into(), "Hotel".into()],
+            [NoteProperty {
+                key: "status".into(),
+                value: "novo".into(),
+            }],
+        )
+        .expect("metadata");
+        manager.save_note_atomic(&second).expect("save second");
+
+        let catalog = manager.metadata_catalog();
+        assert_eq!(catalog.tags[0].note_count, 2);
+        assert_eq!(semantic_identity(&catalog.tags[0].tag), "medicina");
+        assert_eq!(catalog.property_keys[0].note_count, 2);
+
+        manager
+            .move_note_to_trash(&first.metadata.id)
+            .expect("trash");
+        let without_trash = manager.metadata_catalog();
+        assert!(!without_trash.tags.iter().any(|entry| entry.tag == "PBL"));
+        assert_eq!(
+            without_trash
+                .tags
+                .iter()
+                .find(|entry| semantic_identity(&entry.tag) == "medicina")
+                .unwrap()
+                .note_count,
+            1
+        );
+
+        manager
+            .restore_note_from_trash(&first.metadata.id)
+            .expect("restore");
+        let restored = manager.metadata_catalog();
+        assert!(restored.tags.iter().any(|entry| entry.tag == "PBL"));
+        assert_eq!(
+            restored
+                .tags
+                .iter()
+                .find(|entry| semantic_identity(&entry.tag) == "medicina")
+                .unwrap()
+                .note_count,
+            2
+        );
+    }
+
+    #[test]
+    fn save_trash_restore_and_backup_preserve_semantic_metadata_bytes() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = StorageManager::with_custom_paths(
+            tmp.path().join("notes"),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "# Caso clínico".into();
+        doc.user_metadata = NoteMetadata::try_new(
+            ["Urgência".into(), "Saúde".into()],
+            [NoteProperty {
+                key: "fonte".into(),
+                value: "Harrison".into(),
+            }],
+        )
+        .expect("metadata");
+        let id = doc.metadata.id;
+        manager.save_note_atomic(&doc).expect("save");
+        let original = fs::read(manager.note_path(&id)).expect("original bytes");
+
+        let snapshot = manager.create_backup_now().expect("snapshot");
+        assert_eq!(
+            fs::read(snapshot.join("notes").join(format!("{id}.md"))).expect("backup bytes"),
+            original
+        );
+
+        manager.move_note_to_trash(&id).expect("trash");
+        assert_eq!(
+            fs::read(manager.trash_dir().join(format!("{id}.md"))).expect("trash bytes"),
+            original
+        );
+        manager.restore_note_from_trash(&id).expect("restore");
+        assert_eq!(
+            fs::read(manager.note_path(&id)).expect("restored bytes"),
+            original
+        );
+        assert_eq!(
+            manager
+                .load_note(&id)
+                .expect("parse restored")
+                .user_metadata,
+            doc.user_metadata
+        );
+    }
+
+    #[test]
+    fn deriving_catalogs_for_a_thousand_notes_is_fast_and_writes_nothing() {
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("notes");
+        let manager = StorageManager::with_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        )
+        .expect("storage");
+        for index in 0..1_000 {
+            let mut doc = NoteDocument::new_empty();
+            doc.user_metadata = NoteMetadata::try_new(
+                [format!("Área {}", index % 20), "Projeto".into()],
+                [NoteProperty {
+                    key: format!("campo {}", index % 10),
+                    value: index.to_string(),
+                }],
+            )
+            .expect("metadata");
+            place(&manager, &doc);
+        }
+        let before = fingerprint(&notes_dir);
+        let started = std::time::Instant::now();
+        let catalog = manager.metadata_catalog();
+        let elapsed = started.elapsed();
+        println!("metadata catalog for 1000 notes: {elapsed:?}");
+        assert_eq!(catalog.tags.len(), 21);
+        assert_eq!(catalog.property_keys.len(), 10);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "catalog took {elapsed:?}"
+        );
+        assert_eq!(
+            fingerprint(&notes_dir),
+            before,
+            "catalog derivation wrote the store"
+        );
     }
 
     #[test]

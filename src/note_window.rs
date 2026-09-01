@@ -6,13 +6,14 @@ use crate::layer_shell::{
 };
 use crate::webview_bridge::{
     parse_webview_message, send_to_webview, validate_external_url, HostToWebviewMessage,
-    WebviewToHostMessage,
+    MetadataView, WebviewToHostMessage,
 };
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4_layer_shell::LayerShell;
 use noteit_core::autopaste::CaptureDelimiter;
 use noteit_core::diagnostics;
+use noteit_core::metadata::NoteMetadata;
 use noteit_core::model::{paper_intensity_name, paper_type_name, NoteDocument, NoteFrontMatter};
 use noteit_core::settings::{clamp_ui_scale_percent, theme_name};
 use noteit_core::state::{clamp_zoom_percent, LayerMode, NoteWindowState};
@@ -307,6 +308,7 @@ impl NoteWindow {
                                         )
                                         .to_string(),
                                         font_size: doc.metadata.font_size,
+                                        metadata: MetadataView::from(&doc.user_metadata),
                                         collapsed: state_clone.borrow().collapsed,
                                         created_at: doc.metadata.created_at,
                                         updated_at: doc.metadata.updated_at,
@@ -412,6 +414,78 @@ impl NoteWindow {
                                 })
                             {
                                 eprintln!("Paper save failed for note {id}: {error}");
+                            }
+                        }
+                        WebviewToHostMessage::MetadataCatalogRequested { request_id } => {
+                            if let Some(wv) = webview_weak.upgrade() {
+                                send_to_webview(
+                                    &wv,
+                                    &HostToWebviewMessage::MetadataCatalogResult {
+                                        request_id,
+                                        catalog: storage_clone.metadata_catalog(),
+                                    },
+                                );
+                            }
+                        }
+                        WebviewToHostMessage::MetadataSuggestionsRequested {
+                            request_id,
+                            kind,
+                            query,
+                        } => {
+                            let catalog = storage_clone.metadata_catalog();
+                            let suggestions = match kind {
+                                crate::webview_bridge::MetadataSuggestionKind::Tag => {
+                                    catalog.tag_suggestions(&query)
+                                }
+                                crate::webview_bridge::MetadataSuggestionKind::PropertyKey => {
+                                    catalog.property_key_suggestions(&query)
+                                }
+                            };
+                            if let Some(wv) = webview_weak.upgrade() {
+                                send_to_webview(
+                                    &wv,
+                                    &HostToWebviewMessage::MetadataSuggestionsResult {
+                                        request_id,
+                                        suggestions,
+                                    },
+                                );
+                            }
+                        }
+                        WebviewToHostMessage::MetadataChanged {
+                            request_id,
+                            id: message_id,
+                            content,
+                            tags,
+                            properties,
+                        } => {
+                            let result = if message_id != id {
+                                Err("a nota da solicitação não corresponde à janela".to_string())
+                            } else {
+                                NoteMetadata::try_new(tags, properties)
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|metadata| {
+                                        save_user_metadata(
+                                            &storage_clone,
+                                            &doc_clone,
+                                            id,
+                                            content,
+                                            metadata,
+                                        )
+                                    })
+                            };
+                            if let Some(wv) = webview_weak.upgrade() {
+                                let metadata = MetadataView::from(&doc_clone.borrow().user_metadata);
+                                send_to_webview(
+                                    &wv,
+                                    &HostToWebviewMessage::MetadataSaveResult {
+                                        request_id,
+                                        ok: result.is_ok(),
+                                        message: result
+                                            .err()
+                                            .unwrap_or_else(|| "Metadados salvos".to_string()),
+                                        metadata,
+                                    },
+                                );
                             }
                         }
                         WebviewToHostMessage::ThemeChanged { theme } => {
@@ -1370,6 +1444,40 @@ fn save_metadata(
     commit_once_written(storage, document, candidate)
 }
 
+/// Persists semantic metadata against the Markdown currently in the WebView.
+///
+/// A pending editor debounce cannot be overwritten by an older body: if the
+/// page's Markdown differs, this one candidate includes that text edit (and
+/// only then moves `updated_at`) together with the metadata. The committed
+/// document is adopted only after the canonical atomic writer succeeds.
+fn save_user_metadata(
+    storage: &StorageManager,
+    document: &Rc<RefCell<NoteDocument>>,
+    expected_id: Uuid,
+    content: String,
+    metadata: NoteMetadata,
+) -> Result<(), String> {
+    let candidate = {
+        let doc = document.borrow();
+        if doc.metadata.id != expected_id {
+            return Err("note identifier mismatch".to_string());
+        }
+        let content = NoteDocument::canonical_content(&content);
+        if doc.content == content && doc.user_metadata == metadata {
+            return Ok(());
+        }
+        let mut candidate = doc.clone();
+        if candidate.content != content {
+            candidate.content = content.to_string();
+            candidate.touch_content_modified();
+        }
+        candidate.user_metadata = metadata;
+        candidate
+    };
+
+    commit_once_written(storage, document, candidate)
+}
+
 /// Writes a prepared note and, only if that succeeded, makes it the document
 /// held in memory.
 ///
@@ -1409,10 +1517,11 @@ fn file_uri_for_path(path: &Path) -> String {
 mod tests {
     use super::{
         apply_collapse_to_state, complete_flush_response, expire_flush_request, file_uri_for_path,
-        save_and_close, save_content, save_metadata, PendingFlushes, SubpixelDeltaAccumulator,
-        FLUSH_TIMEOUT_ERROR,
+        save_and_close, save_content, save_metadata, save_user_metadata, PendingFlushes,
+        SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
+    use noteit_core::metadata::{NoteMetadata, NoteProperty};
     use noteit_core::model::NoteDocument;
     use noteit_core::state::NoteWindowState;
     use noteit_core::storage::StorageManager;
@@ -2761,6 +2870,104 @@ mod tests {
         let ordering = storage.list_notes_by_recency().expect("listing");
         assert_eq!(ordering[0], first_id);
         assert_eq!(ordering.len(), 2);
+    }
+
+    #[test]
+    fn semantic_metadata_save_keeps_both_timestamps_when_text_is_unchanged() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let created_at = document.borrow().metadata.created_at;
+        let updated_at = document.borrow().metadata.updated_at;
+        let metadata = NoteMetadata::try_new(
+            ["Medicina".into()],
+            [NoteProperty {
+                key: "status".into(),
+                value: "revisando".into(),
+            }],
+        )
+        .expect("metadata");
+
+        save_user_metadata(
+            &storage,
+            &document,
+            id,
+            "conteúdo A".into(),
+            metadata.clone(),
+        )
+        .expect("save metadata");
+
+        let reloaded = storage.load_note(&id).expect("reload");
+        assert_eq!(reloaded.metadata.created_at, created_at);
+        assert_eq!(reloaded.metadata.updated_at, updated_at);
+        assert_eq!(reloaded.user_metadata, metadata);
+    }
+
+    #[test]
+    fn semantic_metadata_save_commits_unsaved_webview_text_in_the_same_candidate() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "texto no disco");
+        let id = document.borrow().metadata.id;
+        let previous_updated_at = document.borrow().metadata.updated_at;
+        let metadata = NoteMetadata::try_new(["PBL".into()], std::iter::empty()).expect("metadata");
+
+        save_user_metadata(
+            &storage,
+            &document,
+            id,
+            "texto novo ainda na WebView".into(),
+            metadata.clone(),
+        )
+        .expect("combined save");
+
+        let reloaded = storage.load_note(&id).expect("reload");
+        assert_eq!(reloaded.content, "texto novo ainda na WebView");
+        assert_eq!(reloaded.user_metadata, metadata);
+        assert!(reloaded.metadata.updated_at > previous_updated_at);
+    }
+
+    #[test]
+    fn failed_semantic_metadata_save_is_not_adopted_and_the_same_retry_works() {
+        let tmp = tempdir().expect("tempdir");
+        let storage = storage_in(&tmp);
+        let document = stored_note(&storage, "conteúdo A");
+        let id = document.borrow().metadata.id;
+        let metadata =
+            NoteMetadata::try_new(["Projeto".into()], std::iter::empty()).expect("metadata");
+
+        let fault = FailingWrites::engage(&storage);
+        save_user_metadata(
+            &storage,
+            &document,
+            id,
+            "conteúdo A".into(),
+            metadata.clone(),
+        )
+        .expect_err("first save fails");
+        fault.lift();
+        assert!(document.borrow().user_metadata.tags.is_empty());
+        assert!(storage
+            .load_note(&id)
+            .expect("disk")
+            .user_metadata
+            .tags
+            .is_empty());
+
+        save_user_metadata(
+            &storage,
+            &document,
+            id,
+            "conteúdo A".into(),
+            metadata.clone(),
+        )
+        .expect("retry");
+        assert_eq!(document.borrow().user_metadata, metadata);
+        assert_eq!(
+            storage.load_note(&id).expect("disk").user_metadata,
+            metadata
+        );
     }
 
     #[test]

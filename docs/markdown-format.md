@@ -15,6 +15,12 @@ note_it:
   font_size: 16
   created_at: "2026-08-26T14:00:00Z"
   updated_at: "2026-08-26T14:05:00Z"
+tags:
+  - Medicina
+  - Urgência
+properties:
+  tipo: estudo
+  fonte: Harrison
 ---
 
 # Meeting Notes
@@ -23,6 +29,32 @@ note_it:
 - [x] Create documentation
 
 Remember to check <u>underlined points</u> and <span data-note-it-color="#D32F2F" style="color:#D32F2F">urgent tasks</span>.
+
+## Semantic Metadata
+
+`note_it` is reserved for application metadata. `tags` and `properties` are user-authored semantic
+metadata and remain outside the Markdown body. Both are optional: a legacy or new note that has
+none omits both keys, reads as `tags = []` and `properties = {}`, and is never mass-migrated.
+
+Tags are YAML strings. Note-it trims the value, accepts and removes one convenience `#`, rejects
+empty/control/multiline or overlong values, and keeps at most 32 tags of at most 64 Unicode
+characters each. Identity uses the same lowercase + Latin-diacritic folding as body search, so
+`Medicina`, `medicina` and `MEDICINA` are one tag, as are `Urgência` and `urgencia`. The first human
+spelling supplied is retained for display.
+
+Properties are a YAML mapping of textual key to textual value. Up to 32 entries are accepted; a
+trimmed key has 1–64 Unicode characters and a single-line value has at most 512. Keys use the same
+case/accent-insensitive identity, so `Status` and `status` cannot coexist, and serialization orders
+them deterministically. V1 deliberately has no nested objects, relations, formulas or computed
+values.
+
+Changing semantic metadata does not change `created_at` or `updated_at`; the latter continues to
+mean the latest textual body edit. If text is pending when metadata is confirmed, both are written
+in one atomic candidate and `updated_at` moves because the text changed, not because metadata did.
+
+Unknown top-level YAML values are preserved semantically on reserialization. YAML comments,
+anchors and exact formatting are not part of serde's value model and can be normalized by a real
+save. Merely opening and closing an untouched note writes nothing, so its bytes remain identical.
 
 ## Trailing Blank Lines Are Not Content
 

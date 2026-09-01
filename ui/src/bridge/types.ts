@@ -25,6 +25,7 @@ export interface NoteData {
   paperType: PaperType;
   paperIntensity: PaperIntensity;
   fontSize: number;
+  metadata: MetadataView;
   collapsed: boolean;
   createdAt: string | null;
   updatedAt: string | null;
@@ -51,6 +52,27 @@ export interface NoteData {
    * a WebView that has just been created is never the capture target.
    */
   captureDelimiter: CaptureDelimiter;
+}
+
+export interface TagView {
+  value: string;
+  /** Reviewed palette slot computed from the Core semantic identity. */
+  colour: number;
+}
+
+export interface NoteProperty {
+  key: string;
+  value: string;
+}
+
+export interface MetadataView {
+  tags: TagView[];
+  properties: NoteProperty[];
+}
+
+export interface MetadataCatalog {
+  tags: Array<{ tag: string; noteCount: number }>;
+  propertyKeys: Array<{ key: string; noteCount: number }>;
 }
 
 /** One note that matched, exactly as the host sends it. */
@@ -120,6 +142,15 @@ export type HostToWebviewMessage =
         message: string;
       };
     }
+  | { type: 'metadata_catalog_result'; payload: { requestId: number; catalog: MetadataCatalog } }
+  | {
+      type: 'metadata_save_result';
+      payload: { requestId: number; ok: boolean; message: string; metadata: MetadataView };
+    }
+  | {
+      type: 'metadata_suggestions_result';
+      payload: { requestId: number; suggestions: string[] };
+    }
   | { type: 'request_content' }
   | { type: 'request_save_and_close' }
   | { type: 'request_flush'; payload: { requestId: number } };
@@ -134,6 +165,21 @@ export type WebviewToHostMessage =
   | {
       type: 'paper_changed';
       payload: { id: string; paperType: PaperType; paperIntensity: PaperIntensity };
+    }
+  | {
+      type: 'metadata_changed';
+      payload: {
+        requestId: number;
+        id: string;
+        content: string;
+        tags: string[];
+        properties: NoteProperty[];
+      };
+    }
+  | { type: 'metadata_catalog_requested'; payload: { requestId: number } }
+  | {
+      type: 'metadata_suggestions_requested';
+      payload: { requestId: number; kind: 'tag' | 'property_key'; query: string };
     }
   | { type: 'theme_changed'; payload: { theme: ThemePreference } }
   | { type: 'ui_scale_changed'; payload: { uiScalePercent: number } }

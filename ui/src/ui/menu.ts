@@ -53,6 +53,8 @@ export interface NoteMenuHandlers {
   onTrashNote(): void;
   onOpenTrash(): void;
   onCreateBackup(): void;
+  /** Opens the one Tags + Properties editor. */
+  onOpenMetadata?(invoker: HTMLElement): void;
   /** Asks the host for a file chooser and an image from it. */
   onInsertImage(): void;
   /** The reader wants to study the cards this note holds. */
@@ -244,6 +246,11 @@ export class NoteMenu {
 
     const captureItem = this.createSubmenuItem('Captura', 'capture');
     const dataItem = this.createSubmenuItem('Dados', 'data');
+    const metadataItem = this.createItem('Metadados', 'note-menu-item');
+    metadataItem.addEventListener('click', () => {
+      this.close();
+      this.options.handlers.onOpenMetadata?.(metadataItem);
+    });
 
     const layerItem = this.createSubmenuItem('Camada', 'layer');
     this.layerValue = this.doc.createElement('span');
@@ -281,6 +288,7 @@ export class NoteMenu {
       captureItem,
       this.createSeparator(),
       dataItem,
+      metadataItem,
       this.createSeparator(),
       zoomItem,
       interfaceItem,

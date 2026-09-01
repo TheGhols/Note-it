@@ -35,6 +35,7 @@ import { collapseTransition } from './ui/collapse.ts';
 import { HeaderReveal } from './ui/headerReveal.ts';
 import { CLIPPER, FLASHCARDS, QUICK_ACTIONS, TRASH_SHORTCUT } from './ui/icons.ts';
 import { MenuPanel, NoteMenu } from './ui/menu.ts';
+import { MetadataPanel, NoteTagStrip } from './ui/metadataPanel.ts';
 import { noteTitle } from './ui/noteTitle.ts';
 import { SearchPalette } from './ui/searchPalette.ts';
 import { bindSearchEntries } from './ui/searchEntry.ts';
@@ -94,6 +95,8 @@ let autoPasteActive = false;
 let captureDelimiter: CaptureDelimiter = DEFAULT_CAPTURE_DELIMITER;
 let noteEditor: NoteEditor | null = null;
 let noteMenu: NoteMenu | null = null;
+let metadataPanel: MetadataPanel | null = null;
+let noteTagStrip: NoteTagStrip | null = null;
 let headerReveal: HeaderReveal | null = null;
 let infoTooltip: NoteInfoTooltip | null = null;
 let searchPalette: SearchPalette | null = null;
@@ -134,6 +137,17 @@ function openTrash(): void {
   flashcardPanel?.close();
   studyHub?.close();
   trashPanel?.openPanel();
+}
+
+function openMetadata(section: 'tags' | 'properties', invoker?: HTMLElement | null): void {
+  searchPalette?.close();
+  findBar?.close();
+  trashPanel?.close();
+  timerPanel?.close();
+  flashcardPanel?.close();
+  studyHub?.close();
+  noteMenu?.close();
+  metadataPanel?.open(section, invoker ?? document.getElementById('note-tags-line'));
 }
 
 /** Opens Find, or Find with the replace row, seeded with the selection. */
@@ -627,6 +641,43 @@ function initUI(): void {
   const zoomOutButton = document.getElementById('btn-zoom-out') as HTMLButtonElement | null;
   const zoomInButton = document.getElementById('btn-zoom-in') as HTMLButtonElement | null;
   if (btnMenu && menuMount) {
+    metadataPanel = new MetadataPanel(menuMount, {
+      requestCatalog: (requestId) => {
+        bridge.sendMessage({ type: 'metadata_catalog_requested', payload: { requestId } });
+      },
+      requestSuggestions: (requestId, kind, query) => {
+        bridge.sendMessage({
+          type: 'metadata_suggestions_requested',
+          payload: { requestId, kind, query },
+        });
+      },
+      save: (requestId, draft) => {
+        if (!activeNoteId || !noteEditor) return;
+        noteEditor.cancelPendingSave();
+        bridge.sendMessage({
+          type: 'metadata_changed',
+          payload: {
+            requestId,
+            id: activeNoteId,
+            content: noteEditor.getMarkdown(),
+            tags: draft.tags,
+            properties: draft.properties,
+          },
+        });
+      },
+      onOpen: () => {
+        infoTooltip?.hide();
+        headerReveal?.setHeld(true);
+      },
+      onClose: () => headerReveal?.setHeld(false),
+    });
+    const tagsLine = document.getElementById('note-tags-line');
+    if (tagsLine) {
+      noteTagStrip = new NoteTagStrip(tagsLine, () => openMetadata('tags', tagsLine));
+      window.addEventListener('resize', () =>
+        noteTagStrip?.render(window.innerWidth, window.innerHeight),
+      );
+    }
     noteMenu = new NoteMenu({
       trigger: btnMenu,
       mount: menuMount,
@@ -714,6 +765,9 @@ function initUI(): void {
         },
         onOpenTrash: openTrash,
         onCreateBackup: () => bridge.sendMessage({ type: 'backup_requested' }),
+        // The menu item is hidden as soon as it delegates. Return focus to the
+        // still-visible menu button when the metadata panel closes.
+        onOpenMetadata: () => openMetadata('tags', btnMenu),
         onInsertImage: requestImageInsert,
         onOpenStudy: () => openStudyHub('current', document.getElementById('btn-menu')),
         onOpenStudyHub: () => openStudyHub('review', document.getElementById('btn-menu')),
@@ -1035,6 +1089,8 @@ function initUI(): void {
       setTheme(normalizeTheme(msg.payload.theme), false);
       setUiScale(clampUiScale(msg.payload.uiScalePercent), false);
       setFontSize(msg.payload.fontSize || 15);
+      metadataPanel?.setMetadata(msg.payload.metadata);
+      noteTagStrip?.setMetadata(msg.payload.metadata, window.innerWidth, window.innerHeight);
       applyZoom(msg.payload.zoomPercent ?? DEFAULT_ZOOM_PERCENT, false);
       setLayerMode(msg.payload.layerMode ?? 'overlay');
       infoTooltip?.setTimestamps({
@@ -1123,6 +1179,21 @@ function initUI(): void {
       if (accepted && msg.payload.ok && msg.payload.studyState) {
         studyHub?.updateStudyState(msg.payload.studyState);
       }
+    } else if (msg.type === 'metadata_catalog_result') {
+      metadataPanel?.setCatalog(msg.payload.requestId, msg.payload.catalog);
+    } else if (msg.type === 'metadata_save_result') {
+      metadataPanel?.resolveSave(
+        msg.payload.requestId,
+        msg.payload.ok,
+        msg.payload.message,
+        msg.payload.metadata,
+      );
+      if (msg.payload.ok) {
+        noteTagStrip?.setMetadata(msg.payload.metadata, window.innerWidth, window.innerHeight);
+        noteStatus?.show(msg.payload.message, true);
+      }
+    } else if (msg.type === 'metadata_suggestions_result') {
+      metadataPanel?.setSuggestions(msg.payload.requestId, msg.payload.suggestions);
     } else if (msg.type === 'data_result') {
       // The sentence arrives ready to show; the page never composes one.
       noteStatus?.show(msg.payload.message, msg.payload.ok);

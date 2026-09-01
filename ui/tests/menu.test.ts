@@ -75,6 +75,7 @@ function mountMenu() {
     onTrashNote: vi.fn(),
     onOpenTrash: vi.fn(),
     onCreateBackup: vi.fn(),
+    onOpenMetadata: vi.fn(),
     onInsertImage: vi.fn(),
     onOpenStudy: vi.fn(),
     onOpenStudyHub: vi.fn(),
@@ -152,6 +153,19 @@ describe('NoteMenu', () => {
     expect(menu.element.hidden).toBe(false);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(handlers.onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('has one Metadados entry that delegates to the single metadata panel', () => {
+    const { menu, trigger, handlers } = mountMenu();
+    active = menu;
+    click(trigger);
+    const entries = Array.from(menu.element.querySelectorAll<HTMLButtonElement>('button')).filter(
+      (button) => button.textContent?.trim() === 'Metadados',
+    );
+    expect(entries).toHaveLength(1);
+    click(entries[0]);
+    expect(handlers.onOpenMetadata).toHaveBeenCalledWith(entries[0]);
+    expect(menu.isOpen()).toBe(false);
   });
 
   it('Escape closes the menu and returns focus to the button', () => {

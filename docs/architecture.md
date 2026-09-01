@@ -32,12 +32,15 @@ GTK, GDK, WebKitGTK, layer-shell, Wayland or Niri enters the Core dependency tre
 ## Core Components (`noteit-core`, Rust)
 
 `NoteItCore` is the small adapter-facing facade. It currently exposes canonical operations for
-listing, reading and searching live notes, listing trash, and loading Study state. Its write and
+listing, reading and searching live notes, deriving metadata catalogs, listing trash, and loading Study state. Its write and
 lifecycle consumers use the same `StorageManager` held by that facade, so there is still one
 implementation of atomic writes, recency, trash, backup and Study persistence.
 
 - `noteit-core/src/model.rs`: Note data models and metadata parsing. `split_front_matter` and
   `body_of` are shared with search, so "the note's body" means the same thing everywhere.
+- `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
+  with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
+  `serde_yaml::Value`.
 - `noteit-core/src/storage.rs`: XDG directory resolution, Markdown disk I/O, atomic saving and the
   existing storage operations used by the GUI and future adapters.
 - `noteit-core/src/search.rs`: accent folding, matching, snippets, labels and ordering — pure
@@ -96,6 +99,9 @@ env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
   panels. All live in the page rather than in a second window, own their keys, and are not part of
   the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
   action did; it is not a dialog and takes nothing from the reader.
+- `ui/src/ui/metadataPanel.ts`: the single Tags/Properties editor and responsive tag strip. It
+  handles typed values only, renders with `textContent`/`value`, and adopts a draft only after the
+  host acknowledges the Core commit.
 - `ui/src/markdown/assetReference.ts`: what a note is allowed to say about a picture — the managed
   reference format, the width limits, the three alignments, and the one function that turns a stored
   reference into something the page may load. A markdown concern rather than an editor one, because
@@ -146,3 +152,26 @@ back; there is no message in the bridge that carries a path, so there is nothing
 And nothing through `Vec<SearchResult>` needs a display. A future CLI calls `NoteItCore::search_notes`
 over the same storage and search implementation the GUI calls; GTK and WebKit enter only after the
 result reaches the desktop adapter.
+
+## Semantic Metadata Flow
+
+```text
+metadata panel confirms a typed draft + current editor Markdown
+  → UUID-addressed WebView message
+  → Core validates NoteMetadata
+  → clone the in-memory NoteDocument candidate
+  → include pending text (and touch updated_at only if text differs)
+  → StorageManager::save_note_atomic (backup → temp → rename commit)
+  → adopt the committed candidate
+  → acknowledge the exact committed MetadataView
+```
+
+`note_it` remains application-owned. `tags`, `properties`, and unknown top-level YAML values live
+in the same front matter, but YAML itself never crosses the bridge. Unknown values are retained as
+Core persistence detail; comments, anchors and original formatting cannot be represented by
+`serde_yaml` and may normalize when an actual content/appearance/metadata save reserializes the
+file. An untouched open/close performs no write and therefore stays byte-identical.
+
+Catalogs are derived on demand by scanning `notes/` only. There is no `tags.json`, database or
+cache to become stale; trash disappears from a catalog because its file is not live, and restore
+makes it return naturally.

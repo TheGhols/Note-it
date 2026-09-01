@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0B Metadata Foundation — Tags + Properties.** Notes can now carry user-authored,
+  structured `tags` and textual `properties` beside the reserved `note_it` front-matter block.
+  Legacy notes read as empty metadata and are never migrated or rewritten merely by being opened.
+  - `noteit-core` owns validation, case/accent-insensitive identity, limits, deterministic ordering,
+    YAML persistence and derived live-note catalogs. No index, database or sidecar was added.
+  - Unknown top-level YAML values survive semantic parse/serialize. Empty Tags/Properties are
+    omitted, while comments/anchors and formatting may be normalized only when a real save occurs.
+  - Semantic-only writes use the canonical atomic note writer and do not move `created_at` or
+    `updated_at`. The WebView sends its live Markdown with a confirmed metadata draft, preventing a
+    pending text edit from being replaced by the older host/disk body.
+  - The existing menu gains one **Metadados** entry. Tags appear as a responsive one-line strip of
+    deterministic accessible pills; Tags and Properties are edited in one keyboard-accessible,
+    internally scrolling panel with catalog-derived autocomplete.
+  - Recency now reads through the actual closing front-matter delimiter with a documented 256 KiB
+    ceiling, so valid metadata beyond the former 4096-byte probe still uses `updated_at`.
+
 - **Phase 4.0A Core Boundary.** The Rust domain and persistence modules now live in the internal,
   headless `noteit-core` crate. `NoteItCore` exposes the existing canonical list, read, search,
   trash-list and Study-query paths, and the GTK/WebKit application consumes that crate rather than

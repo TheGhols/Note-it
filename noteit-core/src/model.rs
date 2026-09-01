@@ -1,5 +1,7 @@
+use crate::metadata::{NoteMetadata, NoteProperties, NoteTags};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// Paper patterns a note can carry, in the order the menu offers them.
@@ -81,12 +83,21 @@ fn default_font_size() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteFrontMatterWrapper {
     pub note_it: NoteFrontMatter,
+    #[serde(default, skip_serializing_if = "NoteTags::is_empty")]
+    pub tags: NoteTags,
+    #[serde(default, skip_serializing_if = "NoteProperties::is_empty")]
+    pub properties: NoteProperties,
+    /// Top-level YAML owned by other tools or future Note-it versions.
+    #[serde(default, flatten)]
+    unknown: BTreeMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteDocument {
     pub metadata: NoteFrontMatter,
+    pub user_metadata: NoteMetadata,
     pub content: String,
+    unknown_front_matter: BTreeMap<String, serde_yaml::Value>,
 }
 
 impl NoteDocument {
@@ -104,7 +115,9 @@ impl NoteDocument {
                 created_at: Some(now),
                 updated_at: Some(now),
             },
+            user_metadata: NoteMetadata::default(),
             content: String::new(),
+            unknown_front_matter: BTreeMap::new(),
         }
     }
 
@@ -122,7 +135,9 @@ impl NoteDocument {
                 created_at: Some(now),
                 updated_at: Some(now),
             },
+            user_metadata: NoteMetadata::default(),
             content: String::new(),
+            unknown_front_matter: BTreeMap::new(),
         }
     }
 
@@ -199,7 +214,9 @@ impl NoteDocument {
             let doc = Self::new_empty();
             return Ok(Self {
                 metadata: doc.metadata,
+                user_metadata: doc.user_metadata,
                 content: Self::canonical_content(raw).to_string(),
+                unknown_front_matter: BTreeMap::new(),
             });
         };
 
@@ -208,13 +225,21 @@ impl NoteDocument {
 
         Ok(Self {
             metadata: wrapper.note_it,
+            user_metadata: NoteMetadata {
+                tags: wrapper.tags,
+                properties: wrapper.properties,
+            },
             content: Self::canonical_content(content).to_string(),
+            unknown_front_matter: wrapper.unknown,
         })
     }
 
     pub fn serialize(&self) -> Result<String, String> {
         let wrapper = NoteFrontMatterWrapper {
             note_it: self.metadata.clone(),
+            tags: self.user_metadata.tags.clone(),
+            properties: self.user_metadata.properties.clone(),
+            unknown: self.unknown_front_matter.clone(),
         };
 
         let yaml_str = serde_yaml::to_string(&wrapper)
@@ -230,6 +255,7 @@ impl NoteDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{NoteMetadata, NoteProperty};
 
     #[test]
     fn test_note_round_trip() {
@@ -379,6 +405,163 @@ mod tests {
 
         // Nothing here goes through `touch_content_modified`.
         assert_eq!(doc.metadata.updated_at, updated_at);
+    }
+
+    #[test]
+    fn legacy_metadata_defaults_empty_and_is_not_written_back_as_empty_fields() {
+        let raw = concat!(
+            "---\n",
+            "note_it:\n",
+            "  id: 00000000-0000-4000-8000-000000000042\n",
+            "---\n\n",
+            "texto\n",
+        );
+        let parsed = NoteDocument::parse(raw).expect("legacy note");
+        assert!(parsed.user_metadata.tags.is_empty());
+        assert!(parsed.user_metadata.properties.is_empty());
+
+        let serialized = parsed.serialize().expect("serialize");
+        assert!(!serialized.contains("\ntags:"));
+        assert!(!serialized.contains("\nproperties:"));
+    }
+
+    #[test]
+    fn tags_and_properties_round_trip_together_with_unicode() {
+        let mut doc = NoteDocument::new_empty();
+        doc.content = "# Choque distributivo".into();
+        doc.user_metadata = NoteMetadata::try_new(
+            [
+                "Medicina".into(),
+                "Urgência".into(),
+                "Clínica Médica".into(),
+            ],
+            [
+                NoteProperty {
+                    key: "tipo".into(),
+                    value: "estudo".into(),
+                },
+                NoteProperty {
+                    key: "fonte".into(),
+                    value: "Harrison".into(),
+                },
+            ],
+        )
+        .expect("metadata");
+
+        let serialized = doc.serialize().expect("serialize");
+        let parsed = NoteDocument::parse(&serialized).expect("parse");
+        assert_eq!(parsed.user_metadata, doc.user_metadata);
+        assert_eq!(parsed.content, doc.content);
+    }
+
+    #[test]
+    fn tags_round_trip_without_inventing_properties() {
+        let mut doc = NoteDocument::new_empty();
+        doc.user_metadata =
+            NoteMetadata::try_new(["Saúde".into(), "Clínica Médica".into()], []).expect("tags");
+
+        let serialized = doc.serialize().expect("serialize");
+        let parsed = NoteDocument::parse(&serialized).expect("parse");
+        assert_eq!(
+            parsed.user_metadata.tags.as_slice(),
+            ["Saúde", "Clínica Médica"]
+        );
+        assert!(parsed.user_metadata.properties.is_empty());
+        assert!(!serialized.contains("\nproperties:"));
+    }
+
+    #[test]
+    fn properties_round_trip_without_inventing_tags() {
+        let mut doc = NoteDocument::new_empty();
+        doc.user_metadata = NoteMetadata::try_new(
+            [],
+            [NoteProperty {
+                key: "disciplina".into(),
+                value: "cardiologia".into(),
+            }],
+        )
+        .expect("properties");
+
+        let serialized = doc.serialize().expect("serialize");
+        let parsed = NoteDocument::parse(&serialized).expect("parse");
+        assert!(parsed.user_metadata.tags.is_empty());
+        assert_eq!(
+            parsed.user_metadata.properties.as_slice(),
+            [NoteProperty {
+                key: "disciplina".into(),
+                value: "cardiologia".into(),
+            }]
+        );
+        assert!(!serialized.contains("\ntags:"));
+    }
+
+    #[test]
+    fn unknown_top_level_yaml_survives_a_real_reserialization() {
+        let raw = concat!(
+            "---\n",
+            "note_it:\n",
+            "  id: 00000000-0000-4000-8000-000000000043\n",
+            "future_tool:\n",
+            "  enabled: true\n",
+            "  nested:\n",
+            "    - um\n",
+            "    - dois\n",
+            "external_number: 42\n",
+            "---\n\n",
+            "texto\n",
+        );
+        let mut doc = NoteDocument::parse(raw).expect("parse unknown YAML");
+        doc.user_metadata = NoteMetadata::try_new(["Projeto".into()], []).expect("tag");
+        let serialized = doc.serialize().expect("serialize");
+        let reparsed: serde_yaml::Value = serde_yaml::from_str(
+            NoteDocument::split_front_matter(&serialized)
+                .0
+                .expect("front matter"),
+        )
+        .expect("yaml");
+        assert_eq!(reparsed["future_tool"]["enabled"], true);
+        assert_eq!(reparsed["future_tool"]["nested"][1], "dois");
+        assert_eq!(reparsed["external_number"], 42);
+    }
+
+    #[test]
+    fn semantic_metadata_never_moves_created_or_updated_at() {
+        let mut doc = NoteDocument::new_empty();
+        let created_at = doc.metadata.created_at;
+        let updated_at = doc.metadata.updated_at;
+        doc.user_metadata = NoteMetadata::try_new(
+            ["Saúde".into()],
+            [NoteProperty {
+                key: "status".into(),
+                value: "revisando".into(),
+            }],
+        )
+        .expect("metadata");
+        assert_eq!(doc.metadata.created_at, created_at);
+        assert_eq!(doc.metadata.updated_at, updated_at);
+    }
+
+    #[test]
+    fn content_and_appearance_edits_preserve_semantic_metadata() {
+        let mut doc = NoteDocument::new_empty();
+        doc.user_metadata = NoteMetadata::try_new(
+            ["PBL".into()],
+            [NoteProperty {
+                key: "disciplina".into(),
+                value: "cardiologia".into(),
+            }],
+        )
+        .expect("metadata");
+        let expected = doc.user_metadata.clone();
+
+        doc.content = "conteúdo alterado".into();
+        doc.touch_content_modified();
+        doc.metadata.color = "black".into();
+        doc.metadata.paper_type = "lined".into();
+        doc.metadata.font_size = 17;
+
+        let parsed = NoteDocument::parse(&doc.serialize().expect("serialize")).expect("parse");
+        assert_eq!(parsed.user_metadata, expected);
     }
 
     #[test]

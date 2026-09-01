@@ -1359,3 +1359,40 @@ identifier, so the set of live references is `notes/` plus `trash/` parsed for
 `../assets/…`, and anything under `assets/<id>/` not named there is a candidate.
 If that is ever built it should be something the reader asks for and can see the
 result of first, not something that runs on its own.
+
+## ADR-033: Semantic Metadata Lives in Markdown, but YAML Stays Behind Core
+
+**Decision.** Tags and V1 textual Properties are top-level front-matter values beside the reserved
+`note_it` mapping. `noteit-core` owns their validation, identity, ordering, persistence and derived
+catalogs. Adapters receive domain structs; neither the WebView nor a future CLI reparses YAML.
+
+**Identity.** Tags and property keys reuse `search::fold`: Unicode lowercase plus the documented
+Latin accent table. The first tag spelling is presentation; folded identity is comparison. A fixed
+FNV-1a hash of that identity selects one of seven reviewed UI colour slots, so colour is stable and
+never stored.
+
+**Limits.** One note has at most 32 tags of 64 characters and 32 Properties with 64-character keys
+and 512-character single-line values. Rejection is explicit and truncation never occurs. V1 values
+are strings: adding later types can extend the domain representation without changing existing
+strings, but nested objects, schemas, relations and formulas are deliberately absent now.
+
+**Preservation.** The typed front-matter wrapper flattens unknown top-level YAML into a private map
+and writes those values back. This is semantic preservation, not a concrete-syntax tree: serde_yaml
+does not retain comments, aliases/anchors or original whitespace. Those can normalize on a real
+save, which is documented; an untouched open/close never serializes and stays byte-identical.
+
+**Transactions and dates.** A metadata request carries the live Markdown. The host validates the
+draft, clones its live `NoteDocument`, folds any pending text into the same candidate, calls the one
+`StorageManager::save_note_atomic` path, and adopts/acknowledges only after rename commits. A failed
+write leaves disk and memory old and the same draft retryable. Semantic-only change touches neither
+timestamp; pending text moves `updated_at` because text changed.
+
+**Catalogs and bounded reads.** Catalogs scan live notes on demand and therefore cannot become
+stale; trash is excluded by directory membership. No index or database exists. Front-matter-only
+reads stop on the real delimiter and cap work at 256 KiB, comfortably beyond every V1 field at its
+limit. This replaces the 4096-byte recency assumption without reading note bodies.
+
+**Rejected alternatives.** Sidecars split a note from its portable metadata and create a second
+transaction. A persistent tag index introduces invalidation and recovery before measurement asks
+for it. Sending YAML through IPC makes the WebView another format authority. Putting metadata into
+ProseMirror makes search, titles and Study interpret bookkeeping as prose. All four are rejected.

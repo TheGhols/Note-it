@@ -1154,6 +1154,26 @@ countdown writes nothing at all, once a second or otherwise.
 
 ## Storage & Reliability
 
+### Tags and Properties
+
+- Tags and textual Properties are structured top-level YAML beside the reserved `note_it` block,
+  never Markdown body content. Missing fields are empty in memory and omitted on disk.
+- Core owns validation and the shared search-fold identity: up to 32 tags (64 characters each) and
+  32 properties (64-character keys, 512-character values). Inputs over a limit are rejected, never
+  truncated; duplicate tag identities collapse to the first spelling and duplicate property-key
+  identities are rejected.
+- One **Metadados** entry opens the only editor. Tags are accessible deterministic-colour pills in
+  a responsive single row; Properties stay inside the internally scrolling panel. Autocomplete is
+  derived on demand from live notes and never writes on suggestion.
+- Semantic values are inserted with DOM text/value APIs and never become HTML, style, class, URL or
+  arbitrary DOM identifiers. They do not enter ProseMirror, visible text, search, titles, Study or
+  flashcards.
+- Metadata uses the same transactional note writer and backup-before-mutation policy. A confirmed
+  draft carries current WebView Markdown, preventing a stale host document from replacing pending
+  text. Metadata-only writes preserve both timestamps.
+- Catalogs scan live `notes/`; trash is naturally absent and restore naturally returns. No index,
+  database or sidecar exists.
+
 - **Recoverable Deletion:**
   - Deleting a note moves its file to `trash/`, from where it can be restored with its identifier,
     its bytes and its modification date intact. The save comes first: a note whose text could not be

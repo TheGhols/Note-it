@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use noteit_core::autopaste::CaptureDelimiter;
+use noteit_core::metadata::{tag_colour_bucket, MetadataCatalog, NoteMetadata, NoteProperty};
 use noteit_core::search::SearchResult;
 use noteit_core::study::{Rating, StudyState};
 use noteit_core::timer::{NoteTimerState, TimerFinishKind};
@@ -10,6 +11,45 @@ use webkit6::prelude::*;
 use webkit6::WebView;
 
 const MAX_GEOMETRY_DELTA: f64 = 100_000.0;
+const TAG_COLOUR_COUNT: usize = 7;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TagView {
+    pub value: String,
+    pub colour: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataView {
+    pub tags: Vec<TagView>,
+    pub properties: Vec<NoteProperty>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataSuggestionKind {
+    Tag,
+    PropertyKey,
+}
+
+impl From<&NoteMetadata> for MetadataView {
+    fn from(metadata: &NoteMetadata) -> Self {
+        Self {
+            tags: metadata
+                .tags
+                .as_slice()
+                .iter()
+                .map(|tag| TagView {
+                    value: tag.clone(),
+                    colour: tag_colour_bucket(tag, TAG_COLOUR_COUNT),
+                })
+                .collect(),
+            properties: metadata.properties.as_slice().to_vec(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StudyCatalogNote {
@@ -31,6 +71,7 @@ pub enum HostToWebviewMessage {
         paper_intensity: String,
         #[serde(rename = "fontSize")]
         font_size: u32,
+        metadata: MetadataView,
         collapsed: bool,
         #[serde(rename = "createdAt")]
         created_at: Option<DateTime<Utc>>,
@@ -184,6 +225,23 @@ pub enum HostToWebviewMessage {
         study_state: Option<StudyState>,
         message: String,
     },
+    MetadataCatalogResult {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        catalog: MetadataCatalog,
+    },
+    MetadataSaveResult {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        ok: bool,
+        message: String,
+        metadata: MetadataView,
+    },
+    MetadataSuggestionsResult {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        suggestions: Vec<String>,
+    },
     RequestContent,
     RequestSaveAndClose,
     RequestFlush {
@@ -223,6 +281,26 @@ pub enum WebviewToHostMessage {
         paper_type: String,
         #[serde(rename = "paperIntensity")]
         paper_intensity: String,
+    },
+    /// Replaces semantic metadata using the Markdown currently held by the
+    /// editor, so the atomic note write can never resurrect an older body.
+    MetadataChanged {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        id: Uuid,
+        content: String,
+        tags: Vec<String>,
+        properties: Vec<NoteProperty>,
+    },
+    MetadataCatalogRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+    },
+    MetadataSuggestionsRequested {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        kind: MetadataSuggestionKind,
+        query: String,
     },
     /// Requests the shared interface theme. The host owns it, exactly as it
     /// owns the layer mode, so the WebView only asks.
@@ -419,6 +497,13 @@ mod tests {
         parse_webview_message, validate_external_url, validate_geometry_delta, WebviewToHostMessage,
     };
     use uuid::Uuid;
+
+    fn empty_metadata() -> super::MetadataView {
+        super::MetadataView {
+            tags: Vec::new(),
+            properties: Vec::new(),
+        }
+    }
 
     #[test]
     fn parses_save_and_close_as_one_message_with_latest_content() {
@@ -667,6 +752,60 @@ mod tests {
     }
 
     #[test]
+    fn metadata_messages_are_typed_addressed_by_uuid_and_never_carry_yaml_or_paths() {
+        let id = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "metadata_changed",
+            "payload": {
+                "requestId": 17,
+                "id": id,
+                "content": "texto vivo",
+                "tags": ["Medicina", "Urgência"],
+                "properties": [{ "key": "status", "value": "revisando" }]
+            }
+        })
+        .to_string();
+        match parse_webview_message(&raw).expect("metadata request") {
+            WebviewToHostMessage::MetadataChanged {
+                request_id,
+                id: parsed_id,
+                content,
+                tags,
+                properties,
+            } => {
+                assert_eq!(request_id, 17);
+                assert_eq!(parsed_id, id);
+                assert_eq!(content, "texto vivo");
+                assert_eq!(tags, ["Medicina", "Urgência"]);
+                assert_eq!(properties[0].key, "status");
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+        let path_attempt = raw.replace(&id.to_string(), "/home/user/notes/x.md");
+        assert!(parse_webview_message(&path_attempt).is_err());
+        assert!(!raw.contains("yaml"));
+    }
+
+    #[test]
+    fn metadata_view_projects_user_text_only_into_json_string_values() {
+        let metadata = noteit_core::metadata::NoteMetadata::try_new(
+            ["<script>alert(1)</script>".into()],
+            [noteit_core::metadata::NoteProperty {
+                key: "<img onerror=alert(1)>".into(),
+                value: "\"</div><script>alert(2)</script>".into(),
+            }],
+        )
+        .expect("hostile text is still text");
+        let view = super::MetadataView::from(&metadata);
+        let encoded = serde_json::to_value(view).expect("json");
+        assert_eq!(encoded["tags"][0]["value"], "<script>alert(1)</script>");
+        assert_eq!(encoded["properties"][0]["key"], "<img onerror=alert(1)>");
+        assert!(encoded["tags"][0]["colour"].is_number());
+        assert!(encoded.get("html").is_none());
+        assert!(encoded.get("yaml").is_none());
+    }
+
+    #[test]
     fn load_note_carries_collapse_state_and_timestamps_to_the_webview() {
         let id = Uuid::new_v4();
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T07:14:00Z")
@@ -680,6 +819,7 @@ mod tests {
             paper_type: "grid-small".to_string(),
             paper_intensity: "subtle".to_string(),
             font_size: 15,
+            metadata: empty_metadata(),
             collapsed: true,
             created_at: Some(created_at),
             updated_at: None,
@@ -715,6 +855,7 @@ mod tests {
             paper_type: "blank".to_string(),
             paper_intensity: "normal".to_string(),
             font_size: 15,
+            metadata: empty_metadata(),
             collapsed: false,
             created_at: None,
             updated_at: None,
@@ -742,6 +883,7 @@ mod tests {
             paper_type: "blank".to_string(),
             paper_intensity: "normal".to_string(),
             font_size: 15,
+            metadata: empty_metadata(),
             collapsed: false,
             created_at: None,
             updated_at: None,
@@ -1012,6 +1154,7 @@ mod tests {
             paper_type: "blank".to_string(),
             paper_intensity: "normal".to_string(),
             font_size: 15,
+            metadata: empty_metadata(),
             collapsed: false,
             created_at: None,
             updated_at: None,

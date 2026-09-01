@@ -9,6 +9,7 @@ pub mod assets;
 pub mod autopaste;
 pub mod backup;
 pub mod diagnostics;
+pub mod metadata;
 pub mod model;
 pub mod search;
 pub mod settings;
@@ -21,6 +22,7 @@ pub mod trash;
 mod atomic_file;
 mod visible_text;
 
+use metadata::MetadataCatalog;
 use model::NoteDocument;
 use search::SearchResult;
 use storage::StorageManager;
@@ -84,6 +86,11 @@ impl NoteItCore {
     /// Lists recoverable deleted notes without opening or mutating them.
     pub fn list_trash(&self) -> Vec<TrashEntry> {
         self.storage.list_trash()
+    }
+
+    /// Derives tag and property-key suggestions from live notes only.
+    pub fn metadata_catalog(&self) -> MetadataCatalog {
+        self.storage.metadata_catalog()
     }
 
     /// Loads the persisted study schedule without a WebView or editor.

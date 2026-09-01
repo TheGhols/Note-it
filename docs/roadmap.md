@@ -560,7 +560,10 @@ future machine interfaces share one domain and persistence authority.
 - [x] **Phase 4.0A — Core Boundary.** Dedicated headless `noteit-core` crate; the GUI consumes its
       shared note/search/trash/Study/storage capabilities, with a Cargo dependency gate preventing
       GTK, GDK, WebKitGTK, layer-shell, Wayland and Niri from entering Core.
-- [ ] **Phase 4.0B — Metadata Foundation: Tags + Properties.** Reserved; not started.
+- [x] **Phase 4.0B — Metadata Foundation: Tags + Properties.** Structured user metadata in each
+      note's Markdown front matter, validated and persisted by Core; derived live-note catalogs,
+      transactional writes over the current WebView document, responsive pills and one compact
+      metadata panel. No sidecar, index, database or CLI command.
 - [ ] **Phase 4.0C — CLI Foundation.** Reserved; the existing lifecycle CLI remains compatible.
 - [ ] **Phase 4.0D — Read API.** Reserved.
 - [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
@@ -571,7 +574,7 @@ future machine interfaces share one domain and persistence authority.
 - [ ] **Phase 4.1 — MCP.** Reserved.
 - [ ] **Phase 4.2 — AI / Second Brain.** Reserved.
 
-Capture & Export, OCR and PDF remain postponed and are not pulled into Phase 4.0A.
+Capture & Export, OCR and PDF remain postponed and are not pulled into Phase 4.0A or 4.0B.
 
 **Recency and the CLI.** Since Phase 3.8R, "most recent" is the note's own `updated_at` — the last
 change to its text — with the file's `mtime` as the fallback for a note that has none. It is what

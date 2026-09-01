@@ -102,6 +102,19 @@ Tudo listado aqui já está implementado.
 - O que a busca encontra é o que está no arquivo. Um `4` que veio de `= 2 + 2` é decoração, não
   texto, e não aparece em busca alguma.
 
+**Tags e propriedades**
+
+- *☰ › Metadados* organiza Tags e Propriedades sem transformar a barra em formulário. Tags também
+  aparecem numa única linha discreta de pílulas; em notas estreitas/baixas viram contador e o
+  excesso vira `+N`.
+- Tags aceitam Unicode, português e espaços. Comparação ignora caixa e acentos para evitar
+  duplicatas, mas preserva a grafia escolhida para exibição. A cor vem deterministicamente da
+  identidade da tag e não é gravada no Markdown.
+- Propriedades são pares textuais simples, como `status → revisando` e `fonte → Harrison`, editados
+  no painel com scroll interno. Sugestões vêm das notas vivas; não há índice, banco ou sidecar.
+- Tudo fica no front matter YAML, fora do corpo: busca textual, título, flashcards e Study não leem
+  Tags/Properties. Alterá-las não muda a data da última edição textual.
+
 **Localizar e substituir**
 
 - `Ctrl+F` localiza dentro da nota atual, com contador de ocorrências; `Enter` e `Shift+Enter`

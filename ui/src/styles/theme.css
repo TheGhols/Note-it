@@ -850,6 +850,247 @@ body[data-collapsed="true"] .note-controls-tools::before {
   gap: calc(2px * var(--ui-scale));
 }
 
+/* Semantic metadata. Chips use a reviewed light surface and dark ink, so the
+   same palette stays above 4.5:1 on every paper and in either UI theme. User
+   text is only textContent; the numeric data-colour comes from Rust/Core. */
+.metadata-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--ui-scale));
+  min-width: 0;
+  max-width: calc(150px * var(--ui-scale));
+  padding: calc(2px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+  color: #1e3a8a;
+  background: #dbeafe;
+  font-size: var(--ui-font-small);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metadata-chip[data-colour="1"] { color: #14532d; background: #dcfce7; }
+.metadata-chip[data-colour="2"] { color: #78350f; background: #fef3c7; }
+.metadata-chip[data-colour="3"] { color: #831843; background: #fce7f3; }
+.metadata-chip[data-colour="4"] { color: #4c1d95; background: #ede9fe; }
+.metadata-chip[data-colour="5"] { color: #164e63; background: #cffafe; }
+.metadata-chip[data-colour="6"] { color: #7f1d1d; background: #fee2e2; }
+
+.metadata-chip button {
+  width: calc(18px * var(--ui-scale));
+  height: calc(18px * var(--ui-scale));
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.metadata-chip button:hover,
+.metadata-chip button:focus-visible {
+  background: rgba(15, 23, 42, 0.12);
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.note-tags-line {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: calc(5px * var(--ui-scale));
+  min-width: 0;
+  height: calc(27px * var(--ui-scale));
+  margin: var(--note-chrome-gutter) calc(12px * var(--ui-scale)) 0;
+  overflow: hidden;
+  cursor: pointer;
+  outline: none;
+}
+
+.note-tags-line[hidden],
+body[data-collapsed="true"] .note-tags-line {
+  display: none;
+}
+
+.note-tags-line:focus-visible {
+  border-radius: var(--ui-radius);
+  box-shadow: 0 0 0 2px var(--paper-text);
+}
+
+body[data-has-tags="true"] .editor-wrapper {
+  padding-top: calc(5px * var(--ui-scale));
+}
+
+.note-tag-overflow,
+.note-tag-count {
+  flex: 0 0 auto;
+  color: var(--paper-text);
+  font-size: var(--ui-font-small);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.note-metadata {
+  width: min(calc(330px * var(--ui-scale)), calc(100vw - (12px * var(--ui-scale))));
+  max-height: calc(100vh - var(--note-header-height) - (8px * var(--ui-scale)));
+  padding: calc(10px * var(--ui-scale));
+}
+
+.note-metadata-header,
+.note-metadata-tabs,
+.note-metadata-actions,
+.note-metadata-add,
+.note-metadata-property {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--ui-scale));
+}
+
+.note-metadata-header {
+  justify-content: space-between;
+}
+
+.note-metadata-header h2 {
+  margin: 0;
+  font-size: var(--ui-font);
+}
+
+.note-metadata-close,
+.note-metadata-tab,
+.note-metadata-add button,
+.note-metadata-actions button,
+.note-metadata-property button {
+  min-height: calc(28px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(8px * var(--ui-scale));
+  border: 1px solid var(--ui-border);
+  border-radius: calc(6px * var(--ui-scale));
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.note-metadata-tabs {
+  margin: calc(8px * var(--ui-scale)) 0;
+}
+
+.note-metadata-tab[aria-selected="true"] {
+  color: var(--ui-text);
+  background: var(--ui-surface-hover);
+  font-weight: 600;
+}
+
+.note-metadata-body {
+  max-height: calc(330px * var(--ui-scale));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.note-metadata-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--ui-scale));
+  margin-bottom: calc(9px * var(--ui-scale));
+}
+
+.note-metadata-empty,
+.note-metadata-status {
+  margin: calc(5px * var(--ui-scale)) 0;
+  color: var(--ui-text-muted);
+  font-size: var(--ui-font-small);
+}
+
+.note-metadata-status[data-ok="false"] { color: #b91c1c; }
+.note-metadata-status[data-ok="true"] { color: #166534; }
+
+.note-metadata-add input,
+.note-metadata-property input {
+  min-width: 0;
+  min-height: calc(29px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  border: 1px solid var(--ui-border);
+  border-radius: calc(6px * var(--ui-scale));
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  font: inherit;
+}
+
+.note-metadata-add input { flex: 1; }
+
+.note-metadata-properties {
+  display: flex;
+  flex-direction: column;
+  gap: calc(7px * var(--ui-scale));
+}
+
+.note-metadata-property {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+}
+
+.note-metadata-property button {
+  font-size: var(--ui-font-small);
+}
+
+.note-metadata-actions {
+  justify-content: space-between;
+  position: sticky;
+  bottom: 0;
+  padding-top: calc(7px * var(--ui-scale));
+  background: var(--ui-surface);
+}
+
+.note-metadata-suggestions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--ui-scale));
+  width: 100%;
+  padding: calc(3px * var(--ui-scale));
+  border: 1px solid var(--ui-border);
+  border-radius: calc(6px * var(--ui-scale));
+  background: var(--ui-surface);
+}
+
+.note-metadata-suggestions button {
+  min-height: calc(26px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  border: 0;
+  border-radius: calc(4px * var(--ui-scale));
+  color: var(--ui-text);
+  background: transparent;
+  text-align: left;
+}
+
+.note-metadata-suggestions button:hover,
+.note-metadata-suggestions button:focus-visible {
+  background: var(--ui-surface-hover);
+  outline: 2px solid var(--ui-focus-ring);
+}
+
+@media (max-width: 320px) {
+  .note-metadata-property {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .note-metadata-property input[placeholder="Valor"] {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .note-metadata-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+body[data-collapsed="true"] .note-metadata {
+  display: none;
+}
+
 .note-menu-separator {
   height: 1px;
   margin: calc(3px * var(--ui-scale)) calc(7px * var(--ui-scale));
