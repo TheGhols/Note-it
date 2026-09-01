@@ -7,42 +7,44 @@ adds native system integration and embeds the TypeScript editor; future CLI and 
 call the same Core instead of recreating its rules.
 
 ```text
-                    ┌───────────────────────────────┐
-                    │ noteit-core (headless crate)  │
-                    │ domain + XDG persistence      │
-                    └───────────────▲───────────────┘
-                                    │
-                     the desktop adapter calls Core
-                                    │
-┌───────────────────────────────────┴───────────────────┐
-│ Rust desktop host: GTK4 + layer-shell + WebKitGTK    │
-│ single instance, lifecycle, windows and IPC bridge    │
-└───────────────────────────▲───────────────────────────┘
-                            │ JSON messages
-┌───────────────────────────▼───────────────────────────┐
-│ TypeScript WebView: Vite + Tiptap / ProseMirror      │
-│ editor, Markdown serializer and HTML sanitization     │
-└───────────────────────────────────────────────────────┘
+                         ┌───────────────────────────────┐
+                         │ noteit-core (headless crate)  │
+                         │ domain + XDG persistence      │
+                         └───────▲───────────────▲───────┘
+                                 │               │
+                     desktop adapter calls Core  │ headless CLI calls Core
+                                 │               │
+ ┌───────────────────────────────┴────────┐     ┌┴──────────────────────────────┐
+ │ note-it GUI: GTK4 + layer-shell + WebKit│     │ noteit CLI: headless binary   │
+ │ single instance, lifecycle, windows    │     │ pure terminal / script / agent│
+ └───────────────────────────────▲────────┘     └───────────────────────────────┘
+                                 │ JSON messages
+ ┌───────────────────────────────▼────────┐
+ │ TypeScript WebView: Vite + Tiptap      │
+ │ editor, Markdown serializer, sanitizer │
+ └────────────────────────────────────────┘
 ```
 
-The dependency direction is enforced by Cargo: the desktop package depends on `noteit-core`, and
-`noteit-core/Cargo.toml` contains no desktop dependency. `scripts/check-core-boundary` also fails if
-GTK, GDK, WebKitGTK, layer-shell, Wayland or Niri enters the Core dependency tree.
+The dependency direction is enforced by Cargo: both the desktop package (`note-it`) and the CLI
+package (`noteit-cli`) depend on `noteit-core`, while `noteit-core` has zero desktop or CLI
+dependencies. `scripts/check-core-boundary` and `scripts/check-cli-boundary` prevent GUI libraries
+(GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) from entering either headless component.
 
 ## Core Components (`noteit-core`, Rust)
 
 `NoteItCore` is the small adapter-facing facade. It currently exposes canonical operations for
-listing, reading and searching live notes, deriving metadata catalogs, listing trash, and loading Study state. Its write and
-lifecycle consumers use the same `StorageManager` held by that facade, so there is still one
-implementation of atomic writes, recency, trash, backup and Study persistence.
+listing, reading and searching live notes, deriving metadata catalogs, listing trash, loading Study state,
+and purely resolving store paths (`StorePaths`). Its write and lifecycle consumers use the same
+`StorageManager` held by that facade, so there is still one implementation of atomic writes, recency,
+trash, backup and Study persistence.
 
 - `noteit-core/src/model.rs`: Note data models and metadata parsing. `split_front_matter` and
   `body_of` are shared with search, so "the note's body" means the same thing everywhere.
 - `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
   with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
   `serde_yaml::Value`.
-- `noteit-core/src/storage.rs`: XDG directory resolution, Markdown disk I/O, atomic saving and the
-  existing storage operations used by the GUI and future adapters.
+- `noteit-core/src/storage.rs`: pure XDG directory resolution (`StorePaths`), Markdown disk I/O, atomic
+  saving and the storage operations used by GUI and CLI adapters.
 - `noteit-core/src/search.rs`: accent folding, matching, snippets, labels and ordering — pure
   functions over `(Uuid, &str)`.
 - `noteit-core/src/trash.rs`: recoverable deletion and read-only trash listing. See ADR-028.
@@ -57,10 +59,25 @@ implementation of atomic writes, recency, trash, backup and Study persistence.
 - `atomic_file.rs` and `visible_text.rs` are private implementation modules shared by those public
   capabilities.
 
-Core tests use only temporary synthetic stores. The canonical headless gate is:
+Core tests use only temporary synthetic stores. The canonical headless gates are:
 
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+scripts/check-core-boundary
+```
+
+## CLI Adapter Components (`noteit-cli`, Rust)
+
+- `main.rs`: Entry point for the `noteit` binary, dispatching arguments and mapping standard exit codes.
+- `cli.rs`: Command line parsing using Clap with bilingual aliases (`ajuda`/`help`, `versao`/`version`, `status`).
+- `output.rs`: Terminal presentation, NO_COLOR/non-TTY detection, and status rendering.
+- `lib.rs`: Programmatic interface (`run_with_args`) and exit code definitions.
+
+The CLI binary has zero graphical dependencies and is tested headless:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
+scripts/check-cli-boundary
 ```
 
 ## Desktop Adapter Components (`src`, Rust)

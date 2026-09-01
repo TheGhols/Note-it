@@ -223,6 +223,8 @@ scripts/note-it-isolated --keep   # mantém a árvore para inspeção
 
 ## Comandos disponíveis
 
+### Aplicativo gráfico (`note-it`)
+
 ```bash
 note-it                       # traz as notas de volta e reaproveita a instância em execução
 note-it new                   # cria uma nota
@@ -231,6 +233,17 @@ note-it hide                  # salva e esconde todas as notas
 note-it toggle                # alterna entre Área de trabalho e Sempre no topo
 note-it toggle-collapse-all   # recolhe todas as notas, ou expande todas
 note-it quit                  # salva tudo e encerra o aplicativo
+```
+
+### CLI headless (`noteit`)
+
+A linha de comando `noteit` é um binário headless independente que não requer sessão gráfica nem WebKit:
+
+```bash
+noteit                        # orientação inicial de uso
+noteit ajuda                  # mostra a ajuda dos comandos (alias: noteit help, noteit --help)
+noteit versao                 # mostra a versão do Note-it (alias: noteit version, noteit --version)
+noteit status                 # verifica os diretórios e ambiente XDG de forma estritamente read-only
 ```
 
 Os mesmos comandos funcionam com `./scripts/run-note-it <comando>` durante o desenvolvimento.
@@ -288,9 +301,7 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 
 ## Estado atual
 
-O editor e o ciclo de vida das notas estão completos até a Fase 3.7 (conversões de unidades). O que
-vem depois — busca global, lixeira e backup, moedas com cotação real, além do núcleo compartilhado
-com uma CLI completa — está planejado no [roadmap](docs/roadmap.md) e **ainda não existe**.
+A Fase 4.0C (Headless CLI Foundation) está completa. A CLI headless `noteit` compartilha `noteit-core` com o aplicativo gráfico `note-it`. As próximas subfases da Fase 4 (Read API, Write API, Machine Interface/JSON e TUI interativa) estão planejadas no [roadmap](docs/roadmap.md).
 
 ## Licença
 

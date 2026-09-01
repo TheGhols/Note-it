@@ -22,32 +22,37 @@ run a session bus of its own. See **Running Against a Throwaway Store** below.
    cd ..
    ```
 
-2. **Build the Rust Native Binary:**
+2. **Build Rust Binaries:**
    ```bash
-   cargo build
+   cargo build --workspace
+   # Or individually:
+   cargo build -p note-it      # Desktop GUI adapter
+   cargo build -p noteit-cli   # Headless CLI adapter (binary: noteit)
    ```
 
 3. **Run Tests:**
    ```bash
-   cargo test
+   cargo test --workspace
    env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+   env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
    scripts/check-core-boundary
+   scripts/check-cli-boundary
    cd ui && pnpm test
    ```
 
 4. **Code Quality Checks:**
    ```bash
    cargo fmt --all -- --check
-   cargo check
-   cargo clippy --all-targets --all-features -- -D warnings
+   cargo check --workspace
+   cargo clippy --workspace --all-targets --all-features -- -D warnings
    cd ui && pnpm lint
    ```
 
-The dedicated `noteit-core` crate is the domain and persistence boundary. It must remain usable
-without GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri or a graphical session.
-`scripts/check-core-boundary` checks its Cargo dependency tree for forbidden desktop libraries;
-compilation independently prevents Core source from importing libraries not declared by its own
-manifest.
+The dedicated `noteit-core` crate is the domain and persistence boundary. The `noteit-cli` crate is the
+headless CLI adapter. Both must remain usable without GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri
+or a graphical session. `scripts/check-core-boundary` and `scripts/check-cli-boundary` check their
+Cargo dependency trees for forbidden desktop libraries; compilation independently prevents Core and
+CLI source from importing libraries not declared by their manifests.
 
 ## Running Against a Throwaway Store
 

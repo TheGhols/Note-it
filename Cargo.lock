@@ -790,6 +790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "noteit-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "noteit-core",
+ "tempfile",
+]
+
+[[package]]
 name = "noteit-core"
 version = "0.1.0"
 dependencies = [

@@ -1396,3 +1396,25 @@ limit. This replaces the 4096-byte recency assumption without reading note bodie
 transaction. A persistent tag index introduces invalidation and recovery before measurement asks
 for it. Sending YAML through IPC makes the WebView another format authority. Putting metadata into
 ProseMirror makes search, titles and Study interpret bookkeeping as prose. All four are rejected.
+
+## ADR-034: Headless CLI (`noteit`) and Desktop Adapter (`note-it`) Separation
+
+**Decision.** Create a separate headless binary `noteit` in a dedicated `noteit-cli` workspace member
+rather than embedding CLI functionality into the existing desktop GUI binary (`note-it`). Both
+executables consume `noteit-core` as their shared domain and persistence authority.
+
+**Rationale.**
+1. **Zero GUI Overhead.** `noteit` must operate in headless environments (SSH, containers, scripts,
+   agents) without requiring an X11 or Wayland display server, GTK initialization, WebKitGTK runtime,
+   or `GApplication` session bus registration.
+2. **Preserving Desktop Lifecycle.** `note-it` remains a specialized desktop adapter and single-instance
+   lifecycle manager for sticky note windows. Modifying its command dispatcher for rich CLI tasks would
+   couple desktop lifecycle with non-interactive CLI semantics.
+3. **Strict Dependency Isolation.** `noteit-cli` depends only on `noteit-core` and lightweight headless
+   libraries (`clap`). The boundary script `scripts/check-cli-boundary` and CI ensure no desktop
+   dependencies enter `noteit-cli`.
+4. **Pure Path Resolution.** `noteit status` must be strictly read-only and never create missing
+   directories on disk. Path resolution was extracted into pure `StorePaths::resolve()` in `noteit-core`,
+   reused by `StorageManager` only when actually initializing or opening stores.
+5. **Bilingual UX.** Human presentation is in Portuguese (`ajuda`, `versao`, `status`), with
+   standard international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).

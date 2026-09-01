@@ -30,8 +30,14 @@ jobs:
       - name: Core Dependency Boundary
         run: scripts/check-core-boundary
 
+      - name: CLI Dependency Boundary
+        run: scripts/check-cli-boundary
+
       - name: Headless Core Tests
         run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+
+      - name: Headless CLI Tests
+        run: env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
 
       - name: Run Rust Unit Tests
         run: cargo test --workspace

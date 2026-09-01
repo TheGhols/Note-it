@@ -104,35 +104,28 @@ struct BackupSchedule {
     last_attempt: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct StorageManager {
-    notes_dir: PathBuf,
-    /// Deleted notes, waiting to be restored. A sibling of `notes_dir`, so the
-    /// move between them is always within one filesystem.
-    trash_dir: PathBuf,
-    /// Local snapshots. Never a backup source: see [`crate::backup`].
-    backups_dir: PathBuf,
-    /// Images the notes hold, one directory per note. A sibling of `notes/`
-    /// and `trash/`, which is what lets a note's own `../assets/…` reference
-    /// resolve the same way from either of them.
-    assets_dir: PathBuf,
-    config_dir: PathBuf,
-    state_dir: PathBuf,
-    runtime_dir: PathBuf,
-    /// Shared by every clone of this handle, because the windows each hold one
-    /// and there is only one store between them.
-    backup_schedule: Rc<RefCell<BackupSchedule>>,
-    /// Makes the post-commit directory sync fail, so the one failure that
-    /// happens *after* the rename can be exercised. It cannot be provoked from
-    /// outside the process: once the rename has returned, nothing a test can do
-    /// to the filesystem reaches back into the sync that follows it. Compiled
-    /// out of every real build.
-    #[cfg(any(test, feature = "test-support"))]
-    fail_directory_sync: bool,
+/// Canonical paths for Note-it data, config, state, and runtime directories.
+///
+/// This type handles pure path resolution according to XDG base directory
+/// specifications. Resolving paths does not perform filesystem I/O or create
+/// directories on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorePaths {
+    pub data_dir: PathBuf,
+    pub notes_dir: PathBuf,
+    pub trash_dir: PathBuf,
+    pub backups_dir: PathBuf,
+    pub assets_dir: PathBuf,
+    pub config_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub runtime_dir: PathBuf,
 }
 
-impl StorageManager {
-    pub fn new() -> Result<Self, String> {
+impl StorePaths {
+    /// Purely resolves canonical Note-it paths according to XDG base directory specifications.
+    ///
+    /// This function does NOT perform any filesystem mutation or create directories on disk.
+    pub fn resolve() -> Self {
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("~/.local/share"))
             .join("note-it");
@@ -150,30 +143,13 @@ impl StorageManager {
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("note-it");
 
-        let manager = Self::assemble(notes_dir, config_dir, state_dir, runtime_dir);
-        manager.ensure_directories()?;
-        Ok(manager)
+        Self::from_custom_paths(notes_dir, config_dir, state_dir, runtime_dir)
     }
 
-    #[allow(dead_code)]
-    pub fn with_custom_paths(
-        notes_dir: PathBuf,
-        config_dir: PathBuf,
-        state_dir: PathBuf,
-        runtime_dir: PathBuf,
-    ) -> Result<Self, String> {
-        let manager = Self::assemble(notes_dir, config_dir, state_dir, runtime_dir);
-        manager.ensure_directories()?;
-        Ok(manager)
-    }
-
-    /// The trash and the backups are siblings of the notes directory, which is
-    /// what the layout on disk already is: one `note-it` data directory holding
-    /// `notes/`, `trash/` and `backups/`. Deriving them rather than passing
-    /// them keeps the three from ever being configured apart, and keeps
-    /// `notes/` and `trash/` on one filesystem, which the move between them
-    /// depends on.
-    fn assemble(
+    /// Derives canonical sibling paths from the supplied directories.
+    ///
+    /// This function does NOT perform any filesystem mutation or create directories on disk.
+    pub fn from_custom_paths(
         notes_dir: PathBuf,
         config_dir: PathBuf,
         state_dir: PathBuf,
@@ -190,13 +166,83 @@ impl StorageManager {
             backups_dir: data_dir.join("backups"),
             assets_dir: data_dir.join(crate::assets::ASSETS_DIRECTORY),
             notes_dir,
+            data_dir,
             config_dir,
             state_dir,
             runtime_dir,
+        }
+    }
+
+    /// Returns the path to `state.json`.
+    pub fn state_file_path(&self) -> PathBuf {
+        self.state_dir.join("state.json")
+    }
+
+    /// Returns the path to `study.json`.
+    pub fn study_file_path(&self) -> PathBuf {
+        self.data_dir.join("study.json")
+    }
+
+    /// Returns the path to `config.toml`.
+    pub fn config_file_path(&self) -> PathBuf {
+        self.config_dir.join("config.toml")
+    }
+
+    /// Returns the path to a specific note Markdown file.
+    pub fn note_path(&self, id: &Uuid) -> PathBuf {
+        self.notes_dir.join(format!("{id}.md"))
+    }
+
+    /// Checks whether the note store exists on disk.
+    pub fn store_exists(&self) -> bool {
+        self.notes_dir.is_dir() || self.data_dir.is_dir()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageManager {
+    paths: StorePaths,
+    /// Shared by every clone of this handle, because the windows each hold one
+    /// and there is only one store between them.
+    backup_schedule: Rc<RefCell<BackupSchedule>>,
+    /// Makes the post-commit directory sync fail, so the one failure that
+    /// happens *after* the rename can be exercised. It cannot be provoked from
+    /// outside the process: once the rename has returned, nothing a test can do
+    /// to the filesystem reaches back into the sync that follows it. Compiled
+    /// out of every real build.
+    #[cfg(any(test, feature = "test-support"))]
+    fail_directory_sync: bool,
+}
+
+impl StorageManager {
+    pub fn new() -> Result<Self, String> {
+        Self::from_paths(StorePaths::resolve())
+    }
+
+    #[allow(dead_code)]
+    pub fn with_custom_paths(
+        notes_dir: PathBuf,
+        config_dir: PathBuf,
+        state_dir: PathBuf,
+        runtime_dir: PathBuf,
+    ) -> Result<Self, String> {
+        Self::from_paths(StorePaths::from_custom_paths(
+            notes_dir,
+            config_dir,
+            state_dir,
+            runtime_dir,
+        ))
+    }
+
+    pub fn from_paths(paths: StorePaths) -> Result<Self, String> {
+        let manager = Self {
+            paths,
             backup_schedule: Rc::new(RefCell::new(BackupSchedule::default())),
             #[cfg(any(test, feature = "test-support"))]
             fail_directory_sync: false,
-        }
+        };
+        manager.ensure_directories()?;
+        Ok(manager)
     }
 
     /// The same store, reached through a handle whose post-commit directory
@@ -209,61 +255,62 @@ impl StorageManager {
     }
 
     pub fn ensure_directories(&self) -> Result<(), String> {
-        fs::create_dir_all(&self.notes_dir)
+        fs::create_dir_all(&self.paths.notes_dir)
             .map_err(|e| format!("Failed to create notes directory: {e}"))?;
-        fs::create_dir_all(&self.trash_dir)
+        fs::create_dir_all(&self.paths.trash_dir)
             .map_err(|e| format!("Failed to create trash directory: {e}"))?;
-        fs::create_dir_all(&self.backups_dir)
+        fs::create_dir_all(&self.paths.backups_dir)
             .map_err(|e| format!("Failed to create backups directory: {e}"))?;
-        fs::create_dir_all(&self.assets_dir)
+        fs::create_dir_all(&self.paths.assets_dir)
             .map_err(|e| format!("Failed to create assets directory: {e}"))?;
-        fs::create_dir_all(&self.config_dir)
+        fs::create_dir_all(&self.paths.config_dir)
             .map_err(|e| format!("Failed to create config directory: {e}"))?;
-        fs::create_dir_all(&self.state_dir)
+        fs::create_dir_all(&self.paths.state_dir)
             .map_err(|e| format!("Failed to create state directory: {e}"))?;
-        fs::create_dir_all(&self.runtime_dir)
+        fs::create_dir_all(&self.paths.runtime_dir)
             .map_err(|e| format!("Failed to create runtime directory: {e}"))?;
         Ok(())
     }
 
+    pub fn paths(&self) -> &StorePaths {
+        &self.paths
+    }
+
     #[allow(dead_code)]
     pub fn notes_dir(&self) -> &Path {
-        &self.notes_dir
+        &self.paths.notes_dir
     }
 
     #[allow(dead_code)]
     pub fn trash_dir(&self) -> &Path {
-        &self.trash_dir
+        &self.paths.trash_dir
     }
 
     pub fn assets_dir(&self) -> &Path {
-        &self.assets_dir
+        &self.paths.assets_dir
     }
 
     #[allow(dead_code)]
     pub fn backups_dir(&self) -> &Path {
-        &self.backups_dir
+        &self.paths.backups_dir
     }
 
     pub fn state_file_path(&self) -> PathBuf {
-        self.state_dir.join("state.json")
+        self.paths.state_file_path()
     }
 
     /// Durable review history. A sibling of notes and assets in XDG data,
     /// never mixed into the operational window state.
     pub fn study_file_path(&self) -> PathBuf {
-        self.notes_dir
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("study.json")
+        self.paths.study_file_path()
     }
 
     pub fn config_file_path(&self) -> PathBuf {
-        self.config_dir.join("config.toml")
+        self.paths.config_file_path()
     }
 
     pub fn note_path(&self, id: &Uuid) -> PathBuf {
-        self.notes_dir.join(format!("{id}.md"))
+        self.paths.note_path(id)
     }
 
     /// Writes a note, or leaves the one already on disk exactly as it was.
@@ -307,24 +354,24 @@ impl StorageManager {
     pub fn move_note_to_trash(&self, id: &Uuid) -> Result<(), String> {
         // A deletion is the change most worth having a way back from.
         self.back_up_before_mutation();
-        trash::move_to_trash(&self.notes_dir, &self.trash_dir, id, Utc::now())
+        trash::move_to_trash(&self.paths.notes_dir, &self.paths.trash_dir, id, Utc::now())
     }
 
     /// Brings a note back out of the trash. Never over a live note: see
     /// [`crate::trash::restore_from_trash`].
     pub fn restore_note_from_trash(&self, id: &Uuid) -> Result<(), trash::RestoreError> {
-        trash::restore_from_trash(&self.notes_dir, &self.trash_dir, id)
+        trash::restore_from_trash(&self.paths.notes_dir, &self.paths.trash_dir, id)
     }
 
     /// Everything in the trash, most recently deleted first. Reading only.
     pub fn list_trash(&self) -> Vec<TrashEntry> {
-        trash::list_trash(&self.trash_dir)
+        trash::list_trash(&self.paths.trash_dir)
     }
 
     /// Whether a note identifier is currently in the trash.
     #[allow(dead_code)]
     pub fn is_trashed(&self, id: &Uuid) -> bool {
-        trash::holds(&self.trash_dir, id)
+        trash::holds(&self.paths.trash_dir, id)
     }
 
     /// A snapshot the user asked for, right now.
@@ -337,7 +384,7 @@ impl StorageManager {
     pub fn create_backup_now(&self) -> Result<PathBuf, String> {
         let now = Utc::now();
         let result = backup::create_snapshot(
-            &self.backups_dir,
+            &self.paths.backups_dir,
             &self.backup_sources(),
             SnapshotKind::Manual,
             now,
@@ -362,9 +409,9 @@ impl StorageManager {
 
     fn backup_sources(&self) -> BackupSources {
         BackupSources {
-            notes_dir: self.notes_dir.clone(),
-            trash_dir: self.trash_dir.clone(),
-            assets_dir: self.assets_dir.clone(),
+            notes_dir: self.paths.notes_dir.clone(),
+            trash_dir: self.paths.trash_dir.clone(),
+            assets_dir: self.paths.assets_dir.clone(),
             config_file: self.config_file_path(),
             state_file: self.state_file_path(),
             study_file: self.study_file_path(),
@@ -385,7 +432,7 @@ impl StorageManager {
         }
 
         let result = backup::create_snapshot(
-            &self.backups_dir,
+            &self.paths.backups_dir,
             &self.backup_sources(),
             SnapshotKind::Automatic,
             now,
@@ -410,7 +457,7 @@ impl StorageManager {
     fn automatic_backup_owed(&self, now: DateTime<Utc>) -> bool {
         let mut schedule = self.backup_schedule.borrow_mut();
         if !schedule.loaded {
-            schedule.last_success = backup::last_snapshot_time(&self.backups_dir);
+            schedule.last_success = backup::last_snapshot_time(&self.paths.backups_dir);
             schedule.loaded = true;
         }
         backup::automatic_backup_due(
@@ -444,7 +491,7 @@ impl StorageManager {
     /// file's own modification time. Nothing is opened here: this is the
     /// directory and nothing more.
     fn note_files(&self) -> Result<Vec<(Uuid, SystemTime)>, String> {
-        let entries = fs::read_dir(&self.notes_dir)
+        let entries = fs::read_dir(&self.paths.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;
 
         let mut files = Vec::new();
@@ -2018,5 +2065,49 @@ mod tests {
             .expect("restore B");
         assert_eq!(manager.read_note_bodies_by_recency().len(), 2);
         assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
+    }
+
+    #[test]
+    fn store_paths_pure_resolution_creates_nothing_on_disk() {
+        let tmp = tempdir().expect("tempdir");
+        let non_existent_base = tmp.path().join("non_existent_tree");
+        let notes_dir = non_existent_base.join("data/notes");
+        let config_dir = non_existent_base.join("config");
+        let state_dir = non_existent_base.join("state");
+        let runtime_dir = non_existent_base.join("runtime");
+
+        let paths = StorePaths::from_custom_paths(
+            notes_dir.clone(),
+            config_dir.clone(),
+            state_dir.clone(),
+            runtime_dir.clone(),
+        );
+
+        assert_eq!(paths.notes_dir, notes_dir);
+        assert_eq!(paths.config_dir, config_dir);
+        assert_eq!(paths.state_dir, state_dir);
+        assert_eq!(paths.runtime_dir, runtime_dir);
+        assert_eq!(paths.trash_dir, non_existent_base.join("data/trash"));
+        assert_eq!(paths.backups_dir, non_existent_base.join("data/backups"));
+        assert_eq!(paths.assets_dir, non_existent_base.join("data/assets"));
+
+        assert!(!paths.store_exists());
+        assert!(!non_existent_base.exists());
+    }
+
+    #[test]
+    fn store_paths_detects_existing_store_without_mutating() {
+        let tmp = tempdir().expect("tempdir");
+        let notes_dir = tmp.path().join("data/notes");
+        fs::create_dir_all(&notes_dir).expect("create notes dir");
+
+        let paths = StorePaths::from_custom_paths(
+            notes_dir.clone(),
+            tmp.path().join("config"),
+            tmp.path().join("state"),
+            tmp.path().join("runtime"),
+        );
+
+        assert!(paths.store_exists());
     }
 }

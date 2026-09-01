@@ -1,5 +1,8 @@
 [workspace]
-members = ["noteit-core"]
+members = [
+    "noteit-core",
+    "noteit-cli",
+]
 resolver = "2"
 
 [package]

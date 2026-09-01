@@ -22,6 +22,8 @@ pub mod trash;
 mod atomic_file;
 mod visible_text;
 
+pub use storage::StorePaths;
+
 use metadata::MetadataCatalog;
 use model::NoteDocument;
 use search::SearchResult;
@@ -42,6 +44,11 @@ pub struct NoteItCore {
 }
 
 impl NoteItCore {
+    /// Purely resolves canonical Note-it paths without performing filesystem I/O or directory creation.
+    pub fn resolve_paths() -> StorePaths {
+        StorePaths::resolve()
+    }
+
     /// Opens the XDG-backed Note-it store.
     pub fn new() -> Result<Self, String> {
         StorageManager::new().map(Self::from_storage)
@@ -55,6 +62,11 @@ impl NoteItCore {
     /// The shared persistence implementation used by existing write flows.
     pub fn storage(&self) -> &StorageManager {
         &self.storage
+    }
+
+    /// Access the resolved storage paths for this store.
+    pub fn paths(&self) -> &StorePaths {
+        self.storage.paths()
     }
 
     /// Lists live note identifiers in the canonical recency order.

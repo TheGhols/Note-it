@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Fails if the headless CLI ever gains a desktop/UI dependency.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tree="$(cargo tree -p noteit-cli --edges normal --prefix none)"
+if grep -Eq '^(gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-))( |$)' <<<"$tree"; then
+  printf '%s\n' "CLI boundary violation: noteit-cli depends on GTK, GDK, WebKitGTK, layer-shell, Wayland or Niri." >&2
+  exit 1
+fi
+
+printf '%s\n' "CLI boundary OK: noteit-cli has no GTK/GDK/WebKitGTK/layer-shell/Wayland/Niri dependency."

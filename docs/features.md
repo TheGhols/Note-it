@@ -1195,3 +1195,18 @@ countdown writes nothing at all, once a second or otherwise.
     window changes. A note without timestamps still opens and reports them as unknown.
   - Visiting a note is not editing it: opening and closing, summoning, hiding, showing or quitting
     without changing the text leaves `updated_at` alone, and the file is not rewritten at all.
+
+## Headless CLI (`noteit`)
+
+- **Separation of Concerns:** `noteit` is a standalone, lightweight CLI binary without GUI, GTK,
+  WebKitGTK, Wayland or display server dependencies.
+- **Orientation & Guidance:** running `noteit` without arguments renders a concise welcome screen with
+  guidance for available commands.
+- **Bilingual Interface:** primary commands in Portuguese (`ajuda`, `versao`, `status`) with canonical
+  international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
+- **Strictly Read-Only Status:** `noteit status` inspects resolved XDG directories and store
+  availability without reading note files, parsing Markdown, or creating directories on disk.
+- **Presentation & Terminal Compatibility:** clean, elegant formatting with ANSI styling on interactive
+  terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
+- **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and
+  `1` for execution errors.

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0C Headless CLI Foundation.** Introduced the dedicated `noteit-cli` crate providing the
+  standalone headless `noteit` binary. The graphical desktop application (`note-it`) remains the GUI
+  and lifecycle adapter while both adapters consume the shared `noteit-core` authority.
+  - Headless architecture: `noteit` requires no X11/Wayland display server, GTK, WebKitGTK, or
+    `GApplication` registration. `scripts/check-cli-boundary` enforces zero UI/desktop dependencies.
+  - Bilingual interface: human presentation in Portuguese (`ajuda`, `versao`, `status`), with
+    standard international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
+  - Single version source: version strings derive strictly from `CARGO_PKG_VERSION`.
+  - Strictly read-only status: `noteit status` inspects resolved XDG directories and store existence
+    without reading note files, parsing Markdown, or writing to disk.
+  - Pure path resolution: `StorePaths::resolve()` in `noteit-core` performs pure XDG path resolution
+    without mutating the filesystem or creating directories on disk.
+  - Clean presentation: automatic TTY/NO_COLOR detection ensures ANSI color codes are emitted only
+    when stdout is an interactive terminal and NO_COLOR is unset.
+  - Standard exit codes: 0 for success, 2 for invalid usage/arguments, 1 for execution errors.
+
 - **Phase 4.0B Metadata Foundation — Tags + Properties.** Notes can now carry user-authored,
   structured `tags` and textual `properties` beside the reserved `note_it` front-matter block.
   Legacy notes read as empty metadata and are never migrated or rewritten merely by being opened.
