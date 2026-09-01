@@ -4,7 +4,7 @@ pub mod output;
 use clap::error::ErrorKind;
 use clap::Parser;
 use cli::{CliArgs, CliCommand};
-use noteit_core::{NoteFilter, NoteItCore, StorePaths};
+use noteit_core::{NoteFilter, NoteItCore, NoteSelectorError, StorePaths};
 use output::OutputContext;
 
 pub const EXIT_SUCCESS: u8 = 0;
@@ -45,39 +45,74 @@ where
                 propriedade,
             }) => {
                 let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    let sanitized = output::sanitize_for_terminal(&err);
                     (
                         EXIT_USAGE_ERROR,
                         format!(
                             "{} {}\n\nUse `{}` para ver o formato correto.\n",
                             ctx.bold("Erro:"),
-                            err,
+                            sanitized,
                             ctx.bold("noteit ajuda")
                         ),
                     )
                 })?;
                 let core = NoteItCore::open_read_only();
                 match core.list_summaries(&filter, limite) {
-                    Ok(summaries) => Ok(output::render_notes_list(ctx, &summaries)),
-                    Err(err) => Err((
-                        EXIT_EXECUTION_ERROR,
-                        format!("{} {}\n", ctx.bold("Erro:"), err),
-                    )),
+                    Ok(batch) => {
+                        for w in &batch.warnings {
+                            eprint!("{}", output::render_warning(ctx, w));
+                        }
+                        Ok(output::render_notes_list(ctx, &batch.items))
+                    }
+                    Err(err) => {
+                        let sanitized = output::sanitize_for_terminal(&err);
+                        Err((
+                            EXIT_EXECUTION_ERROR,
+                            format!("{} {}\n", ctx.bold("Erro:"), sanitized),
+                        ))
+                    }
                 }
             }
             Some(CliCommand::Ler { id }) => {
                 let core = NoteItCore::open_read_only();
                 let resolved_id = core.resolve_note_id(&id).map_err(|err| {
+                    let sanitized_err = match &err {
+                        NoteSelectorError::InvalidFormat(sel) => {
+                            let s = output::sanitize_for_terminal(sel);
+                            format!("formato de seletor inválido `{s}`. Forneça um UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais.")
+                        }
+                        NoteSelectorError::NotFound(sel) => {
+                            let s = output::sanitize_for_terminal(sel);
+                            format!("nenhuma nota encontrada para o seletor `{s}`.")
+                        }
+                        NoteSelectorError::Ambiguous(sel, matches) => {
+                            let s = output::sanitize_for_terminal(sel);
+                            let count = matches.len();
+                            format!("seletor ambíguo `{s}` corresponde a {count} notas vivas.")
+                        }
+                        NoteSelectorError::SymlinkRefused(sel) => {
+                            let s = output::sanitize_for_terminal(sel);
+                            format!("a nota `{s}` é um link simbólico e não pode ser aberta.")
+                        }
+                        NoteSelectorError::StoreUnavailable(reason) => {
+                            let r = output::sanitize_for_terminal(reason);
+                            format!("repositório indisponível: {r}")
+                        }
+                    };
                     (
                         EXIT_EXECUTION_ERROR,
-                        format!("{} {}\n", ctx.bold("Erro:"), err),
+                        format!("{} {}\n", ctx.bold("Erro:"), sanitized_err),
                     )
                 })?;
                 match core.read_note(&resolved_id) {
                     Ok(doc) => Ok(output::render_note_read(ctx, &doc)),
-                    Err(err) => Err((
-                        EXIT_EXECUTION_ERROR,
-                        format!("{} {}\n", ctx.bold("Erro:"), err),
-                    )),
+                    Err(err) => {
+                        let sanitized = output::sanitize_for_terminal(&err);
+                        Err((
+                            EXIT_EXECUTION_ERROR,
+                            format!("{} {}\n", ctx.bold("Erro:"), sanitized),
+                        ))
+                    }
                 }
             }
             Some(CliCommand::Buscar {
@@ -87,23 +122,37 @@ where
                 propriedade,
             }) => {
                 let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    let sanitized = output::sanitize_for_terminal(&err);
                     (
                         EXIT_USAGE_ERROR,
                         format!(
                             "{} {}\n\nUse `{}` para ver o formato correto.\n",
                             ctx.bold("Erro:"),
-                            err,
+                            sanitized,
                             ctx.bold("noteit ajuda")
                         ),
                     )
                 })?;
+                let sanitized_query = output::sanitize_for_terminal(&consulta);
                 let core = NoteItCore::open_read_only();
-                match core.search_notes_filtered(&consulta, &filter, limite) {
-                    Ok(results) => Ok(output::render_search_results(ctx, &consulta, &results)),
-                    Err(err) => Err((
-                        EXIT_EXECUTION_ERROR,
-                        format!("{} {}\n", ctx.bold("Erro:"), err),
-                    )),
+                match core.search_notes_filtered(&sanitized_query, &filter, limite) {
+                    Ok(batch) => {
+                        for w in &batch.warnings {
+                            eprint!("{}", output::render_warning(ctx, w));
+                        }
+                        Ok(output::render_search_results(
+                            ctx,
+                            &sanitized_query,
+                            &batch.items,
+                        ))
+                    }
+                    Err(err) => {
+                        let sanitized = output::sanitize_for_terminal(&err);
+                        Err((
+                            EXIT_EXECUTION_ERROR,
+                            format!("{} {}\n", ctx.bold("Erro:"), sanitized),
+                        ))
+                    }
                 }
             }
             Some(CliCommand::Tags) => {
@@ -123,12 +172,13 @@ where
                 propriedade,
             }) => {
                 let filter = parse_filter(tag, &propriedade).map_err(|err| {
+                    let sanitized = output::sanitize_for_terminal(&err);
                     (
                         EXIT_USAGE_ERROR,
                         format!(
                             "{} {}\n\nUse `{}` para ver o formato correto.\n",
                             ctx.bold("Erro:"),
-                            err,
+                            sanitized,
                             ctx.bold("noteit ajuda")
                         ),
                     )
@@ -136,11 +186,19 @@ where
                 let core = NoteItCore::open_read_only();
                 let state_filter = estado.into();
                 match core.list_tasks(state_filter, &filter, limite) {
-                    Ok(tasks) => Ok(output::render_tasks(ctx, &tasks, state_filter)),
-                    Err(err) => Err((
-                        EXIT_EXECUTION_ERROR,
-                        format!("{} {}\n", ctx.bold("Erro:"), err),
-                    )),
+                    Ok(batch) => {
+                        for w in &batch.warnings {
+                            eprint!("{}", output::render_warning(ctx, w));
+                        }
+                        Ok(output::render_tasks(ctx, &batch.items, state_filter))
+                    }
+                    Err(err) => {
+                        let sanitized = output::sanitize_for_terminal(&err);
+                        Err((
+                            EXIT_EXECUTION_ERROR,
+                            format!("{} {}\n", ctx.bold("Erro:"), sanitized),
+                        ))
+                    }
                 }
             }
             Some(CliCommand::Lixeira) => {

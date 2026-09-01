@@ -68,40 +68,42 @@ fn is_valid_iso_8601_with_zone(candidate: &str) -> bool {
 }
 
 /// Extracts `completed_at` timestamp comment from a task line and returns clean text.
-/// Format: `<!-- note-it:completed_at=ISO8601 -->`
+///
+/// Complies with the TypeScript `taskMeta.ts` contract:
+/// - Locates `<!--\s*note-it:completed_at=([^\s]+?)\s*-->` anywhere in the line.
+/// - Removes ONLY the Note-it metadata comment and trailing whitespace.
+/// - Leaves external/other HTML comments intact.
+/// - Validates ISO 8601 with explicit offset or Z. Returns `None` if absent or invalid.
 pub fn extract_completed_at(raw_text: &str) -> (Option<DateTime<Utc>>, String) {
-    let comment_marker = "note-it:completed_at=";
-    let Some(start_idx) = raw_text.find("<!--") else {
-        return (None, raw_text.trim_end().to_string());
-    };
+    let mut search_from = 0;
 
-    let rest = &raw_text[start_idx..];
-    let Some(end_rel) = rest.find("-->") else {
-        return (None, raw_text.trim_end().to_string());
-    };
-
-    let full_comment = &rest[..end_rel + 3];
-    let inside = full_comment[4..full_comment.len() - 3].trim();
-
-    if let Some(candidate_with_prefix) = inside.strip_prefix("note-it:completed_at=") {
-        let candidate = candidate_with_prefix.trim();
-        let parsed = if is_valid_iso_8601_with_zone(candidate) {
-            DateTime::parse_from_rfc3339(candidate)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
-        } else {
-            None
+    while let Some(rel_start) = raw_text[search_from..].find("<!--") {
+        let comment_start = search_from + rel_start;
+        let rest = &raw_text[comment_start..];
+        let Some(end_rel) = rest.find("-->") else {
+            break;
         };
+        let comment_end = comment_start + end_rel + 3;
+        let inside = raw_text[comment_start + 4..comment_end - 3].trim();
 
-        let mut cleaned = String::with_capacity(raw_text.len());
-        cleaned.push_str(&raw_text[..start_idx]);
-        cleaned.push_str(&rest[end_rel + 3..]);
-        return (parsed, cleaned.trim_end().to_string());
-    } else if inside.contains(comment_marker) {
-        let mut cleaned = String::with_capacity(raw_text.len());
-        cleaned.push_str(&raw_text[..start_idx]);
-        cleaned.push_str(&rest[end_rel + 3..]);
-        return (None, cleaned.trim_end().to_string());
+        if let Some(rest_inside) = inside.strip_prefix("note-it:completed_at=") {
+            let candidate = rest_inside.split_whitespace().next().unwrap_or("");
+            let parsed = if is_valid_iso_8601_with_zone(candidate) {
+                DateTime::parse_from_rfc3339(candidate)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            } else {
+                None
+            };
+
+            let mut cleaned = String::with_capacity(raw_text.len());
+            cleaned.push_str(&raw_text[..comment_start]);
+            cleaned.push_str(&raw_text[comment_end..]);
+            let final_text = cleaned.trim_end().to_string();
+            return (parsed, final_text);
+        }
+
+        search_from = comment_start + 4;
     }
 
     (None, raw_text.trim_end().to_string())
@@ -213,6 +215,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_case_01_completion_comment_alone() {
+        let raw = "Comprar material <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert!(dt.is_some());
+        assert_eq!(text, "Comprar material");
+    }
+
+    #[test]
+    fn test_case_02_other_html_comment_before() {
+        let raw = "Comprar material <!-- observação externa --> <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert!(dt.is_some());
+        assert_eq!(text, "Comprar material <!-- observação externa -->");
+    }
+
+    #[test]
+    fn test_case_03_other_html_comment_after() {
+        let raw = "Comprar material <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 --> <!-- observação externa -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert!(dt.is_some());
+        assert_eq!(text, "Comprar material  <!-- observação externa -->");
+    }
+
+    #[test]
+    fn test_case_04_invalid_comment_yields_none_and_strips_comment() {
+        let raw = "Comprar material <!-- note-it:completed_at=data-invalida -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(text, "Comprar material");
+    }
+
+    #[test]
+    fn test_case_05_absent_comment_yields_none_and_preserves_text() {
+        let raw = "Comprar material simples";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(text, "Comprar material simples");
+    }
+
+    #[test]
+    fn test_case_06_unchecked_task_with_completion_metadata_drops_timestamp() {
+        let id = Uuid::new_v4();
+        let markdown =
+            "- [ ] Tarefa não concluída <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->";
+        let tasks = parse_tasks(id, "Nota", markdown);
+        assert_eq!(tasks.len(), 1);
+        assert!(!tasks[0].checked);
+        assert_eq!(tasks[0].completed_at, None);
+        assert_eq!(tasks[0].text, "Tarefa não concluída");
+    }
+
+    #[test]
+    fn test_case_07_similar_non_note_it_comment_preserved() {
+        let raw = "Comprar material <!-- other-app:completed_at=2026-08-27T11:32:00-03:00 -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(
+            text,
+            "Comprar material <!-- other-app:completed_at=2026-08-27T11:32:00-03:00 -->"
+        );
+    }
+
+    #[test]
+    fn test_case_08_external_comments_are_not_removed() {
+        let raw = "Comprar material <!-- importante --> e mais texto <!-- id=123 -->";
+        let (dt, text) = extract_completed_at(raw);
+        assert_eq!(dt, None);
+        assert_eq!(
+            text,
+            "Comprar material <!-- importante --> e mais texto <!-- id=123 -->"
+        );
+    }
+
+    #[test]
     fn parse_pending_and_completed_tasks() {
         let id = Uuid::new_v4();
         let markdown = "\
@@ -310,17 +386,5 @@ mod tests {
 
         assert_eq!(tasks[2].completed_at, None);
         assert_eq!(tasks[2].text, "Task without date comment");
-    }
-
-    #[test]
-    fn unchecked_task_with_comment_drops_timestamp() {
-        let id = Uuid::new_v4();
-        let markdown =
-            "- [ ] Unchecked task <!-- note-it:completed_at=2026-08-27T11:32:00-03:00 -->";
-        let tasks = parse_tasks(id, "Unchecked note", markdown);
-        assert_eq!(tasks.len(), 1);
-        assert!(!tasks[0].checked);
-        assert_eq!(tasks[0].completed_at, None);
-        assert_eq!(tasks[0].text, "Unchecked task");
     }
 }

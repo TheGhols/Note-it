@@ -1,6 +1,6 @@
 use noteit_core::chrono::{DateTime, Utc};
 use noteit_core::{
-    MetadataCatalog, NoteDocument, NoteSummary, SearchResult, StorePaths, TaskEntry,
+    MetadataCatalog, NoteDocument, NoteSummary, ReadWarning, SearchResult, StorePaths, TaskEntry,
     TaskStateFilter, TrashEntry, Uuid,
 };
 use std::collections::BTreeMap;
@@ -86,7 +86,8 @@ impl OutputContext {
 }
 
 /// Neutralizes ANSI escape sequences and dangerous terminal control characters
-/// from untrusted note content while preserving Unicode, tabs, and newlines.
+/// from untrusted inputs (note contents, CLI queries, arguments, paths) while
+/// preserving Unicode, tabs, and newlines.
 pub fn sanitize_for_terminal(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
@@ -162,9 +163,21 @@ pub fn sanitize_for_terminal(input: &str) -> String {
     out
 }
 
-fn format_dt_pt_br(dt: Option<DateTime<Utc>>) -> String {
+/// Formats a UTC timestamp in the machine's local timezone matching the GUI contract (dd/MM/yyyy HH:mm).
+pub fn format_datetime_local(dt: Option<DateTime<Utc>>) -> String {
+    format_datetime_with_tz(dt, &noteit_core::chrono::Local)
+}
+
+/// Formats a UTC timestamp with a specified timezone.
+pub fn format_datetime_with_tz<Tz: noteit_core::chrono::TimeZone>(
+    dt: Option<DateTime<Utc>>,
+    tz: &Tz,
+) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     match dt {
-        Some(d) => d.format("%d/%m/%Y %H:%M").to_string(),
+        Some(d) => d.with_timezone(tz).format("%d/%m/%Y %H:%M").to_string(),
         None => "desconhecida".to_string(),
     }
 }
@@ -180,7 +193,7 @@ pub fn render_welcome(ctx: &OutputContext) -> String {
     let hint = format!("Use `{}` para começar.", ctx.bold("noteit ajuda"));
 
     format!(
-        "{title}\n\n{subtitle}\n\n  listar       Listar notas vivas\n  ler          Ler uma nota\n  buscar       Buscar notas\n  tags         Catálogo de tags\n  propriedades Catálogo de propriedades\n  tarefas      Listar tarefas\n  lixeira      Listar notas na lixeira\n  status       Verificar a instalação\n  versao       Mostrar versão\n\n{hint}\n"
+        "{title}\n\n{subtitle}\n\n  listar       Listar notas vivas\n  ler          Ler uma nota\n  buscar       Buscar notas\n  tags         Catálogo de tags\n  propriedades Catálogo de propriedades\n  tarefas      Listar tarefas\n  lixeira      Listar notas na lixeira\n  status       Verificar a instalação\n  ajuda        Mostrar ajuda dos comandos\n  versao       Mostrar versão\n\n{hint}\n"
     )
 }
 
@@ -210,9 +223,9 @@ pub fn render_status(ctx: &OutputContext, paths: &StorePaths) -> String {
         ctx.yellow("ainda não criado")
     };
 
-    let data_path = paths.data_dir.display();
-    let config_path = paths.config_dir.display();
-    let state_path = paths.state_dir.display();
+    let data_path = sanitize_for_terminal(&paths.data_dir.display().to_string());
+    let config_path = sanitize_for_terminal(&paths.config_dir.display().to_string());
+    let state_path = sanitize_for_terminal(&paths.state_dir.display().to_string());
 
     format!(
         "{version_line}\n\nCLI       {cli_status}\nCore      {core_status}\nStore     {store_status}\nDados     {data_path}\nConfig    {config_path}\nEstado    {state_path}\n"
@@ -242,9 +255,9 @@ pub fn render_notes_list(ctx: &OutputContext, summaries: &[NoteSummary]) -> Stri
         }
 
         let time_info = if let Some(updated) = summary.updated_at {
-            format!("atualizada {}", updated.format("%d/%m/%Y %H:%M"))
+            format!("atualizada {}", format_datetime_local(Some(updated)))
         } else if let Some(created) = summary.created_at {
-            format!("criada {}", created.format("%d/%m/%Y %H:%M"))
+            format!("criada {}", format_datetime_local(Some(created)))
         } else {
             "data desconhecida".to_string()
         };
@@ -282,10 +295,16 @@ pub fn render_note_read(ctx: &OutputContext, doc: &NoteDocument) -> String {
     }
 
     if let Some(created) = doc.metadata.created_at {
-        out.push_str(&format!("Criada: {}\n", format_dt_pt_br(Some(created))));
+        out.push_str(&format!(
+            "Criada: {}\n",
+            format_datetime_local(Some(created))
+        ));
     }
     if let Some(updated) = doc.metadata.updated_at {
-        out.push_str(&format!("Atualizada: {}\n", format_dt_pt_br(Some(updated))));
+        out.push_str(&format!(
+            "Atualizada: {}\n",
+            format_datetime_local(Some(updated))
+        ));
     }
 
     if !doc.user_metadata.properties.is_empty() {
@@ -311,8 +330,9 @@ pub fn render_search_results(ctx: &OutputContext, query: &str, results: &[Search
         return "Nenhuma nota encontrada.\n".to_string();
     }
 
+    let sanitized_query = sanitize_for_terminal(query);
     let mut out = String::new();
-    out.push_str(&ctx.bold(&format!("Busca: {query}")));
+    out.push_str(&ctx.bold(&format!("Busca: {sanitized_query}")));
     out.push_str("\n\n");
 
     for res in results {
@@ -468,7 +488,7 @@ pub fn render_tasks(ctx: &OutputContext, tasks: &[TaskEntry], state: TaskStateFi
             let completed_suffix = if let Some(dt) = task.completed_at {
                 format!(
                     " {}",
-                    ctx.dim(&format!("(concluída {})", dt.format("%d/%m/%Y %H:%M")))
+                    ctx.dim(&format!("(concluída {})", format_datetime_local(Some(dt))))
                 )
             } else {
                 String::new()
@@ -506,7 +526,7 @@ pub fn render_trash(ctx: &OutputContext, entries: &[TrashEntry]) -> String {
         let label = ctx.bold(&sanitize_for_terminal(&entry.label));
         let snippet = sanitize_for_terminal(&entry.snippet);
         let time_info = if let Some(deleted) = entry.deleted_at {
-            format!("removida {}", deleted.format("%d/%m/%Y %H:%M"))
+            format!("removida {}", format_datetime_local(Some(deleted)))
         } else {
             "data de remoção desconhecida".to_string()
         };
@@ -528,6 +548,19 @@ pub fn render_trash(ctx: &OutputContext, entries: &[TrashEntry]) -> String {
     out
 }
 
+pub fn render_warning(ctx: &OutputContext, warning: &ReadWarning) -> String {
+    let prefix_str = if let Some(id) = &warning.note_id {
+        format!("nota {} ", id_prefix(id))
+    } else {
+        "nota ".to_string()
+    };
+    let sanitized_msg = sanitize_for_terminal(&warning.message);
+    format!(
+        "{} a {prefix_str}foi ignorada por erro de leitura: {sanitized_msg}\n",
+        ctx.yellow("Aviso:")
+    )
+}
+
 pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
 
@@ -547,9 +580,10 @@ pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
     match err.kind() {
         ErrorKind::InvalidSubcommand => {
             let name = extract_context_str(ContextKind::InvalidSubcommand).unwrap_or_default();
-            if !name.is_empty() {
+            let sanitized_name = sanitize_for_terminal(&name);
+            if !sanitized_name.is_empty() {
                 format!(
-                    "{error_prefix} comando desconhecido `{name}`.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
+                    "{error_prefix} comando desconhecido `{sanitized_name}`.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
                 )
             } else {
                 format!(
@@ -559,13 +593,14 @@ pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
         }
         ErrorKind::UnknownArgument => {
             let arg = extract_context_str(ContextKind::InvalidArg).unwrap_or_default();
-            if arg.starts_with('-') {
+            let sanitized_arg = sanitize_for_terminal(&arg);
+            if sanitized_arg.starts_with('-') {
                 format!(
-                    "{error_prefix} opção desconhecida `{arg}`.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
+                    "{error_prefix} opção desconhecida `{sanitized_arg}`.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
                 )
-            } else if !arg.is_empty() {
+            } else if !sanitized_arg.is_empty() {
                 format!(
-                    "{error_prefix} argumento inesperado `{arg}`.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
+                    "{error_prefix} argumento inesperado `{sanitized_arg}`.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
                 )
             } else {
                 format!(
@@ -575,9 +610,10 @@ pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
         }
         ErrorKind::MissingRequiredArgument => {
             let arg = extract_context_str(ContextKind::InvalidArg).unwrap_or_default();
-            if !arg.is_empty() {
+            let sanitized_arg = sanitize_for_terminal(&arg);
+            if !sanitized_arg.is_empty() {
                 format!(
-                    "{error_prefix} argumento obrigatório `{arg}` não fornecido.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
+                    "{error_prefix} argumento obrigatório `{sanitized_arg}` não fornecido.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
                 )
             } else {
                 format!(
@@ -596,6 +632,7 @@ pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noteit_core::chrono::{FixedOffset, TimeZone};
 
     #[test]
     fn terminal_sanitization_removes_dangerous_escapes_and_preserves_unicode() {
@@ -621,5 +658,34 @@ mod tests {
         // Unicode, accents, emoji and Markdown preservation
         let good_text = "# Título com acentos: Biópsia & Coração 🎉\n- [x] Tarefa 1\n\t* Subitem";
         assert_eq!(sanitize_for_terminal(good_text), good_text);
+    }
+
+    #[test]
+    fn deterministic_timezone_formatting_matches_gui_contract() {
+        // UTC instant: 2026-09-01T22:30:00Z
+        let utc_dt = Utc.with_ymd_and_hms(2026, 9, 1, 22, 30, 0).unwrap();
+
+        // In UTC-3 (e.g. America/Sao_Paulo without DST)
+        let tz_sp = FixedOffset::east_opt(-3 * 3600).expect("fixed offset -3h");
+        assert_eq!(
+            format_datetime_with_tz(Some(utc_dt), &tz_sp),
+            "01/09/2026 19:30"
+        );
+
+        // In UTC+2 (e.g. Europe/Paris summer time or Cairo)
+        let tz_cairo = FixedOffset::east_opt(2 * 3600).expect("fixed offset +2h");
+        assert_eq!(
+            format_datetime_with_tz(Some(utc_dt), &tz_cairo),
+            "02/09/2026 00:30"
+        );
+
+        // In UTC
+        assert_eq!(
+            format_datetime_with_tz(Some(utc_dt), &Utc),
+            "01/09/2026 22:30"
+        );
+
+        // Unknown timestamp
+        assert_eq!(format_datetime_with_tz(None, &tz_sp), "desconhecida");
     }
 }

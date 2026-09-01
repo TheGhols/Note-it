@@ -1424,7 +1424,7 @@ executables consume `noteit-core` as their shared domain and persistence authori
    `version.workspace = true` across all crates (`note-it`, `noteit-core`, `noteit-cli`), preventing
    version drift.
 
-## ADR-035: Headless Read API Architecture and Security Boundaries
+### ADR-035: Headless Read API Architecture and Security Boundaries
 
 **Decision.** Implement a strictly read-only, headless inspection API across `noteit-core` and `noteit-cli`, exposing notes listing, individual note retrieval, search, tag/property catalogs, task extraction, and trash inspection.
 
@@ -1433,5 +1433,15 @@ executables consume `noteit-core` as their shared domain and persistence authori
 2. **Strictly Read-Only Open Mode.** `NoteItCore::open_read_only()` and `StorageManager::open_read_only()` inspect paths without calling `ensure_directories()`. Absent stores return clean empty results with exit code 0 rather than creating empty directories or state files.
 3. **Safe Note Selector Resolution.** Note selectors (full UUID or >= 8 hex characters) are validated against path traversal (`..`, `/`, `\`) and non-hex characters before prefix matching against live note IDs. Ambiguous prefixes, non-existent IDs, and symlinks fail closed with exit code 1.
 4. **Terminal Security & Sanitization.** Output rendered to terminals is sanitized (`output::sanitize_for_terminal`) to neutralize ANSI escape codes (CSI, OSC, OSC 52 clipboard hijacking), BEL, backspaces, and control characters, preventing malicious note content from manipulating terminal states.
-5. **Task Parsing & Timestamp Integrity.** Task checkboxes (`- [ ]`, `- [x]`, `- [X]`) and depth nesting are extracted purely from Markdown text outside code fences (`` ``` `` and `~~~`) and front matter. `completed_at` timestamps are extracted only from valid ISO 8601 comment markers without ever inventing timestamps for missing or unparseable dates.
+5. **Task Parsing & Timestamp Integrity.** Task checkboxes (`- [ ]`, `- [x]`, `- [X]`) and depth nesting are extracted purely from Markdown text outside code fences (``` and ~~~) and front matter. `completed_at` timestamps are extracted only from valid ISO 8601 comment markers without ever inventing timestamps for missing or unparseable dates.
 6. **Zero Store Mutations.** No state files, backups, temporary files, or directory structures are touched during read operations. Byte-for-byte store integrity is proven by test gates.
+
+## ADR-036: Read API Contract Hardening, Local Datetimes, and Typed Warnings
+
+**Decision.** Standardize human datetime presentation across `noteit-cli` to use the machine's local timezone matching the GUI contract, expand terminal input sanitization to all rendered untrusted strings, decouple non-fatal read warnings into typed `ReadWarning` / `ReadBatch<T>` in `noteit-core` with zero print statements, and align task metadata comment matching strictly with the TypeScript specification.
+
+**Rationale.**
+1. **Local Timezone Consistency (`dd/MM/yyyy HH:mm`).** Human users expect timestamps displayed by the CLI to match the local machine timezone seen in the desktop interface. Datetime formatting is centralized in `output::format_datetime_local` in `noteit-cli`, while `noteit-core` models remain strictly typed in UTC (`DateTime<Utc>`).
+2. **Comprehensive Untrusted Input Sanitization.** All variable or external inputs rendered to stdout or stderr are sanitized via `output::sanitize_for_terminal` before styling or output. This includes search queries in headers, note selectors in error messages, Clap argument contexts in usage errors, and custom XDG paths in `noteit status`.
+3. **Pure, Decoupled Core Warning Model.** `noteit-core` must not print directly to stdout or stderr with `println!` or `eprintln!`. Read methods return `ReadBatch<T>` containing both parsed items and typed `ReadWarning` structures (`note_id`, `kind`, `message`). The CLI adapter formats these warnings to stderr in Portuguese, while future JSON or MCP adapters can project them into structured error payloads.
+4. **Faithful Task Comment Parsing.** Task completion comments `<!-- note-it:completed_at=... -->` are matched anywhere on the task line without requiring them to be the first HTML comment. Only the Note-it metadata comment is stripped from `TaskEntry.text`, preserving user-authored HTML comments. Unchecked tasks drop any completion timestamps.

@@ -3,6 +3,7 @@ use noteit_core::metadata::{NoteMetadata, NoteProperty};
 use noteit_core::model::NoteDocument;
 use noteit_core::storage::{StorageManager, StorePaths};
 use noteit_core::task::TaskStateFilter;
+use noteit_core::warning::ReadWarningKind;
 use noteit_core::NoteItCore;
 use std::fs;
 use tempfile::tempdir;
@@ -42,11 +43,13 @@ fn test_01_read_only_open_does_not_create_directories() {
     assert!(core
         .list_summaries(&NoteFilter::default(), None)
         .expect("summaries")
+        .items
         .is_empty());
     assert!(core.search_notes("teste").is_empty());
     assert!(core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .expect("tasks")
+        .items
         .is_empty());
     assert!(core.list_trash().is_empty());
     assert!(core.metadata_catalog().tags.is_empty());
@@ -65,11 +68,13 @@ fn test_02_empty_store_returns_empty_collections_cleanly() {
     assert!(core
         .list_summaries(&NoteFilter::default(), None)
         .expect("summaries")
+        .items
         .is_empty());
     assert!(core.search_notes("query").is_empty());
     assert!(core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .expect("tasks")
+        .items
         .is_empty());
     assert!(core.list_trash().is_empty());
 }
@@ -86,15 +91,15 @@ fn test_03_list_recency_orders_most_recent_first() {
     n2.content = "Segunda nota".to_string();
     core.storage().save_note_atomic(&n2).expect("save n2");
 
-    let summaries = core
+    let batch = core
         .list_summaries(&NoteFilter::default(), None)
         .expect("list");
-    assert_eq!(summaries.len(), 2);
+    assert_eq!(batch.items.len(), 2);
     assert_eq!(
-        summaries[0].id, n2.metadata.id,
+        batch.items[0].id, n2.metadata.id,
         "Most recent note must come first"
     );
-    assert_eq!(summaries[1].id, n1.metadata.id);
+    assert_eq!(batch.items[1].id, n1.metadata.id);
 }
 
 #[test]
@@ -115,12 +120,12 @@ fn test_04_legacy_note_without_timestamps_loads_and_lists() {
     assert_eq!(loaded.metadata.created_at, None);
     assert_eq!(loaded.metadata.updated_at, None);
 
-    let summaries = core
+    let batch = core
         .list_summaries(&NoteFilter::default(), None)
         .expect("summaries");
-    assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].id, id);
-    assert_eq!(summaries[0].label, "Nota Legada");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, id);
+    assert_eq!(batch.items[0].label, "Nota Legada");
 }
 
 #[test]
@@ -159,10 +164,10 @@ fn test_06_label_uses_canonical_search_label_logic() {
         "## <span data-note-it-color=\"#ff0000\">Título estilizado</span>\n\nCorpo".to_string();
     core.storage().save_note_atomic(&note).expect("save");
 
-    let summaries = core
+    let batch = core
         .list_summaries(&NoteFilter::default(), None)
         .expect("summaries");
-    assert_eq!(summaries[0].label, "Título estilizado");
+    assert_eq!(batch.items[0].label, "Título estilizado");
 }
 
 #[test]
@@ -179,9 +184,9 @@ fn test_07_tag_filter_matches_single_tag() {
     core.storage().save_note_atomic(&n2).expect("save n2");
 
     let filter = NoteFilter::new(vec!["Medicina".into()], vec![]);
-    let results = core.list_summaries(&filter, None).expect("list");
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, n1.metadata.id);
+    let batch = core.list_summaries(&filter, None).expect("list");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, n1.metadata.id);
 }
 
 #[test]
@@ -196,9 +201,9 @@ fn test_08_repeated_tag_uses_and_semantics() {
     core.storage().save_note_atomic(&n2).expect("save n2");
 
     let filter = NoteFilter::new(vec!["Medicina".into(), "PBL".into()], vec![]);
-    let results = core.list_summaries(&filter, None).expect("list");
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, n1.metadata.id);
+    let batch = core.list_summaries(&filter, None).expect("list");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, n1.metadata.id);
 }
 
 #[test]
@@ -216,9 +221,9 @@ fn test_09_property_filter_matches_single_property() {
     core.storage().save_note_atomic(&n1).expect("save n1");
 
     let filter = NoteFilter::new(vec![], vec![("disciplina".into(), "cardiologia".into())]);
-    let results = core.list_summaries(&filter, None).expect("list");
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, n1.metadata.id);
+    let batch = core.list_summaries(&filter, None).expect("list");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, n1.metadata.id);
 }
 
 #[test]
@@ -259,9 +264,9 @@ fn test_10_repeated_property_uses_and_semantics() {
             ("status".into(), "revisar".into()),
         ],
     );
-    let results = core.list_summaries(&filter, None).expect("list");
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, n1.metadata.id);
+    let batch = core.list_summaries(&filter, None).expect("list");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, n1.metadata.id);
 }
 
 #[test]
@@ -272,10 +277,10 @@ fn test_11_accent_and_case_tag_identity() {
     core.storage().save_note_atomic(&n1).expect("save");
 
     let f1 = NoteFilter::new(vec!["urgencia".into()], vec![]);
-    assert_eq!(core.list_summaries(&f1, None).expect("list").len(), 1);
+    assert_eq!(core.list_summaries(&f1, None).expect("list").items.len(), 1);
 
     let f2 = NoteFilter::new(vec!["URGÊNCIA".into()], vec![]);
-    assert_eq!(core.list_summaries(&f2, None).expect("list").len(), 1);
+    assert_eq!(core.list_summaries(&f2, None).expect("list").items.len(), 1);
 }
 
 #[test]
@@ -293,8 +298,8 @@ fn test_12_accent_and_case_property_key_and_value() {
     core.storage().save_note_atomic(&n1).expect("save");
 
     let filter = NoteFilter::new(vec![], vec![("situacao".into(), "concluido".into())]);
-    let results = core.list_summaries(&filter, None).expect("list");
-    assert_eq!(results.len(), 1);
+    let batch = core.list_summaries(&filter, None).expect("list");
+    assert_eq!(batch.items.len(), 1);
 }
 
 #[test]
@@ -398,7 +403,7 @@ fn test_18_read_missing_note_returns_error() {
 }
 
 #[test]
-fn test_19_malformed_front_matter_does_not_crash_global_listing() {
+fn test_19_malformed_front_matter_does_not_crash_global_listing_and_returns_typed_warning() {
     let (root, core) = synthetic_core();
     let id1 = Uuid::new_v4();
     let malformed = "---\nmalformed: [unclosed yaml\n---\n\n# Quebrada\n";
@@ -409,11 +414,14 @@ fn test_19_malformed_front_matter_does_not_crash_global_listing() {
     valid_note.content = "# Válida\n".into();
     core.storage().save_note_atomic(&valid_note).unwrap();
 
-    let summaries = core
+    let batch = core
         .list_summaries(&NoteFilter::default(), None)
         .expect("list");
-    assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].id, valid_note.metadata.id);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, valid_note.metadata.id);
+    assert_eq!(batch.warnings.len(), 1);
+    assert_eq!(batch.warnings[0].note_id, Some(id1));
+    assert_eq!(batch.warnings[0].kind, ReadWarningKind::UnreadableNote);
 }
 
 #[test]
@@ -443,13 +451,13 @@ fn test_21_task_pending_extraction() {
     note.content = "# Tarefas\n\n- [ ] Fazer compras\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Pending, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Fazer compras");
-    assert!(!tasks[0].checked);
-    assert_eq!(tasks[0].completed_at, None);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Fazer compras");
+    assert!(!batch.items[0].checked);
+    assert_eq!(batch.items[0].completed_at, None);
 }
 
 #[test]
@@ -459,12 +467,12 @@ fn test_22_task_completed_lowercase_x() {
     note.content = "- [x] Tarefa feita\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Completed, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Tarefa feita");
-    assert!(tasks[0].checked);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Tarefa feita");
+    assert!(batch.items[0].checked);
 }
 
 #[test]
@@ -474,12 +482,12 @@ fn test_23_task_completed_uppercase_x() {
     note.content = "- [X] Tarefa maiuscula\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Completed, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Tarefa maiuscula");
-    assert!(tasks[0].checked);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Tarefa maiuscula");
+    assert!(batch.items[0].checked);
 }
 
 #[test]
@@ -491,12 +499,12 @@ fn test_24_valid_completed_at_parsed() {
             .to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Completed, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Comprar material");
-    assert!(tasks[0].completed_at.is_some());
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Comprar material");
+    assert!(batch.items[0].completed_at.is_some());
 }
 
 #[test]
@@ -506,11 +514,11 @@ fn test_25_invalid_completed_at_yields_none() {
     note.content = "- [x] Data invalida <!-- note-it:completed_at=invalido -->\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Completed, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].completed_at, None);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].completed_at, None);
 }
 
 #[test]
@@ -520,11 +528,11 @@ fn test_26_completed_task_without_timestamp_stays_unknown() {
     note.content = "- [x] Sem timestamp\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::Completed, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].completed_at, None);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].completed_at, None);
 }
 
 #[test]
@@ -534,13 +542,13 @@ fn test_27_nested_task_depth_preserved() {
     note.content = "- [ ] Pai\n  - [ ] Filho nível 1\n    - [ ] Neto nível 2\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 3);
-    assert_eq!(tasks[0].depth, 0);
-    assert_eq!(tasks[1].depth, 1);
-    assert_eq!(tasks[2].depth, 2);
+    assert_eq!(batch.items.len(), 3);
+    assert_eq!(batch.items[0].depth, 0);
+    assert_eq!(batch.items[1].depth, 1);
+    assert_eq!(batch.items[2].depth, 2);
 }
 
 #[test]
@@ -559,11 +567,11 @@ fn test_28_fenced_code_fake_task_ignored() {
     .to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Tarefa real");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Tarefa real");
 }
 
 #[test]
@@ -581,11 +589,11 @@ fn test_29_front_matter_fake_task_ignored() {
     note.content = "- [ ] Tarefa real no corpo\n".to_string();
     core.storage().save_note_atomic(&note).unwrap();
 
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Tarefa real no corpo");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Tarefa real no corpo");
 }
 
 #[test]
@@ -602,11 +610,11 @@ fn test_30_task_filtering_by_metadata() {
     core.storage().save_note_atomic(&n2).unwrap();
 
     let filter = NoteFilter::new(vec!["Medicina".into()], vec![]);
-    let tasks = core
+    let batch = core
         .list_tasks(TaskStateFilter::All, &filter, None)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].text, "Tarefa medicina");
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].text, "Tarefa medicina");
 }
 
 #[test]
@@ -653,34 +661,34 @@ fn test_32_performance_1000_notes() {
     }
 
     let start_list = std::time::Instant::now();
-    let summaries = core
+    let summaries_batch = core
         .list_summaries(&NoteFilter::default(), Some(20))
         .unwrap();
     let list_time = start_list.elapsed();
-    assert_eq!(summaries.len(), 20);
+    assert_eq!(summaries_batch.items.len(), 20);
 
     let start_search = std::time::Instant::now();
-    let search_results = core
+    let search_batch = core
         .search_notes_filtered("cardiologia", &NoteFilter::default(), Some(20))
         .unwrap();
     let search_time = start_search.elapsed();
-    assert_eq!(search_results.len(), 20);
+    assert_eq!(search_batch.items.len(), 20);
 
     let start_filter = std::time::Instant::now();
     let filter = NoteFilter::new(
         vec!["Medicina".into()],
         vec![("disciplina".into(), "cardiologia".into())],
     );
-    let filter_results = core.list_summaries(&filter, Some(20)).unwrap();
+    let filter_batch = core.list_summaries(&filter, Some(20)).unwrap();
     let filter_time = start_filter.elapsed();
-    assert_eq!(filter_results.len(), 20);
+    assert_eq!(filter_batch.items.len(), 20);
 
     let start_tasks = std::time::Instant::now();
-    let tasks = core
+    let tasks_batch = core
         .list_tasks(TaskStateFilter::Pending, &NoteFilter::default(), Some(20))
         .unwrap();
     let tasks_time = start_tasks.elapsed();
-    assert_eq!(tasks.len(), 20);
+    assert_eq!(tasks_batch.items.len(), 20);
 
     let start_cat = std::time::Instant::now();
     let catalog = core.metadata_catalog();
@@ -690,4 +698,28 @@ fn test_32_performance_1000_notes() {
     println!(
         "1,000 notes performance in debug: list={list_time:?}, search={search_time:?}, filter={filter_time:?}, tasks={tasks_time:?}, catalog={cat_time:?}"
     );
+}
+
+#[test]
+fn test_33_read_api_modules_have_zero_print_statements() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let files = [
+        "src/lib.rs",
+        "src/filter.rs",
+        "src/task.rs",
+        "src/warning.rs",
+    ];
+
+    for file in files {
+        let path = std::path::Path::new(manifest_dir).join(file);
+        let content = fs::read_to_string(&path).expect("read module");
+        assert!(
+            !content.contains("println!"),
+            "Module {file} must not contain println!"
+        );
+        assert!(
+            !content.contains("eprintln!"),
+            "Module {file} must not contain eprintln!"
+        );
+    }
 }

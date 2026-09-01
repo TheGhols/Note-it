@@ -518,6 +518,113 @@ fn test_read_only_e2e_synthetic_store_byte_for_byte_unchanged() {
 }
 
 #[test]
+fn test_terminal_safety_e2e_with_injected_escapes() {
+    let tmp = tempdir().expect("tempdir");
+    let (data, config, state, cache, _id1, _, _) = setup_rich_synthetic_store(tmp.path());
+    let xdg = Some((
+        data.as_path(),
+        config.as_path(),
+        state.as_path(),
+        cache.as_path(),
+    ));
+
+    // 1. Injected escape in search query
+    let malicious_query = "\x1b]52;c;AAAA\x07\x1b[2Jnoradrenalina";
+    let (code, stdout, stderr) = run_headless(&["buscar", malicious_query], xdg, true);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("\x1b]52"));
+    assert!(!stdout.contains("\x1b[2J"));
+    assert!(!stdout.contains("\x07"));
+    assert!(stdout.contains("Busca: noradrenalina"));
+    assert!(stdout.contains("Choque distributivo"));
+    assert!(stderr.is_empty());
+
+    // 2. Injected escape in invalid subcommand
+    let malicious_cmd = "\x1b[2Jcomando-malicioso";
+    let (code, stdout, stderr) = run_headless(&[malicious_cmd], xdg, true);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(!stderr.contains("\x1b[2J"));
+    assert!(stderr.contains("comando desconhecido `comando-malicioso`"));
+
+    // 3. Injected escape in invalid flag
+    let malicious_flag = "--\x1b]52;c;AAAA\x07opcao-maliciosa";
+    let (code, stdout, stderr) = run_headless(&[malicious_flag], xdg, true);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(!stderr.contains("\x1b]52"));
+    assert!(!stderr.contains("\x07"));
+
+    // 4. Injected escape in note selector
+    let malicious_selector = "\x1b[2J1234";
+    let (code, stdout, stderr) = run_headless(&["ler", malicious_selector], xdg, true);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(!stderr.contains("\x1b[2J"));
+    assert!(stderr.contains("formato de seletor inválido `1234`"));
+
+    // 5. Injected escape in custom XDG path displayed in status
+    let malicious_data = tmp.path().join("data\x1b[2Jevil");
+    let (code, stdout, stderr) = run_headless(
+        &["status"],
+        Some((
+            &malicious_data,
+            config.as_path(),
+            state.as_path(),
+            cache.as_path(),
+        )),
+        true,
+    );
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("\x1b[2J"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn test_corrupted_note_in_store_emits_warning_to_stderr_and_lists_valid_notes_on_stdout() {
+    let tmp = tempdir().expect("tempdir");
+    let data = tmp.path().join("data/note-it");
+    let config = tmp.path().join("config/note-it");
+    let state = tmp.path().join("state/note-it");
+    let cache = tmp.path().join("cache/note-it");
+    fs::create_dir_all(&cache).unwrap();
+
+    let storage = StorageManager::with_custom_paths(
+        data.join("notes"),
+        config.clone(),
+        state.clone(),
+        tmp.path().join("runtime/note-it"),
+    )
+    .expect("setup storage");
+
+    let mut valid_note = NoteDocument::new_empty();
+    valid_note.content = "# Nota Válida\nConteúdo normal.".to_string();
+    storage.save_note_atomic(&valid_note).unwrap();
+
+    let id_bad = Uuid::new_v4();
+    let malformed = "---\nmalformed: [unclosed yaml\n---\n\n# Quebrada\n";
+    fs::write(data.join("notes").join(format!("{id_bad}.md")), malformed).unwrap();
+
+    let xdg_data = tmp.path().join("data");
+    let xdg_config = tmp.path().join("config");
+    let xdg_state = tmp.path().join("state");
+    let xdg_cache = tmp.path().join("cache");
+    let xdg = Some((
+        xdg_data.as_path(),
+        xdg_config.as_path(),
+        xdg_state.as_path(),
+        xdg_cache.as_path(),
+    ));
+
+    let (code, stdout, stderr) = run_headless(&["listar"], xdg, true);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Nota Válida"));
+    assert!(!stdout.contains("Quebrada"));
+    assert!(stderr.contains("Aviso:"));
+    assert!(stderr.contains(&id_bad.as_simple().to_string()[..8]));
+}
+
+#[test]
 fn invalid_subcommand_exits_code_two_and_writes_portuguese_to_stderr() {
     let (code, stdout, stderr) = run_headless(&["comando-inexistente"], None, true);
     assert_eq!(code, 2, "Invalid subcommand must exit with code 2");

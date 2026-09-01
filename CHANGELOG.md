@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0D.1 Read API Contract & Terminal Hardening.** Refined presentation contracts, terminal safety, and Core decoupling:
+  - Local Timezone Formatting: Human datetime presentation across `noteit-cli` (`listar`, `ler`, `tarefas`, `lixeira`) is standardized in `output::format_datetime_local` to display timestamps in the machine's local timezone (`dd/MM/yyyy HH:mm`) matching the desktop GUI contract. `noteit-core` remains strictly typed with `DateTime<Utc>`.
+  - Comprehensive Input Sanitization: Sanitization via `output::sanitize_for_terminal` is applied across all rendered untrusted strings, including search queries in headings, note selectors in error messages, Clap argument contexts in usage errors, and reflected XDG paths in `status`.
+  - Typed Core Warnings & Zero Prints: Removed all `println!` / `eprintln!` calls from `noteit-core` read paths. Read methods return `ReadBatch<T>` alongside typed `ReadWarning` structures, which the CLI adapter formats cleanly to stderr in Portuguese.
+  - Faithful Task Comment Parsing: `extract_completed_at` searches for `<!-- note-it:completed_at=... -->` anywhere on task lines, stripping only the Note-it metadata comment and preserving external user-authored HTML comments.
+
 - **Phase 4.0D Headless Read API.** Implemented the initial programmatic and human-facing read API in `noteit-cli`, backed by centralized `noteit-core` authorities:
   - Read-only store opening: `NoteItCore::open_read_only()` and `StorageManager::open_read_only()` inspect and open the store without calling `ensure_directories()`, creating missing directories or files, or triggering backups. An absent store returns clean empty collections with exit code 0.
   - Commands & Aliases: Portuguese primary commands (`listar`, `ler`, `buscar`, `tags`, `propriedades`, `tarefas`, `lixeira`) with standard international aliases (`list`, `read`, `search`, `properties`, `tasks`, `trash`).

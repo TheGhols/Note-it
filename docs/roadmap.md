@@ -569,6 +569,10 @@ future machine interfaces share one domain and persistence authority.
       `tarefas`/`tasks`, `lixeira`/`trash`; metadata filtering (`--tag`, `--propriedade`/`--property`,
       `--limite`/`--limit`), task parsing with state filter (`--estado`/`--state`), safe note selector
       resolution, terminal security sanitization, and strictly zero store mutations.
+- [x] **Phase 4.0D.1 — Read API Contract & Terminal Hardening.** Standardized local machine timezone
+      presentation (`dd/MM/yyyy HH:mm`) matching GUI contracts, universal untrusted input terminal sanitization,
+      decoupled typed Core warnings (`ReadBatch<T>`, `ReadWarning`) with zero print statements in Core, and
+      faithful TypeScript task metadata comment parsing.
 - [ ] **Phase 4.0E — Write API + GUI/CLI concurrency.** Reserved.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.

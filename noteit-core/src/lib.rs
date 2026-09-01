@@ -20,6 +20,7 @@ pub mod study;
 pub mod task;
 pub mod timer;
 pub mod trash;
+pub mod warning;
 
 mod atomic_file;
 mod visible_text;
@@ -37,6 +38,7 @@ pub use study::StudyState;
 pub use task::{TaskEntry, TaskStateFilter};
 pub use trash::TrashEntry;
 pub use uuid::Uuid;
+pub use warning::{ReadBatch, ReadWarning, ReadWarningKind};
 
 /// The shared application boundary over Note-it's existing store.
 ///
@@ -145,14 +147,16 @@ impl NoteItCore {
     }
 
     /// Lists note summaries in recency order matching an optional filter and limit.
+    /// Returns successfully read summaries alongside any non-fatal read warnings without printing.
     pub fn list_summaries(
         &self,
         filter: &NoteFilter,
         limit: Option<usize>,
-    ) -> Result<Vec<NoteSummary>, String> {
+    ) -> Result<ReadBatch<NoteSummary>, String> {
         let ids = self.storage.list_notes_by_recency()?;
         let max = limit.unwrap_or(20).clamp(1, 100);
         let mut summaries = Vec::new();
+        let mut warnings = Vec::new();
 
         for id in ids {
             if summaries.len() >= max {
@@ -165,12 +169,16 @@ impl NoteItCore {
                     }
                 }
                 Err(err) => {
-                    eprintln!("Aviso: nota {id} ignorada por erro de leitura: {err}");
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::UnreadableNote,
+                        message: err,
+                    });
                 }
             }
         }
 
-        Ok(summaries)
+        Ok(ReadBatch::new(summaries, warnings))
     }
 
     /// Reads and parses one live note through the canonical storage path.
@@ -195,17 +203,20 @@ impl NoteItCore {
     }
 
     /// Searches live notes with tag and property filtering applied.
+    /// Returns search results alongside any non-fatal read warnings without printing.
     pub fn search_notes_filtered(
         &self,
         query: &str,
         filter: &NoteFilter,
         limit: Option<usize>,
-    ) -> Result<Vec<SearchResult>, String> {
+    ) -> Result<ReadBatch<SearchResult>, String> {
         let max = limit.unwrap_or(20).clamp(1, 100);
+        let mut warnings = Vec::new();
 
         if filter.is_empty() {
             let results = self.search_notes(query);
-            return Ok(results.into_iter().take(max).collect());
+            let items = results.into_iter().take(max).collect();
+            return Ok(ReadBatch::new(items, warnings));
         }
 
         let ids = self.storage.list_notes_by_recency()?;
@@ -219,7 +230,11 @@ impl NoteItCore {
                     }
                 }
                 Err(err) => {
-                    eprintln!("Aviso: nota {id} ignorada por erro de leitura: {err}");
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::UnreadableNote,
+                        message: err,
+                    });
                 }
             }
         }
@@ -235,19 +250,22 @@ impl NoteItCore {
             search::search_notes(query, borrowed)
         };
 
-        Ok(results.into_iter().take(max).collect())
+        let items = results.into_iter().take(max).collect();
+        Ok(ReadBatch::new(items, warnings))
     }
 
     /// Lists tasks matching the state filter, metadata filter, and limit.
+    /// Returns extracted tasks alongside any non-fatal read warnings without printing.
     pub fn list_tasks(
         &self,
         state: TaskStateFilter,
         filter: &NoteFilter,
         limit: Option<usize>,
-    ) -> Result<Vec<TaskEntry>, String> {
+    ) -> Result<ReadBatch<TaskEntry>, String> {
         let ids = self.storage.list_notes_by_recency()?;
         let max = limit.unwrap_or(20).clamp(1, 100);
         let mut results = Vec::new();
+        let mut warnings = Vec::new();
 
         for id in ids {
             if results.len() >= max {
@@ -269,12 +287,16 @@ impl NoteItCore {
                     }
                 }
                 Err(err) => {
-                    eprintln!("Aviso: nota {id} ignorada por erro de leitura: {err}");
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::UnreadableNote,
+                        message: err,
+                    });
                 }
             }
         }
 
-        Ok(results)
+        Ok(ReadBatch::new(results, warnings))
     }
 
     /// Lists recoverable deleted notes without opening or mutating them.

@@ -1219,7 +1219,9 @@ countdown writes nothing at all, once a second or otherwise.
   - `--tag <TAG>`: repeatable filter applying boolean AND across tags (case and accent insensitive).
   - `--propriedade <K=V>` / `--property <K=V>`: repeatable filter applying boolean AND across properties.
   - `--estado <ESTADO>` / `--state <STATE>`: task filtering by state (`pendentes`, `concluidas`, `todas` / `pending`, `completed`, `all`).
-- **Terminal Security Sanitization:** untrusted note content is sanitized prior to rendering, neutralizing ANSI escape sequences (CSI, OSC, clipboard injection), BEL, backspace, and control characters while preserving valid Unicode and Markdown.
+- **Terminal Security Sanitization:** all untrusted strings rendered to stdout/stderr (note content, search queries, selectors, reflected argument contexts, and XDG paths) are sanitized prior to styling and output, neutralizing ANSI escape sequences (CSI, OSC, OSC 52 clipboard injection), BEL, backspace, and control characters while preserving valid Unicode and Markdown.
+- **Local Timezone Consistency:** human timestamps across all CLI subcommands (`listar`, `ler`, `tarefas`, `lixeira`) are formatted in the machine's local timezone (`dd/MM/yyyy HH:mm`) matching the desktop GUI contract, while Core models remain strictly UTC (`DateTime<Utc>`).
+- **Typed Warnings Decoupling:** non-fatal read anomalies produce typed `ReadWarning` items inside `ReadBatch<T>` in `noteit-core` without printing. The CLI renders these cleanly to stderr in Portuguese (`Aviso: ...`).
 - **Strictly Read-Only:** all Read API operations inspect the store purely without creating missing directories, state files, or backups.
 - **Presentation & Terminal Compatibility:** clean formatting with discreet ANSI styling on interactive terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
 - **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and `1` for execution errors.

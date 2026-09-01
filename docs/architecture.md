@@ -42,6 +42,7 @@ trash, backup and Study persistence.
   `body_of` are shared with search, so "the note's body" means the same thing everywhere.
 - `noteit-core/src/filter.rs`: typed `NoteFilter` with tag/property AND matching via `semantic_identity`, and safe `NoteSelectorError`.
 - `noteit-core/src/task.rs`: task parsing, checkbox states, depth hierarchy, and ISO 8601 `completed_at` timestamp extraction.
+- `noteit-core/src/warning.rs`: typed, structured non-fatal read anomalies (`ReadWarning`, `ReadBatch<T>`) returned by Core operations without terminal printing.
 - `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
   with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
   `serde_yaml::Value`.
