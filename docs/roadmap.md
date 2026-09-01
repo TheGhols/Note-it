@@ -590,6 +590,14 @@ future machine interfaces share one domain and persistence authority.
       window makes every message still in flight from the previous run refusable. Optimistic
       `TaskRef` snapshot tokens with no sidecar and no persistent task identity. Read API stays
       read-only; note writes never touch `config.toml` or `state.json`.
+- [x] **Phase 4.0E.1 — Fail-Closed Writer Authority & Confirmed UI Adoption.** Made 4.0E's central
+      invariant structural rather than aspirational: the desktop instance holds `WriteAuthority` by
+      value and refuses to start without a lease *and* a control socket, so a running, editable
+      Note-it that does not own its store is unrepresentable. Adoption of a committed document is
+      confirmed by the page (`ExternalWriteApplied`, validated on note, request and generation) rather
+      than inferred from a script having evaluated, with a bounded wait that downgrades to
+      `ui_sync_warning` and never to failure. Removed the client-side timeout that could release the
+      editor while a commit was still in flight; a slow write now says it is slow and stays held.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
 - [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.

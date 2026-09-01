@@ -28,17 +28,32 @@ import type { MetadataView, WebviewToHostMessage } from './types.ts';
  * document that is about to be replaced. They are queued here and run the
  * moment editing resumes, against the document as it then is.
  *
- * ## It always ends
+ * ## Only the host decides when editing resumes
  *
- * The host has its own, shorter deadline and abandons a request that goes
- * unanswered, so a late answer can never commit anything. This has a longer
- * one purely so a host that vanishes cannot leave the editor read-only for
- * ever. Whichever fires, editing comes back and the queue is drained.
+ * Once the snapshot has gone out, this page has no idea what is happening to
+ * it. The host may be part-way through writing a temp file, syncing it,
+ * renaming it, or doing the work that follows a commit. **There is no length of
+ * time after which it becomes safe to guess.** So the document is released by
+ * exactly two things, both of them decisions the host made and told this page
+ * about: `AbortExternalWrite`, meaning nothing was written, or
+ * `ApplyExternalDocument`, meaning something was and here it is.
+ *
+ * A timer of its own would be the one way to reintroduce the failure the
+ * barrier exists to remove: the reader typing against a document the host is
+ * in the middle of replacing. A slow commit is a slow commit — it is allowed to
+ * be slow — and the honest response is to say so, not to start editing again.
+ *
+ * The host is not a separate program that can vanish and leave this running.
+ * The WebView belongs to the very process that owns the barrier: if the host
+ * dies, this page dies with it, so there is no orphan to rescue. What a long
+ * wait earns is a word to the reader, and this raises the indicator to say the
+ * synchronisation is taking a while. It never thaws.
  */
 
-/** Long enough that it never races the host's own deadline, short enough that
- *  a host that disappeared does not leave the note frozen. */
-export const EXTERNAL_WRITE_CLIENT_TIMEOUT_MS = 15000;
+/** When the discreet indicator starts saying a write is taking longer than
+ *  usual. It changes what the reader is told and nothing else — in particular
+ *  it never releases the document. */
+export const EXTERNAL_WRITE_SLOW_NOTICE_MS = 4000;
 
 export interface ExternalWriteHooks {
   /** Closes every path that can change the document. Called before the snapshot. */
@@ -51,9 +66,15 @@ export interface ExternalWriteHooks {
   adopt(payload: ExternalDocument): void;
   /** Sends one message back to the host. */
   send(message: WebviewToHostMessage): void;
-  /** Shows or hides a discreet "syncing" state. Never a modal. */
-  indicate?(active: boolean): void;
-  /** Schedules the safety timeout. Injected so tests do not wait for it. */
+  /**
+   * Shows or hides a discreet "syncing" state. Never a modal.
+   *
+   * `slow` says the write is taking longer than usual, which changes the words
+   * and nothing else. Being told a save is slow is useful; being handed back a
+   * document the host is still replacing is not.
+   */
+  indicate?(active: boolean, slow?: boolean): void;
+  /** Schedules the slow-write notice. Injected so tests do not wait for it. */
   setTimer?(callback: () => void, ms: number): number;
   clearTimer?(handle: number): void;
 }
@@ -116,30 +137,71 @@ export class ExternalWriteBarrier {
       payload: { id: noteId, requestId, generation, content },
     });
 
+    // The only timer here, and all it does is change what the reader is told.
+    // It cannot release the document: see the note at the top of this file.
     const setTimer = this.hooks.setTimer;
     if (setTimer) {
       this.timer = setTimer(() => {
         this.timer = null;
-        // The host went away. Nothing was committed as far as this page can
-        // tell, so the document is simply released exactly as it was.
-        this.release(requestId);
-      }, EXTERNAL_WRITE_CLIENT_TIMEOUT_MS);
+        if (this.requestId === requestId) this.hooks.indicate?.(true, true);
+      }, EXTERNAL_WRITE_SLOW_NOTICE_MS);
     }
   }
 
   /**
    * The change was committed; this is the note as it now stands.
    *
-   * Returns false for a request this page is not waiting on, so an answer that
-   * arrives after the safety timeout cannot replace the document behind the
-   * reader's back.
+   * Answers the host either way, and that answer is the *only* thing the host
+   * treats as proof the page is in step. Evaluating the script that delivered
+   * this message proves the script ran; it does not prove this method was
+   * reached, that the request matched, or that the document was adopted — and a
+   * host that mistook the one for the other would report a stale window as a
+   * synchronised one.
+   *
+   * Returns false for a request this page is not waiting on, and for an
+   * adoption that threw. In both cases a negative answer goes back rather than
+   * silence, so the host learns at once instead of waiting out its timeout.
    */
-  public apply(requestId: string, generation: number, document: ExternalDocument): boolean {
-    if (this.requestId !== requestId) return false;
-    this.generation = generation;
-    this.hooks.adopt(document);
+  public apply(
+    noteId: string,
+    requestId: string,
+    generation: number,
+    document: ExternalDocument,
+  ): boolean {
+    if (this.requestId !== requestId) {
+      this.hooks.send({
+        type: 'external_write_apply_failed',
+        payload: { id: noteId, requestId },
+      });
+      return false;
+    }
+
+    let adopted = false;
+    try {
+      this.hooks.adopt(document);
+      // Moved only once the document really is the committed one. A page that
+      // could not adopt keeps the old generation, so the host refuses whatever
+      // it sends next — which is what stops a stale body being written over a
+      // commit that already happened.
+      this.generation = generation;
+      adopted = true;
+    } catch {
+      adopted = false;
+    }
+
+    // Released either way. Leaving the editor frozen on a failed adoption would
+    // make the note unusable *and* unclosable, and the file is already correct.
     this.release(requestId);
-    return true;
+
+    this.hooks.send(
+      adopted
+        ? {
+            type: 'external_write_applied',
+            payload: { id: noteId, requestId, generation },
+          }
+        : { type: 'external_write_apply_failed', payload: { id: noteId, requestId } },
+    );
+    return adopted;
   }
 
   /** Nothing was written. The document is released exactly as it was. */
@@ -178,7 +240,7 @@ export class ExternalWriteBarrier {
       this.hooks.clearTimer?.(this.timer);
       this.timer = null;
     }
-    this.hooks.indicate?.(false);
+    this.hooks.indicate?.(false, false);
     this.hooks.thaw();
 
     // Drained after thawing, so each one is an ordinary edit of the document

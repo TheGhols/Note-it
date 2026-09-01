@@ -48,6 +48,7 @@ use noteit_core::model::NoteDocument;
 use noteit_core::storage::StorePaths;
 use noteit_core::write::{self, NoteMutation, WriteError, WriteOperation, WriteOutcome};
 use std::collections::VecDeque;
+use std::fmt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -66,11 +67,73 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many answered requests are remembered, so a repeat is recognised.
 const REMEMBERED_REQUESTS: usize = 64;
 
+/// How long startup waits for a store somebody else is holding.
+///
+/// Sized for the one case that is genuinely transient: a `noteit` command
+/// finishing its own direct write, which takes single-digit milliseconds.
+/// Beyond that the store is really held, and starting anyway would make this
+/// process a second writer.
+const LEASE_WAIT: Duration = Duration::from_millis(1500);
+
+/// Why a desktop instance refused to start.
+///
+/// Every variant means the same thing about the store: this process is not its
+/// writer, and it must not behave as though it were.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupRefusal {
+    /// The runtime coordination directory could not be created or trusted.
+    Coordination(String),
+    /// Another Note-it writer holds this store and did not let go.
+    StoreHeld,
+    /// The lease could not even be tested for.
+    LeaseUnavailable(String),
+    /// The control socket could not be opened or made private.
+    Socket(String),
+}
+
+impl fmt::Display for StartupRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StoreHeld => formatter.write_str(
+                "O Note-it não pôde iniciar: o repositório está sendo usado por outro \
+                 escritor do Note-it. Feche a outra instância e tente de novo. \
+                 Nada foi alterado.",
+            ),
+            Self::Coordination(detail) => write!(
+                formatter,
+                "O Note-it não pôde iniciar: o diretório de coordenação de escrita não \
+                 é utilizável, então esta instância não pode garantir que é a única a \
+                 gravar. Nada foi alterado. Detalhe: {detail}"
+            ),
+            Self::LeaseUnavailable(detail) => write!(
+                formatter,
+                "O Note-it não pôde iniciar: não foi possível verificar quem está \
+                 gravando no repositório. Nada foi alterado. Detalhe: {detail}"
+            ),
+            Self::Socket(detail) => write!(
+                formatter,
+                "O Note-it não pôde iniciar: o canal de controle não pôde ser aberto, \
+                 então a linha de comando não teria como falar com esta instância. \
+                 Nada foi alterado. Detalhe: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StartupRefusal {}
+
 /// The lease and the socket, held for the life of the application.
 ///
-/// Dropping this releases the store. Nothing in the application drops it
-/// early: the lease is released when the process ends, which is the only
-/// moment at which the desktop instance stops being able to save.
+/// **A desktop instance cannot exist without one of these.** `AppContext` holds
+/// it by value rather than as an `Option`, and the only way to build one is
+/// [`claim`], which returns it solely on complete success — lease taken, socket
+/// bound, socket narrowed. So "a Note-it window that can save while something
+/// else owns the store" is not a state this program can get into by mistake;
+/// it is a state the types do not allow it to describe.
+///
+/// Dropping this releases the store. Nothing in the application drops it early:
+/// the lease is released when the process ends, which is the only moment at
+/// which the desktop instance stops being able to save.
 pub struct WriteAuthority {
     _lease: WriterLease,
     socket_path: PathBuf,
@@ -91,38 +154,56 @@ struct Envelope {
     reply: std::sync::mpsc::Sender<ControlResponse>,
 }
 
-/// Takes the store and starts listening.
+/// The store, claimed — and the requests that have not been served yet.
 ///
-/// Answers `None` when the lease could not be taken, which means another
-/// Note-it writer already holds this store. The application still runs — it
-/// simply will not be the authority, and will say so — because refusing to
-/// open at all over a store held for a few milliseconds by a CLI command would
-/// be a worse failure than the one it prevents.
-pub fn start(controller: NoteItAppClone, paths: &StorePaths) -> Option<WriteAuthority> {
-    let coordination = WriteCoordinationPaths::for_store(paths);
-    if let Err(error) = coordination.prepare() {
-        eprintln!("The write coordination directory is unusable, so this instance is not the store's authority: {error}");
-        return None;
-    }
+/// Claiming and serving are two steps because the server needs a controller and
+/// the controller needs an `AppContext`, which in turn needs the claim. Rather
+/// than break that circle with an `Option` that could be left empty, it is
+/// broken in the middle: the claim happens first and produces the authority, the
+/// application is built around it, and only then is the controller handed to
+/// [`serve`].
+pub struct StoreClaim {
+    authority: WriteAuthority,
+    requests: futures_channel::mpsc::UnboundedReceiver<Envelope>,
+}
 
-    // A short wait covers a `noteit` command that is finishing its own direct
-    // write. Anything longer than that is a genuinely held store.
+impl StoreClaim {
+    /// Splits the claim into the value the application holds and the stream the
+    /// server consumes.
+    pub fn split(self) -> (WriteAuthority, PendingRequests) {
+        (self.authority, PendingRequests(self.requests))
+    }
+}
+
+/// Requests waiting to be served, once there is an application to serve them.
+pub struct PendingRequests(futures_channel::mpsc::UnboundedReceiver<Envelope>);
+
+/// Takes the store, or refuses to start.
+///
+/// Every step here is a condition of being the writer, and there is no partial
+/// success: a lease without a socket is not an authority, because the command
+/// line would have no way to reach the process that holds the store. When any
+/// step fails the lease is dropped on the way out — released before this
+/// returns — so the next writer is not shut out by a process that gave up.
+///
+/// The short wait exists for one specific case: a `noteit` command finishing a
+/// direct write, which takes milliseconds. Anything longer than that is a store
+/// somebody else genuinely holds, and the honest answer is to say so rather than
+/// to open a window that would quietly become a second writer.
+pub fn claim(paths: &StorePaths) -> Result<StoreClaim, StartupRefusal> {
+    let coordination = WriteCoordinationPaths::for_store(paths);
+    coordination
+        .prepare()
+        .map_err(|error| StartupRefusal::Coordination(error.to_string()))?;
+
     let lease = match WriterLease::acquire_within(
         &coordination,
-        std::time::Instant::now() + Duration::from_millis(1500),
+        std::time::Instant::now() + LEASE_WAIT,
         Duration::from_millis(25),
     ) {
         Ok(Some(lease)) => lease,
-        Ok(None) => {
-            eprintln!(
-                "Another Note-it writer holds this store, so this instance is not its authority."
-            );
-            return None;
-        }
-        Err(error) => {
-            eprintln!("The writer lease could not be taken: {error}");
-            return None;
-        }
+        Ok(None) => return Err(StartupRefusal::StoreHeld),
+        Err(error) => return Err(StartupRefusal::LeaseUnavailable(error.to_string())),
     };
 
     let socket_path = coordination.socket_path();
@@ -130,20 +211,16 @@ pub fn start(controller: NoteItAppClone, paths: &StorePaths) -> Option<WriteAuth
     // socket while this process holds the store, so anything at that path was
     // left by a process that is gone.
     let _ = std::fs::remove_file(&socket_path);
-    let listener = match UnixListener::bind(&socket_path) {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("The control socket could not be opened: {error}");
-            return None;
-        }
-    };
+    let listener = UnixListener::bind(&socket_path)
+        .map_err(|error| StartupRefusal::Socket(error.to_string()))?;
     if let Err(error) = narrow_socket_file(&socket_path) {
-        eprintln!("The control socket could not be narrowed, so it was removed: {error}");
+        // Removed rather than left lying around: a socket nobody can trust the
+        // permissions of is worse than no socket at all.
         let _ = std::fs::remove_file(&socket_path);
-        return None;
+        return Err(StartupRefusal::Socket(error.to_string()));
     }
 
-    let (sender, mut receiver) = unbounded::<Envelope>();
+    let (sender, receiver) = unbounded::<Envelope>();
 
     std::thread::spawn(move || {
         for connection in listener.incoming() {
@@ -155,6 +232,23 @@ pub fn start(controller: NoteItAppClone, paths: &StorePaths) -> Option<WriteAuth
         }
     });
 
+    diagnostics::log(format_args!(
+        "event=write-authority-claimed store={}",
+        coordination.store_key()
+    ));
+
+    Ok(StoreClaim {
+        authority: WriteAuthority {
+            _lease: lease,
+            socket_path,
+        },
+        requests: receiver,
+    })
+}
+
+/// Starts answering the requests this process has already claimed the right to.
+pub fn serve(controller: NoteItAppClone, pending: PendingRequests) {
+    let mut receiver = pending.0;
     let mut remembered: VecDeque<(Uuid, ControlResult)> = VecDeque::new();
     glib::MainContext::default().spawn_local(async move {
         // One at a time, on purpose: see the module comment.
@@ -175,16 +269,6 @@ pub fn start(controller: NoteItAppClone, paths: &StorePaths) -> Option<WriteAuth
             });
         }
     });
-
-    diagnostics::log(format_args!(
-        "event=write-authority-started store={}",
-        coordination.store_key()
-    ));
-
-    Some(WriteAuthority {
-        _lease: lease,
-        socket_path,
-    })
 }
 
 /// Reads one request, waits for the answer, writes it back.

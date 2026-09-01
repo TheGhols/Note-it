@@ -564,6 +564,36 @@ mod tests {
     }
 
     #[test]
+    fn the_key_follows_the_path_as_the_process_resolved_it() {
+        // The contract, stated so it is a decision rather than a surprise: the
+        // key is the digest of the notes directory *as this process spelled
+        // it*. Two processes handed the same XDG environment spell it the same
+        // way, which is all the exclusion between the desktop instance and the
+        // command line needs.
+        //
+        // It does mean two different spellings of one store — a `.` segment, a
+        // symlinked home — are two keys, and therefore two authorities over the
+        // same files. Resolving that needs canonicalisation of a directory that
+        // may not exist yet, which is a larger change than it looks; it is
+        // recorded as a known limit for Phase 4.0R rather than improvised here.
+        let runtime = PathBuf::from("/run/user/1000/note-it");
+        let plain = WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/notes"));
+        let dotted = WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/./notes"));
+
+        assert_eq!(
+            plain.store_key(),
+            WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/notes")).store_key(),
+            "the same spelling must always give the same key"
+        );
+        assert_ne!(
+            plain.store_key(),
+            dotted.store_key(),
+            "this is the documented limit; if it changes, ADR-039 and the 4.0R \
+             note about store identity have to change with it"
+        );
+    }
+
+    #[test]
     fn resolving_paths_creates_nothing() {
         let tmp = tempdir().expect("tempdir");
         let paths = paths_in(tmp.path());

@@ -91,6 +91,9 @@ type PendingFlushes = Rc<RefCell<std::collections::HashMap<u64, FlushCallback>>>
 /// What the host is waiting for while an external write holds the editor.
 type ExternalWriteCallback = Box<dyn FnOnce(Result<String, String>)>;
 type PendingExternalWrite = Rc<RefCell<Option<(Uuid, ExternalWriteCallback)>>>;
+/// What the host is waiting for after handing a committed document back.
+type ExternalAckCallback = Box<dyn FnOnce(Result<(), String>)>;
+type PendingExternalAck = Rc<RefCell<Option<(Uuid, u64, ExternalAckCallback)>>>;
 
 const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content";
@@ -104,6 +107,16 @@ const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content"
 const EXTERNAL_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(4000);
 const EXTERNAL_WRITE_TIMEOUT_ERROR: &str =
     "a nota aberta não respondeu a tempo. Nada foi alterado.";
+
+/// How long the page is given to confirm it adopted the committed document.
+///
+/// This one runs *after* the commit, so it can never decide whether the write
+/// happened — only whether the window is known to be showing it. Running out is
+/// a warning on a completed write, never a failure.
+const EXTERNAL_WRITE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(4000);
+const EXTERNAL_WRITE_ACK_TIMEOUT_ERROR: &str = "a nota aberta não confirmou a atualização a tempo";
+const EXTERNAL_WRITE_ACK_REFUSED_ERROR: &str =
+    "a nota aberta não conseguiu adotar o documento gravado";
 const CLICK_FOCUS_RESTORE_DELAY: std::time::Duration = std::time::Duration::from_millis(60);
 
 #[derive(Default)]
@@ -162,6 +175,13 @@ pub struct NoteWindow {
     /// At most one at a time. Two of them would each snapshot the same text
     /// and the second commit would silently undo the first.
     pending_external_write: PendingExternalWrite,
+    /// The committed document this window has been handed and not yet
+    /// acknowledged.
+    ///
+    /// Separate from `pending_external_write` because it belongs to the other
+    /// side of the commit point: that one decides whether anything is written,
+    /// this one only decides whether the answer carries a warning.
+    pending_external_ack: PendingExternalAck,
     /// False until the page has said `Ready` and been handed its note. A
     /// message that assumes a loaded document has to wait for this.
     loaded: Rc<Cell<bool>>,
@@ -317,6 +337,8 @@ impl NoteWindow {
         let generation_clone = Rc::clone(&external_generation);
         let pending_external_write: PendingExternalWrite = Rc::new(RefCell::new(None));
         let pending_external_clone = Rc::clone(&pending_external_write);
+        let pending_external_ack: PendingExternalAck = Rc::new(RefCell::new(None));
+        let pending_ack_clone = Rc::clone(&pending_external_ack);
         let drag_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
         let resize_deltas = Rc::new(RefCell::new(SubpixelDeltaAccumulator::default()));
 
@@ -853,6 +875,42 @@ impl NoteWindow {
                                 );
                             }
                         }
+                        WebviewToHostMessage::ExternalWriteApplied {
+                            id: message_id,
+                            request_id,
+                            generation,
+                        } => {
+                            if !settle_external_ack(
+                                &pending_ack_clone,
+                                id,
+                                message_id,
+                                request_id,
+                                Some(generation),
+                                Ok(()),
+                            ) {
+                                // An acknowledgement for another note, another
+                                // request, or a generation this window is not
+                                // on. Completing a different write's callback
+                                // with it would report a window as in step
+                                // because some *other* window was.
+                                eprintln!(
+                                    "Rejected a stale or unknown external-write acknowledgement for note {id}"
+                                );
+                            }
+                        }
+                        WebviewToHostMessage::ExternalWriteApplyFailed {
+                            id: message_id,
+                            request_id,
+                        } => {
+                            settle_external_ack(
+                                &pending_ack_clone,
+                                id,
+                                message_id,
+                                request_id,
+                                None,
+                                Err(EXTERNAL_WRITE_ACK_REFUSED_ERROR.to_string()),
+                            );
+                        }
                         WebviewToHostMessage::ExternalWriteReady {
                             id: message_id,
                             request_id,
@@ -1012,6 +1070,7 @@ impl NoteWindow {
             pending_reveal,
             external_generation,
             pending_external_write,
+            pending_external_ack,
         }
     }
 
@@ -1454,9 +1513,17 @@ impl NoteWindow {
     ) {
         let generation = self.external_generation.get().wrapping_add(1);
         self.external_generation.set(generation);
+
+        // Registered before the message goes out, so an answer that comes back
+        // immediately still finds something waiting for it.
+        *self.pending_external_ack.borrow_mut() = Some((request_id, generation, Box::new(done)));
+
+        let pending = Rc::clone(&self.pending_external_ack);
+        let note_id = self.id;
         send_to_webview_confirmed(
             &self.webview,
             &HostToWebviewMessage::ApplyExternalDocument {
+                id: note_id,
                 request_id,
                 generation,
                 content: committed.content.clone(),
@@ -1464,8 +1531,29 @@ impl NoteWindow {
                 created_at: committed.metadata.created_at,
                 updated_at: committed.metadata.updated_at,
             },
-            done,
+            move |delivered| {
+                // Only a *failed* delivery is acted on here. A script that
+                // evaluated tells us nothing about adoption, so success is
+                // ignored and the page's own acknowledgement is waited for.
+                if let Err(error) = delivered {
+                    settle_external_ack(&pending, note_id, note_id, request_id, None, Err(error));
+                }
+            },
         );
+
+        let pending = Rc::clone(&self.pending_external_ack);
+        glib::timeout_add_local_once(EXTERNAL_WRITE_ACK_TIMEOUT, move || {
+            // Past the commit point, so this can only downgrade the answer to a
+            // warning. The write happened either way.
+            settle_external_ack(
+                &pending,
+                note_id,
+                note_id,
+                request_id,
+                None,
+                Err(EXTERNAL_WRITE_ACK_TIMEOUT_ERROR.to_string()),
+            );
+        });
     }
 
     /// Nothing was written; the page simply carries on where it left off.
@@ -1520,6 +1608,50 @@ fn take_external_write(
         Some((waiting, _)) if *waiting == request_id => slot.take().map(|(_, callback)| callback),
         _ => None,
     }
+}
+
+/// Resolves the acknowledgement of a committed document.
+///
+/// Answers `false` when the message is not the one being waited for — another
+/// note, another request, or a generation this window is not on. That check is
+/// what stops one write's acknowledgement completing another write's callback,
+/// which would report a window as synchronised on the strength of a different
+/// document entirely.
+///
+/// `expected_generation` is `Some` only for a positive acknowledgement: a
+/// failure, a delivery error and a timeout all name the request without
+/// claiming a generation was adopted.
+fn settle_external_ack(
+    pending: &PendingExternalAck,
+    expected_note_id: Uuid,
+    message_note_id: Uuid,
+    request_id: Uuid,
+    acknowledged_generation: Option<u64>,
+    outcome: Result<(), String>,
+) -> bool {
+    if message_note_id != expected_note_id {
+        return false;
+    }
+
+    let callback = {
+        let mut slot = pending.borrow_mut();
+        match slot.as_ref() {
+            Some((waiting_request, waiting_generation, _))
+                if *waiting_request == request_id
+                    && acknowledged_generation
+                        .is_none_or(|quoted| quoted == *waiting_generation) =>
+            {
+                slot.take().map(|(_, _, callback)| callback)
+            }
+            _ => None,
+        }
+    };
+
+    let Some(callback) = callback else {
+        return false;
+    };
+    callback(outcome);
+    true
 }
 
 /// Resolves one external-write answer from the page.
@@ -1790,8 +1922,10 @@ mod tests {
     use super::{
         accepts_generation, apply_collapse_to_state, complete_flush_response, expire_flush_request,
         file_uri_for_path, save_and_close, save_content, save_metadata, save_user_metadata,
-        settle_external_write, take_external_write, ExternalWriteCallback, PendingExternalWrite,
-        PendingFlushes, SubpixelDeltaAccumulator, FLUSH_TIMEOUT_ERROR,
+        settle_external_ack, settle_external_write, take_external_write, ExternalAckCallback,
+        ExternalWriteCallback, PendingExternalAck, PendingExternalWrite, PendingFlushes,
+        SubpixelDeltaAccumulator, EXTERNAL_WRITE_ACK_REFUSED_ERROR,
+        EXTERNAL_WRITE_ACK_TIMEOUT_ERROR, FLUSH_TIMEOUT_ERROR,
     };
     use crate::layer_shell::{COLLAPSED_NOTE_HEIGHT, MIN_NOTE_HEIGHT};
     use noteit_core::metadata::{NoteMetadata, NoteProperty};
@@ -3769,5 +3903,156 @@ mod tests {
             "another request took the one that was waiting"
         );
         assert!(take_external_write(&pending, first).is_some());
+    }
+    // The acknowledgement — 4.0E.1 §6-§8, §16.
+    //
+    // A committed document handed to the page is only *known* to be on screen
+    // when the page says so. Evaluating the script that carried it proves the
+    // script ran; the page catches its own listener errors, so that is not the
+    // same fact at all.
+
+    fn ack_slot() -> PendingExternalAck {
+        Rc::new(RefCell::new(None))
+    }
+
+    fn await_ack(
+        pending: &PendingExternalAck,
+        request_id: Uuid,
+        generation: u64,
+        answer: Rc<RefCell<Option<Result<(), String>>>>,
+    ) {
+        let callback: ExternalAckCallback = Box::new(move |result| {
+            *answer.borrow_mut() = Some(result);
+        });
+        *pending.borrow_mut() = Some((request_id, generation, callback));
+    }
+
+    #[test]
+    fn a_matching_acknowledgement_reports_the_window_as_synchronised() {
+        let pending = ack_slot();
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        await_ack(&pending, request_id, 5, Rc::clone(&answer));
+
+        assert!(settle_external_ack(
+            &pending,
+            note_id,
+            note_id,
+            request_id,
+            Some(5),
+            Ok(())
+        ));
+        assert_eq!(answer.borrow().clone(), Some(Ok(())));
+        assert!(pending.borrow().is_none());
+    }
+
+    #[test]
+    fn an_acknowledgement_for_another_note_request_or_generation_is_refused() {
+        // 4.0E.1 §16. None of these may complete this write's callback: doing
+        // so would report a window as showing a document it never received.
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        for (message_note, quoted_request, quoted_generation) in [
+            (Uuid::new_v4(), request_id, Some(5)),
+            (note_id, Uuid::new_v4(), Some(5)),
+            (note_id, request_id, Some(4)),
+            (note_id, request_id, Some(6)),
+        ] {
+            let pending = ack_slot();
+            let answer = Rc::new(RefCell::new(None));
+            await_ack(&pending, request_id, 5, Rc::clone(&answer));
+
+            assert!(
+                !settle_external_ack(
+                    &pending,
+                    note_id,
+                    message_note,
+                    quoted_request,
+                    quoted_generation,
+                    Ok(())
+                ),
+                "a stale acknowledgement was accepted"
+            );
+            assert!(answer.borrow().is_none());
+            assert!(
+                pending.borrow().is_some(),
+                "a stale acknowledgement consumed the pending one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_a_delivery_failure_and_a_timeout_all_downgrade_the_same_way() {
+        // None of them claims a generation, because none of them adopted one.
+        // All three leave the write committed and the answer warned.
+        for reason in [
+            EXTERNAL_WRITE_ACK_REFUSED_ERROR,
+            EXTERNAL_WRITE_ACK_TIMEOUT_ERROR,
+            "a mensagem não pôde ser entregue à página",
+        ] {
+            let pending = ack_slot();
+            let note_id = Uuid::new_v4();
+            let request_id = Uuid::new_v4();
+            let answer = Rc::new(RefCell::new(None));
+            await_ack(&pending, request_id, 2, Rc::clone(&answer));
+
+            assert!(settle_external_ack(
+                &pending,
+                note_id,
+                note_id,
+                request_id,
+                None,
+                Err(reason.to_string())
+            ));
+            assert_eq!(answer.borrow().clone(), Some(Err(reason.to_string())));
+        }
+    }
+
+    #[test]
+    fn only_the_first_answer_about_one_write_counts() {
+        // The page answers, and the timeout fires afterwards. The second must
+        // find nothing waiting, or a completed write would be reported twice —
+        // once as synchronised and once as not.
+        let pending = ack_slot();
+        let note_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let answer = Rc::new(RefCell::new(None));
+        await_ack(&pending, request_id, 1, Rc::clone(&answer));
+
+        assert!(settle_external_ack(
+            &pending,
+            note_id,
+            note_id,
+            request_id,
+            Some(1),
+            Ok(())
+        ));
+        *answer.borrow_mut() = None;
+
+        assert!(!settle_external_ack(
+            &pending,
+            note_id,
+            note_id,
+            request_id,
+            None,
+            Err(EXTERNAL_WRITE_ACK_TIMEOUT_ERROR.to_string())
+        ));
+        assert!(answer.borrow().is_none());
+    }
+
+    #[test]
+    fn an_acknowledgement_nobody_is_waiting_for_changes_nothing() {
+        let pending = ack_slot();
+        let note_id = Uuid::new_v4();
+        assert!(!settle_external_ack(
+            &pending,
+            note_id,
+            note_id,
+            Uuid::new_v4(),
+            Some(1),
+            Ok(())
+        ));
     }
 }

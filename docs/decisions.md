@@ -1527,3 +1527,73 @@ generation the host checks.
     cannot carry a filesystem path because there is no field to put one in. It is an implementation
     detail of the handover — not the machine-readable interface Phase 4.0F is reserved for — and
     nothing outside this repository may depend on it.
+
+## ADR-039: The Desktop Instance Owns the Store or Does Not Start, and Adoption Is Something the Page Says
+
+**Decision.** A Note-it desktop instance that cannot take the writer lease *and* open its control
+socket refuses to start, rather than running without being the store's authority. A committed
+document is considered to have reached the window only when the page itself sends
+`ExternalWriteApplied`; evaluating the script that carried it is not treated as proof. And once the
+page has handed over its snapshot, it never releases the document on a deadline of its own — only
+`ApplyExternalDocument` or `AbortExternalWrite` unfreezes it.
+
+**Rationale.**
+
+1. **ADR-038's invariant was not actually enforced.** The first implementation held the authority as
+   an `Option` and carried on when it was `None`: an instance that failed to take the lease still
+   opened windows, still autosaved, still wrote notes. That is a second writer, produced by the code
+   meant to prevent one. "Exactly one writer per store" is either a property of the system or it is a
+   comment, and an optional field made it a comment.
+
+   It is now a type. `AppContext` holds `WriteAuthority` by value, the only way to obtain one is a
+   complete `claim`, and the claim happens before any window, document or autosave exists. A running,
+   editable Note-it that does not own its store is not a state this program can describe.
+
+2. **A lease without a socket is not authority either.** If the control socket cannot be opened,
+   `noteit` finds the store held and its holder unreachable — so it correctly refuses every write, and
+   the desktop instance has locked everyone else out of a store it alone can change. Startup fails and
+   the lease is released on the way out, which is strictly better than one process quietly becoming
+   the only writer that works.
+
+3. **There is no read-only mode, deliberately.** It would be a third state to reason about, and the
+   honest answer to "something else owns your notes" is a sentence, not a degraded application.
+
+4. **`evaluate_javascript` returning `Ok` proves the script ran.** It does not prove the message was
+   routed to a listener, that the listener matched the request, or that the document was adopted — and
+   the page catches its own listener errors, so a failure inside one still reports a successful
+   evaluation. Treating delivery as adoption meant a window showing pre-commit text could be reported
+   as synchronised. The page now says so itself, naming the note, the request and the generation it
+   took, and only after it has adopted the document and resumed editing. Delivery failure is still
+   used, but only to fail fast: a script that could not be evaluated certainly did not update anything.
+
+5. **A rejected adoption is answered, not left silent.** `ExternalWriteApplyFailed` carries the note
+   and the request and nothing else — no reason, no stack, no note content, because the host acts on
+   whether and never on why. It costs one message and saves the host waiting out a timeout to learn
+   something the page already knew.
+
+6. **A page that could not adopt keeps the old generation.** It is showing text the file no longer
+   has, so it must not be able to save that over the change that was just committed. Staying on the
+   superseded generation is what makes the host refuse it. The editor is still released — the file is
+   already correct, and leaving the note frozen would make it unusable *and* unclosable.
+
+7. **After the snapshot, there is no safe time to guess.** The old client-side timeout released the
+   document fifteen seconds after `ExternalWriteReady`, at which point the host may be part-way
+   through writing a temp file, syncing it or renaming it. The reader would then be typing against a
+   document about to be replaced — exactly the race the barrier exists to remove, reintroduced by the
+   barrier's own safety net. A slow commit is allowed to be slow; the honest response is to say so.
+   The indicator now escalates to "Sincronização demorando…" and nothing else happens.
+
+8. **There is no orphan to rescue.** The WebView belongs to the same process as the host. If the host
+   dies the page dies with it, so a self-release could never save a page from a vanished host — it
+   could only take integrity away from one that was still working.
+
+9. **A commit stays committed.** The acknowledgement runs entirely after the commit point, so it can
+   only decide whether the answer carries `ui_sync_warning`. Missing, refused, or undeliverable, the
+   write happened, the command succeeds, and nothing invites a retry that would append twice.
+
+**Known limit, recorded for Phase 4.0R.** The store key is the digest of the notes directory path *as
+each process resolved it*. Two processes given the same XDG environment agree, which is what the
+exclusion needs — but two different spellings of one store (`/srv/./notes`, a symlinked home) produce
+two keys and therefore two simultaneous authorities over the same files. Fixing it means canonicalising
+a directory that may not exist yet, which is a larger change than it looks and is not worth improvising
+inside a correctness fix.

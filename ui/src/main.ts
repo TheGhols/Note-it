@@ -645,7 +645,7 @@ function initUI(): void {
       syncFlashcardCounts();
     },
     send: (message) => bridge.sendMessage(message),
-    indicate: (active) => syncIndicator?.setActive(active),
+    indicate: (active, slow) => syncIndicator?.setActive(active, slow),
     setTimer: (callback, ms) => window.setTimeout(callback, ms),
     clearTimer: (handle) => window.clearTimeout(handle),
   });
@@ -1360,7 +1360,10 @@ function initUI(): void {
         externalWrite?.begin(activeNoteId, msg.payload.requestId, msg.payload.generation);
       }
     } else if (msg.type === 'apply_external_document') {
-      externalWrite?.apply(msg.payload.requestId, msg.payload.generation, {
+      // The barrier answers the host itself, either way. Nothing here inspects
+      // the result: whether the page is in step is a fact the page reports, not
+      // one this branch could decide.
+      externalWrite?.apply(msg.payload.id, msg.payload.requestId, msg.payload.generation, {
         content: msg.payload.content,
         metadata: msg.payload.metadata,
         createdAt: msg.payload.createdAt ?? null,

@@ -278,6 +278,11 @@ pub enum HostToWebviewMessage {
     /// generation, and starts editing again. Never YAML, never a path, and
     /// never anything the page has to parse front matter out of.
     ApplyExternalDocument {
+        /// The note this document belongs to.
+        ///
+        /// Echoed back in the acknowledgement, so the host is matching what it
+        /// actually sent rather than what the page happened to think was open.
+        id: Uuid,
         #[serde(rename = "requestId")]
         request_id: Uuid,
         generation: u64,
@@ -323,6 +328,33 @@ pub enum WebviewToHostMessage {
         content: String,
         #[serde(default)]
         generation: u64,
+    },
+    /// The committed document was adopted, the generation taken and editing
+    /// resumed — said by the page that did it.
+    ///
+    /// **This is the only proof the host accepts that the window is in step.**
+    /// Evaluating the script that carried `ApplyExternalDocument` proves the
+    /// script ran. It does not prove the message was routed, that the request
+    /// matched, or that the document was adopted — the page catches its own
+    /// listener errors, so a failure there still reports a successful
+    /// evaluation. Treating that as synchronisation would mean calling a stale
+    /// window a fresh one.
+    ExternalWriteApplied {
+        id: Uuid,
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+        generation: u64,
+    },
+    /// The committed document was not adopted.
+    ///
+    /// Carries no reason, no stack trace and no note content: the host acts on
+    /// whether, never on why. The write is on disk either way; this only
+    /// decides whether the answer says the window may be showing something
+    /// older.
+    ExternalWriteApplyFailed {
+        id: Uuid,
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
     },
     /// The page has stopped editing and this is what it held.
     ///
@@ -527,15 +559,15 @@ pub fn send_to_webview(webview: &WebView, message: &HostToWebviewMessage) {
     send_to_webview_confirmed(webview, message, |_| {});
 }
 
-/// The same, for a message whose arrival the host actually needs to know about.
+/// The same, reporting whether the script could be *delivered*.
 ///
-/// Almost nothing needs this. Handing a committed note back to a page does:
-/// "the write did not happen" and "the write happened and the window may not
-/// be showing it" are opposite facts that look identical from outside, and
-/// telling a caller the first when the second is true invites them to repeat a
-/// change that is already on disk.
-///
-/// The callback fires once, with what evaluating the script actually did.
+/// Delivery and adoption are different facts and this only knows the first. It
+/// is used to fail fast: a script that could not be evaluated at all certainly
+/// did not update the window, so there is no point waiting for an answer that
+/// cannot come. A script that *did* evaluate proves nothing beyond that — the
+/// page catches its own listener errors — so the answer that matters is
+/// [`WebviewToHostMessage::ExternalWriteApplied`], sent by the code that
+/// actually adopted the document.
 pub fn send_to_webview_confirmed<F: FnOnce(Result<(), String>) + 'static>(
     webview: &WebView,
     message: &HostToWebviewMessage,
@@ -553,7 +585,7 @@ pub fn send_to_webview_confirmed<F: FnOnce(Result<(), String>) + 'static>(
         done(
             result
                 .map(|_| ())
-                .map_err(|error| format!("a página não confirmou a atualização: {error}")),
+                .map_err(|error| format!("a mensagem não pôde ser entregue à página: {error}")),
         )
     });
 }

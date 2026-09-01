@@ -5,6 +5,7 @@ use crate::layer_shell::{
 };
 use crate::note_window::{NoteWindow, NoteWindowOptions};
 use crate::webview_bridge::StudyCatalogNote;
+use crate::write_authority::StartupRefusal;
 use gio::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::*;
@@ -278,11 +279,18 @@ pub struct AppContext {
     clipboard_watch: Option<gdk::glib::SignalHandlerId>,
     /// The writer lease and the control socket, held for the whole session.
     ///
-    /// `None` when this instance could not take the store — another Note-it
-    /// writer already holds it. The application still runs and still edits its
-    /// open notes; it simply is not the process other Note-it commands are
-    /// routed through.
-    write_authority: Option<crate::write_authority::WriteAuthority>,
+    /// Held **by value**, and that is the point. A Note-it instance that can
+    /// edit and save while something else owns the store would be a second
+    /// writer, which is precisely what this phase exists to make impossible —
+    /// so it is not a state this program can describe. `AppContext` cannot be
+    /// built without an authority, the only way to get one is a complete
+    /// [`crate::write_authority::claim`], and startup refuses rather than
+    /// carrying on without it.
+    ///
+    /// Never read, like `_hold_guard`: what it does, it does by existing. It
+    /// holds the lease for exactly as long as this context does, and releases
+    /// it when the process ends.
+    _write_authority: crate::write_authority::WriteAuthority,
 }
 
 pub struct NoteItApp {
@@ -292,7 +300,13 @@ pub struct NoteItApp {
 }
 
 impl NoteItApp {
-    pub fn new(app: &gtk4::Application) -> Self {
+    /// Builds the application, or refuses to.
+    ///
+    /// The store is claimed *before* anything that could write to it exists.
+    /// There is no window, no document, no autosave and no restored note until
+    /// this has returned successfully, so a refusal cannot leave a half-started
+    /// instance editing a store it does not own.
+    pub fn new(app: &gtk4::Application) -> Result<Self, StartupRefusal> {
         let hold_guard = app.hold();
 
         diagnostics::log(format_args!(
@@ -305,6 +319,13 @@ impl NoteItApp {
         }
 
         let core = NoteItCore::new().expect("Failed to initialize XDG storage");
+
+        // Before anything else that could write. Everything below — the config,
+        // the state, the windows, the autosave — only comes into being once this
+        // process is the store's one writer.
+        let (write_authority, pending_requests) =
+            crate::write_authority::claim(core.paths())?.split();
+
         let storage = core.storage();
         register_asset_scheme(storage.assets_dir().to_path_buf());
         let config = AppConfig::load_from_file(&storage.config_file_path());
@@ -323,7 +344,7 @@ impl NoteItApp {
             layer_state_persistence: StatePersistenceDebouncer::default(),
             autopaste: AutoPaste::new(),
             clipboard_watch: None,
-            write_authority: None,
+            _write_authority: write_authority,
         }));
 
         let action = gio::SimpleAction::new("toggle-layer", None);
@@ -341,22 +362,21 @@ impl NoteItApp {
         });
         app.add_action(&action);
 
-        // Taken before this instance can save anything at all, and held until
-        // the process ends. From here on, every other Note-it writer that
-        // wants this store has to come through the socket it opened.
-        let controller = NoteItAppClone {
-            app: app.clone(),
-            context: Rc::clone(&context),
-        };
-        let store_paths = context.borrow().core.paths().clone();
-        let authority = crate::write_authority::start(controller, &store_paths);
-        context.borrow_mut().write_authority = authority;
+        // The store is already claimed; this is only the point at which there
+        // is an application to answer with.
+        crate::write_authority::serve(
+            NoteItAppClone {
+                app: app.clone(),
+                context: Rc::clone(&context),
+            },
+            pending_requests,
+        );
 
-        Self {
+        Ok(Self {
             app: app.clone(),
             context,
             _hold_guard: hold_guard,
-        }
+        })
     }
 
     pub fn controller(&self) -> NoteItAppClone {

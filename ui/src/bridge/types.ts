@@ -169,6 +169,8 @@ export type HostToWebviewMessage =
   | {
       type: 'apply_external_document';
       payload: {
+        /** The note this document belongs to; echoed back in the acknowledgement. */
+        id: string;
         requestId: string;
         generation: number;
         content: string;
@@ -190,6 +192,26 @@ export type WebviewToHostMessage =
       type: 'external_write_ready';
       payload: { id: string; requestId: string; generation: number; content: string };
     }
+  /**
+   * The committed document was adopted, the generation taken and editing
+   * resumed — said by the page that did it.
+   *
+   * This, and only this, is what tells the host the window is in step. The
+   * script that delivered `apply_external_document` finishing proves the
+   * script ran, not that any of the above happened.
+   */
+  | {
+      type: 'external_write_applied';
+      payload: { id: string; requestId: string; generation: number };
+    }
+  /**
+   * The committed document was *not* adopted.
+   *
+   * Carries no reason, no stack and no note content — the host does not act on
+   * why, only on whether. The write is already on disk either way; what this
+   * changes is that the host reports the window may be showing something older.
+   */
+  | { type: 'external_write_apply_failed'; payload: { id: string; requestId: string } }
   | { type: 'new_note_requested' }
   | { type: 'color_changed'; payload: { id: string; color: PaperColor } }
   | { type: 'font_size_changed'; payload: { id: string; fontSize: number } }

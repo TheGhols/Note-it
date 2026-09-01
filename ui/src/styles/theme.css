@@ -2199,6 +2199,15 @@ body[data-collapsed="true"] .resize-handle {
   display: none;
 }
 
+/* A write that is taking longer than usual. It says so and stays visible; the
+ * document is still held, because only the host knows when it is safe to edit
+ * again. Announcing "still working" is honest — handing the note back while the
+ * write is in flight would not be. */
+.note-syncing[data-slow="true"] {
+  animation: none;
+  opacity: 0.85;
+}
+
 @keyframes note-syncing-appear {
   to {
     opacity: 0.7;

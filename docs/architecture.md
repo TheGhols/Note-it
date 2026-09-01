@@ -110,10 +110,12 @@ scripts/check-cli-boundary
 - `note_window.rs`: GTK4 window wrapper embedding WebKitGTK 6.0 webviews.
 - `webview_bridge.rs`: Bidirectional messaging between Rust host and TypeScript WebView. Message
   types reuse Core domain types, while the actual WebView send path remains desktop-specific.
-- `write_authority.rs`: the desktop instance as the store's writer. Takes the lease at startup, holds
-  it for the whole session, listens on the private socket, and runs the external-write pipeline —
-  freeze the editor, collect its live text, mutate, commit, adopt, move the generation on, hand the
-  committed note back.
+- `write_authority.rs`: the desktop instance as the store's writer. `claim` takes the lease, binds and
+  narrows the socket, and returns a `WriteAuthority` **only on complete success**; `AppContext` holds
+  that by value, so a running instance that does not own its store is not a state the program can
+  describe. Startup refuses rather than degrading — see ADR-039. `serve` then runs the external-write
+  pipeline: freeze the editor, collect its live text, mutate, commit, adopt, move the generation on,
+  hand the committed note back, and wait for the page to say it took it.
 
 ### The write path when a note is open
 
@@ -127,12 +129,28 @@ noteit adicionar        lease held by the desktop instance
                                ├─ 4. apply the mutation to *that*
                                ├─ 5. commit through the atomic writer
                                ├─ 6. adopt it, generation += 1
-                               └─ 7. hand it back to the page and unfreeze
+                               ├─ 7. hand it back to the page and unfreeze
+                               └─ 8. wait for the page to say it adopted it
 ```
 
 Step 2 is in that order and no other: reading first leaves a gap in which a keystroke lands, and that
 keystroke is then written over. Step 6 is what makes every message still in flight from the previous
-run refusable. See ADR-038.
+run refusable. Step 8 is the page's own word — `ExternalWriteApplied`, naming the note, the request
+and the generation — because a script having evaluated says nothing about whether a document was
+adopted. Everything from step 5 onwards is past the commit point, so step 8 can only decide whether
+the answer carries a warning; it can never turn a completed write into a failure. See ADR-038 and
+ADR-039.
+
+Before any of it: the store is claimed. There is no window, no document and no autosave until this
+process is its one writer, and if it cannot be, it says so and exits.
+
+```text
+desktop startup
+   → prepare coordination   ─┐
+   → acquire writer lease    ├─ any failure: release, explain, exit non-zero
+   → bind + narrow socket   ─┘
+   → build the application
+```
 
 ## Frontend Components (TypeScript / Vite / Tiptap)
 
@@ -140,7 +158,9 @@ run refusable. See ADR-038.
 - `ui/src/bridge/externalWrite.ts`: the page's half of an external write — freeze, snapshot, adopt,
   and a queue that holds every edit arriving meanwhile so none is lost.
 - `ui/src/editor/documentLock.ts`: one ProseMirror `filterTransaction` gate. While a write is in
-  flight nothing changes the document — not typing, not a command, not a plugin.
+  flight nothing changes the document — not typing, not a command, not a plugin. The document is
+  released by the host and only by the host: the page has no timeout that could hand it back while a
+  commit is still in flight.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
 - `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.

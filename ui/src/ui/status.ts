@@ -92,9 +92,17 @@ export class NoteStatus {
  */
 export class SyncIndicator {
   private readonly root: HTMLElement;
+  private readonly label: string;
+  private readonly slowLabel: string;
 
-  public constructor(mount: HTMLElement, label = 'Sincronizando…') {
+  public constructor(
+    mount: HTMLElement,
+    label = 'Sincronizando…',
+    slowLabel = 'Sincronização demorando…',
+  ) {
     const doc = mount.ownerDocument;
+    this.label = label;
+    this.slowLabel = slowLabel;
     this.root = doc.createElement('div');
     this.root.className = 'note-syncing';
     this.root.textContent = label;
@@ -113,7 +121,16 @@ export class SyncIndicator {
     return !this.root.hidden;
   }
 
-  public setActive(active: boolean): void {
+  /**
+   * Shows or hides the state, and says whether it is taking longer than usual.
+   *
+   * `slow` changes the words and nothing else. A write that is slow is still a
+   * write in progress: the editor stays held until the host says otherwise, and
+   * saying so is more use to the reader than pretending it finished.
+   */
+  public setActive(active: boolean, slow = false): void {
+    this.root.textContent = slow ? this.slowLabel : this.label;
+    this.root.dataset.slow = String(slow);
     this.root.hidden = !active;
   }
 

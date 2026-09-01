@@ -1253,6 +1253,14 @@ countdown writes nothing at all, once a second or otherwise.
   the change is carried out by the running instance; without it, the CLI writes directly through Core.
   Two simultaneous commands both survive. If the store is held and its owner cannot be reached,
   nothing at all is written and the CLI says so — it never writes around another writer.
+- **A Running Note-it Owns Its Notes:** the desktop application takes the writer lease and opens its
+  control channel before it opens anything else. If another writer holds the store, or the channel
+  cannot be opened, it explains why in one sentence and does not start — no window, no note, no
+  autosave, nothing written. It never runs as a second writer.
+- **The Window Confirms, It Is Not Assumed:** after a change is committed the note on screen says
+  that it adopted it. Until it does, the command reports the change as written *and* warns that the
+  window may still be showing the older text — so nobody repeats a change that already happened. A
+  write that is taking a while says so and keeps the note held; it is never handed back mid-commit.
 - **Nothing Unsaved Is Ever Lost:** changing a note that is open on screen freezes its editor *before*
   reading it, folds the text you have typed but not yet saved into the same commit, and hands the
   committed note back to the window. An edit that had not reached disk yet is never overwritten, and
