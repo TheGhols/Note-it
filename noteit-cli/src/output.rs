@@ -108,9 +108,63 @@ pub fn render_status(ctx: &OutputContext, paths: &StorePaths) -> String {
     )
 }
 
+pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+    let error_prefix = ctx.bold("Erro:");
+    let hint_help = ctx.bold("noteit ajuda");
+
+    let extract_context_str = |kind: ContextKind| -> Option<String> {
+        match err.get(kind) {
+            Some(ContextValue::String(s)) => Some(s.clone()),
+            Some(ContextValue::Strings(strs)) => strs.first().cloned(),
+            Some(ContextValue::StyledStr(s)) => Some(s.to_string()),
+            Some(ContextValue::StyledStrs(strs)) => strs.first().map(|s| s.to_string()),
+            _ => None,
+        }
+    };
+
+    match err.kind() {
+        ErrorKind::InvalidSubcommand => {
+            let name = extract_context_str(ContextKind::InvalidSubcommand).unwrap_or_default();
+            if !name.is_empty() {
+                format!(
+                    "{error_prefix} comando desconhecido `{name}`.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
+                )
+            } else {
+                format!(
+                    "{error_prefix} comando desconhecido.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
+                )
+            }
+        }
+        ErrorKind::UnknownArgument => {
+            let arg = extract_context_str(ContextKind::InvalidArg).unwrap_or_default();
+            if arg.starts_with('-') {
+                format!(
+                    "{error_prefix} opção desconhecida `{arg}`.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
+                )
+            } else if !arg.is_empty() {
+                format!(
+                    "{error_prefix} argumento inesperado `{arg}`.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
+                )
+            } else {
+                format!(
+                    "{error_prefix} argumento ou opção desconhecida.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
+                )
+            }
+        }
+        _ => {
+            format!(
+                "{error_prefix} uso inválido.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use std::path::PathBuf;
 
     #[test]
@@ -184,5 +238,52 @@ mod tests {
         assert!(status.contains("Dados     /nonexistent/data"));
         assert!(status.contains("Config    /nonexistent/config"));
         assert!(status.contains("Estado    /nonexistent/state"));
+    }
+
+    #[test]
+    fn render_error_unknown_subcommand_outputs_portuguese_and_guidance() {
+        let ctx = OutputContext::plain();
+        let cmd =
+            crate::cli::CliArgs::try_parse_from(["noteit", "batata"]).expect_err("should fail");
+        let rendered = render_error(&ctx, &cmd);
+
+        assert!(rendered.contains("Erro: comando desconhecido `batata`."));
+        assert!(rendered.contains("Use `noteit ajuda` para ver os comandos disponíveis."));
+        assert!(!rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn render_error_unknown_flag_outputs_portuguese_and_guidance() {
+        let ctx = OutputContext::plain();
+        let cmd = crate::cli::CliArgs::try_parse_from(["noteit", "--flag-desconhecida"])
+            .expect_err("should fail");
+        let rendered = render_error(&ctx, &cmd);
+
+        assert!(rendered.contains("Erro: opção desconhecida `--flag-desconhecida`."));
+        assert!(rendered.contains("Use `noteit ajuda` para ver os comandos e opções disponíveis."));
+        assert!(!rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn render_error_unexpected_argument_outputs_portuguese_and_guidance() {
+        let ctx = OutputContext::plain();
+        let cmd = crate::cli::CliArgs::try_parse_from(["noteit", "status", "argumento-inesperado"])
+            .expect_err("should fail");
+        let rendered = render_error(&ctx, &cmd);
+
+        assert!(rendered.contains("Erro: argumento inesperado `argumento-inesperado`."));
+        assert!(rendered.contains("Use `noteit ajuda` para ver o formato correto de uso."));
+        assert!(!rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn render_error_styled_contains_ansi_codes() {
+        let ctx = OutputContext::styled();
+        let cmd =
+            crate::cli::CliArgs::try_parse_from(["noteit", "batata"]).expect_err("should fail");
+        let rendered = render_error(&ctx, &cmd);
+
+        assert!(rendered.contains("\x1b[1mErro:\x1b[0m"));
+        assert!(rendered.contains("\x1b[1mnoteit ajuda\x1b[0m"));
     }
 }

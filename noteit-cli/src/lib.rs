@@ -32,7 +32,7 @@ where
         Err(err) => match err.kind() {
             ErrorKind::DisplayHelp => Ok(output::render_help(ctx)),
             ErrorKind::DisplayVersion => Ok(output::render_version(ctx)),
-            _ => Err((EXIT_USAGE_ERROR, err.to_string())),
+            _ => Err((EXIT_USAGE_ERROR, output::render_error(ctx, &err))),
         },
     }
 }
@@ -84,11 +84,42 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_invalid_command_returns_usage_error() {
+    fn dispatch_invalid_command_returns_usage_error_in_portuguese() {
         let ctx = OutputContext::plain();
         let (exit_code, stderr) =
-            run_with_args(["noteit", "nonexistent"], &ctx).expect_err("should fail");
+            run_with_args(["noteit", "batata"], &ctx).expect_err("should fail");
         assert_eq!(exit_code, EXIT_USAGE_ERROR);
-        assert!(!stderr.is_empty());
+        assert!(stderr.contains("Erro: comando desconhecido `batata`."));
+        assert!(stderr.contains("Use `noteit ajuda` para ver os comandos disponíveis."));
+    }
+
+    #[test]
+    fn dispatch_invalid_flag_returns_usage_error_in_portuguese() {
+        let ctx = OutputContext::plain();
+        let (exit_code, stderr) =
+            run_with_args(["noteit", "--flag-desconhecida"], &ctx).expect_err("should fail");
+        assert_eq!(exit_code, EXIT_USAGE_ERROR);
+        assert!(stderr.contains("Erro: opção desconhecida `--flag-desconhecida`."));
+        assert!(stderr.contains("Use `noteit ajuda` para ver os comandos e opções disponíveis."));
+    }
+
+    #[test]
+    fn dispatch_unexpected_argument_returns_usage_error_in_portuguese() {
+        let ctx = OutputContext::plain();
+        let (exit_code, stderr) = run_with_args(["noteit", "status", "argumento-inesperado"], &ctx)
+            .expect_err("should fail");
+        assert_eq!(exit_code, EXIT_USAGE_ERROR);
+        assert!(stderr.contains("Erro: argumento inesperado `argumento-inesperado`."));
+        assert!(stderr.contains("Use `noteit ajuda` para ver o formato correto de uso."));
+    }
+
+    #[test]
+    fn version_string_matches_workspace_cargo_pkg_version() {
+        let ctx = OutputContext::plain();
+        let version_out = run_with_args(["noteit", "versao"], &ctx).expect("success");
+        assert_eq!(
+            version_out,
+            format!("Note-it {}\n", env!("CARGO_PKG_VERSION"))
+        );
     }
 }

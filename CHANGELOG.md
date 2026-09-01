@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 4.0C.1 CLI Foundation Contract Hardening.** Refined version authority and error presentation:
+  - Centralized project version in `[workspace.package]` with Cargo workspace inheritance (`version.workspace = true`) across `note-it`, `noteit-core`, and `noteit-cli`.
+  - Added typed Clap error translation in `output::render_error`, outputting clear Portuguese messages to stderr for unknown commands, options, and unexpected arguments without replacing Clap as the parser authority.
+
 - **Phase 4.0C Headless CLI Foundation.** Introduced the dedicated `noteit-cli` crate providing the
   standalone headless `noteit` binary. The graphical desktop application (`note-it`) remains the GUI
   and lifecycle adapter while both adapters consume the shared `noteit-core` authority.

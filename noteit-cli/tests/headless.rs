@@ -215,31 +215,80 @@ fn status_with_existing_store_preserves_exact_fingerprints() {
 }
 
 #[test]
-fn invalid_subcommand_exits_code_two_and_writes_to_stderr() {
+fn invalid_subcommand_exits_code_two_and_writes_portuguese_to_stderr() {
     let (code, stdout, stderr) = run_headless(&["comando-inexistente"], None, true);
     assert_eq!(code, 2, "Invalid subcommand must exit with code 2");
     assert!(stdout.is_empty(), "Stdout must be empty on invalid usage");
-    assert!(!stderr.is_empty(), "Stderr must describe the error");
+    assert!(stderr.contains("Erro: comando desconhecido `comando-inexistente`."));
+    assert!(stderr.contains("Use `noteit ajuda` para ver os comandos disponíveis."));
+    assert!(!stderr.contains("unrecognized subcommand"));
+    assert!(!stderr.contains("\x1b["));
 }
 
 #[test]
-fn invalid_flag_exits_code_two_and_writes_to_stderr() {
+fn invalid_flag_exits_code_two_and_writes_portuguese_to_stderr() {
     let (code, stdout, stderr) = run_headless(&["--flag-desconhecida"], None, true);
     assert_eq!(code, 2, "Invalid flag must exit with code 2");
     assert!(stdout.is_empty(), "Stdout must be empty on invalid usage");
-    assert!(!stderr.is_empty(), "Stderr must describe the error");
+    assert!(stderr.contains("Erro: opção desconhecida `--flag-desconhecida`."));
+    assert!(stderr.contains("Use `noteit ajuda` para ver os comandos e opções disponíveis."));
+    assert!(!stderr.contains("unexpected argument"));
+    assert!(!stderr.contains("\x1b["));
+}
+
+#[test]
+fn unexpected_argument_on_subcommand_exits_code_two_and_writes_portuguese_to_stderr() {
+    for cmd in &[
+        vec!["status", "argumento-inesperado"],
+        vec!["ajuda", "argumento-inesperado"],
+    ] {
+        let (code, stdout, stderr) = run_headless(cmd, None, true);
+        assert_eq!(
+            code, 2,
+            "Unexpected argument on {:?} must exit with code 2",
+            cmd
+        );
+        assert!(stdout.is_empty(), "Stdout must be empty on invalid usage");
+        assert!(stderr.contains("Erro: argumento inesperado `argumento-inesperado`."));
+        assert!(stderr.contains("Use `noteit ajuda` para ver o formato correto de uso."));
+        assert!(!stderr.contains("\x1b["));
+    }
 }
 
 #[test]
 fn non_tty_or_no_color_emits_no_ansi_escape_sequences() {
+    // Normal commands
     for cmd in &[vec![], vec!["ajuda"], vec!["versao"], vec!["status"]] {
-        let (code, stdout, _) = run_headless(cmd, None, true);
+        let (code, stdout, stderr) = run_headless(cmd, None, true);
         assert_eq!(code, 0);
         assert!(
             !stdout.contains("\x1b["),
-            "Command {:?} emitted ANSI sequences under NO_COLOR: {:?}",
+            "Command {:?} emitted ANSI sequences under NO_COLOR in stdout: {:?}",
             cmd,
             stdout
+        );
+        assert!(
+            !stderr.contains("\x1b["),
+            "Command {:?} emitted ANSI sequences under NO_COLOR in stderr: {:?}",
+            cmd,
+            stderr
+        );
+    }
+
+    // Error cases under NO_COLOR
+    for cmd in &[
+        vec!["batata"],
+        vec!["--opcao-invalida"],
+        vec!["status", "sobrando"],
+    ] {
+        let (code, stdout, stderr) = run_headless(cmd, None, true);
+        assert_eq!(code, 2);
+        assert!(stdout.is_empty());
+        assert!(
+            !stderr.contains("\x1b["),
+            "Error command {:?} emitted ANSI sequences under NO_COLOR in stderr: {:?}",
+            cmd,
+            stderr
         );
     }
 }

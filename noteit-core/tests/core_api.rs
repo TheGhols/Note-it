@@ -50,3 +50,8 @@ fn trash_and_study_queries_use_the_same_synthetic_store() {
     assert!(core.list_notes().expect("list live notes").is_empty());
     assert!(core.study_state().expect("study state").cards.is_empty());
 }
+
+#[test]
+fn workspace_package_version_is_shared() {
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.1.0");
+}

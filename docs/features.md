@@ -1202,8 +1202,11 @@ countdown writes nothing at all, once a second or otherwise.
   WebKitGTK, Wayland or display server dependencies.
 - **Orientation & Guidance:** running `noteit` without arguments renders a concise welcome screen with
   guidance for available commands.
-- **Bilingual Interface:** primary commands in Portuguese (`ajuda`, `versao`, `status`) with canonical
-  international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
+- **Bilingual Interface & Human Errors:** primary commands in Portuguese (`ajuda`, `versao`, `status`)
+  with canonical international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
+  Usage errors are presented as friendly Portuguese messages on stderr while maintaining exit code 2.
+- **Single Version Source:** the CLI and desktop binaries share a single version authority defined
+  in `[workspace.package]`.
 - **Strictly Read-Only Status:** `noteit status` inspects resolved XDG directories and store
   availability without reading note files, parsing Markdown, or creating directories on disk.
 - **Presentation & Terminal Compatibility:** clean, elegant formatting with ANSI styling on interactive

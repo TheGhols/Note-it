@@ -1416,5 +1416,10 @@ executables consume `noteit-core` as their shared domain and persistence authori
 4. **Pure Path Resolution.** `noteit status` must be strictly read-only and never create missing
    directories on disk. Path resolution was extracted into pure `StorePaths::resolve()` in `noteit-core`,
    reused by `StorageManager` only when actually initializing or opening stores.
-5. **Bilingual UX.** Human presentation is in Portuguese (`ajuda`, `versao`, `status`), with
-   standard international aliases (`help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`).
+5. **Bilingual UX & Human Error Presentation.** Human presentation is in Portuguese (`ajuda`,
+   `versao`, `status`), with standard international aliases (`help`, `version`, `status`, `--help`, `-h`,
+   `--version`, `-V`). Usage errors from Clap are mapped to user-friendly Portuguese messages on stderr
+   using typed `ErrorKind` and error context without bypassing Clap as the parsing authority.
+6. **Workspace Version Authority.** The project version is centralized in `[workspace.package]` with
+   `version.workspace = true` across all crates (`note-it`, `noteit-core`, `noteit-cli`), preventing
+   version drift.

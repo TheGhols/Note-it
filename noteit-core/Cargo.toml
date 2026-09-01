@@ -1,11 +1,11 @@
 [package]
 name = "noteit-core"
-version = "0.1.0"
-edition = "2021"
-authors = ["Note-it contributors"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Headless domain and persistence core for Note-it"
-repository = "https://github.com/TheGhols/Note-it"
 publish = false
 
 [features]
