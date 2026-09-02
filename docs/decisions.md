@@ -1674,3 +1674,82 @@ The second: adopting a document briefly lifts the editor's transaction lock — 
 the lock exists to let through — and the restore sat after the call rather than in a `finally`. An
 adoption that threw part-way therefore left the lock off, which is exactly the moment every command
 the page can run must be refused. It is now restored in a `finally`.
+
+## ADR-041: The Machine Interface Is a Second Renderer, Not a Second Program
+
+**Decision.** `noteit --json` emits one versioned JSON document per execution, rendered from the same
+typed outcome the Portuguese sentences are rendered from. The dispatcher runs an operation and
+produces an `Outcome` or a `CommandError`; `output::render` turns that into what a person reads and
+`machine::render` turns it into the document a script parses. Neither is built from the other's
+output, and no business rule exists twice.
+
+**Rationale.**
+
+1. **A machine consumer that has to read Portuguese is not a contract.** The whole point of the phase
+   is that an agent can decide what to do next without a regex. So every decision a caller has to make
+   — did it work, did anything change, did the commit happen, is the window in step, what went wrong —
+   is a typed field with a stable English snake_case token, and every human sentence is explicitly
+   documented as diagnostic. `message` is for the person reading the log.
+
+2. **Serialising the rendered text would have been the easy mistake.** `{"result": "Nota criada com
+   sucesso"}` is JSON and is not an interface: it is the same string parsing problem wearing a
+   content type. The typed outcome layer exists so that the machine renderer never sees a rendered
+   sentence, and so that the human renderer cannot be quietly repurposed as a data source.
+
+3. **Two renderers, one operation.** `WriteOperation`, `NoteMutation`, `WriteOutcome`, `WriteError`
+   and `authority::perform` are untouched. There is no `json_append`. The store cannot behave
+   differently depending on which adapter asked, and the tests prove it by comparing the resulting
+   note file byte for byte between the two modes for a write that moves no timestamp.
+
+4. **Channels had to become data before they could be guaranteed.** The old dispatcher printed read
+   warnings with `eprint!` in the middle of a command, which is invisible to a function-level test and
+   fatal to a machine interface — a successful `--json listar` would have written a sentence to
+   standard error. `run_with_args` now returns a `CliResponse` carrying the exit code and both
+   channels, so "success writes nothing to stderr" is something a test can assert rather than
+   something a reviewer has to notice. That refactor is the phase's only change to the human path's
+   plumbing, and its output is unchanged.
+
+5. **`ui_sync_warning` and `Indeterminate` are the reason the phase exists.** Both are post-commit
+   states that a naive adapter flattens into "it failed", and both would then be retried, and a
+   retried append duplicates a paragraph. So both are first-class: a committed write whose window did
+   not confirm is `status: warning`, `commit_state: committed`, exit `0`, with a structured
+   `ui_sync: {status, code}`; an unknown result is `status: indeterminate`, `commit_state: unknown`,
+   and never `not_committed`. The four cases a caller must tell apart —
+   `ok/committed`, `warning/committed`, `error/not_committed`, `indeterminate/unknown` — are distinct
+   without reading a single character of prose.
+
+6. **`commit_state` is the single source of truth about repeating.** A `retry_safe` boolean was
+   considered and rejected: two fields that answer the same question drift, and the honest answer for
+   `not_committed` is "it depends on `error.code`", which a boolean cannot say. The documented table
+   maps status and commit state to whether an automatic repeat is allowed, and nothing else claims to.
+
+7. **Machine mode survives a parse failure.** Clap refusing an argument list is exactly when a script
+   most needs a machine-readable answer, and it is also when the parsed flag does not exist yet. So
+   the mode is decided from the parsed option when parsing succeeded and from a small exact scan of
+   the raw arguments when it did not — whole-token `--json`, never a substring, never past the `--`
+   escape, never standard input. A test asserts the two agree on every argument list that parses, so
+   the fallback cannot drift away from the real rule.
+
+8. **JSON is data, and the terminal sanitizer is not applied to it.** `sanitize_for_terminal` exists
+   to stop a note's contents from driving a terminal; a document nobody renders as text has no such
+   problem, and JSON escaping already neutralises every control character it could carry. Destroying
+   the body to protect a terminal that is not there would hand a script text the note does not
+   contain. The human renderer still sanitizes, and both are tested on the same note.
+
+9. **The public contract is not the private protocol.** `ControlRequest`, `ControlResponse`, request
+   identifiers, the protocol version, the socket, the lease, the window generation and `WritePath` all
+   derive `Serialize` and none of them are exported here. The CLI-to-desktop conversation and the
+   CLI-to-consumer conversation are different boundaries that happen to share an encoding, and a test
+   greps every document for the vocabulary of the first one.
+
+**Consequences.** The public schema lives in `noteit-cli/src/machine.rs` as explicit DTOs rather than
+as the Core's own types, so a rename in the Core is a compile error rather than a silent schema
+change. Every token — command names, outcome kinds, error codes, warning codes, task states — is
+written out in a `match` for the same reason. `docs/machine-interface.md` is the contract; the phase's
+tests are what keep it true.
+
+**Debt left standing, deliberately.** Store identity canonicalisation (`/path/data` versus
+`/path/./data`) stays for 4.0R. The acknowledgement still carries no content hash. The relationship
+between the authority timeout and the page's own timings is still coupled and still undocumented as a
+single number. Per-note reload after a failed adoption is still the recommended next step and is still
+not implemented. None of them were touched to make this phase look tidier.

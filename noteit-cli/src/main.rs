@@ -4,16 +4,17 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let ctx = OutputContext::for_stdout();
-    let args = std::env::args_os();
+    let response = run_with_args(std::env::args_os(), &ctx);
 
-    match run_with_args(args, &ctx) {
-        Ok(stdout) => {
-            print!("{stdout}");
-            ExitCode::from(noteit_cli::EXIT_SUCCESS)
-        }
-        Err((exit_code, stderr)) => {
-            eprint!("{stderr}");
-            ExitCode::from(exit_code)
-        }
+    // Written in the order they have always appeared: whatever a command had
+    // to warn about, then its result. In machine mode exactly one of the two
+    // is ever non-empty.
+    if !response.stderr.is_empty() {
+        eprint!("{}", response.stderr);
     }
+    if !response.stdout.is_empty() {
+        print!("{}", response.stdout);
+    }
+
+    ExitCode::from(response.exit_code)
 }

@@ -9,6 +9,15 @@ use clap::{Parser, Subcommand, ValueEnum};
     disable_help_subcommand = true
 )]
 pub struct CliArgs {
+    /// Emitir um único documento JSON em vez de texto para pessoas
+    ///
+    /// Global on purpose: it is accepted before the command and after it, and
+    /// at every level of a grouped command, so no consumer has to remember
+    /// where the option goes. It is an option and not a word — after the `--`
+    /// escape, `--json` is payload like any other text.
+    #[arg(long = "json", global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Option<CliCommand>,
 }

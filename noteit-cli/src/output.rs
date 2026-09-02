@@ -1,8 +1,19 @@
+//! What a person reads.
+//!
+//! One of the two renderers over [`crate::outcome`]; the other is
+//! [`crate::machine`]. This one styles, abbreviates identifiers, shows dates
+//! in the machine's own timezone and neutralises terminal escapes, because all
+//! of those are right for a terminal and none of them is right for a parser.
+//! Neither renderer is ever built from the other's output.
+
+use crate::outcome::{
+    CliResponse, CommandError, Executed, HelpText, Outcome, ReadError, UsageError,
+};
 use noteit_core::chrono::{DateTime, Utc};
 use noteit_core::write::{WriteError, WriteOutcome, WriteOutcomeKind};
 use noteit_core::{
-    MetadataCatalog, NoteDocument, NoteSummary, ReadWarning, SearchResult, StorePaths, TaskEntry,
-    TaskStateFilter, TrashEntry, Uuid,
+    MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadWarning, SearchResult,
+    StorePaths, TaskEntry, TaskStateFilter, TrashEntry, Uuid,
 };
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
@@ -239,7 +250,9 @@ pub fn render_help(ctx: &OutputContext) -> String {
          \x20 --propriedade, --property K=V    Filtrar por propriedade, ou aplicar uma em `criar`\n\
          \x20 --estado, --state <E>            Estado das tarefas: pendentes, concluidas, todas\n\
          \x20 --stdin                          Ler o texto da entrada padrão (criar, adicionar, editar)\n\
-         \x20 --vazio, --empty                 Esvaziar o corpo da nota, de propósito (editar)\n\n\
+         \x20 --vazio, --empty                 Esvaziar o corpo da nota, de propósito (editar)\n\
+         \x20 --json                           Devolver um documento JSON em vez de texto,\n\
+         \x20                                  para scripts e agentes (`noteit --json listar`)\n\n\
          {section_aliases}\n\
          \x20 list, read, search, properties, tasks, trash, help, version\n\
          \x20 create, append, edit, add, remove, set, complete, reopen, restore\n"
@@ -738,72 +751,113 @@ pub fn render_warning(ctx: &OutputContext, warning: &ReadWarning) -> String {
     )
 }
 
-pub fn render_error(ctx: &OutputContext, err: &clap::Error) -> String {
-    use clap::error::{ContextKind, ContextValue, ErrorKind};
+/// Everything one execution says to a person, on the two channels it says it on.
+///
+/// The single place the human adapter is entered from. Warnings go to standard
+/// error and results to standard output, exactly as they always have — the
+/// difference since Phase 4.0F is that both are values, so nothing can slip
+/// onto a channel from the middle of a command.
+pub fn render(executed: &Executed, ctx: &OutputContext) -> CliResponse {
+    match &executed.result {
+        Ok(outcome) => CliResponse {
+            exit_code: crate::EXIT_SUCCESS,
+            stdout: render_outcome(ctx, outcome),
+            stderr: render_outcome_warnings(ctx, outcome),
+        },
+        Err(error) => CliResponse::failure(error.exit_code(), render_command_error(ctx, error)),
+    }
+}
 
-    let error_prefix = ctx.bold("Erro:");
-    let hint_help = ctx.bold("noteit ajuda");
+fn render_outcome(ctx: &OutputContext, outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::Welcome => render_welcome(ctx),
+        Outcome::Help(HelpText::Own) => render_help(ctx),
+        Outcome::Help(HelpText::Sub(text)) => text.clone(),
+        Outcome::Version => render_version(ctx),
+        Outcome::Status(paths) => render_status(ctx, paths),
+        Outcome::Notes(batch) => render_notes_list(ctx, &batch.items),
+        Outcome::Note(document) => render_note_read(ctx, document),
+        Outcome::Search { query, batch } => render_search_results(ctx, query, &batch.items),
+        Outcome::Tags(catalog) => render_tags(ctx, catalog),
+        Outcome::Properties(catalog) => render_properties(ctx, catalog),
+        Outcome::Tasks { state, batch } => render_tasks(ctx, &batch.items, *state),
+        Outcome::Trash(entries) => render_trash(ctx, entries),
+        Outcome::Write(outcome) => render_write_outcome(ctx, outcome),
+    }
+}
 
-    let extract_context_str = |kind: ContextKind| -> Option<String> {
-        match err.get(kind) {
-            Some(ContextValue::String(s)) => Some(s.clone()),
-            Some(ContextValue::Strings(strs)) => strs.first().cloned(),
-            Some(ContextValue::StyledStr(s)) => Some(s.to_string()),
-            Some(ContextValue::StyledStrs(strs)) => strs.first().map(|s| s.to_string()),
-            _ => None,
-        }
+fn render_outcome_warnings(ctx: &OutputContext, outcome: &Outcome) -> String {
+    let mut out = String::new();
+    let read_warnings: &[ReadWarning] = match outcome {
+        Outcome::Notes(batch) => &batch.warnings,
+        Outcome::Search { batch, .. } => &batch.warnings,
+        Outcome::Tasks { batch, .. } => &batch.warnings,
+        _ => &[],
     };
-
-    match err.kind() {
-        ErrorKind::InvalidSubcommand => {
-            let name = extract_context_str(ContextKind::InvalidSubcommand).unwrap_or_default();
-            let sanitized_name = sanitize_for_terminal(&name);
-            if !sanitized_name.is_empty() {
-                format!(
-                    "{error_prefix} comando desconhecido `{sanitized_name}`.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
-                )
-            } else {
-                format!(
-                    "{error_prefix} comando desconhecido.\n\nUse `{hint_help}` para ver os comandos disponíveis.\n"
-                )
-            }
-        }
-        ErrorKind::UnknownArgument => {
-            let arg = extract_context_str(ContextKind::InvalidArg).unwrap_or_default();
-            let sanitized_arg = sanitize_for_terminal(&arg);
-            if sanitized_arg.starts_with('-') {
-                format!(
-                    "{error_prefix} opção desconhecida `{sanitized_arg}`.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
-                )
-            } else if !sanitized_arg.is_empty() {
-                format!(
-                    "{error_prefix} argumento inesperado `{sanitized_arg}`.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
-                )
-            } else {
-                format!(
-                    "{error_prefix} argumento ou opção desconhecida.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
-                )
-            }
-        }
-        ErrorKind::MissingRequiredArgument => {
-            let arg = extract_context_str(ContextKind::InvalidArg).unwrap_or_default();
-            let sanitized_arg = sanitize_for_terminal(&arg);
-            if !sanitized_arg.is_empty() {
-                format!(
-                    "{error_prefix} argumento obrigatório `{sanitized_arg}` não fornecido.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
-                )
-            } else {
-                format!(
-                    "{error_prefix} argumento obrigatório não fornecido.\n\nUse `{hint_help}` para ver o formato correto de uso.\n"
-                )
-            }
-        }
-        _ => {
-            format!(
-                "{error_prefix} uso inválido.\n\nUse `{hint_help}` para ver os comandos e opções disponíveis.\n"
-            )
+    for warning in read_warnings {
+        out.push_str(&render_warning(ctx, warning));
+    }
+    if let Outcome::Write(outcome) = outcome {
+        // A committed write whose window could not be refreshed is still a
+        // committed write. The warning goes here and the success line to
+        // standard output, so nothing about it reads as "try that again".
+        if let Some(detail) = &outcome.ui_sync_warning {
+            out.push_str(&render_write_warning(ctx, detail));
         }
     }
+    out
+}
+
+pub fn render_command_error(ctx: &OutputContext, error: &CommandError) -> String {
+    match error {
+        CommandError::Usage(usage) => render_usage_error(ctx, usage),
+        CommandError::Read(read) => render_read_error(ctx, read),
+        CommandError::Write(write) => render_write_error(ctx, write),
+    }
+}
+
+/// A malformed request, said the way this CLI has always said one.
+pub fn render_usage_error(ctx: &OutputContext, error: &UsageError) -> String {
+    format!(
+        "{} {}\n\nUse `{}` {}.\n",
+        ctx.bold("Erro:"),
+        error.sentence_with(sanitize_for_terminal),
+        ctx.bold("noteit ajuda"),
+        error.hint().phrase()
+    )
+}
+
+/// A read that was understood and could not be carried out.
+pub fn render_read_error(ctx: &OutputContext, error: &ReadError) -> String {
+    let message = match error {
+        ReadError::Selector(NoteSelectorError::InvalidFormat(selector)) => {
+            let selector = sanitize_for_terminal(selector);
+            format!(
+                "formato de seletor inválido `{selector}`. Forneça um UUID completo ou prefixo de no mínimo 8 caracteres hexadecimais."
+            )
+        }
+        ReadError::Selector(NoteSelectorError::NotFound(selector)) => {
+            let selector = sanitize_for_terminal(selector);
+            format!("nenhuma nota encontrada para o seletor `{selector}`.")
+        }
+        ReadError::Selector(NoteSelectorError::Ambiguous(selector, matches)) => {
+            let selector = sanitize_for_terminal(selector);
+            let count = matches.len();
+            format!("seletor ambíguo `{selector}` corresponde a {count} notas vivas.")
+        }
+        ReadError::Selector(NoteSelectorError::SymlinkRefused(selector)) => {
+            let selector = sanitize_for_terminal(selector);
+            format!("a nota `{selector}` é um link simbólico e não pode ser aberta.")
+        }
+        ReadError::Selector(NoteSelectorError::StoreUnavailable(reason)) => {
+            let reason = sanitize_for_terminal(reason);
+            format!("repositório indisponível: {reason}")
+        }
+        ReadError::NoteRead { detail } | ReadError::Listing { detail } => {
+            sanitize_for_terminal(detail)
+        }
+    };
+    format!("{} {message}\n", ctx.bold("Erro:"))
 }
 
 #[cfg(test)]

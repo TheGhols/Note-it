@@ -289,6 +289,43 @@ A referência de tarefa mostrada por `noteit tarefas` é uma referência ao esta
 identificador permanente: se a tarefa mudar entre listar e concluir, o comando é recusado e basta
 listar de novo. É melhor do que concluir a tarefa errada.
 
+#### Saída para máquinas (`--json`)
+
+Qualquer comando aceita `--json` e passa a devolver **um** documento JSON por execução, para scripts
+e agentes:
+
+```bash
+noteit --json listar
+noteit ler 8c4f1a2b --json
+noteit --json adicionar 8c4f1a2b "mais um parágrafo"
+```
+
+```json
+{"schema_version":1,"status":"ok","command":"append","data":{"write":{
+  "note_id":"8c4f1a2b-…","kind":"content_appended","changed":true,
+  "commit_state":"committed","ui_sync":{"status":"ok","code":null,"message":null}}},
+  "error":null,"warnings":[]}
+```
+
+Sucesso vai inteiro para a saída padrão e falha inteira para a saída de erro — a outra fica vazia, e
+nenhuma das duas recebe cor ou texto solto. Os códigos de saída são os mesmos de sempre (`0`, `1`,
+`2`).
+
+Nada nesse documento precisa ser lido em português. O consumidor decide por campos tipados: `status`,
+`command` (canônico — `listar` e `list` dão o mesmo `list`), `commit_state`, `error.code`. Os
+identificadores são UUIDs completos, as datas são RFC 3339 em UTC, e o conteúdo da nota vai como está
+no repositório.
+
+Os dois casos que mais importam para quem automatiza:
+
+- gravou, mas a janela aberta não confirmou → `status: warning`, `commit_state: committed`, saída `0`.
+  **Não repita**: o texto já está no arquivo.
+- a resposta não voltou → `status: indeterminate`, `commit_state: unknown`. **Nunca repita
+  automaticamente**: pode ter gravado.
+
+O contrato completo, com a tabela de quando repetir e todos os códigos de erro, está em
+[`docs/machine-interface.md`](docs/machine-interface.md).
+
 ### Durante o desenvolvimento
 
 Para testar o aplicativo desktop durante o desenvolvimento:

@@ -85,14 +85,31 @@ scripts/check-core-boundary
 ## CLI Adapter Components (`noteit-cli`, Rust)
 
 - `main.rs`: Entry point for the `noteit` binary, dispatching arguments and mapping standard exit codes.
-- `cli.rs`: Command line parsing using Clap with PT-BR primary commands and international aliases (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`).
-- `output.rs`: Terminal presentation, ANSI styling, NO_COLOR/non-TTY detection, and terminal security sanitization (`sanitize_for_terminal`).
+- `cli.rs`: Command line parsing using Clap with PT-BR primary commands and international aliases (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`), plus the global `--json` option.
+- `outcome.rs`: what a command produced, before anyone decides how to say it — `Outcome`,
+  `CommandError`, the canonical `Command` names, and `CliResponse` (exit code plus both channels as
+  data). Both renderers read this and neither reads the other.
+- `output.rs`: the human renderer. Terminal presentation, ANSI styling, NO_COLOR/non-TTY detection,
+  and terminal security sanitization (`sanitize_for_terminal`).
+- `machine.rs`: the machine renderer. The public JSON schema as explicit DTOs, one versioned
+  document per execution, stable English tokens for every decision a consumer makes. See
+  `docs/machine-interface.md` and ADR-041.
 - `authority.rs`: the decision of who writes. Takes the writer lease when it is free and writes
   through the Core; when it is held, sends the change to whoever holds it over the private socket;
   when it is held and unreachable, fails closed and changes nothing. Never falls back to writing
   around another writer.
 - `lib.rs`: Programmatic interface (`run_with_args`), filter parsing, Core dispatch, standard exit
-  codes, and standard input handling for `--stdin`.
+  codes, standard input handling for `--stdin`, and the choice of renderer.
+
+```text
+                    ┌──▶ output::render   ──▶ sentences, styling, local dates, 8-char prefixes
+domain ──▶ Outcome ─┤
+       │            └──▶ machine::render  ──▶ one JSON document, UTC, full UUIDs, stable tokens
+       └──▶ CommandError
+```
+
+The two adapters share the operation and share nothing else. A human sentence is never parsed to
+build a document, and no write path exists twice.
 
 The CLI binary has zero graphical dependencies and is tested headless:
 

@@ -609,7 +609,22 @@ future machine interfaces share one domain and persistence authority.
       callback, repeated apply, abort or generation update can return a page that failed to adopt a
       committed document to an editable or seemingly synchronised state. Also closed a transaction
       lock left off when adopting threw part-way.
-- [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
+- [x] **Phase 4.0F — Machine Interface / JSON.** The first stable public contract for machine
+      consumers: a global `--json` that emits exactly one versioned JSON document per execution, on
+      standard output for a success and standard error for a failure, with the other channel empty
+      and no ANSI anywhere. Rendered from the same typed outcome the Portuguese sentences are
+      rendered from — `noteit-cli` gained `outcome.rs` (what happened) and `machine.rs` (the public
+      schema), and `run_with_args` now returns a `CliResponse` carrying both channels as data, so a
+      warning can no longer escape through an `eprint!` in the middle of a command. Canonical command
+      names independent of spelling, full UUIDs, RFC 3339 UTC timestamps, real JSON types, raw
+      Markdown unmangled by the terminal sanitizer, and stable error codes. The two post-commit
+      states that would otherwise be flattened into "it failed" are first class: a committed write
+      whose window did not confirm is `status: warning` with `commit_state: committed` and exit `0`,
+      and an unknown result is `status: indeterminate` with `commit_state: unknown` — never
+      `not_committed`, so no agent can retry it into a duplicated append. Machine mode survives a
+      parse error. The private control protocol is not exported. Human output, exit codes and the
+      write rules are unchanged; the help gained one line documenting the option. Contract in
+      `docs/machine-interface.md`, reasoning in ADR-041.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
 - [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.
 - [ ] **Phase 4.0R — Security & Regression Audit.** Reserved.
