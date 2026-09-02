@@ -75,7 +75,7 @@ nota temporariamente sem perder a preferência armazenada.
 - [x] Conjunto de tokens `--ui-*` que separa o chrome do aplicativo do papel da nota, mantendo o menu legível tanto sobre uma nota preta quanto sobre uma amarela, em qualquer tema.
 
 ### Fase 3.4R: `updated_at` Integridade (concluída)
-- [x] `updated_at` muda somente quando o conteúdo persistido da nota realmente muda. Abrir, fechar, convocar, ocultar, mostrar e sair sem editar deixam o campo intacto.
+- [x] `updated_at` muda somente quando o conteúdo persistido da nota realmente muda. Abrir, fechar, invocar, ocultar, mostrar e sair sem editar deixam o campo intacto.
 - [x] A comparação reside no único caminho pelo qual passa todo conteúdo salvo — salvamento automático, flush antes de ocultar ou sair e salvar e fechar —, não em cada chamador.
 - [x] Uma nota cujo conteúdo permanece inalterado não é reescrita: nenhum arquivo temporário, nenhuma renomeação, nenhum fsync.
 - [x] Fechar e liberar ainda relatam sucesso em um salvamento idêntico, para que o ciclo de vida nunca pare.

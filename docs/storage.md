@@ -74,7 +74,7 @@ Todo o resto deixa `updated_at` deliberadamente em paz:
 - o tema da interface, que não é armazenado na nota;
 - janela e estado de visualização: arrastar, redimensionar, ampliar, recolher/expandir, modo de camada;
 - abrindo o menu ou passando o mouse sobre o cabeçalho;
-- **e visitando a nota.** Abrir e fechar, convocar, ocultar, mostrar ou sair sem editar, tudo deixa-a intacta.
+- **e visitando a nota.** Abrir e fechar, invocar, ocultar, mostrar ou sair sem editar, tudo deixa-a intacta.
 
 Este último ponto é aplicado e não assumido. Fechar e liberar envia tudo o que o editor contém, editado ou não, de modo que o caminho único pelo qual todo o conteúdo salva o funil compara o texto recebido com o que já está armazenado e não faz nada quando eles correspondem. Uma nota inalterada não é reescrita: nenhum arquivo temporário, nenhuma renomeação, nenhum fsync e o arquivo mantém seu próprio horário de modificação.
 

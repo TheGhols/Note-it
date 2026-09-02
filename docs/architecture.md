@@ -44,7 +44,7 @@ A direção da dependência é imposta por Cargo: tanto o pacote desktop (`note-
 - `noteit-core/src/backup.rs`: instantâneos locais, retenção e política de manifesto. Consulte ADR-029 e ADR-032.
 - `noteit-core/src/study.rs`: o modelo `study.json` versionado e o agendador Ladder-v1.
 - `noteit-core/src/assets.rs`: validação de imagens, identificadores, referências de storage e regras de importação.
-- `noteit-core/src/autopaste.rs` e `timer.rs`: headless máquinas e políticas de estado; a área de transferência e a integração de notificação permanecem no host da área de trabalho.
+- `noteit-core/src/autopaste.rs` e `timer.rs`: máquinas de estados e políticas headless; a área de transferência e a integração de notificação permanecem no host da área de trabalho.
 - `noteit-core/src/settings.rs` e `state.rs`: configuração e estado operacional do aplicativo versionado, com persistência atômica, mas sem dependência de janelas.
 - `atomic_file.rs` e `visible_text.rs` são módulos de implementação privados compartilhados por esses recursos públicos.
 
@@ -107,7 +107,7 @@ noteit adicionar        lease mantido pela instância desktop
                                └─ 8. esperar a página confirmar que o adotou
 ```
 
-A etapa 2 ocorre nessa ordem e em nenhuma outra: a leitura primeiro deixa uma lacuna na qual uma tecla é digitada e essa tecla é então reescrita. A etapa 6 é o que torna recusáveis ​​todas as mensagens ainda em trânsito da execução anterior. O passo 8 é a própria palavra da página — `ExternalWriteApplied`, nomeando a nota, a solicitação e a geração — porque um script avaliado não diz nada sobre se um documento foi adotado. Tudo a partir da etapa 5 já passou do ponto de confirmação, portanto a etapa 8 só pode decidir se a resposta contém um aviso; ele nunca pode transformar uma gravação concluída em uma falha. Consulte ADR-038 e ADR-039.
+A etapa 2 ocorre nessa ordem e em nenhuma outra: a leitura primeiro deixa uma lacuna na qual uma tecla é digitada e essa tecla é então reescrita. A etapa 6 é o que torna recusáveis ​​todas as mensagens ainda em trânsito da execução anterior. O passo 8 é a própria palavra da página — `ExternalWriteApplied`, nomeando a nota, a solicitação e a geração — porque um script avaliado não diz nada sobre se um documento foi adotado. Tudo a partir da etapa 5 já passou do ponto de commit, portanto a etapa 8 só pode decidir se a resposta contém um aviso; ele nunca pode transformar uma gravação concluída em uma falha. Consulte ADR-038 e ADR-039.
 
 Antes de tudo, o processo adquire o store. Nenhuma janela, documento ou salvamento automático existe até que esse processo seja o único gravador; se não puder sê-lo, informa o problema e encerra.
 

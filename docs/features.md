@@ -727,7 +727,7 @@ o Markdown ou a data de modificação da nota. A barra de cabeçalho mantém seu
 Os controles SearchPalette, Find, Trash, Timer, Study e image recebem métricas de layout reais.
   - Compartilhado por todas as notas abertas e persistido uma vez em `config.toml`; uma configuração mais antiga padrão
 para 100%. Não afeta o documento, suas marcas de tamanho de texto, zoom por nota ou `updated_at`.
-  - A altura do hospedeiro de uma nota recolhida segue a mesma escala enquanto sua geometria expandida permanece
+  - A altura do host de uma nota recolhida segue a mesma escala enquanto sua geometria expandida permanece
 armazenado inalterado.
 - **Tema (menu):**
   - Sistema / Claro / Escuro, aplicado imediatamente a todas as notas abertas e persistido globalmente.
@@ -800,7 +800,7 @@ um manual a pedido. Sete são mantidos, os antigos são removidos somente após 
 nos cabeçalhos das notas.
   - `created_at` é corrigido na criação; `updated_at` segue apenas edições de conteúdo, não de aparência ou
 mudanças na janela. Uma nota sem carimbos de data e hora ainda será aberta e os reportará como desconhecidos.
-  - Visitar uma nota não é editá-la: abrir e fechar, convocar, ocultar, mostrar ou sair
+  - Visitar uma nota não é editá-la: abrir e fechar, invocar, ocultar, mostrar ou sair
 sem alterar o texto, deixa `updated_at` em paz e o arquivo não é reescrito.
 
 ## CLI headless (`noteit`)
