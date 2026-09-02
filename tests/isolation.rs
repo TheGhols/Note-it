@@ -96,9 +96,12 @@ fn r009_harness_allows_stop_and_verify_from_inherited_isolated_xdg_environment()
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let harness = repo_root.join("scripts/note-it-isolated");
 
-    // Check if dbus-daemon is installed. If not, log explicit SKIPPED as mandated by Section 26.
-    let dbus_daemon_check = Command::new("which").arg("dbus-daemon").output();
-    let has_dbus_daemon = dbus_daemon_check
+    // Asking `dbus-daemon` itself, rather than asking `which` about it: `which`
+    // is not part of a minimal Arch image, and a missing prober used to read as
+    // a missing bus, which quietly skipped this whole scenario in CI.
+    let has_dbus_daemon = Command::new("dbus-daemon")
+        .arg("--version")
+        .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !has_dbus_daemon {
