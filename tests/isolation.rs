@@ -91,6 +91,31 @@ fn r009_harness_rejects_root_inside_real_home() {
     );
 }
 
+/// Whether a pid names a process that is still doing something.
+///
+/// A killed process whose parent has not reaped it stays in the table as a
+/// zombie, and `kill -0` answers yes for it. Containers frequently have no
+/// reaper, so the state field is what the harness reads and what a test asking
+/// "did the bus die?" has to read too.
+fn process_is_running(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // `comm` may itself contain spaces and parentheses, so the fields after
+        // the executable name start at the last `) `.
+        Ok(stat) => match stat.rsplit_once(") ") {
+            Some((_, rest)) => !matches!(rest.split(' ').next(), None | Some("Z") | Some("X")),
+            None => false,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        // No /proc to read: fall back on the weaker question.
+        Err(_) => Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false),
+    }
+}
+
 #[test]
 fn r009_harness_allows_stop_and_verify_from_inherited_isolated_xdg_environment() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -232,6 +257,12 @@ loop.run()
         ready,
         "Isolated session did not become ready on the private bus"
     );
+    // Also the control for the check that step 6 rests on: a helper that always
+    // answered "not running" would let the stop assertion pass without a stop.
+    assert!(
+        process_is_running(bus_pid),
+        "Private D-Bus PID {bus_pid} must be running while the session is live"
+    );
 
     // 3. Subshell inheriting isolated XDG environment and isolated HOME
     let inherited_home = root.join("home");
@@ -292,25 +323,34 @@ loop.run()
         "--stop from inherited environment must succeed with 0!\nstdout: {stdout_s}\nstderr: {stderr_s}"
     );
 
-    // 6. Verify that private bus PID is dead
+    // 6. Verify that the private bus is dead: the process has stopped running
+    //    and the address it served answers nobody.
     let mut pid_terminated = false;
     let term_wait = std::time::Instant::now();
     while term_wait.elapsed() < std::time::Duration::from_secs(4) {
-        let kill_check = Command::new("kill")
-            .arg("-0")
-            .arg(bus_pid.to_string())
-            .output();
-        if let Ok(out) = kill_check {
-            if !out.status.success() {
-                pid_terminated = true;
-                break;
-            }
+        if !process_is_running(bus_pid) {
+            pid_terminated = true;
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(
         pid_terminated,
         "Private D-Bus PID {bus_pid} must be terminated after --stop"
+    );
+
+    let still_answers = Command::new("dbus-send")
+        .arg("--session")
+        .arg("--dest=org.freedesktop.DBus")
+        .arg("/org/freedesktop/DBus")
+        .arg("org.freedesktop.DBus.GetId")
+        .env("DBUS_SESSION_BUS_ADDRESS", &private_bus_addr)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    assert!(
+        !still_answers,
+        "the private bus address must answer nobody once the session is stopped"
     );
 
     // 7. Verify session files cleaned up
