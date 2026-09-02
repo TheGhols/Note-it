@@ -1178,3 +1178,220 @@ fn r002_case_7_sequential_appends_on_note_without_frontmatter_preserves_single_f
         assert!(final_doc.content.contains(&format!("Parágrafo {i}")));
     }
 }
+
+#[test]
+fn r002_case_3_b_exists_cross_corruption_prevented() {
+    let (_tmp, core) = store();
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    assert_ne!(id_a, id_b);
+
+    // 1. Create legitimate B.md with valid front matter declaring id = id_b
+    let mut doc_b = NoteDocument::new_with_id(id_b);
+    doc_b.content = "CONTEUDO_ORIGINAL_DE_B_LEGITIMO".into();
+    let content_b = doc_b.serialize().expect("serialize doc_b");
+    let path_b = core.storage().note_path(&id_b);
+    fs::write(&path_b, &content_b).expect("write legitimate B");
+
+    let bytes_b_before = fs::read(&path_b).expect("read b before");
+
+    // 2. Create hostile A.md: filename is A.md, but front matter claims id = id_b
+    let mut hostile_doc = NoteDocument::new_with_id(id_b);
+    hostile_doc.content = "CONTEUDO_HOSTIL_DE_A_TENTANDO_CORROMPER_B".into();
+    let content_a = hostile_doc.serialize().expect("serialize hostile_doc");
+    let path_a = core.storage().note_path(&id_a);
+    fs::write(&path_a, &content_a).expect("write hostile A");
+
+    let bytes_a_before = fs::read(&path_a).expect("read a before");
+
+    // Pre-condition: exactly 2 files exist
+    let files_before = fs::read_dir(core.storage().notes_dir())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(
+        files_before, 2,
+        "Must be exactly 2 note files before attack"
+    );
+
+    // 3. Attack: attempt mutation directed at note A
+    let mutate_err = write::execute(
+        &core,
+        &WriteOperation::MutateNote {
+            selector: id_a.to_string(),
+            mutation: NoteMutation::Append {
+                payload: "ATAQUE_APPEND_EM_A".into(),
+            },
+        },
+    )
+    .expect_err("mutation on hostile note A must fail fail-closed");
+
+    assert!(
+        matches!(mutate_err, WriteError::StoreUnavailable { .. }),
+        "mutation must fail with StoreUnavailable: {mutate_err:?}"
+    );
+
+    // 4. Invariant: B.md MUST remain byte-for-byte identical to snapshot
+    let bytes_b_after = fs::read(&path_b).expect("read b after");
+    assert_eq!(
+        bytes_b_after, bytes_b_before,
+        "CORRUPÇÃO CRUZADA DETECTADA: B.md foi alterado após ataque em A!"
+    );
+
+    // Invariant: A.md MUST remain byte-for-byte identical to snapshot
+    let bytes_a_after = fs::read(&path_a).expect("read a after");
+    assert_eq!(
+        bytes_a_after, bytes_a_before,
+        "A.md foi alterado apesar do erro de validação!"
+    );
+
+    // Invariant: Exactly 2 files on disk (zero third files, zero ghost files, zero temps)
+    let files_after: Vec<_> = fs::read_dir(core.storage().notes_dir())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(
+        files_after.len(),
+        2,
+        "Must remain exactly 2 files: {files_after:?}"
+    );
+
+    // Reading legitimate B succeeds with authentic content
+    let read_b = core.read_note(&id_b).expect("read B must succeed");
+    assert_eq!(read_b.metadata.id, id_b);
+    assert_eq!(read_b.content, "CONTEUDO_ORIGINAL_DE_B_LEGITIMO");
+
+    // Reading hostile A fails with explicit identity conflict
+    let read_a_err = core.read_note(&id_a).expect_err("reading A must fail");
+    assert!(
+        read_a_err.contains("conflito de identidade"),
+        "error must mention identity conflict: {read_a_err}"
+    );
+}
+
+#[test]
+fn r002_gap2_list_read_mutate_preserves_identity_standard_note() {
+    let (_tmp, core) = store();
+    let initial_content = "Nota criada para fluxo list-read-mutate";
+    let created_id = create(&core, initial_content);
+
+    // 1. LIST: list notes using canonical API
+    let listed_ids = core.list_notes().expect("list notes");
+    assert!(
+        listed_ids.contains(&created_id),
+        "List must include created note"
+    );
+    let listed_id = *listed_ids.iter().find(|&&id| id == created_id).unwrap();
+
+    // 2. READ: use exactly the ID returned by list
+    let read_doc = core
+        .read_note(&listed_id)
+        .expect("read note using listed id");
+    assert_eq!(
+        read_doc.metadata.id, created_id,
+        "Read ID must match created ID"
+    );
+    assert_eq!(read_doc.content, initial_content);
+
+    // 3. MUTATE: use exactly the ID for mutation
+    let append_payload = "Texto adicionado no passo 3";
+    let outcome = write::execute(
+        &core,
+        &WriteOperation::MutateNote {
+            selector: listed_id.to_string(),
+            mutation: NoteMutation::Append {
+                payload: append_payload.into(),
+            },
+        },
+    )
+    .expect("mutation must succeed");
+
+    assert_eq!(
+        outcome.note_id, created_id,
+        "Outcome must report the same UUID"
+    );
+    assert!(outcome.changed);
+
+    // 4. READ AGAIN: verify updated note
+    let final_doc = core
+        .read_note(&listed_id)
+        .expect("read note after mutation");
+    assert_eq!(final_doc.metadata.id, created_id);
+    assert!(final_doc.content.contains(initial_content));
+    assert!(final_doc.content.contains(append_payload));
+
+    // Invariant: exactly 1 note file exists on disk
+    let files: Vec<_> = fs::read_dir(core.storage().notes_dir())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(files.len(), 1, "Exactly 1 note file on disk: {files:?}");
+    assert_eq!(files[0], core.storage().note_path(&created_id));
+}
+
+#[test]
+fn r002_gap2_list_read_mutate_preserves_identity_note_without_frontmatter() {
+    let (_tmp, core) = store();
+    let uuid = Uuid::new_v4();
+    let file_path = core.storage().note_path(&uuid);
+
+    // Prepare note without YAML front matter directly on disk
+    let raw_content = "Texto puro sem qualquer bloco de frontmatter YAML";
+    fs::write(&file_path, raw_content).expect("write plain note");
+
+    // 1. LIST: list notes using canonical API
+    let listed_ids = core.list_notes().expect("list notes");
+    assert_eq!(listed_ids.len(), 1);
+    let listed_id = listed_ids[0];
+    assert_eq!(
+        listed_id, uuid,
+        "Listed note without front matter must be identified by filename UUID"
+    );
+
+    // 2. READ: read note using listed id
+    let read_doc = core.read_note(&listed_id).expect("read plain note");
+    assert_eq!(
+        read_doc.metadata.id, uuid,
+        "Read document must deterministically anchor to filename UUID"
+    );
+    assert_eq!(read_doc.content, raw_content);
+
+    // 3. MUTATE: mutate note using listed id
+    let append_payload = "Adição em nota sem frontmatter";
+    let outcome = write::execute(
+        &core,
+        &WriteOperation::MutateNote {
+            selector: listed_id.to_string(),
+            mutation: NoteMutation::Append {
+                payload: append_payload.into(),
+            },
+        },
+    )
+    .expect("mutation must succeed");
+
+    assert_eq!(outcome.note_id, uuid, "Outcome must report filename UUID");
+    assert!(outcome.changed);
+
+    // 4. READ AGAIN: read note after mutation
+    let final_doc = core
+        .read_note(&listed_id)
+        .expect("read note after mutation");
+    assert_eq!(final_doc.metadata.id, uuid);
+    assert!(final_doc.content.contains(raw_content));
+    assert!(final_doc.content.contains(append_payload));
+
+    // Invariant: exactly 1 file remains on disk, unchanged UUID
+    let files: Vec<_> = fs::read_dir(core.storage().notes_dir())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(files.len(), 1, "Exactly 1 note file on disk: {files:?}");
+    assert_eq!(files[0], file_path);
+}

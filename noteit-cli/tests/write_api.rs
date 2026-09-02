@@ -11,6 +11,7 @@ use noteit_core::control::{
     read_frame, ControlRequest, ControlResponse, ControlResult, MAX_FRAME_BYTES,
 };
 use noteit_core::coordination::WriterLease;
+use noteit_core::model::NoteDocument;
 use noteit_core::write::{WriteOutcome, WriteOutcomeKind};
 use noteit_core::Uuid;
 use std::os::unix::fs::PermissionsExt;
@@ -736,4 +737,341 @@ fn r002_case_6_machine_response_accurately_reports_addressed_note_id() {
 
     // Verify on disk: the file modified is indeed id.md
     assert_eq!(sandbox.body(id), "corpo original\nmais texto");
+}
+
+#[test]
+fn r002_case_3_b_exists_cross_corruption_prevented_cli() {
+    let sandbox = Sandbox::new();
+    let id_b = sandbox.seed("CORPO_ORIGINAL_B_LEGITIMO");
+    let path_b = sandbox.root.join(format!("data/note-it/notes/{id_b}.md"));
+    let bytes_b_before = std::fs::read(&path_b).expect("read b before");
+
+    let id_a = Uuid::new_v4();
+    let path_a = sandbox.root.join(format!("data/note-it/notes/{id_a}.md"));
+    let mut hostile_doc = NoteDocument::new_with_id(id_b);
+    hostile_doc.content = "HOSTIL_A_REIVINDICANDO_B".into();
+    let hostile_content = hostile_doc.serialize().expect("serialize hostile_doc");
+    std::fs::write(&path_a, &hostile_content).expect("write hostile a");
+    let bytes_a_before = std::fs::read(&path_a).expect("read a before");
+
+    // Pre-condition: exactly 2 files
+    let files_before = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(files_before, 2);
+
+    // Attempt append directed at note A through CLI
+    let selector_a = prefix(id_a);
+    let (code, _stdout, stderr) = sandbox.run(&["--json", "adicionar", &selector_a, "ataque"]);
+    assert_ne!(code, 0, "Mutation on note A with divergent ID must fail");
+
+    // Parse error output: must not claim committed
+    if !stderr.is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&stderr) {
+            assert_ne!(v["status"], "ok");
+            assert_ne!(v["data"]["write"]["commit_state"], "committed");
+        }
+    }
+
+    // Invariant: B.md is byte-for-byte untouched!
+    let bytes_b_after = std::fs::read(&path_b).expect("read b after");
+    assert_eq!(
+        bytes_b_after, bytes_b_before,
+        "CORRUPÇÃO CRUZADA DETECTADA: B.md foi alterado!"
+    );
+
+    // Invariant: A.md is byte-for-byte untouched!
+    let bytes_a_after = std::fs::read(&path_a).expect("read a after");
+    assert_eq!(
+        bytes_a_after, bytes_a_before,
+        "A.md foi alterado apesar do erro!"
+    );
+
+    // Invariant: exactly 2 files on disk
+    let files_after = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(files_after, 2, "No extra files created on disk");
+}
+
+#[test]
+fn r002_gap2_cli_list_read_mutate_flow() {
+    let sandbox = Sandbox::new();
+
+    // 1. Create a note via CLI
+    let (code, stdout, stderr) = sandbox.run(&["--json", "criar", "Nota de teste para fluxo"]);
+    assert_eq!(code, 0, "{stderr}");
+    let created_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    let created_id_str = created_resp["data"]["write"]["note_id"]
+        .as_str()
+        .expect("note_id in create")
+        .to_string();
+    let created_uuid = Uuid::parse_str(&created_id_str).expect("parse uuid");
+
+    // 2. LIST: run `noteit --json listar`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "listar"]);
+    assert_eq!(code, 0, "{stderr}");
+    let list_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    let notes_array = list_resp["data"]["notes"].as_array().expect("notes array");
+    let found = notes_array
+        .iter()
+        .find(|n| n["note_id"].as_str() == Some(&created_id_str));
+    assert!(found.is_some(), "Created note must appear in listar");
+
+    let listed_id = found.unwrap()["note_id"].as_str().unwrap();
+
+    // 3. READ: run `noteit --json ler <listed_id>`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "ler", listed_id]);
+    assert_eq!(code, 0, "{stderr}");
+    let read_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(read_resp["data"]["note"]["note_id"], created_id_str);
+    assert_eq!(
+        read_resp["data"]["note"]["content"],
+        "Nota de teste para fluxo"
+    );
+
+    // 4. MUTATE: run `noteit --json adicionar <listed_id> "Texto anexado"`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "adicionar", listed_id, "Texto anexado"]);
+    assert_eq!(code, 0, "{stderr}");
+    let mutate_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(mutate_resp["status"], "ok");
+    assert_eq!(mutate_resp["data"]["write"]["commit_state"], "committed");
+    assert_eq!(mutate_resp["data"]["write"]["note_id"], created_id_str);
+
+    // 5. READ AGAIN: run `noteit --json ler <listed_id>`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "ler", listed_id]);
+    assert_eq!(code, 0, "{stderr}");
+    let read_resp2: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(read_resp2["data"]["note"]["note_id"], created_id_str);
+    assert_eq!(
+        read_resp2["data"]["note"]["content"],
+        "Nota de teste para fluxo\nTexto anexado"
+    );
+
+    // Invariant: exactly 1 file on disk
+    let note_files = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(note_files, 1, "Must be exactly 1 file on disk");
+    assert_eq!(
+        sandbox.body(created_uuid),
+        "Nota de teste para fluxo\nTexto anexado"
+    );
+}
+
+#[test]
+fn r002_gap2_cli_list_read_mutate_flow_without_frontmatter() {
+    let sandbox = Sandbox::new();
+    let uuid = Uuid::new_v4();
+    let path = sandbox.root.join(format!("data/note-it/notes/{uuid}.md"));
+    std::fs::create_dir_all(path.parent().unwrap()).expect("create notes dir");
+    std::fs::write(&path, "Corpo puro sem frontmatter").expect("write plain note");
+
+    let uuid_str = uuid.to_string();
+
+    // 1. LIST: run `noteit --json listar`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "listar"]);
+    assert_eq!(code, 0, "{stderr}");
+    let list_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    let notes_array = list_resp["data"]["notes"].as_array().expect("notes array");
+    let found = notes_array
+        .iter()
+        .find(|n| n["note_id"].as_str() == Some(&uuid_str));
+    assert!(
+        found.is_some(),
+        "Note without front matter must be listed by its filename UUID"
+    );
+
+    let listed_id = found.unwrap()["note_id"].as_str().unwrap();
+
+    // 2. READ: run `noteit --json ler <listed_id>`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "ler", listed_id]);
+    assert_eq!(code, 0, "{stderr}");
+    let read_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(read_resp["data"]["note"]["note_id"], uuid_str);
+    assert_eq!(
+        read_resp["data"]["note"]["content"],
+        "Corpo puro sem frontmatter"
+    );
+
+    // 3. MUTATE: run `noteit --json adicionar <listed_id> "Mais conteudo"`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "adicionar", listed_id, "Mais conteudo"]);
+    assert_eq!(code, 0, "{stderr}");
+    let mutate_resp: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(mutate_resp["status"], "ok");
+    assert_eq!(mutate_resp["data"]["write"]["commit_state"], "committed");
+    assert_eq!(mutate_resp["data"]["write"]["note_id"], uuid_str);
+
+    // 4. READ AGAIN: run `noteit --json ler <listed_id>`
+    let (code, stdout, stderr) = sandbox.run(&["--json", "ler", listed_id]);
+    assert_eq!(code, 0, "{stderr}");
+    let read_resp2: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(read_resp2["data"]["note"]["note_id"], uuid_str);
+    assert_eq!(
+        read_resp2["data"]["note"]["content"],
+        "Corpo puro sem frontmatter\nMais conteudo"
+    );
+
+    // Invariant: exactly 1 file on disk with filename matching uuid
+    let note_files: Vec<_> = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(
+        note_files.len(),
+        1,
+        "Must be exactly 1 file on disk: {note_files:?}"
+    );
+    assert_eq!(note_files[0], path);
+}
+
+#[test]
+fn r001_stress_concurrent_writers_via_different_paths_committed_equals_persisted() {
+    let sandbox = Sandbox::new();
+    let id = sandbox.seed("BASE_CONTENT");
+    let selector = prefix(id);
+
+    // Create a symlink pointing to the sandbox's data dir
+    let symlink_data = sandbox.root.join("symlink_data");
+    std::os::unix::fs::symlink(sandbox.root.join("data"), &symlink_data).expect("symlink data");
+
+    // Two concurrent worker threads targeting the same physical store via different paths
+    // Writer 1 uses canonical path; Writer 2 uses symlink path
+    const OPS_PER_WRITER: usize = 12; // 24 total operations
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let committed_payloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let t1 = {
+        let barrier = barrier.clone();
+        let committed = committed_payloads.clone();
+        let root = sandbox.root.clone();
+        let sel = selector.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            for i in 0..OPS_PER_WRITER {
+                let payload = format!("STRESS_CANONICAL_{i:03}");
+                let mut cmd = std::process::Command::new(support::noteit_bin());
+                cmd.args(["--json", "adicionar", &sel, &payload]);
+                cmd.env_remove("DISPLAY");
+                cmd.env_remove("WAYLAND_DISPLAY");
+                cmd.env_remove("DBUS_SESSION_BUS_ADDRESS");
+                cmd.env_remove("NO_COLOR");
+                cmd.env_remove("COLUMNS");
+                cmd.env("TERM", "xterm-256color");
+                cmd.env("XDG_DATA_HOME", root.join("data"));
+                cmd.env("XDG_CONFIG_HOME", root.join("config"));
+                cmd.env("XDG_STATE_HOME", root.join("state"));
+                cmd.env("XDG_CACHE_HOME", root.join("cache"));
+                cmd.env("XDG_RUNTIME_DIR", root.join("runtime"));
+
+                let output = cmd.output().expect("run canonical writer");
+                if output.status.success() {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                        if v["status"] == "ok" && v["data"]["write"]["commit_state"] == "committed"
+                        {
+                            committed.lock().unwrap().push(payload);
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    let t2 = {
+        let barrier = barrier.clone();
+        let committed = committed_payloads.clone();
+        let root = sandbox.root.clone();
+        let sel = selector.clone();
+        let symlink_path = symlink_data.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            for i in 0..OPS_PER_WRITER {
+                let payload = format!("STRESS_SYMLINK_{i:03}");
+                let mut cmd = std::process::Command::new(support::noteit_bin());
+                cmd.args(["--json", "adicionar", &sel, &payload]);
+                cmd.env_remove("DISPLAY");
+                cmd.env_remove("WAYLAND_DISPLAY");
+                cmd.env_remove("DBUS_SESSION_BUS_ADDRESS");
+                cmd.env_remove("NO_COLOR");
+                cmd.env_remove("COLUMNS");
+                cmd.env("TERM", "xterm-256color");
+                cmd.env("XDG_DATA_HOME", &symlink_path);
+                cmd.env("XDG_CONFIG_HOME", root.join("config"));
+                cmd.env("XDG_STATE_HOME", root.join("state"));
+                cmd.env("XDG_CACHE_HOME", root.join("cache"));
+                cmd.env("XDG_RUNTIME_DIR", root.join("runtime"));
+
+                let output = cmd.output().expect("run symlink writer");
+                if output.status.success() {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                        if v["status"] == "ok" && v["data"]["write"]["commit_state"] == "committed"
+                        {
+                            committed.lock().unwrap().push(payload);
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    t1.join().expect("thread 1 join");
+    t2.join().expect("thread 2 join");
+
+    let committed_list = committed_payloads.lock().unwrap().clone();
+    let total_committed = committed_list.len();
+
+    // Critical assertion: operations must have committed
+    assert!(
+        total_committed > 0,
+        "Expected committed operations, found 0"
+    );
+
+    let body = sandbox.body(id);
+    let mut persisted_count = 0;
+    let mut missing_payloads = Vec::new();
+    let mut duplicate_payloads = Vec::new();
+
+    for payload in &committed_list {
+        let occurrences = body.matches(payload).count();
+        if occurrences == 1 {
+            persisted_count += 1;
+        } else if occurrences == 0 {
+            missing_payloads.push(payload.clone());
+        } else {
+            duplicate_payloads.push((payload.clone(), occurrences));
+        }
+    }
+
+    assert!(
+        missing_payloads.is_empty(),
+        "LOST COMMITTED WRITES DETECTED! Total committed: {total_committed}, missing: {missing_payloads:?}"
+    );
+    assert!(
+        duplicate_payloads.is_empty(),
+        "DUPLICATE WRITES DETECTED! Duplicates: {duplicate_payloads:?}"
+    );
+    assert_eq!(
+        persisted_count, total_committed,
+        "TOTAL_COMMITTED ({total_committed}) != TOTAL_PERSISTED ({persisted_count})"
+    );
+
+    // Verify exactly 1 note file exists on disk, zero ghost notes
+    let note_files = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(
+        note_files, 1,
+        "Must be exactly 1 note file on disk, found {note_files}"
+    );
 }
