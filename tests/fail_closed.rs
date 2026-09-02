@@ -153,7 +153,7 @@ impl Sandbox {
     }
 
     fn coordination(&self) -> WriteCoordinationPaths {
-        WriteCoordinationPaths::for_store(&self.store_paths())
+        WriteCoordinationPaths::for_store(&self.store_paths()).expect("coordination paths")
     }
 
     fn spawn_note_it(&self, binary: &Path, args: &[&str]) -> Child {
@@ -423,8 +423,8 @@ fn the_desktop_and_the_command_line_agree_on_which_store_they_mean() {
     // what makes the lease an exclusion between them rather than two locks that
     // never meet.
     let paths = StorePaths::resolve();
-    let from_desktop = WriteCoordinationPaths::for_store(&paths);
-    let from_cli = WriteCoordinationPaths::for_store(&StorePaths::resolve());
+    let from_desktop = WriteCoordinationPaths::for_store(&paths).expect("from desktop");
+    let from_cli = WriteCoordinationPaths::for_store(&StorePaths::resolve()).expect("from cli");
 
     assert_eq!(from_desktop.store_key(), from_cli.store_key());
     assert_eq!(from_desktop.lock_path(), from_cli.lock_path());
@@ -440,6 +440,8 @@ fn the_desktop_and_the_command_line_agree_on_which_store_they_mean() {
     );
     assert_ne!(
         from_desktop.store_key(),
-        WriteCoordinationPaths::for_store(&elsewhere).store_key()
+        WriteCoordinationPaths::for_store(&elsewhere)
+            .expect("elsewhere")
+            .store_key()
     );
 }

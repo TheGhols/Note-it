@@ -369,11 +369,22 @@ impl StorageManager {
     /// goes ahead — a snapshot is an extra layer of safety, and turning its
     /// failure into a failed save would cost the edit the backup exists to
     /// protect.
-    pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
+    /// Writes a note verifying that the addressed identity matches the document metadata identity.
+    pub fn save_note_atomic_with_id(
+        &self,
+        expected_id: &Uuid,
+        doc: &NoteDocument,
+    ) -> Result<PathBuf, String> {
+        if doc.metadata.id != *expected_id {
+            return Err(format!(
+                "conflito de identidade na persistência: a mutação endereçada à nota {expected_id} tentou salvar com id {}",
+                doc.metadata.id
+            ));
+        }
         self.back_up_before_mutation();
         let serialized = doc.serialize()?;
-        let target_path = self.note_path(&doc.metadata.id);
-        let what = format!("note {}", doc.metadata.id);
+        let target_path = self.note_path(expected_id);
+        let what = format!("note {expected_id}");
 
         #[cfg(any(test, feature = "test-support"))]
         if self.fail_directory_sync {
@@ -387,6 +398,10 @@ impl StorageManager {
 
         write_atomic(&target_path, serialized.as_bytes(), &what)?;
         Ok(target_path)
+    }
+
+    pub fn save_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
+        self.save_note_atomic_with_id(&doc.metadata.id, doc)
     }
 
     /// Moves a note into the trash, where it can be restored from.
@@ -541,7 +556,7 @@ impl StorageManager {
         }
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read note {}: {e}", path.display()))?;
-        NoteDocument::parse(&content)
+        NoteDocument::parse_with_id(&content, *id)
     }
 
     /// Every `.md` in the store whose name is a note identifier, with the

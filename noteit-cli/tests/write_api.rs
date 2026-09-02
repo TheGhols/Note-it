@@ -650,3 +650,90 @@ fn a_repeated_request_identifier_is_answered_from_memory_rather_than_applied_twi
     assert_eq!(first.result, second.result);
     assert!(matches!(first.result, ControlResult::Committed(_)));
 }
+
+#[test]
+fn r001_case_e_concurrent_writers_via_different_paths_share_lease_and_persist_all_mutations() {
+    let sandbox = Sandbox::new();
+    let id = sandbox.seed("base");
+    let selector = prefix(id);
+
+    // Create a symlink pointing to the sandbox's data dir
+    let symlink_data = sandbox.root.join("symlink_data");
+    std::os::unix::fs::symlink(sandbox.root.join("data"), &symlink_data).expect("symlink data");
+
+    // Spawn 2 concurrent writers addressing the same physical store via different paths
+    // Writer 1 uses the canonical sandbox data path
+    let mut cmd1 = sandbox.command(&["adicionar", &selector, "MUTACAO_CANONICA"]);
+
+    // Writer 2 uses the symlinked XDG_DATA_HOME
+    let mut cmd2 = sandbox.command(&["adicionar", &selector, "MUTACAO_SYMLINK"]);
+    cmd2.env("XDG_DATA_HOME", &symlink_data);
+
+    let child1 = cmd1
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn 1");
+    let child2 = cmd2
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn 2");
+
+    let out1 = child1.wait_with_output().expect("wait 1");
+    let out2 = child2.wait_with_output().expect("wait 2");
+
+    assert!(
+        out1.status.success(),
+        "Writer 1 failed: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+    assert!(
+        out2.status.success(),
+        "Writer 2 failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    let body = sandbox.body(id);
+    assert!(
+        body.contains("MUTACAO_CANONICA"),
+        "Canonical write was lost: {body}"
+    );
+    assert!(
+        body.contains("MUTACAO_SYMLINK"),
+        "Symlink write was lost: {body}"
+    );
+    assert!(body.starts_with("base"), "{body}");
+
+    // Critical invariant: committed == persisted.
+    // Both mutations succeeded, both must be present in the exact note on disk.
+    // Zero ghost files created.
+    let note_files = std::fs::read_dir(sandbox.root.join("data/note-it/notes"))
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(
+        note_files, 1,
+        "Must be exactly 1 note file on disk, found {note_files}"
+    );
+}
+
+#[test]
+fn r002_case_6_machine_response_accurately_reports_addressed_note_id() {
+    let sandbox = Sandbox::new();
+    let id = sandbox.seed("corpo original");
+    let selector = prefix(id);
+
+    let (code, stdout, stderr) = sandbox.run(&["--json", "adicionar", &selector, "mais texto"]);
+    assert_eq!(code, 0, "{stderr}");
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid json response");
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(parsed["data"]["write"]["changed"], true);
+    assert_eq!(parsed["data"]["write"]["commit_state"], "committed");
+    assert_eq!(parsed["data"]["write"]["note_id"], id.to_string());
+
+    // Verify on disk: the file modified is indeed id.md
+    assert_eq!(sandbox.body(id), "corpo original\nmais texto");
+}

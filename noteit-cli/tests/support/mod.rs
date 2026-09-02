@@ -54,7 +54,7 @@ impl Sandbox {
     }
 
     pub fn coordination(&self) -> WriteCoordinationPaths {
-        WriteCoordinationPaths::for_store(&self.store_paths())
+        WriteCoordinationPaths::for_store(&self.store_paths()).expect("coordination paths")
     }
 
     pub fn core(&self) -> NoteItCore {
@@ -86,6 +86,7 @@ impl Sandbox {
         command.env_remove("DBUS_SESSION_BUS_ADDRESS");
         command.env_remove("NO_COLOR");
         command.env_remove("COLUMNS");
+        command.env("TERM", "xterm-256color");
         command.env("XDG_DATA_HOME", self.root.join("data"));
         command.env("XDG_CONFIG_HOME", self.root.join("config"));
         command.env("XDG_STATE_HOME", self.root.join("state"));

@@ -201,6 +201,52 @@ impl NoteDocument {
         Self::canonical_content(Self::split_front_matter(raw).1)
     }
 
+    /// Parses a note where the expected note identifier is known (e.g. from the filename `<uuid>.md`).
+    ///
+    /// - If the note has no front matter, default metadata is constructed anchored to `expected_id`.
+    ///   Its identity is deterministic and does not generate a random UUID on parse.
+    /// - If the note has front matter whose `id` disagrees with `expected_id`, parsing fails with an
+    ///   identity conflict error, preventing silent redirection or corruption.
+    pub fn parse_with_id(raw: &str, expected_id: Uuid) -> Result<Self, String> {
+        let (front_matter, content) = Self::split_front_matter(raw);
+
+        let Some(yaml_str) = front_matter else {
+            if raw.trim_start().starts_with("---") {
+                return Err(
+                    "Invalid markdown front matter: missing closing delimiter '---'".to_string(),
+                );
+            }
+            // No front matter present: anchor default metadata to expected_id
+            let doc = Self::new_with_id(expected_id);
+            return Ok(Self {
+                metadata: doc.metadata,
+                user_metadata: doc.user_metadata,
+                content: Self::canonical_content(raw).to_string(),
+                unknown_front_matter: BTreeMap::new(),
+            });
+        };
+
+        let wrapper: NoteFrontMatterWrapper = serde_yaml::from_str(yaml_str)
+            .map_err(|e| format!("Failed to parse YAML front matter: {e}"))?;
+
+        if wrapper.note_it.id != expected_id {
+            return Err(format!(
+                "conflito de identidade da nota: o arquivo `{expected_id}.md` possui front matter com id `{}`",
+                wrapper.note_it.id
+            ));
+        }
+
+        Ok(Self {
+            metadata: wrapper.note_it,
+            user_metadata: NoteMetadata {
+                tags: wrapper.tags,
+                properties: wrapper.properties,
+            },
+            content: Self::canonical_content(content).to_string(),
+            unknown_front_matter: wrapper.unknown,
+        })
+    }
+
     pub fn parse(raw: &str) -> Result<Self, String> {
         let (front_matter, content) = Self::split_front_matter(raw);
 

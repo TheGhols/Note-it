@@ -25,6 +25,7 @@ fn run_headless(
     cmd.env_remove("DISPLAY");
     cmd.env_remove("WAYLAND_DISPLAY");
     cmd.env_remove("DBUS_SESSION_BUS_ADDRESS");
+    cmd.env_remove("TERM");
 
     if no_color {
         cmd.env("NO_COLOR", "1");

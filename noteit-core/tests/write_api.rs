@@ -974,3 +974,207 @@ fn markdown_carrying_terminal_escapes_is_stored_exactly_as_written() {
     .expect("append");
     assert!(body(&core, id).ends_with("\u{1b}]0;título\u{7}"));
 }
+
+// R-002 and R-004 Identity and Integrity Verification -------------------------
+
+#[test]
+fn r002_case_1_deterministic_parse_anchored_to_filename_uuid() {
+    let id_a = Uuid::new_v4();
+    let raw = "Corpo de texto sem nenhum front matter";
+
+    // Parse multiple times with the expected ID
+    let doc1 = NoteDocument::parse_with_id(raw, id_a).expect("parse 1");
+    let doc2 = NoteDocument::parse_with_id(raw, id_a).expect("parse 2");
+    let doc3 = NoteDocument::parse_with_id(raw, id_a).expect("parse 3");
+
+    assert_eq!(doc1.metadata.id, id_a);
+    assert_eq!(doc2.metadata.id, id_a);
+    assert_eq!(doc3.metadata.id, id_a);
+    assert_eq!(doc1.content, raw);
+}
+
+#[test]
+fn r002_case_2_multiple_appends_on_note_without_frontmatter_mutates_only_addressed_file() {
+    let (_tmp, core) = store();
+    let id_a = Uuid::new_v4();
+    let file_path = core.storage().note_path(&id_a);
+    // Write a note without front matter directly to disk
+    fs::write(&file_path, "Texto inicial sem frontmatter").expect("write raw note");
+
+    // Perform multiple appends via write API
+    for i in 1..=3 {
+        let outcome = write::execute(
+            &core,
+            &WriteOperation::MutateNote {
+                selector: id_a.to_string(),
+                mutation: NoteMutation::Append {
+                    payload: format!("Linha {i}"),
+                },
+            },
+        )
+        .expect("append");
+
+        // Verify machine outcome reports addressed ID
+        assert_eq!(outcome.note_id, id_a);
+        assert!(outcome.changed);
+    }
+
+    // Verify disk state: exactly 1 file exists, which is id_a.md
+    let notes_dir = core.storage().paths().notes_dir.clone();
+    let entries: Vec<_> = fs::read_dir(&notes_dir)
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+
+    assert_eq!(
+        entries.len(),
+        1,
+        "Must be exactly 1 file on disk, found {entries:?}"
+    );
+    assert_eq!(entries[0], file_path);
+
+    // Verify content
+    let doc = core.read_note(&id_a).expect("read note");
+    assert_eq!(doc.metadata.id, id_a);
+    assert!(doc.content.contains("Texto inicial sem frontmatter"));
+    assert!(doc.content.contains("Linha 1"));
+    assert!(doc.content.contains("Linha 2"));
+    assert!(doc.content.contains("Linha 3"));
+}
+
+#[test]
+fn r002_case_3_divergence_between_filename_and_frontmatter_fails_explicitly() {
+    let (_tmp, core) = store();
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    assert_ne!(id_a, id_b);
+
+    let mut doc_b = NoteDocument::new_with_id(id_b);
+    doc_b.content = "Corpo com ID divergente".into();
+    let hostile_content = doc_b.serialize().expect("serialize doc_b");
+    let path_a = core.storage().note_path(&id_a);
+    let path_b = core.storage().note_path(&id_b);
+    fs::write(&path_a, &hostile_content).expect("write hostile note");
+
+    // Reading note A must fail with explicit identity conflict error
+    let read_err = core
+        .read_note(&id_a)
+        .expect_err("reading note with divergent ID must fail");
+    assert!(
+        read_err.contains("conflito de identidade"),
+        "error must explicitly report identity conflict: {read_err}"
+    );
+
+    // Attempting a mutation on selector id_a must fail before touching anything
+    let mutate_err = write::execute(
+        &core,
+        &WriteOperation::MutateNote {
+            selector: id_a.to_string(),
+            mutation: NoteMutation::Append {
+                payload: "tentativa de ataque".into(),
+            },
+        },
+    )
+    .expect_err("mutation on note with divergent ID must fail");
+
+    assert!(
+        matches!(mutate_err, WriteError::StoreUnavailable { .. }),
+        "mutation must fail closed: {mutate_err:?}"
+    );
+
+    // Verify store state: file B was NEVER created, file A was NOT modified
+    assert!(!path_b.exists(), "Target file B must NOT be created");
+    let content_after = fs::read_to_string(&path_a).expect("read path a");
+    assert_eq!(
+        content_after, hostile_content,
+        "Path A must remain completely unmodified"
+    );
+}
+
+#[test]
+fn r002_case_4_defense_in_depth_storage_layer_rejects_identity_mismatch() {
+    let (_tmp, core) = store();
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    assert_ne!(id_a, id_b);
+
+    let doc_b = NoteDocument::new_with_id(id_b);
+    let path_a = core.storage().note_path(&id_a);
+    let path_b = core.storage().note_path(&id_b);
+
+    // Call save_note_atomic_with_id with mismatched expected_id
+    let err = core
+        .storage()
+        .save_note_atomic_with_id(&id_a, &doc_b)
+        .expect_err("save_note_atomic_with_id must reject mismatched ID");
+
+    assert!(
+        err.contains("conflito de identidade na persistência"),
+        "error must report identity conflict: {err}"
+    );
+
+    // Verify neither file exists on disk
+    assert!(!path_a.exists(), "Path A must not exist");
+    assert!(!path_b.exists(), "Path B must not exist");
+}
+
+#[test]
+fn r002_case_5_defense_in_depth_write_layer_rejects_identity_mismatch() {
+    let (_tmp, core) = store();
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    assert_ne!(id_a, id_b);
+
+    let doc_b = NoteDocument::new_with_id(id_b);
+    let path_a = core.storage().note_path(&id_a);
+    let path_b = core.storage().note_path(&id_b);
+
+    let err = write::commit_addressed(&core, &id_a, &doc_b)
+        .expect_err("commit_addressed must reject mismatched ID");
+
+    assert!(
+        matches!(err, WriteError::Persistence { .. }),
+        "error must be WriteError::Persistence: {err:?}"
+    );
+
+    assert!(!path_a.exists(), "Path A must not exist");
+    assert!(!path_b.exists(), "Path B must not exist");
+}
+
+#[test]
+fn r002_case_7_sequential_appends_on_note_without_frontmatter_preserves_single_file_and_uuid() {
+    let (_tmp, core) = store();
+    let id = Uuid::new_v4();
+    let file_path = core.storage().note_path(&id);
+    fs::write(&file_path, "Início").expect("initial write");
+
+    for i in 1..=5 {
+        let outcome = write::execute(
+            &core,
+            &WriteOperation::MutateNote {
+                selector: id.to_string(),
+                mutation: NoteMutation::Append {
+                    payload: format!("Parágrafo {i}"),
+                },
+            },
+        )
+        .expect("append");
+
+        assert_eq!(outcome.note_id, id);
+        assert!(outcome.changed);
+    }
+
+    let notes_dir = core.storage().paths().notes_dir.clone();
+    let count = fs::read_dir(&notes_dir)
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .count();
+    assert_eq!(count, 1, "Must be exactly 1 file on disk after 5 appends");
+
+    let final_doc = core.read_note(&id).expect("read final doc");
+    assert_eq!(final_doc.metadata.id, id);
+    for i in 1..=5 {
+        assert!(final_doc.content.contains(&format!("Parágrafo {i}")));
+    }
+}

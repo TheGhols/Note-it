@@ -626,7 +626,7 @@ pub fn execute(core: &NoteItCore, operation: &WriteOperation) -> Result<WriteOut
             match apply(&document, mutation)? {
                 None => Ok(WriteOutcome::new(note_id, outcome_kind, false)),
                 Some(candidate) => {
-                    commit(core, &candidate)?;
+                    commit_addressed(core, &note_id, &candidate)?;
                     Ok(WriteOutcome::new(note_id, outcome_kind, true))
                 }
             }
@@ -665,6 +665,29 @@ pub fn create_note(core: &NoteItCore, draft: &NoteDraft) -> Result<WriteOutcome,
     ))
 }
 
+/// Commits a document to disk, ensuring that the addressed note ID matches the document ID.
+///
+/// Refuses to write if the addressed note ID does not match the document metadata ID,
+/// enforcing defense-in-depth against silent write redirection or identity confusion.
+pub fn commit_addressed(
+    core: &NoteItCore,
+    addressed_id: &Uuid,
+    document: &NoteDocument,
+) -> Result<(), WriteError> {
+    if document.metadata.id != *addressed_id {
+        return Err(WriteError::Persistence {
+            detail: format!(
+                "identity mismatch: addressed note {addressed_id} cannot be written to {}",
+                document.metadata.id
+            ),
+        });
+    }
+    core.storage()
+        .save_note_atomic_with_id(addressed_id, document)
+        .map(|_| ())
+        .map_err(|detail| WriteError::Persistence { detail })
+}
+
 /// The one way a mutation reaches the disk.
 ///
 /// Straight through the canonical atomic writer, so the backup that precedes a
@@ -673,10 +696,7 @@ pub fn create_note(core: &NoteItCore, draft: &NoteDraft) -> Result<WriteOutcome,
 /// edit made in a window. There is deliberately no second write path here to
 /// keep in step with that one.
 pub fn commit(core: &NoteItCore, document: &NoteDocument) -> Result<(), WriteError> {
-    core.storage()
-        .save_note_atomic(document)
-        .map(|_| ())
-        .map_err(|detail| WriteError::Persistence { detail })
+    commit_addressed(core, &document.metadata.id, document)
 }
 
 #[cfg(test)]

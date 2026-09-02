@@ -27,7 +27,7 @@ $XDG_RUNTIME_DIR/note-it/            0700
     control.sock                     0600   soquete privado da autoridade
 ```
 
-`<store key>` é o digest FNV-1a de 64 bits do caminho do diretório de notas, escrito como dezesseis caracteres hexadecimais minúsculos. A chave por store permite que um store de teste isolado e o store real tenham, ao mesmo tempo, um gravador legítimo cada um, sem que um espere pelo outro.
+`<store key>` é o digest FNV-1a de 64 bits do caminho canônico físico do diretório de notas, escrito como dezesseis caracteres hexadecimais minúsculos. A resolução canônica garante que caminhos contendo `.`, `..`, links simbólicos ou barras redundantes convirjam para a mesma chave de coordenação e compartilhem o mesmo lease de exclusão. A chave por store permite que um store de teste isolado e o store real tenham, ao mesmo tempo, um gravador legítimo cada um, sem que um espere pelo outro. Consulte o ADR-044.
 
 Nada aqui pertence ao store. Ele descreve esta inicialização, não tem sentido após uma reinicialização e nunca é feito backup. Quando a sessão não tem `$XDG_RUNTIME_DIR`, o substituto é `/tmp/note-it-<uid>`, com escopo definido para o usuário em vez de um nome que qualquer um poderia usar primeiro - e de qualquer forma, ambos os diretórios são recusados ​​se forem um link simbólico, pertencerem a outro usuário ou forem acessíveis por um.
 

@@ -100,7 +100,7 @@ pub fn perform_at(
     paths: &StorePaths,
     operation: &WriteOperation,
 ) -> Result<PerformedWrite, WriteError> {
-    let coordination = WriteCoordinationPaths::for_store(paths);
+    let coordination = WriteCoordinationPaths::for_store(paths).map_err(from_coordination)?;
     coordination.prepare().map_err(from_coordination)?;
 
     let deadline = Instant::now() + BUSY_RETRY_WINDOW;

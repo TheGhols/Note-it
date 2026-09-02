@@ -64,11 +64,142 @@
 
 use crate::hashing::fnv1a_64_hex;
 use crate::storage::StorePaths;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+const MAX_SYMLINK_DEPTH: usize = 40;
+
+const ERR_ELOOP: i32 = 40;
+
+fn is_filesystem_loop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERR_ELOOP)
+}
+
+/// Resolves a store directory path to its canonical physical path.
+///
+/// If the directory exists on disk, standard canonicalization (`realpath`) is used,
+/// resolving any symlinks, redundant slashes, and `.` or `..` segments.
+///
+/// If the directory does not exist yet (e.g. before initial directory creation), its
+/// existing ancestors are canonicalized and trailing path segments are normalized with
+/// symlink traversal and loop detection.
+pub fn canonicalize_store_directory(path: &Path) -> Result<PathBuf, CoordinationError> {
+    let abs_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| {
+                CoordinationError::Unavailable(format!(
+                    "could not determine current directory for store resolution: {error}"
+                ))
+            })?
+            .join(path)
+    };
+
+    match fs::canonicalize(&abs_path) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut visited = HashSet::new();
+            resolve_path_with_symlinks(&abs_path, &mut visited, 0)
+        }
+        Err(error) if is_filesystem_loop(&error) => Err(CoordinationError::Unsafe(format!(
+            "symlink loop detected while resolving store directory {}: {error}",
+            abs_path.display()
+        ))),
+        Err(error) => Err(CoordinationError::Unavailable(format!(
+            "could not resolve store directory {}: {error}",
+            abs_path.display()
+        ))),
+    }
+}
+
+fn resolve_path_with_symlinks(
+    path: &Path,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+) -> Result<PathBuf, CoordinationError> {
+    if depth > MAX_SYMLINK_DEPTH {
+        return Err(CoordinationError::Unsafe(format!(
+            "too many levels of symbolic links while resolving {}",
+            path.display()
+        )));
+    }
+
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+            }
+            Component::RootDir => {
+                current.push(Component::RootDir.as_os_str());
+            }
+            Component::CurDir => {
+                // Ignore `.`
+            }
+            Component::ParentDir => {
+                // `..` - pop from current
+                current.pop();
+            }
+            Component::Normal(name) => {
+                let candidate = current.join(name);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        let target = fs::read_link(&candidate).map_err(|error| {
+                            CoordinationError::Unavailable(format!(
+                                "could not read symbolic link {}: {error}",
+                                candidate.display()
+                            ))
+                        })?;
+                        let target_path = if target.is_absolute() {
+                            target
+                        } else {
+                            current.join(target)
+                        };
+                        if let Ok(c) = fs::canonicalize(&target_path) {
+                            current = c;
+                        } else {
+                            if !visited.insert(candidate.clone()) {
+                                return Err(CoordinationError::Unsafe(format!(
+                                    "symlink loop detected at {}",
+                                    candidate.display()
+                                )));
+                            }
+                            current = resolve_path_with_symlinks(&target_path, visited, depth + 1)?;
+                        }
+                    }
+                    Ok(_) => {
+                        if let Ok(c) = fs::canonicalize(&candidate) {
+                            current = c;
+                        } else {
+                            current = candidate;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        current = candidate;
+                    }
+                    Err(error) if is_filesystem_loop(&error) => {
+                        return Err(CoordinationError::Unsafe(format!(
+                            "symlink loop detected at {}: {error}",
+                            candidate.display()
+                        )));
+                    }
+                    Err(error) => {
+                        return Err(CoordinationError::Unavailable(format!(
+                            "could not inspect path {}: {error}",
+                            candidate.display()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(current)
+}
 
 /// The lock file inside a store's coordination directory.
 pub const LOCK_FILE_NAME: &str = "writer.lock";
@@ -113,9 +244,9 @@ impl std::error::Error for CoordinationError {}
 
 /// Where one store's writer lease and control socket live.
 ///
-/// Resolving is pure: it touches no filesystem and creates nothing. Everything
-/// that has to exist is made by [`Self::prepare`], which is also where every
-/// safety check happens.
+/// Resolving canonical store paths ensures that all equivalent filesystem
+/// representations (symlinks, `.` segments, `..` traversals, redundant separators)
+/// share the exact same coordination directory, lease, and authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteCoordinationPaths {
     runtime_root: PathBuf,
@@ -125,24 +256,21 @@ pub struct WriteCoordinationPaths {
 }
 
 impl WriteCoordinationPaths {
-    /// The coordination paths for a store. Pure.
-    pub fn for_store(paths: &StorePaths) -> Self {
+    /// The coordination paths for a store.
+    pub fn for_store(paths: &StorePaths) -> Result<Self, CoordinationError> {
         Self::for_parts(&paths.runtime_dir, &paths.notes_dir)
     }
 
     /// The same, from the two directories that decide it.
-    pub fn for_parts(runtime_root: &Path, notes_dir: &Path) -> Self {
-        // The path as the process resolved it. Two processes given the same
-        // XDG environment resolve the same string, which is the only agreement
-        // needed; a store reached through two different spellings is two
-        // different keys, and the ownership checks below still hold for both.
-        let store_key = fnv1a_64_hex(notes_dir.as_os_str().as_encoded_bytes());
-        Self {
+    pub fn for_parts(runtime_root: &Path, notes_dir: &Path) -> Result<Self, CoordinationError> {
+        let canonical_notes_dir = canonicalize_store_directory(notes_dir)?;
+        let store_key = fnv1a_64_hex(canonical_notes_dir.as_os_str().as_encoded_bytes());
+        Ok(Self {
             store_dir: runtime_root.join(&store_key),
             runtime_root: runtime_root.to_path_buf(),
             store_key,
-            notes_dir: notes_dir.to_path_buf(),
-        }
+            notes_dir: canonical_notes_dir,
+        })
     }
 
     /// The digest naming this store's coordination directory.
@@ -175,6 +303,11 @@ impl WriteCoordinationPaths {
         self.store_dir.join(STORE_MARKER_FILE_NAME)
     }
 
+    /// The canonical physical directory where notes live.
+    pub fn notes_dir(&self) -> &Path {
+        &self.notes_dir
+    }
+
     /// Creates and validates the coordination directories.
     ///
     /// Called by every path that is about to take, or try to take, the lease.
@@ -183,6 +316,12 @@ impl WriteCoordinationPaths {
     pub fn prepare(&self) -> Result<(), CoordinationError> {
         create_private_directory(&self.runtime_root)?;
         create_private_directory(&self.store_dir)?;
+        fs::create_dir_all(&self.notes_dir).map_err(|error| {
+            CoordinationError::Unavailable(format!(
+                "could not create store directory {}: {error}",
+                self.notes_dir.display()
+            ))
+        })?;
 
         // Written *inside* the directory that was just made or validated, so
         // its owner is this process by construction. That is what the two
@@ -459,6 +598,7 @@ mod tests {
 
     fn paths_in(root: &Path) -> WriteCoordinationPaths {
         WriteCoordinationPaths::for_parts(&root.join("runtime"), &root.join("data/notes"))
+            .expect("paths_in")
     }
 
     #[test]
@@ -503,11 +643,10 @@ mod tests {
         paths.prepare().expect("prepare");
         fs::write(paths.lock_path(), b"stale").expect("leave a lock file behind");
 
-        let lease = WriterLease::try_acquire(&paths).expect("prepare");
-        assert!(
-            lease.is_some(),
-            "a file left behind by a dead process was treated as a live lease"
-        );
+        let lease = WriterLease::try_acquire(&paths)
+            .expect("prepare")
+            .expect("a stale file must not keep a writer out");
+        drop(lease);
     }
 
     #[test]
@@ -536,8 +675,10 @@ mod tests {
         // other for no reason at all.
         let tmp = tempdir().expect("tempdir");
         let runtime = tmp.path().join("runtime");
-        let first = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("a/notes"));
-        let second = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("b/notes"));
+        let first = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("a/notes"))
+            .expect("first");
+        let second = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("b/notes"))
+            .expect("second");
         assert_ne!(first.store_key(), second.store_key());
 
         let held = WriterLease::try_acquire(&first)
@@ -556,40 +697,148 @@ mod tests {
     fn the_same_store_always_resolves_to_the_same_key() {
         let runtime = PathBuf::from("/run/user/1000/note-it");
         let notes = PathBuf::from("/home/someone/.local/share/note-it/notes");
-        let first = WriteCoordinationPaths::for_parts(&runtime, &notes);
-        let second = WriteCoordinationPaths::for_parts(&runtime, &notes);
+        let first = WriteCoordinationPaths::for_parts(&runtime, &notes).expect("first");
+        let second = WriteCoordinationPaths::for_parts(&runtime, &notes).expect("second");
         assert_eq!(first.store_key(), second.store_key());
         assert_eq!(first.lock_path(), second.lock_path());
         assert_eq!(first.socket_path(), second.socket_path());
     }
 
     #[test]
-    fn the_key_follows_the_path_as_the_process_resolved_it() {
-        // The contract, stated so it is a decision rather than a surprise: the
-        // key is the digest of the notes directory *as this process spelled
-        // it*. Two processes handed the same XDG environment spell it the same
-        // way, which is all the exclusion between the desktop instance and the
-        // command line needs.
-        //
-        // It does mean two different spellings of one store — a `.` segment, a
-        // symlinked home — are two keys, and therefore two authorities over the
-        // same files. Resolving that needs canonicalisation of a directory that
-        // may not exist yet, which is a larger change than it looks; it is
-        // recorded as a known limit for Phase 4.0R rather than improvised here.
-        let runtime = PathBuf::from("/run/user/1000/note-it");
-        let plain = WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/notes"));
-        let dotted = WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/./notes"));
+    fn r001_case_a_canonical_vs_dotted_shares_key_and_lease() {
+        let tmp = tempdir().expect("tempdir");
+        let runtime = tmp.path().join("runtime");
+        let real_notes = tmp.path().join("notes");
+        let dotted_notes = tmp.path().join("./notes");
+
+        let plain = WriteCoordinationPaths::for_parts(&runtime, &real_notes).expect("plain");
+        let dotted = WriteCoordinationPaths::for_parts(&runtime, &dotted_notes).expect("dotted");
 
         assert_eq!(
             plain.store_key(),
-            WriteCoordinationPaths::for_parts(&runtime, Path::new("/srv/notes")).store_key(),
-            "the same spelling must always give the same key"
-        );
-        assert_ne!(
-            plain.store_key(),
             dotted.store_key(),
-            "this is the documented limit; if it changes, ADR-039 and the 4.0R \
-             note about store identity have to change with it"
+            "Case A: canonical and dotted paths must yield the exact same store key"
+        );
+        assert_eq!(plain.lock_path(), dotted.lock_path());
+        assert_eq!(plain.socket_path(), dotted.socket_path());
+
+        // Test authority/lease exclusion: plain writer holds lease, dotted writer must be locked out
+        let lease = WriterLease::try_acquire(&plain)
+            .expect("prepare")
+            .expect("acquire plain");
+        let dotted_attempt = WriterLease::try_acquire(&dotted).expect("prepare");
+        assert!(
+            dotted_attempt.is_none(),
+            "dotted alias must not acquire an independent lease on the same store"
+        );
+        drop(lease);
+    }
+
+    #[test]
+    fn r001_case_b_canonical_vs_redundant_components_shares_key_and_lease() {
+        let tmp = tempdir().expect("tempdir");
+        let runtime = tmp.path().join("runtime");
+        let real_notes = tmp.path().join("notes");
+        let redundant_notes = tmp.path().join("./././notes");
+
+        let plain = WriteCoordinationPaths::for_parts(&runtime, &real_notes).expect("plain");
+        let redundant =
+            WriteCoordinationPaths::for_parts(&runtime, &redundant_notes).expect("redundant");
+
+        assert_eq!(
+            plain.store_key(),
+            redundant.store_key(),
+            "Case B: canonical and redundant component paths must yield the same store key"
+        );
+        assert_eq!(plain.lock_path(), redundant.lock_path());
+    }
+
+    #[test]
+    fn r001_case_c_canonical_vs_parent_traversal_shares_key_and_lease() {
+        let tmp = tempdir().expect("tempdir");
+        let runtime = tmp.path().join("runtime");
+        let real_notes = tmp.path().join("notes");
+        let up_notes = tmp.path().join("sub/../notes");
+
+        let plain = WriteCoordinationPaths::for_parts(&runtime, &real_notes).expect("plain");
+        let up = WriteCoordinationPaths::for_parts(&runtime, &up_notes).expect("up");
+
+        assert_eq!(
+            plain.store_key(),
+            up.store_key(),
+            "Case C: canonical and parent traversal paths must yield the same store key"
+        );
+        assert_eq!(plain.lock_path(), up.lock_path());
+
+        let lease = WriterLease::try_acquire(&plain)
+            .expect("prepare")
+            .expect("acquire plain");
+        assert!(
+            WriterLease::try_acquire(&up).expect("prepare").is_none(),
+            "parent traversal alias must not acquire an independent lease on the same store"
+        );
+        drop(lease);
+    }
+
+    #[test]
+    fn r001_case_d_canonical_vs_symlink_shares_key_and_lease() {
+        let tmp = tempdir().expect("tempdir");
+        let runtime = tmp.path().join("runtime");
+        let real_notes = tmp.path().join("real_store/notes");
+        fs::create_dir_all(&real_notes).expect("create real store");
+
+        let symlink_notes = tmp.path().join("symlink_notes");
+        std::os::unix::fs::symlink(&real_notes, &symlink_notes).expect("create symlink");
+
+        let plain = WriteCoordinationPaths::for_parts(&runtime, &real_notes).expect("plain");
+        let linked = WriteCoordinationPaths::for_parts(&runtime, &symlink_notes).expect("linked");
+
+        assert_eq!(
+            plain.store_key(),
+            linked.store_key(),
+            "Case D: symlink pointing to store must yield the exact same store key"
+        );
+        assert_eq!(plain.lock_path(), linked.lock_path());
+        assert_eq!(plain.socket_path(), linked.socket_path());
+
+        // Plain writer acquires lease; linked writer must be locked out
+        let lease = WriterLease::try_acquire(&plain)
+            .expect("prepare")
+            .expect("acquire plain");
+        assert!(
+            WriterLease::try_acquire(&linked)
+                .expect("prepare")
+                .is_none(),
+            "symlink alias must not acquire an independent lease on the same store"
+        );
+        drop(lease);
+
+        // Conversely, linked writer acquires lease; plain writer must be locked out
+        let lease_linked = WriterLease::try_acquire(&linked)
+            .expect("prepare")
+            .expect("acquire linked");
+        assert!(
+            WriterLease::try_acquire(&plain).expect("prepare").is_none(),
+            "plain path must not acquire an independent lease while symlink alias holds it"
+        );
+        drop(lease_linked);
+    }
+
+    #[test]
+    fn symlink_loop_in_store_directory_is_refused() {
+        let tmp = tempdir().expect("tempdir");
+        let runtime = tmp.path().join("runtime");
+        let loop1 = tmp.path().join("loop1");
+        let loop2 = tmp.path().join("loop2");
+
+        std::os::unix::fs::symlink(&loop2, &loop1).expect("symlink 1");
+        std::os::unix::fs::symlink(&loop1, &loop2).expect("symlink 2");
+
+        let err = WriteCoordinationPaths::for_parts(&runtime, &loop1)
+            .expect_err("symlink loop must fail explicitly");
+        assert!(
+            matches!(err, CoordinationError::Unsafe(_)),
+            "must be CoordinationError::Unsafe, got: {err:?}"
         );
     }
 
@@ -617,10 +866,7 @@ mod tests {
             assert_eq!(mode, 0o700, "{} is not private", directory.display());
         }
         let marker = fs::read_to_string(paths.store_marker_path()).expect("marker");
-        assert_eq!(
-            marker.trim_end(),
-            tmp.path().join("data/notes").to_string_lossy()
-        );
+        assert_eq!(marker.trim_end(), paths.notes_dir().to_string_lossy());
     }
 
     #[test]
@@ -650,7 +896,8 @@ mod tests {
         let runtime = tmp.path().join("runtime");
         std::os::unix::fs::symlink(&elsewhere, &runtime).expect("symlink");
 
-        let paths = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("data/notes"));
+        let paths = WriteCoordinationPaths::for_parts(&runtime, &tmp.path().join("data/notes"))
+            .expect("for_parts");
         let error = paths
             .prepare()
             .expect_err("a symlinked runtime must be refused");

@@ -191,7 +191,8 @@ pub struct PendingRequests(futures_channel::mpsc::UnboundedReceiver<Envelope>);
 /// somebody else genuinely holds, and the honest answer is to say so rather than
 /// to open a window that would quietly become a second writer.
 pub fn claim(paths: &StorePaths) -> Result<StoreClaim, StartupRefusal> {
-    let coordination = WriteCoordinationPaths::for_store(paths);
+    let coordination = WriteCoordinationPaths::for_store(paths)
+        .map_err(|error| StartupRefusal::Coordination(error.to_string()))?;
     coordination
         .prepare()
         .map_err(|error| StartupRefusal::Coordination(error.to_string()))?;
@@ -389,7 +390,7 @@ fn mutate_unloaded(
         return Ok(WriteOutcome::new(note_id, kind, false));
     };
     let core = controller.context.borrow().core.clone();
-    write::commit(&core, &candidate)?;
+    write::commit_addressed(&core, &note_id, &candidate)?;
     window.adopt_committed_document(candidate);
     Ok(WriteOutcome::new(note_id, kind, true))
 }
@@ -462,7 +463,7 @@ async fn mutate_open_note(
     };
 
     let core = controller.context.borrow().core.clone();
-    if let Err(error) = write::commit(&core, &candidate) {
+    if let Err(error) = write::commit_addressed(&core, &note_id, &candidate) {
         // Before the commit point. The file is untouched, the host still
         // describes it, and the page keeps the text it had.
         window.abort_external_write(request_id);
