@@ -561,8 +561,26 @@ impl StorageManager {
     /// file's own modification time, alongside any non-fatal scan warnings.
     #[allow(clippy::type_complexity)]
     pub fn note_files_with_warnings(&self) -> Result<NoteFilesBatch, String> {
-        if !self.paths.notes_dir.is_dir() {
-            return Ok((Vec::new(), Vec::new()));
+        // `is_dir()` answers false for a path it could not stat at all, which
+        // would turn "the store could not be examined" into "the store is
+        // empty". Absence is the only case that reads back as no notes.
+        match fs::metadata(&self.paths.notes_dir) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "The notes path {} is not a directory",
+                    self.paths.notes_dir.display()
+                ))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), Vec::new()))
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Failed to examine the notes directory {}: {e}",
+                    self.paths.notes_dir.display()
+                ))
+            }
         }
         let entries = fs::read_dir(&self.paths.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;

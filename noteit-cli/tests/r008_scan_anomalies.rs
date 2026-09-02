@@ -543,3 +543,55 @@ fn r008_9_individual_metadata_failure_emits_typed_warning() {
 
     fs::set_permissions(&unreadable_path, fs::Permissions::from_mode(0o600)).unwrap();
 }
+
+/// The same contract as `r008_8`, proven without depending on DAC.
+///
+/// `chmod 000` is inert for root, so the container CI runs that scenario's
+/// early return rather than the scenario. Replacing the notes directory with a
+/// regular file makes `read_dir` fail with `NotADirectory` for every user,
+/// which is the same class of failure: the catalogue cannot be known, and an
+/// empty answer would be a lie.
+#[test]
+fn r008_10_global_scan_failure_is_deterministic_without_dac() {
+    let tmp = tempdir().expect("tempdir");
+    let (core, notes_dir) = setup_store(tmp.path());
+
+    let mut doc = NoteDocument::new_empty();
+    doc.content = "# Cabeçalho\nConteúdo".into();
+    doc.user_metadata = NoteMetadata::try_new(vec!["rust".into()], vec![]).expect("metadata");
+    core.storage().save_note_atomic(&doc).expect("save note");
+    drop(core);
+
+    // The notes directory is no longer a directory. Nothing about the process
+    // identity can make `read_dir` succeed here.
+    fs::remove_dir_all(&notes_dir).expect("remove notes dir");
+    fs::write(&notes_dir, b"not a directory").expect("write file in its place");
+
+    let read_only = NoteItCore::open_read_only_at(StorePaths::from_custom_paths(
+        notes_dir.clone(),
+        tmp.path().join("config/note-it"),
+        tmp.path().join("state/note-it"),
+        tmp.path().join("runtime/note-it"),
+    ));
+    assert!(
+        read_only.metadata_catalog_with_warnings().is_err(),
+        "a notes directory that cannot be scanned must not read back as an empty catalogue"
+    );
+
+    for command in ["tags", "propriedades"] {
+        let (status, stdout, stderr) = run_cli(&[command, "--json"], tmp.path());
+        assert_ne!(status, 0, "{command} --json must exit non-zero");
+        let json_text = if stdout.is_empty() { &stderr } else { &stdout };
+        let json: serde_json::Value =
+            serde_json::from_str(json_text).expect("a single valid JSON error envelope");
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["error"]["code"], "read_failed");
+
+        let (status, _stdout, stderr) = run_cli(&[command], tmp.path());
+        assert_ne!(status, 0, "{command} must exit non-zero");
+        assert!(
+            stderr.contains("Erro") && stderr.contains("is not a directory"),
+            "{command} must name the failure on stderr, got: {stderr}"
+        );
+    }
+}
