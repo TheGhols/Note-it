@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Every step below runs a stage of `scripts/check`, which is where the gates
+# actually live. The workflow decides *what runs where* and keeps one step per
+# gate so a red run names the gate that failed; it does not restate the
+# commands. Installing the runner's system packages stays here, because that
+# is the runner's business and not the repository's.
 jobs:
   rust-check:
     name: Rust Checks & Tests
@@ -21,26 +26,32 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Environment Diagnosis
+        run: scripts/doctor rust
+
       - name: Rust Format Check
-        run: cargo fmt --all -- --check
+        run: scripts/check rust-format
+
+      - name: Cargo Check
+        run: scripts/check rust-check
 
       - name: Clippy Lint
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: scripts/check rust-clippy
 
       - name: Core Dependency Boundary
-        run: scripts/check-core-boundary
+        run: scripts/check core-boundary
 
       - name: CLI Dependency Boundary
-        run: scripts/check-cli-boundary
+        run: scripts/check cli-boundary
 
       - name: Headless Core Tests
-        run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+        run: scripts/check core-tests
 
       - name: Headless CLI Tests
-        run: env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
+        run: scripts/check cli-tests
 
       - name: Run Rust Unit Tests
-        run: cargo test --workspace
+        run: scripts/check workspace-tests
 
   frontend-check:
     name: Frontend Checks & Tests
@@ -58,18 +69,17 @@ jobs:
         with:
           node-version: 22
 
+      - name: Environment Diagnosis
+        run: scripts/doctor frontend
+
       - name: Install Frontend Dependencies
-        working-directory: ./ui
-        run: pnpm install --frozen-lockfile
+        run: scripts/check frontend-install
 
       - name: TypeScript Lint
-        working-directory: ./ui
-        run: pnpm run lint
+        run: scripts/check frontend-lint
 
       - name: Run Frontend Tests
-        working-directory: ./ui
-        run: pnpm run test
+        run: scripts/check frontend-test
 
       - name: Build Frontend Bundle
-        working-directory: ./ui
-        run: pnpm run build
+        run: scripts/check frontend-build

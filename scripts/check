@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+#
+# Every gate this repository has, in one place.
+#
+# This script is the authority. The CI workflow calls these stages rather than
+# restating the commands, so "what has to pass" is one list that lives in the
+# repository and not four lists that drift — one in the workflow, one in
+# CONTRIBUTING, one in the development guide, one in somebody's memory.
+#
+# Fail-closed throughout: the first stage that fails stops the run and its
+# exit code is the script's exit code. Nothing is ever softened with `|| true`,
+# no failure is reported as success, and a missing tool is an error rather than
+# a reason to reach for a different one.
+#
+# `workspace-tests` also covers the isolation harness: `tests/isolation.rs`
+# runs `scripts/test-isolation` from inside `cargo test`, so it is not invoked
+# a second time here. In a graphical session that harness briefly opens a real
+# Note-it window, pointed the whole time at a throwaway store on a private bus.
+#
+# Usage: scripts/check [all|rust|frontend|<stage>]
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
+
+readonly EXIT_USAGE=2
+readonly EXIT_MISSING_TOOL=1
+
+readonly RUST_STAGES=(
+  rust-format
+  rust-check
+  rust-clippy
+  core-boundary
+  cli-boundary
+  core-tests
+  cli-tests
+  workspace-tests
+)
+
+readonly FRONTEND_STAGES=(
+  frontend-install
+  frontend-lint
+  frontend-test
+  frontend-build
+)
+
+usage() {
+  cat >&2 <<USAGE
+Uso: scripts/check [all|rust|frontend|<estágio>]
+
+Agregados:
+  all        Rust e frontend (padrão)
+  rust       ${RUST_STAGES[*]}
+  frontend   ${FRONTEND_STAGES[*]}
+
+Estágios Rust:
+  rust-format      cargo fmt --all -- --check
+  rust-check       cargo check --workspace
+  rust-clippy      cargo clippy --workspace --all-targets --all-features -- -D warnings
+  core-boundary    scripts/check-core-boundary
+  cli-boundary     scripts/check-cli-boundary
+  core-tests       cargo test -p noteit-core, sem display
+  cli-tests        cargo test -p noteit-cli, sem display e sem barramento
+  workspace-tests  cargo test --workspace (inclui o harness de isolamento)
+
+Estágios do frontend, todos executados em ui/:
+  frontend-install  pnpm install --frozen-lockfile
+  frontend-lint     pnpm run lint
+  frontend-test     pnpm run test
+  frontend-build    pnpm run build
+
+Códigos de saída:
+  0  tudo o que foi pedido passou
+  1  falta uma ferramenta obrigatória
+  2  uso inválido
+  *  o código do estágio que falhou
+
+Use scripts/doctor antes daqui para saber se a máquina tem o necessário.
+USAGE
+}
+
+# --- the stages ------------------------------------------------------------
+
+stage_rust_format() { cargo fmt --all -- --check; }
+stage_rust_check() { cargo check --workspace; }
+stage_rust_clippy() { cargo clippy --workspace --all-targets --all-features -- -D warnings; }
+stage_core_boundary() { "$REPO_ROOT/scripts/check-core-boundary"; }
+stage_cli_boundary() { "$REPO_ROOT/scripts/check-cli-boundary"; }
+
+# The two headless suites are not made redundant by `workspace-tests`. They
+# prove a different property: that the Core and the CLI still work with no
+# display, no compositor and no session bus at all. Running them under the
+# ambient session would prove nothing, so the variables are stripped.
+stage_core_tests() {
+  env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
+}
+stage_cli_tests() {
+  env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
+}
+stage_workspace_tests() { cargo test --workspace; }
+
+# The project has a pnpm lockfile and the CI uses pnpm. There is deliberately
+# no fallback to npm, yarn or bun: a different package manager resolves a
+# different tree, and a build that quietly changed its dependencies is worse
+# than a build that stopped.
+require_pnpm() {
+  if ! command -v pnpm >/dev/null 2>&1; then
+    printf 'scripts/check: pnpm não encontrado.\n' >&2
+    printf 'O projeto usa pnpm e o lockfile é pnpm; npm e yarn não são alternativas.\n' >&2
+    exit "$EXIT_MISSING_TOOL"
+  fi
+}
+
+stage_frontend_install() {
+  require_pnpm
+  cd "$REPO_ROOT/ui" && pnpm install --frozen-lockfile
+}
+stage_frontend_lint() {
+  require_pnpm
+  cd "$REPO_ROOT/ui" && pnpm run lint
+}
+stage_frontend_test() {
+  require_pnpm
+  cd "$REPO_ROOT/ui" && pnpm run test
+}
+stage_frontend_build() {
+  require_pnpm
+  cd "$REPO_ROOT/ui" && pnpm run build
+}
+
+# --- running them ----------------------------------------------------------
+
+# The function that implements one stage, by its public name.
+stage_function() {
+  printf 'stage_%s' "${1//-/_}"
+}
+
+is_stage() {
+  local candidate="$1" known
+  for known in "${RUST_STAGES[@]}" "${FRONTEND_STAGES[@]}"; do
+    [[ "$candidate" == "$known" ]] && return 0
+  done
+  return 1
+}
+
+run_stage() {
+  local name="$1" code=0
+  printf '\n==> %s\n' "$name"
+  # Each stage runs in a subshell so a `cd` in one cannot decide where the
+  # next one runs.
+  ("$(stage_function "$name")") || code=$?
+  if ((code != 0)); then
+    printf '\nscripts/check: `%s` falhou (exit %d)\n' "$name" "$code" >&2
+    exit "$code"
+  fi
+}
+
+run_stages() {
+  local name
+  for name in "$@"; do
+    run_stage "$name"
+  done
+}
+
+main() {
+  if (($# > 1)); then
+    printf 'scripts/check: informe no máximo um alvo\n\n' >&2
+    usage
+    return "$EXIT_USAGE"
+  fi
+
+  local target="${1:-all}"
+  cd "$REPO_ROOT"
+
+  case "$target" in
+    all)
+      run_stages "${RUST_STAGES[@]}" "${FRONTEND_STAGES[@]}"
+      ;;
+    rust)
+      run_stages "${RUST_STAGES[@]}"
+      ;;
+    frontend)
+      run_stages "${FRONTEND_STAGES[@]}"
+      ;;
+    -h | --help | help)
+      usage
+      return "$EXIT_USAGE"
+      ;;
+    *)
+      if is_stage "$target"; then
+        run_stage "$target"
+      else
+        printf 'scripts/check: alvo desconhecido `%s`\n\n' "$target" >&2
+        usage
+        return "$EXIT_USAGE"
+      fi
+      ;;
+  esac
+
+  printf '\nscripts/check: %s — tudo passou.\n' "$target"
+}
+
+main "$@"

@@ -11,41 +11,133 @@ sudo pacman -S --needed gtk4 gtk4-layer-shell webkitgtk-6.0 rust nodejs pnpm pkg
 
 `dbus` fornece `dbus-daemon` e `dbus-send`, usados pelo harness de testes isolados para dar à execução um barramento de sessão próprio. Consulte **Executando com um store descartável** abaixo.
 
-## Compilando o projeto
+## Os três comandos
 
-1. **Crie os ativos de front-end:**
-   ```bash
-   cd ui
-   pnpm install
-   pnpm build
-   cd ..
-   ```
+O repositório tem três entrypoints canônicos, e o CI executa exatamente eles.
+Não há uma segunda lista de comandos para manter sincronizada: o workflow
+invoca os mesmos estágios que você invoca localmente.
 
-2. **Criar binários Rust:**
-   ```bash
-   cargo build --workspace
-   # Ou individualmente:
-   cargo build -p note-it      # Adaptador da GUI desktop
-   cargo build -p noteit-cli   # Adaptador da CLI headless (binário: noteit)
-   ```
+```bash
+scripts/doctor all    # a máquina tem o necessário?
+scripts/check all     # todos os gates
+scripts/build.sh      # build release do projeto inteiro
+```
 
-3. **Executar testes:**
-   ```bash
-   cargo test --workspace
-   env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
-   env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
-   scripts/check-core-boundary
-   scripts/check-cli-boundary
-   cd ui && pnpm test
-   ```
+Os três funcionam de qualquer diretório — cada um resolve a raiz do repositório
+a partir do próprio caminho, então `cd /tmp && /caminho/Note-it/scripts/check
+rust` faz o que se espera.
 
-4. **Verificações de qualidade de código:**
-   ```bash
-   cargo fmt --all -- --check
-   cargo check --workspace
-   cargo clippy --workspace --all-targets --all-features -- -D warnings
-   cd ui && pnpm lint
-   ```
+### `scripts/doctor` — o ambiente
+
+```bash
+scripts/doctor          # equivale a `all`
+scripts/doctor rust
+scripts/doctor frontend
+scripts/doctor all
+```
+
+Diagnóstico **somente leitura**. Verifica presença e versão do que o build
+realmente precisa e diz o que falta. Não instala nada, não usa `sudo`, não
+altera PATH, dotfiles, configuração do Git nem gerenciador de pacotes:
+instalar pacotes de sistema é decisão de quem opera a máquina, e no CI é
+responsabilidade do workflow.
+
+O que ele verifica:
+
+| Modo | Verificações |
+| --- | --- |
+| `rust` | `bash`, `git`, `cargo`, `rustc`, `pkg-config`; módulos `gtk4`, `gtk4-layer-shell-0`, `webkitgtk-6.0`; `dbus-daemon` e `dbus-send` |
+| `frontend` | `node` e `pnpm`, com a versão de cada um |
+
+A versão mínima do Rust é lida de `rust-version` no `Cargo.toml` — o doctor não
+tem opinião própria sobre a toolchain. Uma versão anterior à declarada é
+**erro**. Para `node` e `pnpm` o projeto não declara mínimo, então ausência é
+erro e uma versão atrás da que o CI usa é apenas aviso.
+
+Ao contrário do `check`, o doctor **não** para no primeiro problema: ele roda
+todas as verificações e o resumo final é o veredito, para você instalar tudo o
+que falta de uma vez.
+
+Códigos de saída: `0` ambiente pronto · `1` requisito ausente ou incompatível ·
+`2` uso inválido.
+
+### `scripts/check` — os gates
+
+```bash
+scripts/check           # equivale a `all`
+scripts/check rust
+scripts/check frontend
+scripts/check all
+scripts/check <estágio>
+scripts/check --help    # lista os estágios
+```
+
+Estágios, e o comando exato que cada um executa:
+
+| Estágio | Comando |
+| --- | --- |
+| `rust-format` | `cargo fmt --all -- --check` |
+| `rust-check` | `cargo check --workspace` |
+| `rust-clippy` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| `core-boundary` | `scripts/check-core-boundary` |
+| `cli-boundary` | `scripts/check-cli-boundary` |
+| `core-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core` |
+| `cli-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli` |
+| `workspace-tests` | `cargo test --workspace` |
+| `frontend-install` | `pnpm install --frozen-lockfile`, em `ui/` |
+| `frontend-lint` | `pnpm run lint`, em `ui/` |
+| `frontend-test` | `pnpm run test`, em `ui/` |
+| `frontend-build` | `pnpm run build`, em `ui/` |
+
+`core-tests` e `cli-tests` não são redundantes com `workspace-tests`, embora
+repitam testes: eles provam uma propriedade diferente — que o Core e a CLI ainda
+funcionam **sem display, sem compositor e sem barramento de sessão**. Rodá-los
+dentro da sessão ambiente não provaria nada, por isso as variáveis são
+removidas.
+
+O frontend usa pnpm e só pnpm. Não há fallback para npm, yarn ou bun: um
+gerenciador diferente resolve uma árvore diferente, e um build que trocou de
+dependências em silêncio é pior que um build que parou. Sem pnpm, o estágio
+falha com saída `1`.
+
+**Fail-closed.** O primeiro estágio que falhar interrompe a execução, e o código
+de saída do `check` é o código daquele estágio. Nenhum erro é convertido em
+sucesso, nenhum gate é amaciado com `|| true`. Uso inválido sai com `2` sem
+executar nada.
+
+**Isolamento.** `scripts/test-isolation` **não** é invocado aqui: ele já roda
+dentro de `cargo test --workspace`, por `tests/isolation.rs`, e executá-lo
+duas vezes só custaria tempo. Numa sessão gráfica, a metade de fidelidade desse
+harness **abre brevemente uma janela real do Note-it**, apontada o tempo todo
+para um store descartável em um barramento próprio — comportamento esperado e
+descrito em **O teste de regressão**, mais abaixo.
+
+**Artefatos.** Os gates escrevem apenas onde o desenvolvimento normalmente
+escreve e o Git já ignora: `target/`, `ui/node_modules/` e `ui/dist/`. Nenhum
+deles toca o store real, instala binário em `~/.local/bin` ou cria hook de Git.
+
+### `scripts/build.sh` — o build
+
+```bash
+scripts/build.sh
+```
+
+Compila o frontend com `pnpm install --frozen-lockfile` seguido de
+`pnpm run build`, depois o workspace Rust inteiro com
+`cargo build --release --workspace`, e por fim confere que
+`target/release/note-it` e `target/release/noteit` existem e são executáveis —
+não anuncia sucesso sem olhar. Constrói e **não instala**: nada vai para
+`~/.local/bin`, nada entra no PATH.
+
+## Compilando partes isoladas
+
+Quando quiser menos que o build completo:
+
+```bash
+cargo build --workspace
+cargo build -p note-it      # Adaptador da GUI desktop
+cargo build -p noteit-cli   # Adaptador da CLI headless (binário: noteit)
+```
 
 O crate dedicado `noteit-core` define o limite do domínio e da persistência. O crate `noteit-cli` é o adaptador da CLI headless. Ambos devem continuar utilizáveis sem GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri ou uma sessão gráfica. `scripts/check-core-boundary` e `scripts/check-cli-boundary` verificam suas árvores de dependências do Cargo em busca de bibliotecas de desktop proibidas; de forma independente, a compilação impede que o código-fonte do Core e da CLI importe bibliotecas não declaradas em seus manifestos.
 

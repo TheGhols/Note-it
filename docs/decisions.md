@@ -665,3 +665,29 @@ A segunda: a adoção de um documento suspende brevemente o bloqueio de transaç
 10. **O logotipo aparece uma vez.** `noteit ajuda`, os erros, cada comando e o `--json` seguem sem ele. Uma ajuda é referência, e referência não abre com anúncio.
 
 **Consequências.** `run_with_args` passou a receber `Channels` em vez de um `OutputContext`; é a superfície interna da crate, e o binário e os testes foram acompanhados. A interface de máquina não mudou em nada: mesmo documento, mesmos canais, mesmos códigos — agora também provado sobre um terminal real e sob janelas de todos os tamanhos, justamente porque a camada de apresentação passou a existir e precisava ser provada incapaz de alcançá-la.
+
+## ADR-043: Os gates vivem no repositório e o CI os consome
+
+**Decisão.** `scripts/check` é a autoridade sobre o que precisa passar. O workflow do GitHub Actions não reimplementa os comandos de qualidade: cada step invoca um estágio de `scripts/check`, e o mesmo estágio é o que uma pessoa roda localmente. `scripts/doctor` diagnostica o ambiente sem alterá-lo e `scripts/build.sh` faz a build reprodutível. Nenhum código de runtime do Note-it foi tocado para isso.
+
+**Justificativa.**
+
+1. **Havia quatro listas e elas já divergiam.** O CI rodava sete comandos; `docs/development.md` documentava oito, incluindo `cargo check --workspace`, que o CI **não** executava; o `CONTRIBUTING.md` trazia uma quinta lista mais fraca que todas as outras — `cargo fmt --check` em vez de `cargo fmt --all -- --check`, `cargo clippy -- -D warnings` sem `--workspace --all-targets --all-features`, `cargo test` sem `--workspace`, e nenhum dos dois boundary scripts. Um colaborador que seguisse o CONTRIBUTING passaria em tudo localmente e quebraria no CI. Não é um problema de disciplina: é o resultado previsível de manter a mesma lista em quatro lugares.
+
+2. **O consumidor certo do gate é o CI, não o contrário.** A alternativa seria gerar o script a partir do workflow, ou aceitar a duplicação e adicionar um teste que compara as duas listas. Ambas mantêm duas fontes; a segunda ainda deixa a lista fraca do CONTRIBUTING de fora. Colocar os comandos num script versionado e fazer o workflow chamá-lo resolve as duas coisas de uma vez, e tem o efeito colateral de que reproduzir uma falha do CI localmente passa a ser o mesmo comando que falhou lá.
+
+3. **Um step por gate continua sendo o certo.** Trocar nove steps por um `scripts/check all` gigante economizaria linhas de YAML e custaria a informação mais útil de um run vermelho: qual gate quebrou. Os estágios são atômicos justamente para o workflow preservar essa granularidade enquanto chama uma implementação só.
+
+4. **Nada foi removido, e um gate foi ganho.** `cargo check --workspace` já estava documentado como gate local e faltava no CI; agora está lá. As duas suítes headless permanecem apesar de `cargo test --workspace` repetir seus testes: elas provam outra coisa — que o Core e a CLI funcionam sem display, sem compositor e sem barramento. Um teste que passa dentro da sessão ambiente não diz nada sobre isso.
+
+5. **`doctor` verifica e nunca conserta.** A tentação óbvia é fazer o diagnóstico instalar o que falta. Um script do projeto que chama `pacman`, `apt` ou `brew` decide por quem opera a máquina, precisa de privilégio que não deveria pedir, e no CI colide com a instalação do runner — que continua sendo do workflow. Verificar e dizer o que falta é a fronteira inteira.
+
+6. **`doctor` não para no primeiro problema; `check` para.** São perguntas diferentes. Um diagnóstico que aborta faz a pessoa instalar uma coisa, rodar de novo e instalar outra; ele roda tudo e o resumo é o veredito. Um gate que continua depois de falhar está mentindo sobre o estado do repositório; ele para e propaga o código do estágio que quebrou.
+
+7. **A toolchain mínima é a que o `Cargo.toml` já declara.** `doctor` lê `rust-version` do manifesto em vez de repetir o número. Uma política de versão escrita em dois lugares é a mesma classe de bug que esta fase existe para eliminar. Para `node` e `pnpm` o projeto não declara mínimo nenhum, então ausência é erro e estar atrás do que o CI usa é aviso — não se inventa aqui uma incompatibilidade que ninguém demonstrou.
+
+8. **pnpm e só pnpm.** O `build.sh` anterior caía para `npm install` quando `pnpm` não existia, e instalava sem `--frozen-lockfile`. As duas coisas produzem uma árvore de dependências que o lockfile não descreve e que o CI nunca viu — exatamente o oposto de uma build reprodutível. Falta de pnpm passou a ser erro.
+
+9. **O harness de isolamento não roda duas vezes.** `tests/isolation.rs` já executa `scripts/test-isolation` de dentro do `cargo test`, então `workspace-tests` o cobre. Numa sessão gráfica ele abre brevemente uma janela real do Note-it, apontada o tempo todo para um store descartável em um barramento próprio; isso é comportamento conhecido do projeto e está documentado onde alguém vai encontrá-lo.
+
+**Consequências.** Adicionar um gate agora é editar `scripts/check` e acrescentar um step que o chama; ele passa a valer local e remotamente na mesma alteração. `CONTRIBUTING.md` e `docs/development.md` apontam para os entrypoints em vez de repetir comandos. Os três scripts resolvem a raiz do repositório a partir do próprio caminho, então funcionam de qualquer diretório. Nenhuma dependência nova, nenhum task runner, nenhum arquivo de runtime alterado: a fase inteira cabe em `scripts/`, no workflow e na documentação.

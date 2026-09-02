@@ -602,7 +602,23 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       ganhou exemplos. Interface de máquina intocada: `--json` continua com exatamente um documento,
       nos mesmos canais, com os mesmos códigos, provado agora também sobre um terminal real.
       **Nenhuma TUI foi implementada** — ela foi movida para a Fase 5.0.
-- [ ] **Fase 4.0H — Ferramentas de desenvolvedor e automação.** Reservado.
+- [x] **Fase 4.0H — Ferramentas de desenvolvedor e automação.** O ciclo diagnosticar → verificar →
+      construir passou a ter três entrypoints canônicos, e o CI executa exatamente eles.
+      `scripts/doctor` diagnostica o ambiente sem alterá-lo — presença e versão de `bash`, `git`,
+      `cargo`, `rustc`, `pkg-config`, dos módulos `gtk4`, `gtk4-layer-shell-0` e `webkitgtk-6.0`, de
+      `dbus-daemon`/`dbus-send`, de `node` e de `pnpm` —, lendo a versão mínima do Rust do
+      `rust-version` do próprio `Cargo.toml` em vez de redeclará-la, e sem instalar, elevar
+      privilégio ou tocar em PATH, dotfiles ou configuração. `scripts/check` virou a autoridade
+      sobre os gates, com doze estágios atômicos e três agregados, fail-closed: para no primeiro que
+      falha e propaga o código dele. `scripts/build.sh` deixou de cair para `npm` e de instalar sem
+      lockfile congelado; agora exige pnpm, usa `--frozen-lockfile`, compila o workspace inteiro em
+      release e confere que `target/release/note-it` e `target/release/noteit` existem antes de dizer
+      que terminou. O workflow parou de reimplementar os comandos: cada step chama um estágio, um
+      step por gate, e ganhou `cargo check --workspace`, que estava documentado como gate local e
+      faltava no CI. Foram eliminadas as listas divergentes de comandos que existiam entre CI,
+      `CONTRIBUTING.md` e `docs/development.md` — a do CONTRIBUTING era mais fraca que a do CI em
+      quatro pontos. Nenhum arquivo de runtime, manifesto ou lockfile foi alterado, nenhuma
+      dependência foi adicionada e a interface de máquina não foi tocada. Justificativa no ADR-043.
 - [ ] **Fase 4.0R — Auditoria de Segurança e Regressão.** Reservado.
 - [ ] **Fase 4.1 — MCP.** Reservado.
 - [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.

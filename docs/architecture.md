@@ -55,6 +55,34 @@ env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
 scripts/check-core-boundary
 ```
 
+## Ferramentas de desenvolvimento (`scripts/`)
+
+Os gates de qualidade vivem no repositório e o CI os consome. `scripts/check` é a
+autoridade sobre o que precisa passar; `.github/workflows/ci.yml` decide *onde* cada
+coisa roda e chama os mesmos estágios, um por step, para que um run vermelho aponte
+o gate. Nenhum comando de qualidade é reescrito no workflow, no CONTRIBUTING ou no
+guia de desenvolvimento.
+
+- `scripts/doctor`: diagnóstico somente leitura do ambiente (`rust`, `frontend`, `all`).
+  Verifica presença e versão; nunca instala, eleva privilégio ou altera a máquina.
+  A versão mínima do Rust é lida de `rust-version` no `Cargo.toml`, e não redeclarada.
+- `scripts/check`: os gates, como estágios atômicos (`rust-format`, `rust-check`,
+  `rust-clippy`, `core-boundary`, `cli-boundary`, `core-tests`, `cli-tests`,
+  `workspace-tests`, `frontend-install`, `frontend-lint`, `frontend-test`,
+  `frontend-build`) e como agregados (`rust`, `frontend`, `all`). Fail-closed: para no
+  primeiro que falha e propaga o código dele.
+- `scripts/build.sh`: build release reprodutível do frontend e do workspace inteiro,
+  com lockfile congelado, que confere os binários antes de dizer que terminou.
+- `scripts/check-core-boundary`, `scripts/check-cli-boundary`: continuam sendo a
+  autoridade sobre dependências de desktop nos crates headless. `scripts/check` os
+  chama; não os substitui nem afrouxa.
+- `scripts/note-it-isolated`, `scripts/test-isolation`, `scripts/run-note-it`:
+  inalterados. O harness de isolamento é alcançado por `cargo test --workspace`
+  através de `tests/isolation.rs`, e por isso `scripts/check` não o executa de novo.
+
+Os três entrypoints resolvem a raiz do repositório a partir do próprio caminho, então
+funcionam de qualquer diretório de trabalho.
+
 ## Componentes do adaptador CLI (`noteit-cli`, Rust)
 
 - `main.rs`: Ponto de entrada para o binário `noteit`, despachando argumentos e mapeando códigos de saída padrão.

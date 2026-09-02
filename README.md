@@ -221,6 +221,24 @@ scripts/note-it-isolated          # árvore XDG temporária, removida ao sair
 scripts/note-it-isolated --keep   # mantém a árvore para inspeção
 ```
 
+### Diagnosticar, verificar, construir
+
+Três comandos canônicos, e o CI executa exatamente eles — não existe uma segunda
+lista de comandos para manter sincronizada:
+
+```bash
+scripts/doctor all    # a máquina tem o necessário? (somente leitura)
+scripts/check all     # todos os gates do repositório
+scripts/build.sh      # build release do projeto inteiro
+```
+
+`scripts/doctor` diagnostica e não altera nada: não instala, não usa `sudo` e não
+mexe em PATH, dotfiles ou configuração. `scripts/check` para no primeiro gate que
+falhar e devolve o código dele; use o nome de um estágio para rodar só um
+(`scripts/check rust-clippy`) e `scripts/check --help` para ver a lista.
+`scripts/build.sh` constrói e não instala. Os três funcionam de qualquer
+diretório. Detalhes em [`docs/development.md`](docs/development.md).
+
 ## Comandos disponíveis
 
 ### Aplicativo gráfico (`note-it`)

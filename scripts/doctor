@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+#
+# Reads this machine and says whether it can build and test Note-it.
+#
+# Read-only, on purpose and without exception. It runs `command -v`, asks
+# tools for their version and asks pkg-config what it knows. It installs
+# nothing, fixes nothing, elevates nothing and writes nothing — not to the
+# shell, PATH, dotfiles, package managers or Git config. Installing system
+# packages belongs to the person or to the CI runner, never to a script in
+# the repository.
+#
+# Deliberately without `set -e`: a diagnosis that stops at the first missing
+# tool makes a person install one thing, run it again, and install one more.
+# Every check runs, and the summary at the end is the verdict.
+#
+# Usage: scripts/doctor [rust|frontend|all]
+#
+set -uo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
+
+readonly EXIT_OK=0
+readonly EXIT_INCOMPLETE=1
+readonly EXIT_USAGE=2
+
+FAILURES=0
+
+ok()      { printf '  [ok]    %s\n' "$*"; }
+warn()    { printf '  [aviso] %s\n' "$*"; }
+problem() { printf '  [erro]  %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
+
+usage() {
+  cat >&2 <<'USAGE'
+Uso: scripts/doctor [rust|frontend|all]
+
+  rust      ferramentas e bibliotecas do sistema para compilar e testar o Rust
+  frontend  ferramentas para compilar e testar o frontend
+  all       os dois (padrão)
+
+Códigos de saída:
+  0  o ambiente pedido está pronto
+  1  falta um requisito, ou ele é incompatível
+  2  uso inválido
+
+Diagnóstico somente leitura: não instala nada e não altera nada.
+USAGE
+}
+
+# The first version at least as new as the second. Missing components count
+# as zero, so "1.89" and "1.89.0" mean the same thing.
+version_at_least() {
+  local have="$1" want="$2"
+  local h1 h2 h3 w1 w2 w3
+  IFS=. read -r h1 h2 h3 <<<"$have"
+  IFS=. read -r w1 w2 w3 <<<"$want"
+  h1=$((10#${h1:-0})); h2=$((10#${h2:-0})); h3=$((10#${h3:-0}))
+  w1=$((10#${w1:-0})); w2=$((10#${w2:-0})); w3=$((10#${w3:-0}))
+  ((h1 != w1)) && { ((h1 > w1)); return; }
+  ((h2 != w2)) && { ((h2 > w2)); return; }
+  ((h3 >= w3))
+}
+
+# The first dotted number in a tool's own version line.
+version_of() {
+  "$@" 2>/dev/null | head -n1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1
+}
+
+require_command() {
+  local name="$1" description="$2"
+  if command -v "$name" >/dev/null 2>&1; then
+    local version
+    version="$(version_of "$name" --version)"
+    if [[ -n "$version" ]]; then ok "$name $version"; else ok "$name"; fi
+    return 0
+  fi
+  problem "$name não encontrado — $description"
+  return 1
+}
+
+# The minimum Rust the workspace itself declares. Read from the manifest
+# rather than restated here: this phase does not get to have an opinion about
+# the toolchain that Cargo.toml does not already have.
+declared_rust_version() {
+  sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+    "$REPO_ROOT/Cargo.toml" | head -n1
+}
+
+check_rust() {
+  printf '\nRust\n'
+  require_command bash "necessário para os scripts do repositório"
+  require_command git "necessário para o controle de versão"
+  require_command cargo "instale a toolchain Rust"
+
+  if require_command rustc "instale a toolchain Rust"; then
+    local have want
+    have="$(version_of rustc --version)"
+    want="$(declared_rust_version)"
+    if [[ -z "$want" ]]; then
+      warn "Cargo.toml não declara rust-version; versão do rustc não verificada"
+    elif [[ -z "$have" ]]; then
+      warn "não foi possível ler a versão do rustc; mínimo declarado: $want"
+    elif version_at_least "$have" "$want"; then
+      ok "rustc $have atende ao rust-version $want do workspace"
+    else
+      problem "rustc $have é anterior ao rust-version $want declarado em Cargo.toml"
+    fi
+  fi
+
+  printf '\nBibliotecas do sistema\n'
+  if require_command pkg-config "no Arch Linux: pacote pkgconf"; then
+    # The exact module names the desktop build links against. They come from
+    # what the build already requires — `scripts/run-note-it` checks the same
+    # three — and are not guessed here.
+    local package version
+    for package in gtk4 gtk4-layer-shell-0 webkitgtk-6.0; do
+      if pkg-config --exists "$package" 2>/dev/null; then
+        version="$(pkg-config --modversion "$package" 2>/dev/null)"
+        ok "$package ${version:-presente}"
+      else
+        problem "$package não encontrado pelo pkg-config"
+      fi
+    done
+  else
+    problem "sem pkg-config não é possível verificar gtk4, gtk4-layer-shell-0 e webkitgtk-6.0"
+  fi
+
+  printf '\nBarramento de sessão (harness de testes isolados)\n'
+  require_command dbus-daemon "no Arch Linux: pacote dbus"
+  require_command dbus-send "no Arch Linux: pacote dbus"
+}
+
+check_frontend() {
+  printf '\nFrontend\n'
+  # The project declares no minimum for either, so neither is invented here:
+  # both must be present, both have their version shown, and a major version
+  # behind what the CI builds on is said out loud without being called an
+  # incompatibility nobody has demonstrated.
+  if require_command node "instale o Node.js"; then
+    local node_version
+    node_version="$(version_of node --version)"
+    if [[ -n "$node_version" ]] && ! version_at_least "$node_version" "22"; then
+      warn "o CI compila com Node 22; esta máquina tem $node_version"
+    fi
+  fi
+
+  if require_command pnpm "o projeto usa pnpm; npm e yarn não são alternativas aqui"; then
+    local pnpm_version
+    pnpm_version="$(version_of pnpm --version)"
+    if [[ -n "$pnpm_version" ]] && ! version_at_least "$pnpm_version" "11"; then
+      warn "o CI usa pnpm 11; esta máquina tem $pnpm_version"
+    fi
+  fi
+}
+
+main() {
+  local mode="${1:-all}"
+  if (($# > 1)); then
+    usage
+    return "$EXIT_USAGE"
+  fi
+
+  case "$mode" in
+    rust | frontend | all) ;;
+    -h | --help | help)
+      usage
+      return "$EXIT_USAGE"
+      ;;
+    *)
+      printf 'scripts/doctor: modo desconhecido `%s`\n\n' "$mode" >&2
+      usage
+      return "$EXIT_USAGE"
+      ;;
+  esac
+
+  printf 'Ambiente de desenvolvimento do Note-it (%s)\n' "$mode"
+
+  [[ "$mode" == rust || "$mode" == all ]] && check_rust
+  [[ "$mode" == frontend || "$mode" == all ]] && check_frontend
+
+  printf '\n'
+  if ((FAILURES == 0)); then
+    printf 'Ambiente pronto.\n'
+    return "$EXIT_OK"
+  fi
+  printf 'Ambiente incompleto: %d requisito(s) faltando ou incompatível(is).\n' "$FAILURES"
+  printf 'Instale o que falta você mesmo; este diagnóstico não altera a máquina.\n'
+  return "$EXIT_INCOMPLETE"
+}
+
+main "$@"
