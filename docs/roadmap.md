@@ -3,7 +3,7 @@
 ## Fase 0: Fundação Pública (Concluída)
 - [x] Inicialização do repositório, `.gitignore`, licenciamento e documentação.
 - [x] Rust e TypeScript constroem estrutura inicial.
-- [x] Arquitetura do projeto e especificação de armazenamento.
+- [x] Arquitetura do projeto e especificação de storage.
 
 ## Fase 1: Fatia Vertical e Integridade Markdown (Concluída)
 - [x] Trabalhando na janela de notas GTK4 + `gtk4-layer-shell` + WebKitGTK 6.0.
@@ -52,13 +52,13 @@ tira antes do WebView repintar.
 - [x] `Ctrl+Shift+M` colapso, `Ctrl+Shift+Space` troca de camada, `Ctrl+Shift+>` / `Ctrl+Shift+<`
 tamanho do texto, todos roteados através do único controlador de teclado.
 
-### Fase 3.2R: convocação, reabertura e tipografia (concluída)
+### Fase 3.2R: Invocação, reabertura e tipografia (concluída)
 - [x] `note-it` invoca a instância em execução de qualquer aplicativo em foco, criando uma camada de desktop
 nota temporariamente sem perder a preferência armazenada.
-- [x] Fechar a última nota não a deixa mais presa: a nota usada por último é reaberta na próxima convocação.
+- [x] Fechar a última nota não a deixa mais presa: a nota usada por último é reaberta na próxima invocação.
 - [x] Digitar `->` produz um código real `→`, externo.
 
-### Fase 3.3: Colapso de múltiplas notas e refinamentos UX (concluído)
+### Fase 3.3: Recolhimento de múltiplas notas e refinamentos de UX (concluída)
 - [x] `note-it toggle-collapse-all` para cada nota, com `Ctrl+Shift+M` ainda por nota.
 - [x] Uma nota recolhida se expande quando clicada e `☰` se expande e abre o menu com um clique.
 - [x] O menu de configurações não fica mais recortado em uma nota recolhida.
@@ -79,7 +79,7 @@ nota temporariamente sem perder a preferência armazenada.
 - [x] A comparação reside no único caminho pelo qual passa todo conteúdo salvo — salvamento automático, flush antes de ocultar ou sair e salvar e fechar —, não em cada chamador.
 - [x] Uma nota cujo conteúdo permanece inalterado não é reescrita: nenhum arquivo temporário, nenhuma renomeação, nenhum fsync.
 - [x] Fechar e liberar ainda relatam sucesso em um salvamento idêntico, para que o ciclo de vida nunca pare.
-- [x] A recência, que decide qual nota uma convocação traz, agora acompanha a última edição, não o último fechamento. Consulte a observação na Fase 4 abaixo.
+- [x] A recência, que decide qual nota uma invocação traz, agora acompanha a última edição, não o último fechamento. Consulte a observação na Fase 4 abaixo.
 
 ### Fase 3.4R.1: Integridade Transacional de Persistência (Concluída)
 - [x] Uma alteração de conteúdo ou aparência é preparada em uma cópia e adotada na memória somente depois que `save_note_atomic` confirma a gravação; assim, o documento sempre descreve a nota em disco.
@@ -92,7 +92,7 @@ nova tentativa foi bem-sucedida.
 - [x] Tudo o que a Fase 3.4R estabeleceu permanece inalterado: conteúdo persistente idêntico não grava nada,
 `updated_at` muda apenas em uma edição real, `created_at` nunca muda e uma nota intocada preserva o horário de modificação do arquivo.
 
-### Fase 3.4R.2: Ponto de Compromisso (Concluído)
+### Fase 3.4R.2: Ponto de Commit (Concluído)
 - [x] A renomeação é o ponto de confirmação: um salvamento relata falha em qualquer coisa antes ou durante ele, e
 sucesso a partir daí.
 - [x] Uma sincronização de diretório que falha após a renomeação gera um aviso de durabilidade, não uma falha de salvamento; assim, memória e arquivo nunca terminam descrevendo versões diferentes da nota.
@@ -125,7 +125,7 @@ deixa AltGr — relatado como `Ctrl+Alt` — para o editor.
 - [x] Uma nota é comparada e armazenada em uma grafia canônica, portanto, nem a nova linha de um arquivo é
 terminado com nem a linha em branco que o serializador coloca depois que um bloco final é confundido com
 uma edição. Tudo o que a Fase 3.4R estabeleceu ainda se mantém: uma edição real ainda se move `updated_at`.
-- [x] Uma nota criada durante uma elevação por convocação abre na camada em que as outras notas estão, não na preferência armazenada.
+- [x] Uma nota criada durante uma elevação por invocação abre na camada em que as outras notas estão, não na preferência armazenada.
 - [x] `state.json` e `config.toml` são escritos sob a mesma regra de ponto de confirmação que uma nota, em um
 gravação atômica compartilhada: a renomeação é confirmada, uma sincronização de diretório falha após ser uma durabilidade
 aviso e uma configuração é totalmente substituída ou não é substituída.
@@ -176,7 +176,7 @@ a tabela de unidades são dados e o resultado é a decoração que o mecanismo m
 - [x] Moedas deliberadamente **não** implementadas e nenhuma taxa codificada. A fronteira um futuro
 a fonte deve ficar para trás está anotada em `ui/src/units/convert.ts` e ADR-025.
 
-### Fase 3.7R: Teste do ambiente de isolamento (concluído)
+### Fase 3.7R: Isolamento do Harness de Testes (Concluída)
 - [x] `scripts/note-it-isolated` isola o **barramento de sessão** e também o XDG. Note-it é uma `GApplication` de instância única; portanto, quando já havia um daemon no barramento real, um comando supostamente “isolado” era encaminhado a ele e o store real recebia a gravação. Foi assim que uma nota de teste chegou ao diretório de notas do próprio usuário durante os testes físicos da Fase 3.7.
 - [x] Um `dbus-daemon` privado por execução de teste, com `DBUS_SESSION_BUS_ADDRESS` apontado para ele e o
 variáveis de inicialização do D-Bus removidas. O daemon real nunca é interrompido e nem percebe a execução.
@@ -217,7 +217,7 @@ os `10000 m` da conversão são decorações e procurá-los não encontra nada.
 Quatro coisas que a Fase 3.8 disse que não foram exatamente o que fez. Nenhum recurso novo, nenhuma pesquisa difusa, nenhum índice, nenhum thread — a menor alteração correta para cada um e um teste para cada um. Consulte ADR-027.1.
 
 - [x] "Cada nota" agora significa cada nota. A varredura parou em 5.000, então a nota 5.001 foi
-inencontrável e nada teria dito isso. A varredura lê todo o armazenamento; o **resultado**
+inencontrável e nada teria dito isso. A varredura lê todo o store; o **resultado**
 lista ainda está limitada a 100, porque cem linhas é o que uma pessoa lê e o leitor pode
 veja que são cem. Um teste coloca uma nota na posição 5 001 e a encontra.
 - [x] A listagem de consulta vazia mantém seu limite: mostra no máximo cem notas, portanto, lendo além delas
@@ -271,7 +271,7 @@ e aberto, e as notas, identificadores, Markdown, lixo, configuração e estado d
 voltar. O procedimento manual está em `docs/storage.md`.
 - [x] Auditoria de confiabilidade em quinze casos de falha – uma nota que desapareceu, uma que não pode ser lida,
 uma entrada de lixo removida externamente, uma restauração em um identificador ativo, um diretório de backups que
-não pode ser criado, um armazenamento que não pode ser lido, um commit que não pode ser acessado, um arranhão deixado por um
+não pode ser criado, um store que não pode ser lido, um commit que não pode ser acessado, um arranhão deixado por um
 falha, estado obsoleto, estado ausente, front matter danificado, configuração ausente e liberação
 que falha com várias notas abertas.
 - [x] Terminologia: o que a Fase 3.8 chama de "AutoPaste" é **Colar URL na seleção**
@@ -319,7 +319,7 @@ e não há gerenciador de cronômetro global.
 
 ### Fase 3.11: AutoPaste da área de transferência (concluído)
 
-O verdadeiro, no sentido em que o Antinote usa a palavra: um modo de captura, não a pasta de seleção sobre URL Fase 3.8 enviada com esse nome. Esse ainda está lá, ainda chamado Colar URL na seleção, e intocado por isso.
+O verdadeiro, no sentido em que o Antinote usa a palavra: um modo de captura, não a colagem de URL sobre seleção Fase 3.8 enviada com esse nome. Esse ainda está lá, ainda chamado Colar URL na seleção, e intocado por isso.
 
 - [x] Um modo de captura explícito, desativado por padrão, ativado em *☰ › Captura* com uma linha dizendo
 exatamente o que fará.
@@ -397,7 +397,7 @@ de jeito nenhum, então a exibição de uma nota chega à rede de graça.
 
 **Deliberadamente não nesta fase:** corte, rotação, filtros, legendas, galerias, lightboxes, imagens por URL e **coleta automática de ativos órfãos** — remover uma imagem tira-a da nota e sai do arquivo, porque excluir bytes em uma estimativa é pior do que mantê-los.
 
-#### 3.12R: o backup aprende sobre imagens
+#### 3.12R: O backup passa a incluir imagens
 
 Enviado em 3.12 e detectado pela auditoria que se seguiu: as imagens foram para `assets/` e o instantâneo ainda copiou apenas `notes/`, `trash/`, `config.toml` e `state.json`. Um backup feito entre restaura o Markdown de uma nota e não o arquivo para o qual seu `![](../assets/…)` aponta, o que não é o que um backup promete.
 
@@ -412,10 +412,10 @@ a importação interrompida é ignorada, como acontece com as notas.
 renomeado e a retenção não é executada — um backup antigo nunca é excluído para liberar espaço
 por um que não aconteceu.
 - [x] A versão 2 do manifesto registra a contagem de imagens. Os snapshots da versão 1 permanecem listáveis ​​e legíveis.
-- [x] Comprovado pela restauração em um segundo armazenamento vazio com o original excluído: ambas as notas vêm
+- [x] Comprovado pela restauração em um segundo store vazio com o original excluído: ambas as notas vêm
 de volta, ambas as imagens são renderizadas por meio de `note-it-asset:` e cada arquivo é idêntico em bytes.
 
-#### 3.12R.1: o clipe
+#### 3.12R.1: O clipper de imagens
 
 Um refinamento da mesma fase, não uma fase própria: a entrada teve três cliques de profundidade para aquilo que as pessoas mais fazem.
 
@@ -485,7 +485,7 @@ a cópia do estudo não pode ser confirmada como um instantâneo completo.
 
 Captura e Exportação, OCR e PDF são adiados. Eles não fazem parte da Fase 3.14.
 
-### Fase 3.14R.1: Atualização da interface e acessibilidade visual (completa)
+### Fase 3.14R.1: Polimento de interface e acessibilidade visual (Concluída)
 
 - [x] O Study Hub distingue os cartões de origem das instruções de revisão, incluindo o explícito 2 cartões /
 Corpus reversível de 3 revisões.
@@ -506,7 +506,7 @@ Timer/AutoPaste e Close antes dos atalhos opcionais.
 Evolução arquitetônica de um aplicativo para uma plataforma local programável. GUI, CLI e futuras interfaces de máquina compartilham um domínio e autoridade de persistência.
 
 - [x] **Fase 4.0A — Limite do Core.** Crate headless dedicada `noteit-core`; a GUI consome seus
-      recursos compartilhados de notas, pesquisa, lixeira, estudo e armazenamento, com uma barreira
+      recursos compartilhados de notas, pesquisa, lixeira, estudo e storage, com uma barreira
       de dependências do Cargo que impede GTK, GDK, WebKitGTK, layer-shell, Wayland e Niri de
       entrarem no Core.
 - [x] **Fase 4.0B — Fundação de metadados: tags + propriedades.** Metadados estruturados do usuário
@@ -592,7 +592,7 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 
-**Recência e o CLI.** Desde a Fase 3.8R, "mais recente" é o próprio `updated_at` da nota — a última alteração em seu texto — com o `mtime` do arquivo como substituto para uma nota que não possui nenhum. É o que decide qual nota uma convocação traz de volta quando cada nota é fechada, e por qual ordem de pesquisa e troca rápida. Se uma fase futura precisar de "a nota que abri pela última vez" como distinta de "a nota que escrevi pela última vez", ela pertence a `state.json` como estado explícito, não aos carimbos de data e hora do sistema de arquivos.
+**Recência e o CLI.** Desde a Fase 3.8R, "mais recente" é o próprio `updated_at` da nota — a última alteração em seu texto — com o `mtime` do arquivo como substituto para uma nota que não possui nenhum. É o que decide qual nota uma invocação traz de volta quando cada nota é fechada, e por qual ordem de pesquisa e troca rápida. Se uma fase futura precisar de "a nota que abri pela última vez" como distinta de "a nota que escrevi pela última vez", ela pertence a `state.json` como estado explícito, não aos carimbos de data e hora do sistema de arquivos.
 
 ## Fase 5: Empacotamento e distribuição (planejada)
 

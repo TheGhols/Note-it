@@ -261,7 +261,7 @@ Uma declaração pode conter uma conversão — `metros := 10 km em m` — e a v
 
 ### As unidades
 
-Cada grafia abaixo corresponde **exatamente**. Não há dobramento de caso: `m` é um metro e `M` não é nada, porque uma regra que os dobrasse também dobraria `MB` sobre `mb`. Quando uma conveniência em letras minúsculas é segura, ela é simplesmente listada como um alias, e é por isso que `ml` e `l` funcionam e `mb` não.
+Cada grafia abaixo corresponde **exatamente**. Não há conversão de maiúsculas/minúsculas (case folding): `m` é um metro e `M` não é nada, porque uma regra que os dobrasse também dobraria `MB` sobre `mb`. Quando uma conveniência em letras minúsculas é segura, ela é simplesmente listada como um alias, e é por isso que `ml` e `l` funcionam e `mb` não.
 
 ### Comprimento — base `m`
 
@@ -416,7 +416,7 @@ Aberto com `Ctrl+K` dentro de qualquer nota. A paleta é um painel na página, n
 
 **corpo** da nota: tudo abaixo de front matter. Títulos, listas, tarefas, citações, textos explicativos, blocos de código e comentários são todos conteúdos de notas e podem ser pesquisados.
 
-O front matter em si não é. `note_it:`, `created_at:`, `updated_at:` e `paper:` são como o arquivo é escrito, não o que o leitor escreveu, e uma pesquisa por `paper` não deve retornar todas as notas no armazenamento.
+O front matter em si não é. `note_it:`, `created_at:`, `updated_at:` e `paper:` são como o arquivo é escrito, não o que o leitor escreveu, e uma pesquisa por `paper` não deve retornar todas as notas no store.
 
 Tampouco é algo que o editor apenas desenha. Um `4` mostrado ao lado de `= 2 + 2`, um `10000 m` mostrado ao lado de `= 10 km em m` e todas as outras decorações não estão no arquivo, portanto nenhuma pesquisa pode encontrá-los.
 
@@ -424,18 +424,18 @@ Tampouco é algo que o editor apenas desenha. Um `4` mostrado ao lado de `= 2 + 
 
 | Propriedade | Comportamento |
 | --- | --- |
-| Caso | Insensível — `BIÓPSIA`, `Biópsia` e `biópsia` são uma palavra |
+| Maiúsculas/minúsculas | Insensível — `BIÓPSIA`, `Biópsia` e `biópsia` são uma palavra |
 | Acentos | Insensível — `biopsia` encontra `Biópsia`, `coracao` encontra `Coração` |
 | Correspondência | Substring literal. `.*`, `[a-z]` e `(foo\|bar)` são esses caracteres, não um padrão |
 | Limite de consulta | 512 caracteres; mais é recusado em vez de truncado silenciosamente |
 | Resultados | 100 notas no máximo |
 | Trecho | Cerca de 240 caracteres, cortados no limite do caractere |
 | Ordem | Mais recentemente escrito no primeiro |
-| Notas digitalizadas | **Todos eles.** Não há limite máximo de varredura — o limite está nos resultados, não na extensão da pesquisa |
+| Notas varridas | **Todas as notas.** Não há limite máximo de varredura — o limite está nos resultados, não na extensão da pesquisa |
 
 Não há lematização, correspondência difusa e pesquisa semântica. `biopsia` encontra `biópsia`; não encontra `punção`. A regra é aquela que o leitor pode prever, e esse é o ponto.
 
-**O que os limites não limitam é a nota.** Vinculam a consulta e a resposta; o arquivo é lido até o fim, porque uma palavra no final de uma nota longa deve ser localizável. Um armazenamento de mil notas é pesquisado em cerca de 40 ms e uma única nota de 2 MB é pesquisada corretamente e sem escrever nada - ambos medidos por testes - mas não há garantia formal sobre um arquivo individual arbitrariamente grande, e nenhuma é reivindicada. Consulte ADR-027.1.
+**O que os limites não limitam é a nota.** Vinculam a consulta e a resposta; o arquivo é lido até o fim, porque uma palavra no final de uma nota longa deve ser localizável. Um store de mil notas é pesquisado em cerca de 40 ms e uma única nota de 2 MB é pesquisada corretamente e sem escrever nada - ambos medidos por testes - mas não há garantia formal sobre um arquivo individual arbitrariamente grande, e nenhuma é reivindicada. Consulte ADR-027.1.
 
 ### Qual é a aparência de um resultado
 
@@ -454,7 +454,7 @@ Biópsia hepática                                    4
 
 Abrir a paleta sem digitar mostra as notas mais recentemente **escritas**, portanto, o mesmo controle também é como você se move entre elas. Aparecer nessa lista não é edição: `updated_at` não se move.
 
-"Escrito mais recentemente" é o próprio `updated_at` da nota, não a data no arquivo. Alterar a cor, o papel, a intensidade do padrão ou o tamanho da fonte de uma nota reescreve o arquivo sem ser uma edição e não move a nota para cima nesta lista - repintar uma nota não é escrever nela. Uma nota sem `updated_at` — escrita antes da existência do campo, ou com front matter que não pode ser lida — retorna ao carimbo de data/hora do próprio arquivo. A mesma regra decide qual nota uma convocação traz de volta, portanto há uma ideia de “mais recente” na aplicação, em vez de duas que discordam.
+"Escrito mais recentemente" é o próprio `updated_at` da nota, não a data no arquivo. Alterar a cor, o papel, a intensidade do padrão ou o tamanho da fonte de uma nota reescreve o arquivo sem ser uma edição e não move a nota para cima nesta lista - repintar uma nota não é escrever nela. Uma nota sem `updated_at` — escrita antes da existência do campo, ou com front matter que não pode ser lida — retorna ao carimbo de data/hora do próprio arquivo. A mesma regra decide qual nota uma invocação traz de volta, portanto há uma ideia de “mais recente” na aplicação, em vez de duas que discordam.
 
 ### Abrindo um resultado
 
@@ -563,7 +563,7 @@ Mover esta nota para a lixeira? Você poderá restaurá-la depois em Dados › L
 
 A restauração coloca o arquivo de volta em `notes/` com o mesmo identificador e os mesmos bytes, e a nota torna-se localizável novamente imediatamente. Ele mantém a data de modificação original: uma nota recuperada volta para onde estava no alternador rápido, em vez de pular para o topo como se tivesse acabado de ser escrita.
 
-**A restauração nunca substitui uma nota ativa.** Se uma nota com o mesmo identificador já estiver no armazenamento, a restauração será recusada, nenhum dos arquivos será alterado e o painel informará isso.
+**A restauração nunca substitui uma nota ativa.** Se uma nota com o mesmo identificador já estiver no store, a restauração será recusada, nenhum dos arquivos será alterado e o painel informará isso.
 
 **Não há exclusão permanente nem "esvaziar a lixeira"** nesta versão. Isso é deliberado: esta é a fase que torna a exclusão recuperável, e um botão irreversível ao lado de um botão de restauração está a um clique errado do que ele existe para evitar. A lixeira, portanto, cresce até que você mesmo a limpe, o que pode ser feito com qualquer gerenciador de arquivos - uma nota na lixeira é um `.md` comum em `~/.local/share/note-it/trash/`.
 
@@ -573,7 +573,7 @@ Note-it mantém instantâneos locais de tudo que pode ser recuperado.
 
 **Onde.** `~/.local/share/note-it/backups/<data-e-hora>/`, contendo `notes/`, `trash/`, `assets/`, `config.toml`, `state.json` e um `manifest.json` descrevendo o instantâneo. Diretórios comuns e arquivos comuns — sem arquivo, sem banco de dados, sem formato próprio do Note-it.
 
-**As imagens viajam com as notas que as contêm.** Uma nota que diz `![](../assets/…)` é apenas meia nota sem o arquivo para o qual aponta, então `assets/` é copiado com as mesmas garantias e no mesmo formato, byte por byte. Um instantâneo que não conseguiu copiar uma imagem não é confirmado - você nunca obtém um backup que pareça completo e sem imagens. Uma imagem que nenhuma nota aponta mais também é copiada: um backup registra o armazenamento como está e não é o local para decidir quais arquivos ainda são desejados.
+**As imagens viajam com as notas que as contêm.** Uma nota que diz `![](../assets/…)` é apenas meia nota sem o arquivo para o qual aponta, então `assets/` é copiado com as mesmas garantias e no mesmo formato, byte por byte. Um instantâneo que não conseguiu copiar uma imagem não é confirmado - você nunca obtém um backup que pareça completo e sem imagens. Uma imagem que nenhuma nota aponta mais também é copiada: um backup registra o store como está e não é o local para decidir quais arquivos ainda são desejados.
 
 **Quando.** No máximo um snapshot automático a cada 24 horas, tirado **antes** da primeira alteração depois que essa janela tiver passado. A questão é considerar primeiro: o estado ao qual vale a pena voltar é aquele antes da edição. Não há cronômetro – um daemon ocioso não funciona e um daemon deixado aberto por dias tira seu instantâneo no momento em que você começa a digitar novamente.
 
@@ -597,7 +597,7 @@ Note-it mantém instantâneos locais de tudo que pode ser recuperado.
 
 Uma imagem em uma nota, mantida como um arquivo em vez de contrabandeada para o texto.
 
-**Colocando um.** Cole, solte na nota ou peça um seletor de arquivo — no clipe no cabeçalho ou em *☰ › Mídia › Inserir imagem…*. Todos terminam no mesmo lugar: os bytes são gravados no armazenamento e a nota ganha uma referência a eles. O clipe de papel e a entrada do menu são duas portas para uma sala: uma solicitação, um seletor, uma importação, para que nada possa ficar entre eles.
+**Colocando um.** Cole, solte na nota ou peça um seletor de arquivo — no clipe no cabeçalho ou em *☰ › Mídia › Inserir imagem…*. Todos terminam no mesmo lugar: os bytes são gravados no store e a nota ganha uma referência a eles. O clipe de papel e a entrada do menu são duas portas para uma sala: uma solicitação, um seletor, uma importação, para que nada possa ficar entre eles.
 
 **PNG, JPEG, WebP e GIF.** O que é um arquivo *é* decidido por seus primeiros bytes, nunca por seu nome — então um PNG chamado `.txt` é um PNG, e algo chamado `.png` que não é uma imagem é recusado. **SVG não é aceito**: é um formato de documento que pode conter script, e admiti-lo abriria uma superfície inteira por causa de uma imagem. Uma recusa diz isso em uma linha no rodapé da nota e não deixa nada para trás – nenhum diretório, nenhum arquivo escrito pela metade, nenhuma alteração na nota.
 
@@ -770,7 +770,7 @@ com ligaduras e deixado intacto dentro do código embutido e dos blocos de códi
   - `Ctrl+K` para pesquisar cada nota, `Ctrl+F` para encontrar nesta, `Ctrl+H` para localizar e substituir.
 Todos os três estavam livres antes da Fase 3.8 e não colidiram com nada acima.
 
-## Armazenamento e confiabilidade
+## Storage e confiabilidade
 
 ### Tags e propriedades
 
@@ -824,7 +824,7 @@ sem alterar o texto, deixa `updated_at` em paz e o arquivo não é reescrito.
 - **Limpeza de segurança do terminal:** todas as strings não confiáveis ​​renderizadas para stdout/stderr (conteúdo de notas, consultas de pesquisa, seletores, contextos de argumentos refletidos e caminhos XDG) são limpas antes do estilo e da saída, neutralizando sequências de escape ANSI (CSI, OSC, injeção de área de transferência OSC 52), BEL, backspace e caracteres de controle, preservando Unicode e Markdown válidos.
 - **Consistência de fuso horário local:** carimbos de data/hora humanos em todos os subcomandos CLI (`listar`, `ler`, `tarefas`, `lixeira`) são formatados no fuso horário local da máquina (`dd/MM/yyyy HH:mm`) correspondente ao contrato GUI do desktop, enquanto os modelos Core permanecem estritamente UTC (`DateTime<Utc>`).
 - **Desacoplamento de avisos digitados:** anomalias de leitura não fatais produzem itens `ReadWarning` digitados dentro de `ReadBatch<T>` em `noteit-core` sem impressão. O CLI os renderiza de forma limpa para stderr em português (`Aviso: ...`).
-- **Leituras estritamente somente leitura:** todas as operações de leitura API inspecionam o armazenamento puramente, sem criar diretórios ausentes, arquivos de estado, backups — ou qualquer arquivo de coordenação de gravação. A leitura nunca é alugada e nunca abre uma tomada.
+- **Leituras estritamente somente leitura:** todas as operações de leitura API inspecionam o store de forma puramente somente leitura, sem criar diretórios ausentes, arquivos de estado, backups — ou qualquer arquivo de coordenação de gravação. A leitura nunca é alugada e nunca abre uma tomada.
 - **Subcomandos de gravação coordenada API:**
   - `noteit criar [TEXTO]` / `noteit create`: cria uma nota e responde com seu UUID. Aceita
 `--stdin` para Markdown multilinha e `--tag` / `--propriedade` para aplicar metadados na criação.
@@ -846,7 +846,7 @@ apenas esse comentário, preservando recuo, marcador, aninhamento e comentários
   - `noteit lixeira restaurar <ID>` / `trash restore`: restaura dados e nada mais — sem janela, não
 foco, nenhuma camada ou alteração de geometria. Uma nota ativa com o mesmo identificador nunca é substituída.
 - **Referências de tarefas:** `noteit tarefas` mostra uma referência de oito caracteres ao lado de cada tarefa. É um *token de instantâneo otimista*, não uma identidade: nada é armazenado, nenhum arquivo secundário é criado e é recalculado em relação à nota no momento da gravação. Se a tarefa mudar nesse meio tempo, o comando será recusado e você listará as tarefas novamente – muito melhor do que marcar silenciosamente uma tarefa diferente.
-- **Exatamente um gravador por armazenamento:** as gravações são serializadas por um bloqueio de aconselhamento. Com Note-it em execução, a alteração é realizada pela instância em execução; sem ele, o CLI escreve diretamente através do Core. Dois comandos simultâneos sobrevivem. Se o store for mantida e seu proprietário não puder ser contatado, nada será escrito e o CLI diz isso - ele nunca escreve em torno de outro gravador.
+- **Exatamente um gravador por store:** as gravações são serializadas por um bloqueio de aconselhamento. Com Note-it em execução, a alteração é realizada pela instância em execução; sem ele, o CLI escreve diretamente através do Core. Dois comandos simultâneos sobrevivem. Se o store for mantida e seu proprietário não puder ser contatado, nada será escrito e o CLI diz isso - ele nunca escreve em torno de outro gravador.
 - **Um Note-it em execução possui suas notas:** o aplicativo de desktop recebe o lease de escrita e abre seu canal de controle antes de abrir qualquer outra coisa. Se outro gravador mantém o store, ou o canal não pode ser aberto, isso explica o porquê em uma frase e não inicia - nenhuma janela, nenhuma nota, nenhum salvamento automático, nada escrito. Nunca funciona como um segundo gravador.
 - **A janela confirma, não é presumido:** depois que uma alteração é confirmada, a nota na tela diz que ela foi adotada. Até que isso aconteça, o comando relata a alteração conforme escrita *e* avisa que a janela ainda pode estar mostrando o texto antigo — para que ninguém repita uma alteração que já aconteceu. Uma escrita que demora um pouco diz isso e mantém a nota segura; ele nunca é devolvido no meio do commit.
 - **Uma janela que fica para trás para em vez de fingir:** no raro caso em que uma alteração é gravada no disco, mas a nota aberta não pode aceitá-la, a nota é retida e diz isso ("A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota."). Ele não volta a aceitar a digitação que não conseguiria salvar - um editor que descarta silenciosamente o trabalho é pior do que aquele que para visivelmente. A alteração está segura no disco; reabrir a nota traz a janela de volta exatamente, sem nada perdido e nada duplicado.
