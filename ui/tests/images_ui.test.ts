@@ -313,6 +313,8 @@ describe('what the page is allowed to load', () => {
     )![1];
     expect(csp).toContain("img-src 'self' note-it-asset:");
     expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("form-action 'none'");
     expect(csp).not.toContain('img-src *');
     for (const scheme of ['http:', 'https:', 'data:', 'file:']) {
       expect(csp.split(';').find((part) => part.includes('img-src'))).not.toContain(scheme);
