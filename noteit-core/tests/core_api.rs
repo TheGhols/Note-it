@@ -45,7 +45,7 @@ fn test_01_read_only_open_does_not_create_directories() {
         .expect("summaries")
         .items
         .is_empty());
-    assert!(core.search_notes("teste").is_empty());
+    assert!(core.search_notes("teste").expect("search").items.is_empty());
     assert!(core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .expect("tasks")
@@ -70,7 +70,7 @@ fn test_02_empty_store_returns_empty_collections_cleanly() {
         .expect("summaries")
         .items
         .is_empty());
-    assert!(core.search_notes("query").is_empty());
+    assert!(core.search_notes("query").expect("search").items.is_empty());
     assert!(core
         .list_tasks(TaskStateFilter::All, &NoteFilter::default(), None)
         .expect("tasks")
@@ -439,7 +439,10 @@ fn test_20_large_note_reading_and_search() {
     let read_back = core.read_note(&large.metadata.id).expect("read");
     assert_eq!(read_back.content.len(), large.content.len());
 
-    let results = core.search_notes("PalavraRaraNoFinal");
+    let results = core
+        .search_notes("PalavraRaraNoFinal")
+        .expect("search")
+        .items;
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].note_id, large.metadata.id);
 }

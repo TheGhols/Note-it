@@ -1118,12 +1118,14 @@ impl NoteWindow {
         &self,
         request_id: u64,
         results: Vec<noteit_core::search::SearchResult>,
+        notice: Option<String>,
     ) {
         send_to_webview(
             &self.webview,
             &HostToWebviewMessage::SearchResults {
                 request_id,
                 results,
+                notice,
             },
         );
     }
@@ -2990,7 +2992,10 @@ mod tests {
         let document = stored_note(&storage, &body);
         let id = document.borrow().metadata.id;
 
-        let bodies = storage.read_note_bodies_by_recency();
+        let bodies = storage
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         let search = |query: &str| {
             noteit_core::search::search_notes(
                 query,
@@ -3136,7 +3141,10 @@ mod tests {
             .save_to_file(&storage.state_file_path())
             .expect("persist the timer");
 
-        let bodies = storage.read_note_bodies_by_recency();
+        let bodies = storage
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         for query in ["25:00", "pomodoro", "timer", "foco", "deadline"] {
             let results = noteit_core::search::search_notes(
                 query,

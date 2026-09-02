@@ -1269,7 +1269,11 @@ function initUI(): void {
     } else if (msg.type === 'set_font_size') {
       setFontSize(msg.payload.fontSize);
     } else if (msg.type === 'search_results') {
-      searchPalette?.showResults(msg.payload.requestId, msg.payload.results);
+      searchPalette?.showResults(
+        msg.payload.requestId,
+        msg.payload.results,
+        msg.payload.notice,
+      );
     } else if (msg.type === 'trash_entries') {
       trashPanel?.showEntries(msg.payload.requestId, msg.payload.entries);
     } else if (msg.type === 'study_catalog_result') {

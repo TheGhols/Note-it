@@ -43,6 +43,9 @@ export class SearchPalette {
   private readonly handlers: SearchPaletteHandlers;
 
   private results: SearchResult[] = [];
+  // Why the answer is incomplete, when it is. An empty list carrying a notice
+  // is a failure to read the store, not a store with nothing in it.
+  private notice: string | null = null;
   private selected = 0;
   private open = false;
 
@@ -135,10 +138,11 @@ export class SearchPalette {
    * Takes an answer from the host, if it is still the answer to the question
    * being asked.
    */
-  public showResults(requestId: number, results: SearchResult[]): void {
+  public showResults(requestId: number, results: SearchResult[], notice?: string): void {
     if (!this.open) return;
     if (requestId !== this.lastRequestId) return;
     this.results = results;
+    this.notice = notice ?? null;
     this.selected = 0;
     this.renderResults();
   }
@@ -178,6 +182,7 @@ export class SearchPalette {
   };
 
   private request(query: string): void {
+    this.notice = null;
     this.lastRequestId += 1;
     this.handlers.onQuery(this.lastRequestId, query);
   }
@@ -251,11 +256,12 @@ export class SearchPalette {
 
     const query = this.input.value.trim();
     if (this.results.length === 0) {
-      this.status.textContent = query === '' ? 'nenhuma nota' : 'nenhum resultado';
+      this.status.textContent =
+        this.notice ?? (query === '' ? 'nenhuma nota' : 'nenhum resultado');
       return;
     }
-    this.status.textContent =
-      query === '' ? 'notas recentes' : `${this.results.length} nota(s)`;
+    const found = query === '' ? 'notas recentes' : `${this.results.length} nota(s)`;
+    this.status.textContent = this.notice === null ? found : `${found} — ${this.notice}`;
 
     this.results.forEach((result, index) => {
       const row = this.doc.createElement('li');

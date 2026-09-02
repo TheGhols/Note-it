@@ -7,7 +7,7 @@ use crate::metadata::{
 use crate::model::{NoteDocument, NoteFrontMatterWrapper};
 use crate::study::{self, Rating, StudyState};
 use crate::trash::{self, TrashEntry};
-use crate::warning::{ReadWarning, ReadWarningKind};
+use crate::warning::{ReadBatch, ReadWarning, ReadWarningKind};
 use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -637,6 +637,17 @@ impl StorageManager {
             }
 
             if !file_type.is_file() {
+                warnings.push(ReadWarning {
+                    note_id: path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .and_then(|stem| Uuid::parse_str(stem).ok()),
+                    kind: ReadWarningKind::IoError,
+                    message: format!(
+                        "Ignorado: `{}` tem nome de nota mas não é um arquivo regular.",
+                        path.display()
+                    ),
+                });
                 continue;
             }
 
@@ -822,10 +833,13 @@ impl StorageManager {
     /// bookkeeping, not something anyone typed, and a search for `paper` must
     /// not return every note in the store.
     ///
-    /// A note that has vanished or cannot be read is skipped rather than
-    /// failing the whole scan: one unreadable file must not stop search
-    /// working. Nothing here writes, so searching never touches a note.
-    pub fn read_note_bodies_by_recency(&self) -> Vec<(Uuid, String)> {
+    /// A note that cannot be read becomes a warning rather than disappearing:
+    /// one unreadable file must not stop search working, and it must not look
+    /// like a note that was never written either. A scan that could not be
+    /// performed at all is an error, because an empty answer to "what is in
+    /// the store?" would be a lie. Nothing here writes, so searching never
+    /// touches a note.
+    pub fn read_note_bodies_by_recency(&self) -> Result<ReadBatch<(Uuid, String)>, String> {
         self.read_bodies(usize::MAX)
     }
 
@@ -835,27 +849,63 @@ impl StorageManager {
     /// Capped because the listing itself is capped. Reading past what the
     /// palette will show would be reading files nobody is going to see, and
     /// unlike a search it would answer no question.
-    pub fn read_recent_note_bodies(&self, limit: usize) -> Vec<(Uuid, String)> {
+    pub fn read_recent_note_bodies(
+        &self,
+        limit: usize,
+    ) -> Result<ReadBatch<(Uuid, String)>, String> {
         self.read_bodies(limit)
     }
 
-    fn read_bodies(&self, limit: usize) -> Vec<(Uuid, String)> {
-        let Ok(ids) = self.list_notes_by_recency() else {
-            return Vec::new();
-        };
+    fn read_bodies(&self, limit: usize) -> Result<ReadBatch<(Uuid, String)>, String> {
+        let (ids, mut warnings) = self.list_notes_by_recency_with_warnings()?;
+        let mut bodies = Vec::new();
 
-        ids.into_iter()
-            .take(limit)
-            .filter_map(|id| {
-                let path = self.note_path(&id);
-                let meta = fs::symlink_metadata(&path).ok()?;
-                if meta.file_type().is_symlink() || !meta.file_type().is_file() {
-                    return None;
+        for id in ids.into_iter().take(limit) {
+            let path = self.note_path(&id);
+            let file_type = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::UnreadableNote,
+                        message: format!(
+                            "Falha ao inspecionar a nota {id} durante a busca: {error}"
+                        ),
+                    });
+                    continue;
                 }
-                let raw = fs::read_to_string(path).ok()?;
-                Some((id, NoteDocument::body_of(&raw).to_string()))
-            })
-            .collect()
+            };
+
+            if file_type.is_symlink() {
+                warnings.push(ReadWarning {
+                    note_id: Some(id),
+                    kind: ReadWarningKind::SymlinkRefused,
+                    message: format!(
+                        "Leitura recusada: o arquivo da nota {id} é um link simbólico."
+                    ),
+                });
+                continue;
+            }
+            if !file_type.is_file() {
+                warnings.push(ReadWarning {
+                    note_id: Some(id),
+                    kind: ReadWarningKind::IoError,
+                    message: format!("A nota {id} não é um arquivo regular."),
+                });
+                continue;
+            }
+
+            match fs::read_to_string(&path) {
+                Ok(raw) => bodies.push((id, NoteDocument::body_of(&raw).to_string())),
+                Err(error) => warnings.push(ReadWarning {
+                    note_id: Some(id),
+                    kind: ReadWarningKind::UnreadableNote,
+                    message: format!("Falha ao ler o conteúdo da nota {id}: {error}"),
+                }),
+            }
+        }
+
+        Ok(ReadBatch::new(bodies, warnings))
     }
 }
 
@@ -1096,7 +1146,10 @@ mod tests {
         .expect("metadata");
         manager.save_note_atomic(&doc).expect("save");
 
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0].0, doc.metadata.id);
         assert_eq!(bodies[0].1, "# Biópsia hepática\n\ncorpo da nota");
@@ -1345,7 +1398,10 @@ mod tests {
         let broken = Uuid::new_v4();
         fs::create_dir(manager.note_path(&broken)).expect("occupy a note path");
 
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         let ids: Vec<Uuid> = bodies.iter().map(|(id, _)| *id).collect();
         assert!(ids.contains(&good.metadata.id));
         assert!(ids.contains(&orphan));
@@ -1394,7 +1450,10 @@ mod tests {
         let mut timings = Vec::new();
         for query in ["biopsia", "nota", "inexistente-xyz", "punção"] {
             let started = std::time::Instant::now();
-            let bodies = manager.read_note_bodies_by_recency();
+            let bodies = manager
+                .read_note_bodies_by_recency()
+                .expect("read the note bodies")
+                .items;
             let results = crate::search::search_notes(
                 query,
                 bodies.iter().map(|(id, body)| (*id, body.as_str())),
@@ -1520,7 +1579,10 @@ mod tests {
             "the needle has to sit past the old ceiling for this test to mean anything",
         );
 
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         assert_eq!(
             bodies.len(),
             5_001,
@@ -1540,6 +1602,8 @@ mod tests {
         assert_eq!(
             manager
                 .read_recent_note_bodies(crate::search::MAX_RESULTS)
+                .expect("read the note bodies")
+                .items
                 .len(),
             crate::search::MAX_RESULTS,
         );
@@ -1674,7 +1738,10 @@ mod tests {
         );
 
         // ...and every one of them is still searchable.
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         assert_eq!(bodies.len(), 4);
         assert!(bodies
             .iter()
@@ -1740,12 +1807,18 @@ mod tests {
         let before = fingerprint(&notes_dir);
         for _ in 0..3 {
             manager.list_notes_by_recency().expect("list");
-            let bodies = manager.read_note_bodies_by_recency();
+            let bodies = manager
+                .read_note_bodies_by_recency()
+                .expect("read the note bodies")
+                .items;
             crate::search::search_notes(
                 "biopsia",
                 bodies.iter().map(|(id, body)| (*id, body.as_str())),
             );
-            manager.read_recent_note_bodies(crate::search::MAX_RESULTS);
+            let _recent = manager
+                .read_recent_note_bodies(crate::search::MAX_RESULTS)
+                .expect("read the note bodies")
+                .items;
         }
 
         assert_eq!(fingerprint(&notes_dir), before, "a read modified the store");
@@ -1780,7 +1853,10 @@ mod tests {
         assert!(huge.content.len() > 2_000_000);
 
         let before = fingerprint(&notes_dir);
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         let results = crate::search::search_notes(
             "transjugular",
             bodies.iter().map(|(id, body)| (*id, body.as_str())),
@@ -1854,7 +1930,10 @@ mod tests {
     }
 
     fn search_finds(manager: &StorageManager, query: &str) -> Vec<Uuid> {
-        let bodies = manager.read_note_bodies_by_recency();
+        let bodies = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         crate::search::search_notes(query, bodies.iter().map(|(id, body)| (*id, body.as_str())))
             .into_iter()
             .map(|result| result.note_id)
@@ -1894,7 +1973,10 @@ mod tests {
             .expect("modification time");
 
         for query in ["", "verdade", "MARCADOR-8391", "data-note-it-color"] {
-            let bodies = manager.read_note_bodies_by_recency();
+            let bodies = manager
+                .read_note_bodies_by_recency()
+                .expect("read the note bodies")
+                .items;
             let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
             let results = if query.is_empty() {
                 crate::search::recent_notes(notes)
@@ -1960,6 +2042,8 @@ mod tests {
         assert!(
             manager
                 .read_recent_note_bodies(crate::search::MAX_RESULTS)
+                .expect("read the note bodies")
+                .items
                 .is_empty(),
             "an empty query must not offer a deleted note"
         );
@@ -2249,20 +2333,37 @@ mod tests {
         assert_eq!(fs::read(manager.state_file_path()).unwrap(), state_before);
         assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
 
-        let live = manager.read_note_bodies_by_recency();
+        let live = manager
+            .read_note_bodies_by_recency()
+            .expect("read the note bodies")
+            .items;
         assert_eq!(
             live.len(),
             2,
             "closed notes are ordinary catalog candidates"
         );
         manager.move_note_to_trash(&b.metadata.id).expect("trash B");
-        assert_eq!(manager.read_note_bodies_by_recency().len(), 1);
+        assert_eq!(
+            manager
+                .read_note_bodies_by_recency()
+                .expect("read the note bodies")
+                .items
+                .len(),
+            1
+        );
         assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
 
         manager
             .restore_note_from_trash(&b.metadata.id)
             .expect("restore B");
-        assert_eq!(manager.read_note_bodies_by_recency().len(), 2);
+        assert_eq!(
+            manager
+                .read_note_bodies_by_recency()
+                .expect("read the note bodies")
+                .items
+                .len(),
+            2
+        );
         assert_eq!(manager.load_study().unwrap().cards[key].review_count, 1);
     }
 

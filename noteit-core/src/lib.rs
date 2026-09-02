@@ -237,19 +237,25 @@ impl NoteItCore {
     }
 
     /// Searches every live note, or lists recent notes for an empty query.
-    pub fn search_notes(&self, query: &str) -> Vec<SearchResult> {
+    ///
+    /// A scan that could not be performed is an error rather than an empty
+    /// result: "nothing matched" and "nothing could be read" are different
+    /// answers and the interface must be able to tell them apart. A note that
+    /// could not be read individually arrives as a warning beside the results.
+    pub fn search_notes(&self, query: &str) -> Result<ReadBatch<SearchResult>, String> {
         let listing = query.trim().is_empty();
         let bodies = if listing {
-            self.storage.read_recent_note_bodies(search::MAX_RESULTS)
+            self.storage.read_recent_note_bodies(search::MAX_RESULTS)?
         } else {
-            self.storage.read_note_bodies_by_recency()
+            self.storage.read_note_bodies_by_recency()?
         };
-        let notes = bodies.iter().map(|(id, body)| (*id, body.as_str()));
-        if listing {
+        let notes = bodies.items.iter().map(|(id, body)| (*id, body.as_str()));
+        let results = if listing {
             search::recent_notes(notes)
         } else {
             search::search_notes(query, notes)
-        }
+        };
+        Ok(ReadBatch::new(results, bodies.warnings))
     }
 
     /// Searches live notes with tag and property filtering applied.

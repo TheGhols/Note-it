@@ -15,6 +15,7 @@
 //! recovered after a crash. See ADR-027 for the measurements behind that.
 
 use crate::visible_text::visible_text;
+use crate::warning::ReadBatch;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -306,6 +307,46 @@ pub fn search_note(query: &Folded, note_id: Uuid, content: &str) -> Option<Searc
         match_count: count,
         matched_text: visible[from..to.max(from)].to_string(),
     })
+}
+
+/// What the palette is shown after one query.
+///
+/// The notice exists so that an empty list is never the whole answer. A store
+/// that could not be scanned and a store with nothing matching produce the
+/// same empty `results`, and only this tells a reader which one happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchAnswer {
+    pub results: Vec<SearchResult>,
+    /// A short line for the palette's status, or `None` when the scan was
+    /// wholly healthy.
+    pub notice: Option<String>,
+}
+
+/// Turns what the store answered into what the palette says.
+///
+/// The runtime and the tests both go through here, so "an error must not look
+/// like no results" is one decision in one place rather than a convention the
+/// interface is trusted to keep.
+pub fn resolve_search_answer(outcome: Result<ReadBatch<SearchResult>, String>) -> SearchAnswer {
+    match outcome {
+        Ok(batch) if batch.warnings.is_empty() => SearchAnswer {
+            results: batch.items,
+            notice: None,
+        },
+        Ok(batch) => {
+            let unreadable = batch.warnings.len();
+            SearchAnswer {
+                results: batch.items,
+                notice: Some(format!(
+                    "{unreadable} nota(s) não puderam ser lidas; os resultados estão incompletos"
+                )),
+            }
+        }
+        Err(error) => SearchAnswer {
+            results: Vec::new(),
+            notice: Some(format!("a busca falhou: {error}")),
+        },
+    }
 }
 
 /// Every note the query occurs in, in the order they were handed over.

@@ -18,6 +18,7 @@ use noteit_core::autopaste::{
 };
 use noteit_core::diagnostics::{self, LayerToggleTrace};
 use noteit_core::model::NoteDocument;
+use noteit_core::search::resolve_search_answer;
 use noteit_core::settings::{
     clamp_ui_scale_percent, resolve_startup_config, theme_name, AppConfig,
 };
@@ -1042,10 +1043,15 @@ impl NoteItAppClone {
     /// which is what makes the same control a way to move between them.
     pub fn answer_search(&self, requester: Uuid, request_id: u64, query: &str) {
         let ctx = self.context.borrow();
-        let results = ctx.core.search_notes(query);
+        // A scan that failed and a store with nothing matching both arrive as
+        // an empty list; the notice is what tells the palette which happened.
+        let answer = resolve_search_answer(ctx.core.search_notes(query));
+        if let Some(notice) = &answer.notice {
+            eprintln!("Busca: {notice}");
+        }
 
         if let Some(window) = ctx.windows.get(&requester) {
-            window.send_search_results(request_id, results);
+            window.send_search_results(request_id, answer.results, answer.notice);
         }
     }
 
@@ -1251,10 +1257,32 @@ impl NoteItAppClone {
     /// schema and extractor the current note uses.
     pub fn answer_study_catalog(&self, requester: Uuid, request_id: u64) {
         let ctx = self.context.borrow();
-        let mut notes: Vec<StudyCatalogNote> = ctx
-            .core
-            .storage()
-            .read_note_bodies_by_recency()
+        let scan = ctx.core.storage().read_note_bodies_by_recency();
+        let batch = match scan {
+            Ok(batch) => batch,
+            Err(error) => {
+                // The catalogue is every note, so a scan that could not be
+                // performed cannot be answered with an empty one.
+                eprintln!("Study catalog unavailable: {error}");
+                if let Some(window) = ctx.windows.get(&requester) {
+                    window.send_study_catalog(
+                        request_id,
+                        Vec::new(),
+                        None,
+                        Some(
+                            "As notas não puderam ser lidas, então o catálogo de estudos está indisponível."
+                                .to_string(),
+                        ),
+                    );
+                }
+                return;
+            }
+        };
+        for warning in &batch.warnings {
+            eprintln!("Study catalog warning: {}", warning.message);
+        }
+        let mut notes: Vec<StudyCatalogNote> = batch
+            .items
             .into_iter()
             .map(|(id, content)| StudyCatalogNote { id, content })
             .collect();

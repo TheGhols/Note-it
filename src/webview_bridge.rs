@@ -184,6 +184,12 @@ pub enum HostToWebviewMessage {
         #[serde(rename = "requestId")]
         request_id: u64,
         results: Vec<SearchResult>,
+        /// Why an answer is not the whole truth: the scan failed outright, or
+        /// some notes could not be read. Absent when the store was read
+        /// cleanly, so an empty list is only ever "nothing matched" when this
+        /// is not here.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
     },
     /// The note a search result named is no longer on disk — removed by
     /// another program between the search and the choice.

@@ -127,7 +127,10 @@ export type HostToWebviewMessage =
   /** An image could not be taken in. Already the sentence to show. */
   | { type: 'image_import_failed'; payload: { message: string } }
   | { type: 'set_font_size'; payload: { fontSize: number } }
-  | { type: 'search_results'; payload: { requestId: number; results: SearchResult[] } }
+  | {
+      type: 'search_results';
+      payload: { requestId: number; results: SearchResult[]; notice?: string };
+    }
   | { type: 'search_result_missing'; payload: { noteId: string } }
   | { type: 'reveal_match'; payload: { query: string } }
   | { type: 'trash_entries'; payload: { requestId: number; entries: TrashEntry[] } }
