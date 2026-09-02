@@ -18,26 +18,133 @@ use noteit_core::{
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
+/// What one output channel can do.
+///
+/// A value rather than a call to [`IsTerminal`] wherever a decision happens,
+/// so every renderer is a pure function of it and the whole matrix — styled,
+/// plain, wide, narrow — is reachable from a test with no terminal at all.
+///
+/// Each channel gets its own: standard output being a terminal says nothing
+/// about standard error, and a warning styled into a redirected file is a
+/// warning nobody can grep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputContext {
+    /// Whether this channel accepts ANSI.
     pub color_enabled: bool,
+    /// Columns the terminal reported, when one did.
+    ///
+    /// `None` is "nobody said", not "zero": a pipe has no width, and neither
+    /// does a terminal that answered nonsense. Layout uses
+    /// [`Self::effective_width`], which turns that into an assumption.
+    pub width: Option<usize>,
+    /// Whether block-drawing characters can be expected to arrive intact.
+    ///
+    /// A separate question from colour, and it has a different answer: a file
+    /// holds UTF-8 perfectly well, so a pipe still gets the wordmark, while
+    /// `TERM=dumb` is a terminal saying it has no capabilities to speak of and
+    /// is not one to hand six lines of box-drawing to.
+    pub block_art_enabled: bool,
 }
 
 impl OutputContext {
-    /// Detects whether stdout should receive ANSI styling based on TTY and NO_COLOR.
+    /// The width assumed when no terminal reported one.
+    ///
+    /// Eighty columns is what every terminal emulator opens at and what a
+    /// redirected file is read back in, and it is wide enough for the whole
+    /// presentation — so the conservative answer is also the complete one.
+    pub const ASSUMED_WIDTH: usize = 80;
+
+    /// Column counts worth believing. Zero columns is a terminal saying it
+    /// does not know, and a five-digit width is a stale variable rather than
+    /// a window.
+    const PLAUSIBLE_WIDTH: std::ops::RangeInclusive<usize> = 1..=10_000;
+
+    /// What standard output can do, asked of standard output itself.
     pub fn for_stdout() -> Self {
         let is_tty = std::io::stdout().is_terminal();
-        let no_color = std::env::var_os("NO_COLOR").is_some();
-        let term_dumb = std::env::var("TERM").map(|t| t == "dumb").unwrap_or(false);
         Self {
-            color_enabled: is_tty && !no_color && !term_dumb,
+            color_enabled: Self::color_allowed(is_tty),
+            width: Self::detect_width(is_tty),
+            block_art_enabled: !Self::term_is_dumb(),
         }
+    }
+
+    /// What standard error can do, asked of standard error itself.
+    ///
+    /// Width is not detected here because nothing is laid out to this channel:
+    /// errors and warnings are sentences, and sentences wrap.
+    pub fn for_stderr() -> Self {
+        Self {
+            color_enabled: Self::color_allowed(std::io::stderr().is_terminal()),
+            width: None,
+            block_art_enabled: !Self::term_is_dumb(),
+        }
+    }
+
+    /// The shared half of both answers: a terminal, and neither of the two
+    /// conventions by which a person turns styling off.
+    ///
+    /// `NO_COLOR` counts when it is set at all, including to the empty string,
+    /// which is what the convention asks for.
+    fn color_allowed(is_tty: bool) -> bool {
+        let no_color = std::env::var_os("NO_COLOR").is_some();
+        is_tty && !no_color && !Self::term_is_dumb()
+    }
+
+    fn term_is_dumb() -> bool {
+        std::env::var("TERM")
+            .map(|term| term == "dumb")
+            .unwrap_or(false)
+    }
+
+    /// How wide the terminal on standard output is.
+    ///
+    /// A pipe is never measured: there is no window behind it, and a `COLUMNS`
+    /// inherited from the shell that started the pipeline describes a window
+    /// the output is not going to. When there is a terminal it is asked
+    /// directly — `TIOCGWINSZ` is the window, where `COLUMNS` is a variable
+    /// that may not have been updated since it was last resized — and the
+    /// variable is only the fallback.
+    fn detect_width(is_tty: bool) -> Option<usize> {
+        if !is_tty {
+            return None;
+        }
+        Self::window_columns().or_else(Self::columns_variable)
+    }
+
+    fn window_columns() -> Option<usize> {
+        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+        // SAFETY: `TIOCGWINSZ` reads nothing and writes one `winsize`, into a
+        // `winsize` this function owns for the length of the call. A failed
+        // call is reported in the return value and leaves the struct zeroed,
+        // which the plausibility check below rejects anyway.
+        let answered = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) };
+        if answered != 0 {
+            return None;
+        }
+        Self::plausible(usize::from(size.ws_col))
+    }
+
+    fn columns_variable() -> Option<usize> {
+        let raw = std::env::var("COLUMNS").ok()?;
+        Self::plausible(raw.trim().parse::<usize>().ok()?)
+    }
+
+    fn plausible(columns: usize) -> Option<usize> {
+        Self::PLAUSIBLE_WIDTH.contains(&columns).then_some(columns)
+    }
+
+    /// The width to lay out for: what the terminal said, or the assumption.
+    pub fn effective_width(&self) -> usize {
+        self.width.unwrap_or(Self::ASSUMED_WIDTH)
     }
 
     /// Explicitly creates a plain (non-ANSI) output context.
     pub fn plain() -> Self {
         Self {
             color_enabled: false,
+            width: None,
+            block_art_enabled: true,
         }
     }
 
@@ -45,6 +152,21 @@ impl OutputContext {
     pub fn styled() -> Self {
         Self {
             color_enabled: true,
+            width: None,
+            block_art_enabled: true,
+        }
+    }
+
+    /// The same context, laying out for a window of a stated size.
+    pub fn with_width(self, width: Option<usize>) -> Self {
+        Self { width, ..self }
+    }
+
+    /// The same context, for a terminal that can or cannot draw blocks.
+    pub fn with_block_art(self, block_art_enabled: bool) -> Self {
+        Self {
+            block_art_enabled,
+            ..self
         }
     }
 
@@ -93,6 +215,60 @@ impl OutputContext {
             format!("\x1b[35m{text}\x1b[0m")
         } else {
             text.to_string()
+        }
+    }
+}
+
+/// Both channels, each with its own answer about what it can do.
+///
+/// One execution writes to two places, and they are not the same place: `noteit
+/// listar > lista.txt` has a terminal on standard error and a file on standard
+/// output, and `noteit listar 2> erros.txt` has it the other way round. Carrying
+/// the pair means the renderer never has to guess which one it is writing to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Channels {
+    pub stdout: OutputContext,
+    pub stderr: OutputContext,
+}
+
+impl Channels {
+    /// What this process actually has, asked of each channel separately.
+    pub fn detect() -> Self {
+        Self {
+            stdout: OutputContext::for_stdout(),
+            stderr: OutputContext::for_stderr(),
+        }
+    }
+
+    /// Both channels plain, which is what a test wants unless it says otherwise.
+    pub fn plain() -> Self {
+        Self {
+            stdout: OutputContext::plain(),
+            stderr: OutputContext::plain(),
+        }
+    }
+
+    /// Both channels styled, the shape of a process attached to a terminal.
+    pub fn styled() -> Self {
+        Self {
+            stdout: OutputContext::styled(),
+            stderr: OutputContext::styled(),
+        }
+    }
+
+    /// The same pair, laying standard output out for a window of a stated size.
+    pub fn with_width(self, width: Option<usize>) -> Self {
+        Self {
+            stdout: self.stdout.with_width(width),
+            ..self
+        }
+    }
+
+    /// The same pair, for a terminal that can or cannot draw blocks.
+    pub fn with_block_art(self, block_art_enabled: bool) -> Self {
+        Self {
+            stdout: self.stdout.with_block_art(block_art_enabled),
+            stderr: self.stderr.with_block_art(block_art_enabled),
         }
     }
 }
@@ -199,22 +375,30 @@ fn id_prefix(id: &Uuid) -> String {
     simple[..8].to_string()
 }
 
+/// The presentation `noteit` shows when it was given nothing to do.
+///
+/// Delegated rather than written here: it is the one screen whose shape
+/// depends on the size of the window as well as on whether the channel takes
+/// colour, and [`crate::welcome`] is where that lives.
 pub fn render_welcome(ctx: &OutputContext) -> String {
-    let title = ctx.bold("Note-it");
-    let subtitle = ctx.dim("Suas notas, também pelo terminal.");
-    let hint = format!("Use `{}` para começar.", ctx.bold("noteit ajuda"));
-
-    format!(
-        "{title}\n\n{subtitle}\n\n  listar       Listar notas vivas\n  ler          Ler uma nota\n  buscar       Buscar notas\n  tags         Catálogo de tags\n  propriedades Catálogo de propriedades\n  tarefas      Listar tarefas\n  lixeira      Listar notas na lixeira\n  status       Verificar a instalação\n  ajuda        Mostrar ajuda dos comandos\n  versao       Mostrar versão\n\n{hint}\n"
-    )
+    crate::welcome::render(ctx)
 }
 
+/// The help, which is the same text whether it was asked for by name, by flag
+/// or in Portuguese.
+///
+/// It documents every option this CLI really has and no option it does not,
+/// including the two clap answers for itself — `--help` and `--version` are
+/// real arguments, and a help that omits them is wrong about the program.
+/// The presentation belongs to `noteit` alone and is deliberately not repeated
+/// here: help is a reference, and a reference does not open with a logo.
 pub fn render_help(ctx: &OutputContext) -> String {
     let title = ctx.bold("Note-it CLI");
     let section_usage = ctx.bold("Uso:");
     let section_reading = ctx.bold("Leitura:");
     let section_writing = ctx.bold("Escrita:");
     let section_options = ctx.bold("Opções comuns:");
+    let section_examples = ctx.bold("Exemplos:");
     let section_aliases = ctx.bold("Aliases internacionais:");
 
     format!(
@@ -231,6 +415,7 @@ pub fn render_help(ctx: &OutputContext) -> String {
          \x20 status       Verificar o ambiente e store do Note-it\n\
          \x20 ajuda        Mostrar esta ajuda\n\
          \x20 versao       Mostrar a versão\n\n\
+         \x20 Nenhum comando de leitura altera o store.\n\n\
          {section_writing}\n\
          \x20 criar [TEXTO]                      Criar uma nota e devolver o identificador dela\n\
          \x20 adicionar <ID> <TEXTO>             Acrescentar Markdown ao final de uma nota\n\
@@ -249,10 +434,22 @@ pub fn render_help(ctx: &OutputContext) -> String {
          \x20 --tag <TAG>                      Filtrar por tag, ou aplicar uma em `criar`\n\
          \x20 --propriedade, --property K=V    Filtrar por propriedade, ou aplicar uma em `criar`\n\
          \x20 --estado, --state <E>            Estado das tarefas: pendentes, concluidas, todas\n\
+         \x20                                  (também aceita pending, completed, all)\n\
          \x20 --stdin                          Ler o texto da entrada padrão (criar, adicionar, editar)\n\
          \x20 --vazio, --empty                 Esvaziar o corpo da nota, de propósito (editar)\n\
-         \x20 --json                           Devolver um documento JSON em vez de texto,\n\
-         \x20                                  para scripts e agentes (`noteit --json listar`)\n\n\
+         \x20 --json                           Devolver um único documento JSON em vez de texto,\n\
+         \x20                                  para scripts e agentes. Vale antes ou depois do\n\
+         \x20                                  comando, e desliga cor, dica e apresentação\n\
+         \x20 --help, -h                       Mostrar esta ajuda; depois de um comando,\n\
+         \x20                                  mostrar a ajuda daquele comando\n\
+         \x20 --version, -V                    Mostrar a versão\n\n\
+         {section_examples}\n\
+         \x20 noteit listar --limite 5\n\
+         \x20 noteit buscar \"choque séptico\" --tag Medicina\n\
+         \x20 noteit criar \"Minha nota\" --tag Medicina\n\
+         \x20 echo \"- [ ] revisar\" | noteit adicionar 8c4f1a2b --stdin\n\
+         \x20 noteit --json listar\n\
+         \x20 noteit listar --help\n\n\
          {section_aliases}\n\
          \x20 list, read, search, properties, tasks, trash, help, version\n\
          \x20 create, append, edit, add, remove, set, complete, reopen, restore\n"
@@ -756,15 +953,23 @@ pub fn render_warning(ctx: &OutputContext, warning: &ReadWarning) -> String {
 /// The single place the human adapter is entered from. Warnings go to standard
 /// error and results to standard output, exactly as they always have — the
 /// difference since Phase 4.0F is that both are values, so nothing can slip
-/// onto a channel from the middle of a command.
-pub fn render(executed: &Executed, ctx: &OutputContext) -> CliResponse {
+/// onto a channel from the middle of a command, and since Phase 4.0G each
+/// channel is styled for itself rather than for whatever standard output
+/// happened to be.
+pub fn render(executed: &Executed, channels: &Channels) -> CliResponse {
     match &executed.result {
         Ok(outcome) => CliResponse {
             exit_code: crate::EXIT_SUCCESS,
-            stdout: render_outcome(ctx, outcome),
-            stderr: render_outcome_warnings(ctx, outcome),
+            stdout: render_outcome(&channels.stdout, outcome),
+            // Warnings are written to standard error and are styled for
+            // standard error, which may be a file while standard output is a
+            // terminal, or the other way round.
+            stderr: render_outcome_warnings(&channels.stderr, outcome),
         },
-        Err(error) => CliResponse::failure(error.exit_code(), render_command_error(ctx, error)),
+        Err(error) => CliResponse::failure(
+            error.exit_code(),
+            render_command_error(&channels.stderr, error),
+        ),
     }
 }
 
@@ -863,7 +1068,86 @@ pub fn render_read_error(ctx: &OutputContext, error: &ReadError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::{Command, Executed};
     use noteit_core::chrono::{FixedOffset, TimeZone};
+
+    /// The pair a terminal on one channel and a file on the other produces.
+    fn split(stdout_styled: bool, stderr_styled: bool) -> Channels {
+        Channels {
+            stdout: if stdout_styled {
+                OutputContext::styled()
+            } else {
+                OutputContext::plain()
+            },
+            stderr: if stderr_styled {
+                OutputContext::styled()
+            } else {
+                OutputContext::plain()
+            },
+        }
+    }
+
+    #[test]
+    fn a_redirected_channel_is_never_styled_because_the_other_one_is_a_terminal() {
+        // `noteit comando-inexistente 2> erros.txt` from a terminal: the
+        // sentence is going into a file, and a file gets no escapes. Before
+        // Phase 4.0G both channels shared standard output's answer, and this
+        // is the case that got it wrong.
+        let failed = Executed::failed(
+            Some(Command::List),
+            CommandError::Usage(UsageError::detail("comando desconhecido `batata`.")),
+        );
+
+        let terminal_out_file_err = render(&failed, &split(true, false));
+        assert!(
+            !terminal_out_file_err.stderr.contains('\u{1b}'),
+            "a redirected standard error was styled: {:?}",
+            terminal_out_file_err.stderr
+        );
+        assert!(terminal_out_file_err.stderr.contains("Erro:"));
+
+        // And the other way round: `noteit ... > saida.txt` still styles the
+        // error it prints to the terminal the person is looking at.
+        let file_out_terminal_err = render(&failed, &split(false, true));
+        assert!(
+            file_out_terminal_err.stderr.contains('\u{1b}'),
+            "a terminal on standard error stopped being styled"
+        );
+
+        // The two say the same thing, and only the styling differs.
+        assert_eq!(
+            sanitize_for_terminal(&file_out_terminal_err.stderr),
+            terminal_out_file_err.stderr
+        );
+    }
+
+    #[test]
+    fn results_follow_standard_output_and_warnings_follow_standard_error() {
+        let executed = Executed::ok(Command::Welcome, Outcome::Welcome);
+        let styled_result = render(&executed, &split(true, false));
+        assert!(
+            styled_result.stdout.contains('\u{1b}'),
+            "a terminal on standard output stopped being styled"
+        );
+        assert!(styled_result.stderr.is_empty());
+
+        let plain_result = render(&executed, &split(false, true));
+        assert!(
+            !plain_result.stdout.contains('\u{1b}'),
+            "a redirected standard output was styled"
+        );
+    }
+
+    #[test]
+    fn the_help_is_a_reference_and_never_opens_with_the_presentation() {
+        let help = render_help(&OutputContext::plain());
+        assert!(!help.contains('█'), "the help opened with the wordmark");
+        assert!(!help.contains("Comece por:"));
+        // And the presentation is not the help either: it points at it.
+        let presentation = render_welcome(&OutputContext::plain());
+        assert!(presentation.contains("noteit ajuda"));
+        assert!(!presentation.contains("Aliases internacionais:"));
+    }
 
     #[test]
     fn terminal_sanitization_removes_dangerous_escapes_and_preserves_unicode() {

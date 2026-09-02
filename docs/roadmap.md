@@ -584,7 +584,24 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       privado não é exportado. A saída humana, os códigos de saída e as regras de gravação permanecem
       inalterados; a ajuda ganhou uma linha que documenta a opção. Contrato em
       `docs/machine-interface.md`; justificativa no ADR-041.
-- [ ] **Fase 4.0G — CLI interativa / TUI.** Reservada.
+- [x] **Fase 4.0G — Experiência humana e apresentação da CLI.** `noteit` sem argumentos deixou de ser
+      uma lista de comandos e passou a ser uma apresentação: logotipo `NOTE-IT` em blocos, versão vinda
+      da própria versão do pacote, uma linha dizendo o que o Note-it é e cinco comandos por onde
+      começar. Amarelo para a marca, magenta para o acento, e nada mais — cor nenhuma carrega
+      informação sozinha. A apresentação se adapta ao terminal em vez de quebrar nele: logotipo a
+      partir de 54 colunas, `NOTE-IT` escrito entre 27 e 53, versão e dois comandos abaixo disso. A
+      largura vem do próprio terminal (`TIOCGWINSZ`), com `COLUMNS` apenas como reserva e só quando o
+      valor é plausível; sem terminal, 80 colunas por suposição conservadora. `NO_COLOR` — mesmo vazio
+      — e `TERM=dumb` desligam a cor, e `TERM=dumb` também dispensa a arte em blocos. Cano e
+      redirecionamento recebem texto puro e determinístico. Executar `noteit` não cria nota, janela,
+      socket, lock ou store: imprime, sai com `0` e não toca em carimbo de tempo nenhum. O logotipo
+      aparece só aí — `noteit ajuda`, os erros e o `--json` seguem sem ele. `OutputContext` passou a
+      responder por canal, corrigindo um vazamento de ANSI para a saída de erro redirecionada quando a
+      saída padrão era um terminal, e ganhou largura, de modo que toda a matriz é testável sem um
+      terminal físico. A ajuda passou a documentar `--help`, `--version` e os aliases de `--estado`, e
+      ganhou exemplos. Interface de máquina intocada: `--json` continua com exatamente um documento,
+      nos mesmos canais, com os mesmos códigos, provado agora também sobre um terminal real.
+      **Nenhuma TUI foi implementada** — ela foi movida para a Fase 5.0.
 - [ ] **Fase 4.0H — Ferramentas de desenvolvedor e automação.** Reservado.
 - [ ] **Fase 4.0R — Auditoria de Segurança e Regressão.** Reservado.
 - [ ] **Fase 4.1 — MCP.** Reservado.
@@ -598,6 +615,11 @@ Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a 
 
 Saiu da Fase 4 em vez de ser abandonada: vem depois do trabalho de Core e CLI acima.
 
+- [ ] **Fase 5.0 — TUI completa.** Saiu da Fase 4.0G, que entregou apresentação e não interatividade.
+      É aqui que uma interface de terminal de verdade seria decidida: painéis, navegação por teclado,
+      seleção de notas, edição dentro do terminal. `noteit tui` é uma proposta, não um comando —
+      nenhuma parte dela existe hoje, e a Fase 4.0G deliberadamente não abriu caminho para ela: nenhum
+      framework de TUI foi adicionado, nenhum loop de eventos, nenhum prompt persistente.
 - [ ] PKGBUILD do Arch Linux para o AUR.
 - [ ] Automação de releases e artefatos binários.
 - [ ] Versão v0.1.0.

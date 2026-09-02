@@ -107,6 +107,28 @@ Com `--root DIR` o barramento privado é registrado em `DIR/session` e **reutili
 
 Executá-lo localmente abrirá brevemente uma janela de notas real: esse é o ponto da metade da fidelidade, e ela está apontada para um store descartável o tempo todo.
 
+### Testar o que só um terminal sabe responder
+
+`noteit-cli/tests/presentation.rs` cobre a apresentação e a política de ANSI da Fase 4.0G no binário
+real. Quase tudo ali é decidido por perguntas que nenhuma variável de ambiente responde — se o que
+está na saída padrão é um terminal e quantas colunas ele tem —, e a CLI recusa, de propósito, acreditar
+em uma variável sobre isso. Então a suíte fornece a coisa real: abre um pseudoterminal de tamanho
+declarado, aponta a saída padrão do processo para ele, mantém a saída de erro em um cano e lê de volta
+o que foi escrito. É assim que "um terminal largo recebe o logotipo", "uma janela de 20 colunas recebe
+duas linhas" e "a saída de erro redirecionada não recebe cor porque a saída padrão é um terminal" viram
+afirmações em vez de observações.
+
+O pseudoterminal fica na própria suíte, e não no harness compartilhado: é a única que precisa de um, e
+um auxiliar compilado em suítes que nunca o chamam é código morto em todas elas. Duas armadilhas que já
+custaram tempo: enquanto o `Command` não é descartado, o processo de teste ainda segura uma ponta de
+escrita e a leitura nunca vê fim de arquivo; e um terminal entrega `\r\n` onde a CLI escreveu `\n`, o que
+é obra do terminal e não da CLI.
+
+A forma da tela — as três larguras, a escolha de frase, as duas cores — também é testada sem terminal
+nenhum, direto sobre `OutputContext`, porque as capacidades são um valor. As duas metades se cobrem: a
+unitária percorre cada largura de 1 a 200, a de processo prova que o binário real chega às mesmas
+conclusões.
+
 ### Medir a pesquisa em vez de adivinhá-la
 
 A afirmação de que Note-it não precisa de índice de pesquisa é um teste, não uma memória:

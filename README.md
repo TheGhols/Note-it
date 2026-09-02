@@ -240,11 +240,51 @@ note-it quit                  # salva tudo e encerra o aplicativo
 A linha de comando `noteit` é um binário headless independente que não requer sessão gráfica nem WebKit:
 
 ```bash
-noteit                        # orientação inicial de uso
+noteit                        # apresentação e primeiros comandos
 noteit ajuda                  # mostra a ajuda dos comandos (alias: noteit help, noteit --help)
 noteit versao                 # mostra a versão do Note-it (alias: noteit version, noteit --version)
 noteit status                 # verifica os diretórios e ambiente XDG de forma estritamente read-only
 ```
+
+Executado sem argumentos, `noteit` se apresenta e encerra:
+
+```text
+███╗   ██╗ ██████╗ ████████╗███████╗      ██╗████████╗
+████╗  ██║██╔═══██╗╚══██╔══╝██╔════╝      ██║╚══██╔══╝
+██╔██╗ ██║██║   ██║   ██║   █████╗  █████╗██║   ██║
+██║╚██╗██║██║   ██║   ██║   ██╔══╝  ╚════╝██║   ██║
+██║ ╚████║╚██████╔╝   ██║   ███████╗      ██║   ██║
+╚═╝  ╚═══╝ ╚═════╝    ╚═╝   ╚══════╝      ╚═╝   ╚═╝
+
+Note-it 0.1.0
+Notas rápidas, locais e prontas para você e seus agentes.
+
+Comece por:
+  noteit listar
+  noteit buscar "texto"
+  noteit criar "Minha nota"
+  noteit status
+  noteit ajuda
+```
+
+Não é um prompt e não espera nada: imprime, sai com código `0` e não deixa nada no repositório —
+nem sequer o cria. A apresentação aparece só aqui; `noteit ajuda` e os demais comandos não repetem
+o logotipo.
+
+O que aparece se adapta ao terminal, e nada além da forma muda:
+
+| Situação | O que sai |
+| --- | --- |
+| Terminal com 54 colunas ou mais | Logotipo em blocos, amarelo e magenta |
+| Terminal estreito (27 a 53 colunas) | `NOTE-IT` escrito, sem arte, com os mesmos comandos |
+| Terminal muito estreito (menos de 27) | `NOTE-IT`, versão e os dois comandos essenciais |
+| `NO_COLOR` definido (mesmo vazio) | O mesmo texto, sem nenhuma sequência ANSI |
+| `TERM=dumb` | Sem cor e sem arte em blocos |
+| `noteit \| cat`, `noteit > saida.txt` | Texto puro, sem ANSI, idêntico a cada execução |
+| `--json` | Só o documento JSON: nunca logotipo, cor ou dica |
+
+Cor nunca é a única forma de dizer alguma coisa: retirando toda a cor e reduzindo à largura mínima,
+a versão, o convite e os comandos continuam lá.
 
 Leitura (nunca escreve nada no repositório):
 

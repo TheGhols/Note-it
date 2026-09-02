@@ -64,13 +64,28 @@ impl Sandbox {
     }
 
     pub fn command(&self, args: &[&str]) -> Command {
+        let mut command = self.bare_command(args);
+        // Almost every suite is reading text, and unstyled text is what it
+        // wants to read. The presentation suite asks for the terminal's own
+        // answer instead, through `bare_command`.
+        command.env("NO_COLOR", "1");
+        command
+    }
+
+    /// The same throwaway world, with nothing said about styling.
+    ///
+    /// `NO_COLOR` is *removed* rather than left alone: it may be set in the
+    /// environment the test runner was started from, and a suite about when
+    /// colour appears cannot inherit the answer.
+    pub fn bare_command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(noteit_bin());
         command.args(args);
         // Headless on purpose: no display, no compositor, no session bus.
         command.env_remove("DISPLAY");
         command.env_remove("WAYLAND_DISPLAY");
         command.env_remove("DBUS_SESSION_BUS_ADDRESS");
-        command.env("NO_COLOR", "1");
+        command.env_remove("NO_COLOR");
+        command.env_remove("COLUMNS");
         command.env("XDG_DATA_HOME", self.root.join("data"));
         command.env("XDG_CONFIG_HOME", self.root.join("config"));
         command.env("XDG_STATE_HOME", self.root.join("state"));

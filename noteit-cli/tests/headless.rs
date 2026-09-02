@@ -89,21 +89,37 @@ fn walkdir(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn noteit_without_arguments_shows_welcome_screen_headless() {
-    let (code, stdout, stderr) = run_headless(&[], None, true);
+fn noteit_without_arguments_shows_the_presentation_headless() {
+    // Given a store of its own so the assertion is about the presentation and
+    // never about what happens to be in the person's own notes directory.
+    // Shape and styling are `tests/presentation.rs`; what is asserted here is
+    // that the empty command line still answers, and answers quietly.
+    let tmp = tempdir().expect("tempdir");
+    let data = tmp.path().join("data");
+    let config = tmp.path().join("config");
+    let state = tmp.path().join("state");
+    let cache = tmp.path().join("cache");
+    let runtime = tmp.path().join("runtime");
+
+    let xdg = Some((
+        data.as_path(),
+        config.as_path(),
+        state.as_path(),
+        cache.as_path(),
+        runtime.as_path(),
+    ));
+
+    let (code, stdout, stderr) = run_headless(&[], xdg, true);
     assert_eq!(code, 0, "Exit code should be 0");
     assert!(stderr.is_empty(), "Stderr should be empty on normal output");
     assert!(stdout.contains("Note-it"));
-    assert!(stdout.contains("Suas notas, também pelo terminal."));
-    assert!(stdout.contains("listar"));
-    assert!(stdout.contains("ler"));
-    assert!(stdout.contains("buscar"));
-    assert!(stdout.contains("tags"));
-    assert!(stdout.contains("propriedades"));
-    assert!(stdout.contains("tarefas"));
-    assert!(stdout.contains("lixeira"));
-    assert!(stdout.contains("status"));
-    assert!(stdout.contains("Use `noteit ajuda` para começar."));
+    assert!(stdout.contains(env!("CARGO_PKG_VERSION")));
+    assert!(stdout.contains("Comece por:"));
+    assert!(stdout.contains("noteit listar"));
+    assert!(stdout.contains("noteit buscar"));
+    assert!(stdout.contains("noteit criar"));
+    assert!(stdout.contains("noteit status"));
+    assert!(stdout.contains("noteit ajuda"));
 }
 
 #[test]

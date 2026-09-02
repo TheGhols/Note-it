@@ -21,6 +21,13 @@ clap = { version = "4.5", features = ["derive"] }
 # crate now depends on them directly.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# One call: `ioctl(TIOCGWINSZ)`, to ask the terminal how wide it is so the
+# presentation can shrink instead of wrapping. The standard library has no
+# answer for that, and `COLUMNS` alone is not one — shells do not export it, so
+# relying on it would mean the narrow layouts never actually appeared. Already
+# in this workspace's graph through `dirs-sys` and `getrandom`, so it adds a
+# dependency edge and not a crate. Nothing about it reaches the Core.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.10"

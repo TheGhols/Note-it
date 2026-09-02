@@ -44,6 +44,8 @@ Nada mais é gravado em nenhum dos canais no modo máquina: nenhum `Aviso:`, nen
 
 ANSI nunca é emitido no modo máquina, esteja o processo conectado a um terminal ou não. `NO_COLOR` é irrelevante aqui porque não há nada para desligar.
 
+A apresentação que a Fase 4.0G deu a `noteit` sem argumentos também não alcança este contrato. `noteit --json` responde com o documento `welcome` e nada mais: nenhum logotipo, nenhuma cor, nenhuma dica humana, nenhum "Comece por:", antes ou depois do documento. O mesmo vale para toda a matriz de terminal — a largura da janela, `TERM=dumb`, `COLUMNS` — que não altera um único byte de nenhum documento. É afirmado comparando, byte a byte, a mesma execução sobre um terminal real e dentro de um cano.
+
 ---
 
 ## 3. O envelope

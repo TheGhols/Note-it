@@ -60,14 +60,16 @@ scripts/check-core-boundary
 - `main.rs`: Ponto de entrada para o binário `noteit`, despachando argumentos e mapeando códigos de saída padrão.
 - `cli.rs`: análise de linha de comando usando Clap com comandos primários PT-BR e aliases internacionais (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`), mais a opção global `--json`.
 - `outcome.rs`: o que um comando produziu, antes que alguém decida como dizê-lo - `Outcome`, `CommandError`, os nomes canônicos `Command` e `CliResponse` (código de saída mais ambos os canais como dados). Ambos os renderizadores leem isso e nenhum lê o outro.
-- `output.rs`: o renderizador humano. Apresentação do terminal, estilo ANSI, detecção NO_COLOR/não TTY e higienização da segurança do terminal (`sanitize_for_terminal`).
+- `output.rs`: o renderizador humano. Apresentação do terminal, estilo ANSI e higienização da segurança do terminal (`sanitize_for_terminal`). Aqui também mora `OutputContext` — o que **um** canal pode fazer (aceita cor, largura conhecida, desenha blocos) — e `Channels`, o par. Cada canal é decidido a partir dele mesmo: um terminal na saída padrão não diz nada sobre a saída de erro, e um aviso estilizado dentro de um arquivo redirecionado é um aviso que ninguém consegue filtrar. Como as capacidades são um valor, e não uma chamada a `is_terminal()` espalhada pelo código, toda a matriz (estilizado, puro, largo, estreito, `dumb`) é alcançável em teste sem terminal físico.
+- `welcome.rs`: a apresentação de `noteit` sem argumentos. Logotipo `NOTE-IT` em blocos, versão vinda de `CARGO_PKG_VERSION`, uma linha sobre o que o Note-it é e cinco comandos por onde começar. Função pura de `OutputContext` e da versão do pacote: não lê, não abre e não grava nada. Cor e largura variam de forma independente — retirando toda a cor e reduzindo à largura mínima, nenhuma informação se perde.
 - `machine.rs`: o renderizador da máquina. O esquema público JSON como DTOs explícitos, um documento versionado por execução, tokens em inglês estáveis ​​para cada decisão tomada por um consumidor. Consulte `docs/machine-interface.md` e ADR-041.
 - `authority.rs`: a decisão de quem escreve. Adquire o lease quando ele está livre e grava pelo Core; quando está ocupado, envia a alteração ao detentor pelo soquete privado; quando está ocupado e inacessível, falha de modo seguro e não altera nada. Nunca tenta contornar outro gravador.
 - `lib.rs`: Interface programática (`run_with_args`), análise de filtro, despacho Core, códigos de saída padrão, tratamento de entrada padrão para `--stdin` e escolha do renderizador.
 
 ```text
                     ┌──▶ output::render   ──▶ frases, estilo, datas locais, prefixos de 8 caracteres
-domínio ─▶ Outcome ─┤
+domínio ─▶ Outcome ─┤          │
+       │            │          └──▶ welcome::render ──▶ a apresentação, por largura e por cor
        │            └──▶ machine::render  ──▶ um documento JSON, UTC, UUIDs completos, tokens estáveis
        └──▶ CommandError
 ```

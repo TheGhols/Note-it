@@ -3,6 +3,7 @@ pub mod cli;
 pub mod machine;
 pub mod outcome;
 pub mod output;
+pub mod welcome;
 
 use clap::error::ErrorKind;
 use clap::Parser;
@@ -12,7 +13,7 @@ use noteit_core::{NoteFilter, NoteItCore, NoteProperty, StorePaths};
 use outcome::{
     CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError, UsageError,
 };
-use output::OutputContext;
+use output::Channels;
 use std::io::Read;
 
 pub const EXIT_SUCCESS: u8 = 0;
@@ -45,18 +46,18 @@ pub type StdinSource<'a> = &'a dyn Fn() -> Result<String, String>;
 ///
 /// Returns everything the process has to say as data: the exit code and both
 /// channels. Nothing in here prints.
-pub fn run_with_args<I, T>(args: I, ctx: &OutputContext) -> CliResponse
+pub fn run_with_args<I, T>(args: I, channels: &Channels) -> CliResponse
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    run_with_args_and_stdin(args, ctx, &read_process_stdin)
+    run_with_args_and_stdin(args, channels, &read_process_stdin)
 }
 
 /// The whole dispatcher, with standard input supplied explicitly.
 pub fn run_with_args_and_stdin<I, T>(
     args: I,
-    ctx: &OutputContext,
+    channels: &Channels,
     stdin: StdinSource<'_>,
 ) -> CliResponse
 where
@@ -99,7 +100,7 @@ where
     if machine {
         machine::render(&executed)
     } else {
-        output::render(&executed, ctx)
+        output::render(&executed, channels)
     }
 }
 
@@ -513,18 +514,48 @@ mod tests {
     use super::*;
 
     fn stdout_of(args: &[&str]) -> String {
-        let ctx = OutputContext::plain();
-        let response = run_with_args(args.to_vec(), &ctx);
+        let channels = Channels::plain();
+        let response = run_with_args(args.to_vec(), &channels);
         assert_eq!(response.exit_code, EXIT_SUCCESS, "{}", response.stderr);
         assert!(response.stderr.is_empty(), "{}", response.stderr);
         response.stdout
     }
 
     #[test]
-    fn dispatch_no_args_renders_welcome_with_success() {
+    fn dispatch_no_args_renders_the_presentation_with_success() {
         let result = stdout_of(&["noteit"]);
-        assert!(result.contains("Note-it"));
-        assert!(result.contains("Use `noteit ajuda` para começar."));
+        assert!(result.contains("Note-it"), "{result}");
+        assert!(
+            result.contains(env!("CARGO_PKG_VERSION")),
+            "the presentation must name the version: {result}"
+        );
+        assert!(result.contains("Comece por:"), "{result}");
+        assert!(result.contains("noteit listar"), "{result}");
+        assert!(result.contains("noteit ajuda"), "{result}");
+    }
+
+    #[test]
+    fn dispatch_no_args_is_the_only_command_that_shows_the_presentation() {
+        // The wordmark belongs to the empty command line. Anything else —
+        // including the help, which is the screen most likely to be mistaken
+        // for a place to put it — answers without it.
+        let presentation = stdout_of(&["noteit"]);
+        assert!(presentation.contains('\u{2588}'), "{presentation}");
+
+        for arguments in [
+            vec!["noteit", "ajuda"],
+            vec!["noteit", "help"],
+            vec!["noteit", "--help"],
+            vec!["noteit", "versao"],
+            vec!["noteit", "status"],
+            vec!["noteit", "listar", "--help"],
+        ] {
+            let answer = stdout_of(&arguments);
+            assert!(
+                !answer.contains('\u{2588}') && !answer.contains("Comece por:"),
+                "{arguments:?} showed the presentation"
+            );
+        }
     }
 
     #[test]
@@ -552,8 +583,8 @@ mod tests {
 
     #[test]
     fn dispatch_invalid_command_returns_usage_error_in_portuguese() {
-        let ctx = OutputContext::plain();
-        let response = run_with_args(["noteit", "batata"], &ctx);
+        let channels = Channels::plain();
+        let response = run_with_args(["noteit", "batata"], &channels);
         assert_eq!(response.exit_code, EXIT_USAGE_ERROR);
         assert!(response.stdout.is_empty());
         assert!(response
@@ -566,8 +597,8 @@ mod tests {
 
     #[test]
     fn dispatch_invalid_flag_returns_usage_error_in_portuguese() {
-        let ctx = OutputContext::plain();
-        let response = run_with_args(["noteit", "--flag-desconhecida"], &ctx);
+        let channels = Channels::plain();
+        let response = run_with_args(["noteit", "--flag-desconhecida"], &channels);
         assert_eq!(response.exit_code, EXIT_USAGE_ERROR);
         assert!(response
             .stderr
@@ -579,8 +610,8 @@ mod tests {
 
     #[test]
     fn dispatch_unexpected_argument_returns_usage_error_in_portuguese() {
-        let ctx = OutputContext::plain();
-        let response = run_with_args(["noteit", "status", "argumento-inesperado"], &ctx);
+        let channels = Channels::plain();
+        let response = run_with_args(["noteit", "status", "argumento-inesperado"], &channels);
         assert_eq!(response.exit_code, EXIT_USAGE_ERROR);
         assert!(response
             .stderr
@@ -637,7 +668,7 @@ mod tests {
         assert!(!machine_mode_requested(&args));
         assert!(CliArgs::try_parse_from(&args).is_err());
 
-        let response = run_with_args(args, &OutputContext::plain());
+        let response = run_with_args(args, &Channels::plain());
         assert_eq!(response.exit_code, EXIT_USAGE_ERROR);
         assert!(response.stdout.is_empty());
         assert!(response.stderr.starts_with("Erro: "), "{}", response.stderr);
@@ -655,11 +686,11 @@ mod tests {
 
     #[test]
     fn machine_documents_carry_no_styling_even_in_a_styled_context() {
-        // `OutputContext::styled()` is what an attached terminal produces, and
+        // `Channels::styled()` is what an attached terminal produces, and
         // the machine interface must be indifferent to it: JSON is data, and a
         // consumer never asked for colour. `NO_COLOR` is beside the point here
         // for the same reason — there is nothing to turn off.
-        let styled = OutputContext::styled();
+        let styled = Channels::styled();
         for arguments in [
             vec!["noteit", "--json"],
             vec!["noteit", "--json", "ajuda"],
