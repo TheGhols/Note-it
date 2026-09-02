@@ -154,8 +154,12 @@ impl ConfigLoadOutcome {
 }
 
 impl AppConfig {
-    /// Backwards-compatible convenience wrapper that delegates to [`Self::load_detailed`].
-    /// Automatically performs quarantine preservation on corrupted files before returning the value.
+    /// Convenience wrapper that delegates to [`Self::load_detailed`].
+    ///
+    /// Warning: This convenience wrapper returns default values if the file cannot
+    /// be read or preserved (`ReadFailed` / `CorruptedPreservationFailed`).
+    /// Subsequent calls to [`Self::save_to_file`] will refuse to overwrite an unreadable
+    /// file, but callers should prefer [`Self::load_detailed`] to inspect and report errors.
     pub fn load_from_file(path: &Path) -> Self {
         Self::load_detailed(path).value()
     }
@@ -164,16 +168,23 @@ impl AppConfig {
     /// valid configurations, corrupted files preserved via quarantine, preservation failures,
     /// and I/O read errors.
     pub fn load_detailed(path: &Path) -> ConfigLoadOutcome {
-        if !path.exists() {
-            let config = Self::default();
-            if let Err(error) = config.save_to_file(path) {
-                eprintln!("Failed to persist default configuration: {error}");
-            }
-            return ConfigLoadOutcome::Missing(config);
-        }
+        Self::load_detailed_with_reader(path, |p| fs::read(p))
+    }
 
-        let raw_bytes = match fs::read(path) {
+    /// Configuration loader allowing custom reader injection for deterministic failure testing.
+    pub fn load_detailed_with_reader(
+        path: &Path,
+        reader: impl Fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> ConfigLoadOutcome {
+        let raw_bytes = match reader(path) {
             Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let config = Self::default();
+                if let Err(error) = config.save_to_file_with_reader(path, &reader) {
+                    eprintln!("Failed to persist default configuration: {error}");
+                }
+                return ConfigLoadOutcome::Missing(config);
+            }
             Err(e) => {
                 eprintln!("Failed to read configuration at {}: {e}", path.display());
                 return ConfigLoadOutcome::ReadFailed(e.to_string());
@@ -235,17 +246,26 @@ impl AppConfig {
     /// The file is replaced whole or not at all.
     /// Invariant (R-006): If an existing file at `path` is currently malformed or
     /// corrupted, it must be preserved via quarantine before replacement.
-    /// If preservation fails, fail-closed: do not overwrite the corrupted file.
+    /// If preservation fails or if an existing file is unreadable, fail-closed:
+    /// do not overwrite the original file.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
+        self.save_to_file_with_reader(path, |p| fs::read(p))
+    }
+
+    /// Saves configuration allowing custom reader injection for deterministic failure testing.
+    pub fn save_to_file_with_reader(
+        &self,
+        path: &Path,
+        reader: impl Fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             crate::permissions::create_private_dir_all(parent)
                 .map_err(|e| format!("Failed to create configuration directory: {e}"))?;
         }
 
-        // Before replacing an existing file, if it is currently malformed/corrupted,
-        // ensure it has been safely quarantined so unparsed data is never lost!
-        if path.exists() {
-            if let Ok(existing_bytes) = fs::read(path) {
+        // Before replacing an existing file, verify/preserve previous contents.
+        match reader(path) {
+            Ok(existing_bytes) => {
                 let is_valid = std::str::from_utf8(&existing_bytes)
                     .ok()
                     .and_then(|s| toml::from_str::<toml::Value>(s).ok())
@@ -261,12 +281,81 @@ impl AppConfig {
                     )?;
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // If symlink_metadata succeeds, it's a dangling symlink occupying the target path
+                if let Ok(meta) = fs::symlink_metadata(path) {
+                    if meta.file_type().is_symlink() {
+                        return Err(format!(
+                            "Refusing to overwrite dangling symlink at {}",
+                            path.display()
+                        ));
+                    }
+                }
+                // Genuinely missing: safe to create new file.
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Refusing to overwrite configuration at {}: unable to read existing content for preservation: {e}",
+                    path.display()
+                ));
+            }
         }
 
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config to TOML: {e}"))?;
 
         write_atomic(path, toml_str.as_bytes(), "the configuration")
+    }
+}
+
+/// Result of resolving configuration during application startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigStartupRecovery {
+    pub config: AppConfig,
+    pub can_persist: bool,
+    pub log_message: Option<String>,
+}
+
+/// Resolves application startup behavior for a given [`ConfigLoadOutcome`].
+///
+/// Implements fail-closed policy:
+/// - Valid / Missing: config is usable and safe to persist.
+/// - CorruptedRecovered: default config in memory, quarantine preserved on disk, safe to persist.
+/// - CorruptedPreservationFailed / ReadFailed: default config in memory, but persistence is BLOCKED
+///   to protect unreadable or unpreserved original files from being overwritten.
+pub fn resolve_startup_config(outcome: ConfigLoadOutcome) -> ConfigStartupRecovery {
+    match outcome {
+        ConfigLoadOutcome::Valid(c) | ConfigLoadOutcome::Missing(c) => ConfigStartupRecovery {
+            config: c,
+            can_persist: true,
+            log_message: None,
+        },
+        ConfigLoadOutcome::CorruptedRecovered {
+            value,
+            quarantine_path,
+            error,
+        } => ConfigStartupRecovery {
+            config: value,
+            can_persist: true,
+            log_message: Some(format!(
+                "Aviso: arquivo de configuração corrompido ({error}). Original preservado em {}",
+                quarantine_path.display()
+            )),
+        },
+        ConfigLoadOutcome::CorruptedPreservationFailed { error } => ConfigStartupRecovery {
+            config: AppConfig::default(),
+            can_persist: false,
+            log_message: Some(format!(
+                "Erro crítico: arquivo de configuração corrompido, mas a preservação em quarentena falhou: {error}. Persistência bloqueada para proteger o arquivo original."
+            )),
+        },
+        ConfigLoadOutcome::ReadFailed(error) => ConfigStartupRecovery {
+            config: AppConfig::default(),
+            can_persist: false,
+            log_message: Some(format!(
+                "Erro crítico: falha ao ler arquivo de configuração: {error}. Persistência bloqueada para proteger o arquivo original."
+            )),
+        },
     }
 }
 

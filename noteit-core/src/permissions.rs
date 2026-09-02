@@ -107,3 +107,50 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()?;
     Ok(())
 }
+
+/// Copies a regular file to a destination, guaranteeing the destination file is
+/// born private (`0600`) regardless of the source file's permissions or ambient umask.
+///
+/// Refuses symbolic links and non-regular files (fail-closed).
+/// Does NOT mutate the source file's permissions or metadata.
+pub fn copy_private_file(source: &Path, destination: &Path) -> Result<u64, String> {
+    let meta = fs::symlink_metadata(source)
+        .map_err(|e| format!("Failed to inspect source file {}: {e}", source.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "Refusing to copy symbolic link {}: backups do not follow links",
+            source.display()
+        ));
+    }
+    if !meta.file_type().is_file() {
+        return Err(format!(
+            "Refusing to copy non-regular file {}",
+            source.display()
+        ));
+    }
+
+    let mut reader = File::open(source)
+        .map_err(|e| format!("Failed to open source file {}: {e}", source.display()))?;
+    let mut writer = create_private_file(destination).map_err(|e| {
+        format!(
+            "Failed to create private destination file {}: {e}",
+            destination.display()
+        )
+    })?;
+
+    let bytes_copied = io::copy(&mut reader, &mut writer).map_err(|e| {
+        format!(
+            "Failed to copy bytes from {} to {}: {e}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    writer.sync_all().map_err(|e| {
+        format!(
+            "Failed to sync destination file {}: {e}",
+            destination.display()
+        )
+    })?;
+
+    Ok(bytes_copied)
+}

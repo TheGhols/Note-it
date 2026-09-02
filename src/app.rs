@@ -18,9 +18,11 @@ use noteit_core::autopaste::{
 };
 use noteit_core::diagnostics::{self, LayerToggleTrace};
 use noteit_core::model::NoteDocument;
-use noteit_core::settings::{clamp_ui_scale_percent, theme_name, AppConfig, ConfigLoadOutcome};
+use noteit_core::settings::{
+    clamp_ui_scale_percent, resolve_startup_config, theme_name, AppConfig,
+};
 use noteit_core::state::{
-    next_collapse_all, AppState, LayerMode, NoteWindowState, StateLoadOutcome,
+    next_collapse_all, resolve_startup_state, AppState, LayerMode, NoteWindowState,
 };
 use noteit_core::study::Rating;
 use noteit_core::timer::TimerFinishKind;
@@ -257,6 +259,8 @@ pub struct AppContext {
     pub core: NoteItCore,
     pub config: AppConfig,
     pub state: AppState,
+    pub can_persist_config: bool,
+    pub can_persist_state: bool,
     pub windows: HashMap<Uuid, NoteWindow>,
     pub ui_dist_path: PathBuf,
     lifecycle: LifecycleCoordinator,
@@ -331,62 +335,26 @@ impl NoteItApp {
         let storage = core.storage();
         register_asset_scheme(storage.assets_dir().to_path_buf());
         let config_outcome = AppConfig::load_detailed(&storage.config_file_path());
-        let config = match &config_outcome {
-            ConfigLoadOutcome::Valid(c) | ConfigLoadOutcome::Missing(c) => c.clone(),
-            ConfigLoadOutcome::CorruptedRecovered {
-                value,
-                quarantine_path,
-                error,
-            } => {
-                eprintln!(
-                    "Aviso: arquivo de configuração corrompido ({error}). Original preservado em {}",
-                    quarantine_path.display()
-                );
-                value.clone()
-            }
-            ConfigLoadOutcome::CorruptedPreservationFailed { error } => {
-                eprintln!(
-                    "Erro crítico: arquivo de configuração corrompido, mas a preservação em quarentena falhou: {error}"
-                );
-                config_outcome.value()
-            }
-            ConfigLoadOutcome::ReadFailed(error) => {
-                eprintln!("Erro: falha ao ler arquivo de configuração: {error}");
-                config_outcome.value()
-            }
-        };
+        let startup_config = resolve_startup_config(config_outcome);
+        if let Some(msg) = &startup_config.log_message {
+            eprintln!("{msg}");
+        }
+        let config = startup_config.config;
 
         let state_outcome = AppState::load_detailed(&storage.state_file_path());
-        let state = match &state_outcome {
-            StateLoadOutcome::Valid(s) | StateLoadOutcome::Missing(s) => s.clone(),
-            StateLoadOutcome::CorruptedRecovered {
-                value,
-                quarantine_path,
-                error,
-            } => {
-                eprintln!(
-                    "Aviso: arquivo de estado corrompido ({error}). Original preservado em {}",
-                    quarantine_path.display()
-                );
-                value.clone()
-            }
-            StateLoadOutcome::CorruptedPreservationFailed { error } => {
-                eprintln!(
-                    "Erro crítico: arquivo de estado corrompido, mas a preservação em quarentena falhou: {error}"
-                );
-                state_outcome.value()
-            }
-            StateLoadOutcome::ReadFailed(error) => {
-                eprintln!("Erro: falha ao ler arquivo de estado: {error}");
-                state_outcome.value()
-            }
-        };
+        let startup_state = resolve_startup_state(state_outcome);
+        if let Some(msg) = &startup_state.log_message {
+            eprintln!("{msg}");
+        }
+        let state = startup_state.state;
         let ui_dist_path = find_ui_dist_path();
 
         let context = Rc::new(RefCell::new(AppContext {
             core,
             config,
             state,
+            can_persist_config: startup_config.can_persist,
+            can_persist_state: startup_state.can_persist,
             windows: HashMap::new(),
             ui_dist_path,
             lifecycle: LifecycleCoordinator::default(),
@@ -729,7 +697,9 @@ impl NoteItAppClone {
             }
             ctx.config.theme = resolved.to_string();
             let config_path = ctx.core.storage().config_file_path();
-            if let Err(error) = ctx.config.save_to_file(&config_path) {
+            if !ctx.can_persist_config {
+                eprintln!("Aviso: gravação de tema ignorada para proteger arquivo de configuração original.");
+            } else if let Err(error) = ctx.config.save_to_file(&config_path) {
                 eprintln!("Failed to persist the interface theme: {error}");
             }
             ctx.windows.values().cloned().collect()
@@ -754,6 +724,10 @@ impl NoteItAppClone {
             let mut next = ctx.config.clone();
             next.ui_scale_percent = resolved;
             let config_path = ctx.core.storage().config_file_path();
+            if !ctx.can_persist_config {
+                eprintln!("Aviso: gravação de escala ignorada para proteger arquivo de configuração original.");
+                return;
+            }
             if let Err(error) = next.save_to_file(&config_path) {
                 eprintln!("Failed to persist the interface scale: {error}");
                 return;
@@ -824,14 +798,22 @@ impl NoteItAppClone {
                         lifecycle,
                         summon_restore,
                         layer_state_persistence,
+                        can_persist_state,
                         ..
                     } = &mut *ctx;
                     let state_path = core.storage().state_file_path();
+                    let can_persist = *can_persist_state;
                     *summon_restore = None;
                     layer_state_persistence.cancel();
                     let commit_result = commit_hidden_transition(
                         state,
-                        |next_state| next_state.save_to_file(&state_path),
+                        |next_state| {
+                            if can_persist {
+                                next_state.save_to_file(&state_path)
+                            } else {
+                                Ok(())
+                            }
+                        },
                         || {
                             for window in windows.values() {
                                 window.close_after_save();
@@ -1423,7 +1405,9 @@ impl NoteItAppClone {
             }
             ctx.config.capture_delimiter = resolved.to_string();
             let config_path = ctx.core.storage().config_file_path();
-            if let Err(error) = ctx.config.save_to_file(&config_path) {
+            if !ctx.can_persist_config {
+                eprintln!("Aviso: gravação de delimitador ignorada para proteger arquivo de configuração original.");
+            } else if let Err(error) = ctx.config.save_to_file(&config_path) {
                 eprintln!("Failed to persist the capture delimiter: {error}");
             }
             ctx.windows.values().cloned().collect()
@@ -1811,6 +1795,12 @@ fn clipboard_offers_text(clipboard: &gdk::Clipboard) -> bool {
 fn persist_state_now(ctx: &mut AppContext, reason: &str) -> Result<(), String> {
     ctx.layer_state_persistence.cancel();
     diagnostics::log(format_args!("event=state-persist-now reason={reason}"));
+    if !ctx.can_persist_state {
+        diagnostics::log(format_args!(
+            "event=state-persist-skipped reason=persistence-blocked"
+        ));
+        return Ok(());
+    }
     ctx.state
         .save_to_file(&ctx.core.storage().state_file_path())
 }

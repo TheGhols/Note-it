@@ -353,7 +353,9 @@ impl NoteItCore {
     }
 
     /// Derives tag and property-key suggestions from live notes alongside any non-fatal scan warnings.
-    pub fn metadata_catalog_with_warnings(&self) -> (MetadataCatalog, Vec<ReadWarning>) {
+    pub fn metadata_catalog_with_warnings(
+        &self,
+    ) -> Result<(MetadataCatalog, Vec<ReadWarning>), String> {
         self.storage.metadata_catalog_with_warnings()
     }
 

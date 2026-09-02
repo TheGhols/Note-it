@@ -630,10 +630,19 @@ impl StorageManager {
                 continue;
             };
 
-            let modified = entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
+            let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+                Ok(time) => time,
+                Err(error) => {
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::IoError,
+                        message: format!(
+                            "Falha ao obter data de modificação da nota {id}: {error}"
+                        ),
+                    });
+                    UNIX_EPOCH
+                }
+            };
             files.push((id, modified));
         }
 
@@ -675,12 +684,12 @@ impl StorageManager {
     ///
     /// There is no sidecar or index to invalidate. Trash is excluded because
     /// only `notes_dir` is traversed; restoring a file makes it appear again.
-    pub fn metadata_catalog_with_warnings(&self) -> (MetadataCatalog, Vec<ReadWarning>) {
+    pub fn metadata_catalog_with_warnings(
+        &self,
+    ) -> Result<(MetadataCatalog, Vec<ReadWarning>), String> {
         let mut tags: BTreeMap<String, (String, usize)> = BTreeMap::new();
         let mut keys: BTreeMap<String, (String, usize)> = BTreeMap::new();
-        let (ids, scan_warnings) = self
-            .list_notes_by_recency_with_warnings()
-            .unwrap_or_default();
+        let (ids, scan_warnings) = self.list_notes_by_recency_with_warnings()?;
         let mut warnings = scan_warnings;
 
         for id in ids {
@@ -759,18 +768,28 @@ impl StorageManager {
                 .then_with(|| semantic_identity(&left.key).cmp(&semantic_identity(&right.key)))
         });
 
-        (
+        Ok((
             MetadataCatalog {
                 tags,
                 property_keys,
             },
             warnings,
-        )
+        ))
     }
 
     /// Derives autocomplete catalogs from live note front matter.
+    ///
+    /// The signature has no room to report a scan that failed outright, so the
+    /// failure is reported to the operator instead of being swallowed. Callers
+    /// that must act on it use [`Self::metadata_catalog_with_warnings`].
     pub fn metadata_catalog(&self) -> MetadataCatalog {
-        self.metadata_catalog_with_warnings().0
+        match self.metadata_catalog_with_warnings() {
+            Ok((catalog, _)) => catalog,
+            Err(error) => {
+                eprintln!("Failed to scan the notes for the metadata catalog: {error}");
+                MetadataCatalog::default()
+            }
+        }
     }
 
     /// **Every** note's own text, newest first, ready to be searched.

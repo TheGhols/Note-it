@@ -208,8 +208,12 @@ impl StateLoadOutcome {
 }
 
 impl AppState {
-    /// Backwards-compatible convenience wrapper that delegates to [`Self::load_detailed`].
-    /// Automatically performs quarantine preservation on corrupted files before returning the value.
+    /// Convenience wrapper that delegates to [`Self::load_detailed`].
+    ///
+    /// Warning: This convenience wrapper returns default values if the file cannot
+    /// be read or preserved (`ReadFailed` / `CorruptedPreservationFailed`).
+    /// Subsequent calls to [`Self::save_to_file`] will refuse to overwrite an unreadable
+    /// file, but callers should prefer [`Self::load_detailed`] to inspect and report errors.
     pub fn load_from_file(path: &Path) -> Self {
         Self::load_detailed(path).value()
     }
@@ -218,12 +222,19 @@ impl AppState {
     /// valid state files, corrupted files preserved via quarantine, preservation failures,
     /// and I/O read errors.
     pub fn load_detailed(path: &Path) -> StateLoadOutcome {
-        if !path.exists() {
-            return StateLoadOutcome::Missing(Self::default());
-        }
+        Self::load_detailed_with_reader(path, |p| fs::read(p))
+    }
 
-        let raw_bytes = match fs::read(path) {
+    /// State loader allowing custom reader injection for deterministic failure testing.
+    pub fn load_detailed_with_reader(
+        path: &Path,
+        reader: impl Fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> StateLoadOutcome {
+        let raw_bytes = match reader(path) {
             Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return StateLoadOutcome::Missing(Self::default());
+            }
             Err(e) => {
                 eprintln!("Failed to read state file at {}: {e}", path.display());
                 return StateLoadOutcome::ReadFailed(e.to_string());
@@ -281,8 +292,18 @@ impl AppState {
     ///
     /// Invariant (R-006): If an existing file at `path` is currently malformed or
     /// corrupted, it must be preserved via quarantine before replacement.
-    /// If preservation fails, fail-closed: do not overwrite the corrupted file.
+    /// If preservation fails or if an existing file is unreadable, fail-closed:
+    /// do not overwrite the original file.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
+        self.save_to_file_with_reader(path, |p| fs::read(p))
+    }
+
+    /// Saves state allowing custom reader injection for deterministic failure testing.
+    pub fn save_to_file_with_reader(
+        &self,
+        path: &Path,
+        reader: impl Fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let write = STATE_WRITE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         diagnostics::log(format_args!(
@@ -291,10 +312,9 @@ impl AppState {
             self.active_layer_mode.as_str()
         ));
 
-        // Before replacing an existing file, if it is currently malformed/corrupted,
-        // ensure it has been safely quarantined so unparsed data is never lost!
-        if path.exists() {
-            if let Ok(existing_bytes) = fs::read(path) {
+        // Before replacing an existing file, verify/preserve previous contents.
+        match reader(path) {
+            Ok(existing_bytes) => {
                 let is_valid = serde_json::from_slice::<serde_json::Value>(&existing_bytes).is_ok();
                 if !is_valid {
                     crate::quarantine::quarantine_corrupted_file(path, &existing_bytes).map_err(
@@ -306,6 +326,24 @@ impl AppState {
                         },
                     )?;
                 }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // If symlink_metadata succeeds, it's a dangling symlink occupying the target path
+                if let Ok(meta) = fs::symlink_metadata(path) {
+                    if meta.file_type().is_symlink() {
+                        return Err(format!(
+                            "Refusing to overwrite dangling symlink at {}",
+                            path.display()
+                        ));
+                    }
+                }
+                // Genuinely missing: safe to create new file.
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Refusing to overwrite state file at {}: unable to read existing content for preservation: {e}",
+                    path.display()
+                ));
             }
         }
 
@@ -327,7 +365,60 @@ impl AppState {
         };
         crate::permissions::create_private_dir_all(parent)
     }
+}
 
+/// Result of resolving state during application startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateStartupRecovery {
+    pub state: AppState,
+    pub can_persist: bool,
+    pub log_message: Option<String>,
+}
+
+/// Resolves application startup behavior for a given [`StateLoadOutcome`].
+///
+/// Implements fail-closed policy:
+/// - Valid / Missing: state is usable and safe to persist.
+/// - CorruptedRecovered: default state in memory, quarantine preserved on disk, safe to persist.
+/// - CorruptedPreservationFailed / ReadFailed: default state in memory, but persistence is BLOCKED
+///   to protect unreadable or unpreserved original files from being overwritten.
+pub fn resolve_startup_state(outcome: StateLoadOutcome) -> StateStartupRecovery {
+    match outcome {
+        StateLoadOutcome::Valid(s) | StateLoadOutcome::Missing(s) => StateStartupRecovery {
+            state: s,
+            can_persist: true,
+            log_message: None,
+        },
+        StateLoadOutcome::CorruptedRecovered {
+            value,
+            quarantine_path,
+            error,
+        } => StateStartupRecovery {
+            state: value,
+            can_persist: true,
+            log_message: Some(format!(
+                "Aviso: arquivo de estado corrompido ({error}). Original preservado em {}",
+                quarantine_path.display()
+            )),
+        },
+        StateLoadOutcome::CorruptedPreservationFailed { error } => StateStartupRecovery {
+            state: AppState::default(),
+            can_persist: false,
+            log_message: Some(format!(
+                "Erro crítico: arquivo de estado corrompido, mas a preservação em quarentena falhou: {error}. Persistência bloqueada para proteger o arquivo original."
+            )),
+        },
+        StateLoadOutcome::ReadFailed(error) => StateStartupRecovery {
+            state: AppState::default(),
+            can_persist: false,
+            log_message: Some(format!(
+                "Erro crítico: falha ao ler arquivo de estado: {error}. Persistência bloqueada para proteger o arquivo original."
+            )),
+        },
+    }
+}
+
+impl AppState {
     #[cfg(test)]
     fn save_to_file_with_failing_sync(&self, path: &Path) -> Result<(), String> {
         Self::ensure_parent(path)?;

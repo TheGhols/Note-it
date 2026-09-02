@@ -367,8 +367,10 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
-                eprintln!("Skipping unreadable entry in {}: {error}", path.display());
-                continue;
+                return Err(format!(
+                    "Failed to inspect entry in {}: {error}",
+                    path.display()
+                ));
             }
         };
 
@@ -383,7 +385,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
             continue;
         }
 
-        fs::copy(&path, destination.join(name))
+        crate::permissions::copy_private_file(&path, &destination.join(name))
             .map_err(|e| format!("Failed to copy {} into the snapshot: {e}", path.display()))?;
         copied += 1;
     }
@@ -541,7 +543,7 @@ fn copy_note_assets(source: &Path, destination: &Path, note: &str) -> Result<usi
             ));
         }
 
-        fs::copy(&path, destination.join(name))
+        crate::permissions::copy_private_file(&path, &destination.join(name))
             .map_err(|e| format!("Failed to copy {} into the snapshot: {e}", path.display()))?;
         copied += 1;
     }
@@ -551,8 +553,15 @@ fn copy_note_assets(source: &Path, destination: &Path, note: &str) -> Result<usi
 
 /// Copies a single file if it is there. Reports whether it was.
 fn copy_optional_file(source: &Path, destination: &Path) -> Result<bool, String> {
-    let Ok(metadata) = fs::symlink_metadata(source) else {
-        return Ok(false);
+    let metadata = match fs::symlink_metadata(source) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect {} for the backup: {error}",
+                source.display()
+            ));
+        }
     };
     if metadata.file_type().is_symlink() {
         eprintln!(
@@ -565,7 +574,7 @@ fn copy_optional_file(source: &Path, destination: &Path) -> Result<bool, String>
         return Ok(false);
     }
 
-    fs::copy(source, destination)
+    crate::permissions::copy_private_file(source, destination)
         .map_err(|e| format!("Failed to copy {} into the snapshot: {e}", source.display()))?;
     Ok(true)
 }
@@ -590,7 +599,7 @@ fn copy_optional_file_strict(source: &Path, destination: &Path) -> Result<bool, 
             source.display()
         ));
     }
-    fs::copy(source, destination).map_err(|error| {
+    crate::permissions::copy_private_file(source, destination).map_err(|error| {
         format!(
             "Failed to copy {} into the snapshot: {error}",
             source.display()

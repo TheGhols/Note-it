@@ -233,17 +233,29 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
 
         CliCommand::Tags { command: None } => {
             let core = NoteItCore::open_read_only();
-            let (catalog, warnings) = core.metadata_catalog_with_warnings();
-            Executed::ok(Command::Tags, Outcome::Tags { catalog, warnings })
+            match core.metadata_catalog_with_warnings() {
+                Ok((catalog, warnings)) => {
+                    Executed::ok(Command::Tags, Outcome::Tags { catalog, warnings })
+                }
+                Err(detail) => Executed::failed(
+                    Some(Command::Tags),
+                    CommandError::Read(ReadError::Listing { detail }),
+                ),
+            }
         }
 
         CliCommand::Propriedades { command: None } => {
             let core = NoteItCore::open_read_only();
-            let (catalog, warnings) = core.metadata_catalog_with_warnings();
-            Executed::ok(
-                Command::Properties,
-                Outcome::Properties { catalog, warnings },
-            )
+            match core.metadata_catalog_with_warnings() {
+                Ok((catalog, warnings)) => Executed::ok(
+                    Command::Properties,
+                    Outcome::Properties { catalog, warnings },
+                ),
+                Err(detail) => Executed::failed(
+                    Some(Command::Properties),
+                    CommandError::Read(ReadError::Listing { detail }),
+                ),
+            }
         }
 
         CliCommand::Tarefas {
