@@ -16,6 +16,7 @@ use noteit_core::Uuid;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::process::Stdio;
 use support::{prefix, AuthorityBehaviour, FakeAuthority, Sandbox};
 
@@ -109,6 +110,83 @@ fn note_id_of(value: &Value) -> String {
         .as_str()
         .expect("a write answers with a note identifier")
         .to_string()
+}
+
+impl Sandbox {
+    fn notes_dir(&self) -> std::path::PathBuf {
+        self.store_paths().data_dir.join("notes")
+    }
+
+    /// The bytes of one note's file, for the comparisons that have to be exact.
+    fn note_file(&self, id: Uuid) -> Vec<u8> {
+        std::fs::read(self.notes_dir().join(format!("{id}.md"))).expect("read the note file")
+    }
+}
+
+const AMBIGUOUS_PREFIX: &str = "aaaaaaaa";
+const AMBIGUOUS_IDS: [&str; 2] = [
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "aaaaaaaa-0000-4000-8000-000000000002",
+];
+
+#[derive(Debug, PartialEq, Eq)]
+struct NoteFileSnapshot {
+    bytes: Vec<u8>,
+    length: u64,
+    inode: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+fn note_file_snapshot(sandbox: &Sandbox, id: Uuid) -> NoteFileSnapshot {
+    let path = sandbox.notes_dir().join(format!("{id}.md"));
+    let metadata = std::fs::metadata(&path).expect("read note metadata");
+    NoteFileSnapshot {
+        bytes: std::fs::read(path).expect("read note bytes"),
+        length: metadata.len(),
+        inode: metadata.ino(),
+        modified_seconds: metadata.mtime(),
+        modified_nanoseconds: metadata.mtime_nsec(),
+        changed_seconds: metadata.ctime(),
+        changed_nanoseconds: metadata.ctime_nsec(),
+    }
+}
+
+fn seed_ambiguous_fixture(sandbox: &Sandbox) -> [Uuid; 2] {
+    let ids = AMBIGUOUS_IDS.map(|raw| Uuid::parse_str(raw).expect("valid fixture UUID"));
+    for (id, content) in ids.into_iter().zip(["primeira nota", "segunda nota"]) {
+        let mut document = noteit_core::model::NoteDocument::new_empty();
+        document.metadata.id = id;
+        document.content = content.to_string();
+        sandbox
+            .core()
+            .storage()
+            .save_note_atomic(&document)
+            .expect("seed deterministic ambiguous note");
+    }
+
+    let live = sandbox.core().list_notes().expect("list fixture notes");
+    assert_eq!(
+        live.len(),
+        2,
+        "the ambiguous fixture must have two live notes"
+    );
+    assert_ne!(ids[0], ids[1], "the fixture UUIDs must be different");
+    for id in ids {
+        assert!(live.contains(&id), "fixture note {id} is not live");
+        assert!(
+            id.as_simple().to_string().starts_with(AMBIGUOUS_PREFIX),
+            "fixture note {id} does not share selector {AMBIGUOUS_PREFIX}"
+        );
+    }
+    ids
+}
+
+fn assert_no_window_state(sandbox: &Sandbox) {
+    assert!(!sandbox.root.join("state/note-it/state.json").exists());
+    assert!(!sandbox.root.join("config/note-it/config.toml").exists());
 }
 
 // --- the envelope -----------------------------------------------------------
@@ -682,8 +760,13 @@ fn a_write_through_an_authority_answers_with_the_same_public_contract() {
     let sandbox = Sandbox::new();
     let id = sandbox.seed("corpo");
     let outcome = WriteOutcome::new(id, WriteOutcomeKind::ContentAppended, true);
-    let authority =
-        FakeAuthority::start(&sandbox, AuthorityBehaviour::CommitOutcome(outcome.clone()));
+    let authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: Some(outcome.clone()),
+            mismatched_response_id: false,
+        },
+    );
 
     let through = success(sandbox.run(&["--json", "adicionar", &prefix(id), "mais"]));
     assert_eq!(authority.handled(), 1, "the request never reached anyone");
@@ -734,7 +817,13 @@ fn a_committed_write_whose_window_lagged_is_a_warning_and_stays_committed() {
     let id = sandbox.seed("ABCD");
     let outcome = WriteOutcome::new(id, WriteOutcomeKind::ContentAppended, true)
         .with_ui_sync_warning("a janela aberta não confirmou a alteração");
-    let authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::CommitOutcome(outcome));
+    let authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: Some(outcome),
+            mismatched_response_id: false,
+        },
+    );
 
     let (code, stdout, stderr) = sandbox.run(&["--json", "adicionar", &prefix(id), "XYZ"]);
     assert_eq!(code, 0, "a warning is not a failure: {stderr}");
@@ -764,7 +853,13 @@ fn the_human_adapter_still_says_the_same_warning_its_own_way() {
     let id = sandbox.seed("ABCD");
     let outcome = WriteOutcome::new(id, WriteOutcomeKind::ContentAppended, true)
         .with_ui_sync_warning("a janela aberta não confirmou a alteração");
-    let _authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::CommitOutcome(outcome));
+    let _authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: Some(outcome),
+            mismatched_response_id: false,
+        },
+    );
 
     let (code, stdout, stderr) = sandbox.run(&["adicionar", &prefix(id), "XYZ"]);
     assert_eq!(code, 0, "the human adapter turned a warning into a failure");
@@ -801,7 +896,13 @@ fn a_connection_that_drops_after_the_request_is_indeterminate_and_never_repeated
 fn an_answer_belonging_to_another_request_is_indeterminate_too() {
     let sandbox = Sandbox::new();
     let id = sandbox.seed("corpo");
-    let authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::MismatchedResponseId);
+    let authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: None,
+            mismatched_response_id: true,
+        },
+    );
 
     let answer = failure(
         sandbox.run(&["--json", "adicionar", &prefix(id), "mais"]),
@@ -914,10 +1015,66 @@ fn a_store_that_cannot_be_written_reports_it_and_leaves_the_note_alone() {
 }
 
 #[test]
+fn ambiguous_read_from_real_binary_is_one_error_document_and_preserves_both_notes() {
+    let sandbox = Sandbox::new();
+    let ids = seed_ambiguous_fixture(&sandbox);
+    let before = ids.map(|id| note_file_snapshot(&sandbox, id));
+
+    // `Sandbox::run` executes CARGO_BIN_EXE_noteit through
+    // `std::process::Command` in the private XDG/runtime environment.
+    let answer = failure(sandbox.run(&["--json", "ler", AMBIGUOUS_PREFIX]), 1);
+
+    assert_eq!(answer["status"], "error");
+    assert_eq!(answer["command"], "read");
+    assert_eq!(answer["data"], Value::Null);
+    assert_eq!(answer["error"]["code"], "ambiguous_selector");
+    assert_eq!(answer["error"]["commit_state"], Value::Null);
+    assert_eq!(answer["warnings"], Value::Array(vec![]));
+    for (id, expected) in ids.into_iter().zip(before) {
+        assert_eq!(
+            note_file_snapshot(&sandbox, id),
+            expected,
+            "ambiguous read changed or rewrote {id}"
+        );
+    }
+    assert_no_window_state(&sandbox);
+}
+
+#[test]
+fn ambiguous_write_from_real_binary_is_not_committed_and_preserves_both_notes() {
+    let sandbox = Sandbox::new();
+    let ids = seed_ambiguous_fixture(&sandbox);
+    let before = ids.map(|id| note_file_snapshot(&sandbox, id));
+
+    let answer = failure(
+        sandbox.run(&["--json", "adicionar", AMBIGUOUS_PREFIX, "XYZ"]),
+        1,
+    );
+
+    assert_eq!(answer["status"], "error");
+    assert_eq!(answer["command"], "append");
+    assert_eq!(answer["data"], Value::Null);
+    assert_eq!(answer["error"]["code"], "ambiguous_selector");
+    assert_eq!(answer["error"]["commit_state"], "not_committed");
+    assert_eq!(answer["warnings"], Value::Array(vec![]));
+    for (id, expected) in ids.into_iter().zip(before) {
+        let after = note_file_snapshot(&sandbox, id);
+        assert_eq!(after, expected, "ambiguous write changed or rewrote {id}");
+        assert!(
+            !String::from_utf8(after.bytes)
+                .expect("the note is UTF-8")
+                .contains("XYZ"),
+            "the refused payload reached {id}"
+        );
+    }
+    assert_no_window_state(&sandbox);
+}
+
+#[test]
 fn every_selector_failure_is_told_apart_by_its_code() {
     let sandbox = Sandbox::new();
     let first = sandbox.seed("um");
-    // Two notes sharing a prefix, so an ambiguous selector is reachable.
+    // A valid selector makes the malformed task reference itself the error.
     let shared = &first.as_simple().to_string()[..8];
 
     let invalid = failure(sandbox.run(&["--json", "ler", "xyz"]), 1);
@@ -1060,7 +1217,13 @@ fn a_machine_read_claims_no_coordination_state_at_all() {
 fn no_machine_document_carries_the_private_control_protocol() {
     let sandbox = Sandbox::new();
     let id = sandbox.seed("corpo");
-    let authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::Commit);
+    let authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: None,
+            mismatched_response_id: false,
+        },
+    );
     let through = success(sandbox.run(&["--json", "adicionar", &prefix(id), "mais"]));
     drop(authority);
 

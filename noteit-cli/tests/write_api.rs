@@ -534,7 +534,13 @@ fn a_command_waits_for_a_lease_that_is_about_to_be_released() {
 fn a_held_store_with_an_authority_listening_is_written_through_it() {
     let sandbox = Sandbox::new();
     let id = sandbox.seed("corpo");
-    let authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::Commit);
+    let authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: None,
+            mismatched_response_id: false,
+        },
+    );
 
     let (code, stdout, stderr) = sandbox.run(&["adicionar", &prefix(id), "mais"]);
     assert_eq!(code, 0, "{stderr}");
@@ -593,7 +599,13 @@ fn a_connection_that_drops_after_the_request_is_reported_as_unknown_and_never_re
 #[test]
 fn the_control_socket_is_reachable_only_by_its_owner() {
     let sandbox = Sandbox::new();
-    let _authority = FakeAuthority::start(&sandbox, AuthorityBehaviour::Commit);
+    let _authority = FakeAuthority::start(
+        &sandbox,
+        AuthorityBehaviour::Commit {
+            outcome: None,
+            mismatched_response_id: false,
+        },
+    );
     let coordination = sandbox.coordination();
 
     let socket_mode = std::fs::metadata(coordination.socket_path())

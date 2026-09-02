@@ -7,8 +7,6 @@
 //!
 //! Compiled into every suite that names it, so each one sees the whole harness
 //! whether or not it uses all of it.
-#![allow(dead_code)]
-
 use noteit_core::control::{read_frame, write_frame, ControlRequest, ControlResponse};
 use noteit_core::coordination::{WriteCoordinationPaths, WriterLease};
 use noteit_core::model::NoteDocument;
@@ -63,10 +61,6 @@ impl Sandbox {
         NoteItCore::from_storage(
             StorageManager::from_paths(self.store_paths()).expect("open the sandbox store"),
         )
-    }
-
-    pub fn notes_dir(&self) -> PathBuf {
-        self.store_paths().data_dir.join("notes")
     }
 
     pub fn command(&self, args: &[&str]) -> Command {
@@ -130,11 +124,6 @@ impl Sandbox {
     pub fn body(&self, id: Uuid) -> String {
         self.core().read_note(&id).expect("read").content
     }
-
-    /// The bytes of one note's file, for the comparisons that have to be exact.
-    pub fn note_file(&self, id: Uuid) -> Vec<u8> {
-        std::fs::read(self.notes_dir().join(format!("{id}.md"))).expect("read the note file")
-    }
 }
 
 pub fn prefix(id: Uuid) -> String {
@@ -158,18 +147,17 @@ pub struct FakeAuthority {
 /// How a fake authority answers one request.
 #[derive(Clone)]
 pub enum AuthorityBehaviour {
-    /// Answer properly.
-    Commit,
-    /// Answer properly, with exactly this outcome.
-    CommitOutcome(WriteOutcome),
+    /// Answer properly, optionally with an exact outcome or a deliberately
+    /// unrelated response identifier.
+    Commit {
+        outcome: Option<WriteOutcome>,
+        mismatched_response_id: bool,
+    },
     /// Read the request and hang up without a word — the shape of a crash
     /// after the change may already have been committed.
     HangUpAfterRequest,
     /// Answer with a protocol version this build does not speak.
     WrongVersion,
-    /// Answer an entirely different request. Whatever happened to this one is
-    /// not in the envelope that came back.
-    MismatchedResponseId,
 }
 
 impl FakeAuthority {
@@ -214,30 +202,24 @@ impl FakeAuthority {
                         response.protocol_version = 999;
                         let _ = write_frame(&mut stream, &response);
                     }
-                    AuthorityBehaviour::MismatchedResponseId => {
+                    AuthorityBehaviour::Commit {
+                        outcome,
+                        mismatched_response_id,
+                    } => {
+                        let response_id = if *mismatched_response_id {
+                            Uuid::new_v4()
+                        } else {
+                            request.request_id
+                        };
                         let response = ControlResponse::accepted(
-                            Uuid::new_v4(),
-                            WriteOutcome::new(
-                                Uuid::new_v4(),
-                                WriteOutcomeKind::ContentAppended,
-                                true,
-                            ),
-                        );
-                        let _ = write_frame(&mut stream, &response);
-                    }
-                    AuthorityBehaviour::CommitOutcome(outcome) => {
-                        let response =
-                            ControlResponse::accepted(request.request_id, outcome.clone());
-                        let _ = write_frame(&mut stream, &response);
-                    }
-                    AuthorityBehaviour::Commit => {
-                        let response = ControlResponse::accepted(
-                            request.request_id,
-                            WriteOutcome::new(
-                                Uuid::new_v4(),
-                                WriteOutcomeKind::ContentAppended,
-                                true,
-                            ),
+                            response_id,
+                            outcome.clone().unwrap_or_else(|| {
+                                WriteOutcome::new(
+                                    Uuid::new_v4(),
+                                    WriteOutcomeKind::ContentAppended,
+                                    true,
+                                )
+                            }),
                         );
                         let _ = write_frame(&mut stream, &response);
                     }
