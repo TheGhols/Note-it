@@ -770,7 +770,7 @@ com ligaduras e deixado intacto dentro do código embutido e dos blocos de códi
   - `Ctrl+K` para pesquisar cada nota, `Ctrl+F` para encontrar nesta, `Ctrl+H` para localizar e substituir.
 Todos os três estavam livres antes da Fase 3.8 e não colidiram com nada acima.
 
-## Storage e confiabilidade
+## Armazenamento e confiabilidade
 
 ### Tags e propriedades
 

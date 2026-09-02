@@ -1,54 +1,59 @@
 # Integração com o compositor Niri
 
-Note-it integra-se com o compositor Wayland Niri via protocolo `wlr-layer-shell-unstable-v1` (usando `gtk4-layer-shell`):
-- **Camada Desktop:** As notas são anexadas à camada `bottom`, abaixo das janelas normais, integrando-se à área de trabalho.
-- **Camada Overlay:** As notas alternam para a camada `overlay`, aparecendo sobre as áreas de trabalho ativas para edição imediata.
+Note-it foi projetado e testado para o compositor Wayland de blocos roláveis ​​[Niri](https://github.com/YaLTeR/niri).
+
+## Configuração do Layer Shell
+
+Note-it registra janelas com o namespace Wayland Layer Shell `note-it`.
+
+- **Camada da área de trabalho:** As notas são anexadas à camada `bottom` com `exclusive_zone = 0`, mantendo-as no fundo atrás dos blocos Niri ativos.
+- **Camada de sobreposição:** As notas mudam para a camada `overlay`, aparecendo sobre áreas de trabalho ativas para edição imediata.
 
 ## Invocando o Note-it de qualquer lugar
 
-Os atalhos internos do aplicativo Note-it são eventos normais de teclado dentro do WebView da nota. Um cliente Wayland só recebe eventos de teclado enquanto detém o foco de entrada; portanto, esses atalhos funcionam quando a nota está em foco e não fazem nada enquanto o navegador ou o terminal estão na frente. A invocação da nota (summon), portanto, deve vir do compositor.
+Os atalhos do aplicativo Note-it são eventos-chave comuns dentro do WebView da nota. Um cliente Wayland só recebe eventos importantes enquanto mantém o foco do teclado, portanto, esses atalhos funcionam quando a nota em si está focada e não fazem nada enquanto o navegador ou o terminal estão na frente. A invocação da nota, portanto, deve vir do compositor.
 
-A alternância canônica de camada é um atalho configurado no compositor. Ela ativa a ação GApplication `toggle-layer` no processo Note-it já em execução, de modo que não depende de uma nota, janela GTK ou WebView manterem o foco de teclado.
+A alternância da camada autoritativa é uma ligação do compositor. Ele ativa a ação `toggle-layer` GApplication no processo Note-it já em execução, portanto não depende de uma nota, janela GTK ou WebView mantendo o foco.
 
 ```text
 Ctrl+Shift+Space
     ↓
-Atalho global Niri (repeat=false, allow-inhibiting=false)
+atalho global do Niri (repeat=false, allow-inhibiting=false)
     ↓  gapplication action io.github.theghols.NoteIt toggle-layer
-instância Note-it já em execução
+a instância do Note-it que já está em execução
     ↓
-decisão única de camada compartilhada aplicada a todas as superfícies de notas
+uma decisão compartilhada de camada, aplicada ao vivo a todas as superfícies de notas
 ```
 
 ## Atalhos de teclado recomendados
 
-Adicione o seguinte trecho à configuração que o Niri efetivamente carrega (`~/.config/niri/config.kdl`, um arquivo incluído por ele como `binds.kdl`, ou o caminho definido por `NIRI_CONFIG`). Execute `niri validate` após a edição.
+Adicione o seguinte à configuração que Niri realmente carrega. Pode ser `~/.config/niri/config.kdl`, um arquivo incluído nele, como `binds.kdl`, ou o caminho selecionado por `NIRI_CONFIG`. Execute `niri validate` após editá-lo.
 
 ```kdl
-// Iniciar daemon em segundo plano na inicialização do compositor
+// Inicia o daemon em segundo plano junto com o compositor
 spawn-at-startup "note-it" "--background"
 
 binds {
-    // Alternância global canônica Desktop ↔ Overlay. `Space` é o nome XKB.
+    // Alternância global oficial Desktop ↔ Overlay. `Space` é o nome no XKB.
     Ctrl+Shift+Space repeat=false allow-inhibiting=false {
         spawn "gapplication" "action" "io.github.theghols.NoteIt" "toggle-layer"
     }
 
-    // Invocar Note-it de qualquer aplicativo: restaura as notas e as
-    // traz para a frente. Este é o principal atalho de uso.
+    // Convoca o Note-it de qualquer aplicativo: restaura as notas e as traz
+    // para a frente. Este é o atalho principal para acessá-las.
     Mod+Shift+N { spawn "note-it"; }
 
-    // Recolher todas as notas para suas barras, ou expandir todas novamente
+    // Recolhe todas as notas às respectivas barras ou expande todas novamente
     Mod+Shift+M repeat=false { spawn "note-it" "toggle-collapse-all"; }
 
-    // Criação rápida de nova nota
+    // Cria uma nota rapidamente
     Mod+Alt+N { spawn "note-it" "new"; }
 }
 ```
 
-Mantenha um atalho existente `Mod+Shift+D` se ele já pertencer ao Note-it e não conflitar com outro aplicativo. Ele pode continuar chamando `note-it toggle`, embora não seja estritamente necessário para o fluxo principal.
+Mantenha um alias `Mod+Shift+D` existente se ele já pertencer a Note-it e não entrar em conflito com outro aplicativo. Pode continuar a chamar `note-it toggle`; não é necessário para o fluxo de trabalho principal.
 
-O arquivo desktop `io.github.theghols.NoteIt.desktop` deve estar instalado em um diretório de aplicações XDG para que o `gapplication` resolva o identificador da aplicação:
+A entrada da área de trabalho `io.github.theghols.NoteIt.desktop` deve ser instalada em um diretório de aplicativos XDG para que `gapplication` possa resolver o ID do aplicativo:
 
 ```bash
 install -Dm644 resources/io.github.theghols.NoteIt.desktop \
@@ -56,19 +61,19 @@ install -Dm644 resources/io.github.theghols.NoteIt.desktop \
 update-desktop-database ~/.local/share/applications
 ```
 
-`note-it toggle` continua sendo o fallback via CLI e atinge a mesma transição compartilhada, mas lançar um segundo processo GTK o torna ligeiramente mais lento do que invocar a ação de aplicação direta.
+`note-it toggle` continua sendo o substituto de CLI e atinge a mesma transição compartilhada, mas iniciar um segundo processo GTK o torna mais lento do que a ação direta do aplicativo.
 
 ## O que uma invocação faz com a camada
 
-Uma superfície na camada `bottom` é sempre desenhada abaixo de janelas comuns; não há como elevá-la mantendo-a nessa mesma camada. Uma nota mantida na camada desktop, portanto, não pode se tornar visível sobre o navegador sem ser promovida para a camada `overlay`.
+Uma superfície de camada `bottom` é sempre pintada abaixo de janelas comuns; não há como aumentá-lo enquanto o mantém nessa camada. Uma nota deixada na área de trabalho, portanto, não pode ficar visível no navegador sem movê-la para a camada `overlay`.
 
-A invocação eleva as notas para `overlay` **sem sobrescrever a preferência armazenada**. A nota torna-se visível imediatamente, e `note-it toggle`, `Ctrl+Shift+Space` e a próxima reinicialização continuam refletindo a camada escolhida pelo usuário. Essa elevação temporária perdura até a próxima troca explícita de camada ou reinício.
+A invocação aumenta as notas para `overlay` **sem reescrever a preferência armazenada**. A nota é genuinamente visível e `note-it toggle`, `Ctrl+Shift+Space` e a próxima reinicialização ainda refletem a camada que o usuário escolheu. A elevação dura até a próxima alteração ou reinicialização explícita da camada.
 
-`note-it show` é diferente por projeto: é uma solicitação explícita para colocar as notas em modo overlay, gravando essa escolha como preferência durável.
+`note-it show` é diferente propositalmente: é uma solicitação explícita para colocar as notas no modo de sobreposição e armazena isso como preferência.
 
-### Retornando da camada Desktop
+### Voltando da camada Desktop
 
-O atalho do Niri descrito acima é o fluxo canônico para `Ctrl+Shift+Space`. Ele funciona quando um navegador, terminal ou editor está em foco, quando a nota está completamente coberta por outras janelas e mesmo quando a nota não recebeu nenhum clique desde que foi movida para a camada desktop.
+A ligação Niri acima é o fluxo de trabalho `Ctrl+Shift+Space` real. Funciona quando um navegador, terminal ou editor está focado, quando a nota está completamente coberta e quando a nota nunca foi clicada desde que foi movida para a área de trabalho.
 
 ```kdl
 Ctrl+Shift+Space repeat=false allow-inhibiting=false {
@@ -76,32 +81,32 @@ Ctrl+Shift+Space repeat=false allow-inhibiting=false {
 }
 ```
 
-O WebView ainda trata `Ctrl+Shift+Space` como um fallback local quando a nota já detém o foco. Isso é útil, mas não é canônico e não permite que uma superfície na camada `bottom` coberta receba entrada do teclado.
+O WebView ainda trata `Ctrl+Shift+Space` como um substituto local quando a nota já possui o foco. É útil, mas não é oficial e não pode fazer com que uma superfície `bottom` coberta receba entradas do teclado.
 
-No Niri 26.04 com protocolo layer-shell versão 4, alternar de `bottom` para `overlay` não recria a superfície. Uma superfície ocluída em `bottom` pode, contudo, aguardar um frame antes de seu pedido de camada ser comitado. Para tornar a promoção instantânea, Note-it remapeia deliberadamente apenas essa direção com a interatividade de teclado temporariamente desativada, preservando o foco na janela do navegador. A transição de `overlay` para `bottom` utiliza diretamente a transição dinâmica do protocolo. Nenhum dos caminhos chama cegamente `present()`.
+Em Niri 26.04 com protocolo Layer-Shell versão 4, alterar `bottom` para `overlay` não recria inerentemente a superfície. Uma superfície inferior ocluída pode, no entanto, esperar por um quadro antes que sua solicitação de camada seja confirmada. Para tornar a promoção imediata, Note-it remapeia deliberadamente apenas essa direção, com a interatividade do teclado temporariamente desativada para que o navegador mantenha o foco. `overlay` para `bottom` usa a transição de protocolo ao vivo diretamente. Nenhum dos caminhos ao vivo chama cegamente `present()`.
 
-## Recolhendo uma nota ou todas elas
+## Recolher uma nota ou todas elas
 
-`Ctrl+Shift+M` dentro de uma nota recolhe apenas aquela nota específica; é um evento de teclado no WebView da própria nota e só atinge a nota que detém o foco.
+`Ctrl+Shift+M` dentro de uma nota recolhe apenas essa nota; é um evento chave no próprio WebView da nota e atinge apenas a nota que mantém o foco do teclado.
 
-Recolher todas as notas é um atalho do compositor pelo mesmo motivo que a invocação global: nenhuma nota pode estar em foco quando o usuário deseja ocultá-las da visão. O atalho executa `note-it toggle-collapse-all`, que recolhe todas as notas que ainda estiverem expandidas e expande todas caso todas já estejam recolhidas. Cada nota preserva sua própria flag `collapsed` e seu tamanho expandido no `state.json`.
+Recolher cada nota é uma combinação de teclas do compositor pelo mesmo motivo que uma invocação: nenhuma nota pode ser focada quando o usuário deseja que todas elas sejam tiradas do caminho. Ele executa `note-it toggle-collapse-all`, que recolhe tudo o que ainda está expandido e expande tudo quando todos estão recolhidos. Cada nota mantém seu próprio sinalizador `collapsed` e seu próprio tamanho expandido em `state.json`.
 
-O comando precisa ser alcançável pelo compositor, que o executa em um ambiente limpo. Ter o binário instalado no `PATH` — ou um inicializador apontando para a compilação — faz parte da configuração do atalho; um atalho nomeando um comando não encontrado falha silenciosamente.
+O comando deve ser acessível a partir do compositor, o que o gera em um ambiente simples. Instalar o binário em algum lugar em `PATH` — ou um inicializador apontando para a compilação — faz parte da configuração do atalho de teclado; uma ligação que nomeia um comando que não resolve falha silenciosamente.
 
-Como a invocação lançada é encaminhada para a instância ativa através do despachante de instância única, o ambiente em que ela foi gerada não afeta a execução: a instância que já gerencia as notas é a que atua sobre elas.
+Como uma invocação gerada é entregue à instância em execução por meio do despachante de instância única, o ambiente com o qual ela é gerada não importa: a instância que já possui as notas é aquela que atua sobre elas.
 
-### O que a matriz comprova e o que ela não pode atestar
+### O que a matriz mostra e o que ela não pode provar
 
-O recolhimento de notas foi outrora reportado como falho na camada desktop. Executar todos os disparos em uma sessão real do Niri, com um store isolado e um barramento D-Bus privado, confirmou que o recolhimento funciona perfeitamente em ambas as camadas e através de todos os pontos de entrada: o menu **Recolher nota**, `Ctrl+Shift+M` e `toggle-collapse-all`, antes de uma mudança de camada, depois dela e em ambas as direções. A superfície de fato encolhe para a sua barra de cabeçalho na camada `bottom`, esteja ela coberta por outras janelas ou não.
+O colapso foi relatado como falha na camada da área de trabalho. A execução de cada gatilho em uma sessão Niri real, com um store isolado e um barramento privado, encontrou o próprio colapso funcionando em ambas as camadas e através de cada ponto de entrada: **Recolher nota**, `Ctrl+Shift+M` e `toggle-collapse-all` do menu, antes de uma mudança de camada, depois de uma, e em ambas as direções de uma. A superfície realmente encolhe até sua barra em `bottom`, ocluída ou não.
 
-O que depende da camada é o alcance do foco, não a operação de recolhimento. `Ctrl+Shift+M` é um evento de teclado dentro do WebView da própria nota, dependendo de que ela detenha o foco de teclado; uma superfície na camada `bottom` fica atrás de todas as janelas: quando o foco está em outro aplicativo, não há superfície exposta para clicar. Na camada overlay a nota fica no topo e um clique recupera o foco imediatamente, razão pela qual o mesmo atalho parecia funcionar lá e não aqui. O caminho de retorno são os atalhos do compositor, projetados exatamente para essa finalidade — `Ctrl+Shift+Space` para promover as notas ou `Mod+Shift+M` para recolher e expandir todas sem necessidade de foco prévio.
+O que é específico da camada é o alcance, não o colapso. `Ctrl+Shift+M` é um evento chave no próprio WebView da nota, então ele precisa da nota para manter o foco do teclado, e uma superfície `bottom` fica atrás de cada janela: uma vez que o foco foi para outro lugar, não há mais nada para clicar. Na camada de sobreposição, a nota está no topo e um clique traz o foco de volta, e é por isso que o mesmo acorde parece funcionar ali e não aqui. O caminho de volta são as ligações do compositor, que é exatamente para isso que servem - `Ctrl+Shift+Space` para promover as notas, ou `Mod+Shift+M` para recolher e expandir todas elas sem focar em nada.
 
-As suítes sintéticas de teste cobrem o que um processo pode decidir por conta própria: que uma mudança de camada nunca altera a flag `collapsed` de uma nota, que um recolhimento nunca altera a camada, que qualquer ordem produz exatamente uma alteração de cada e que nenhum atalho dispara duas vezes (`src/state.rs`, `src/layer_shell.rs`, `ui/tests/layer_collapse.test.ts`). Se o compositor encaminha eventos de teclado para uma superfície na camada `bottom` e se clicar nela restaura o foco são comportamentos gerenciados pelo Niri, verificáveis em uma sessão real em execução.
+Os conjuntos sintéticos cobrem o que um processo pode decidir por si só: que uma mudança de camada nunca altera o sinalizador `collapsed` de uma nota, que um colapso nunca altera a camada, que qualquer ordem produz exatamente uma mudança de cada e que nenhum acorde é acionado duas vezes (`src/state.rs`, `src/layer_shell.rs`, `ui/tests/layer_collapse.test.ts`). Se o compositor ainda direciona o teclado para uma superfície `bottom`, e se clicar em uma delas restaura o foco para ela, são respostas de Niri e devem ser questionadas durante uma sessão em execução.
 
 ## O tema do sistema e a área de trabalho
 
-**Tema → Sistema** segue o esquema de cores do desktop, lido dentro do WebView através de `prefers-color-scheme`. O WebKitGTK obtém essa informação das configurações GTK da sessão em que o aplicativo foi iniciado; portanto, uma sessão Wayland que não declare preferências simplesmente adota o tema claro — as notas permanecem completamente estilizadas em qualquer caso.
+**Tema → Sistema** segue o esquema de cores do desktop, lido dentro de WebView até `prefers-color-scheme`. WebKitGTK deriva isso das configurações GTK da sessão em que o aplicativo foi iniciado, portanto, uma sessão Wayland que não relata nenhuma preferência simplesmente resolve o tema claro - as notas são sempre totalmente estilizadas de qualquer maneira.
 
-A preferência é monitorada dinamicamente enquanto o aplicativo executa, de modo que alternar o desktop entre claro e escuro atualiza as notas abertas sem necessidade de reinicialização. As opções **Claro** e **Escuro** são escolhas explícitas que ignoram o tema do desktop.
+A preferência é observada enquanto o aplicativo é executado, portanto, alternar a área de trabalho entre claro e escuro atinge notas abertas sem reiniciar. **Claro** e **Escuro** são escolhas explícitas e ignoram totalmente a área de trabalho.
 
-O tema é uma configuração global armazenada em `config.toml`. Ele personaliza menus e popovers da aplicação; cada nota individual preserva a cor e o padrão de papel atribuídos, de modo que uma nota amarela permanece amarela mesmo sobre um desktop escuro.
+O tema é global e vive em `config.toml`. Ele veste os menus e popovers do aplicativo; cada nota mantém a cor e o padrão do papel que foi fornecido, portanto, uma nota amarela permanece amarela em uma área de trabalho escura.

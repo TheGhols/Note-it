@@ -1,93 +1,94 @@
-# Storage e diretórios XDG
+# Armazenamento e diretórios XDG
 
-Note-it segue rigorosamente a especificação de diretórios base XDG:
+Note-it adere à especificação de diretório base XDG:
 
-| Diretório | Finalidade | Padrão |
+| Caminho | Propósito | Exemplo de substituto |
 | --- | --- | --- |
-| `$XDG_DATA_HOME/note-it/notes/` | Arquivos Markdown de notas persistidas | `~/.local/share/note-it/notes/` |
-| `$XDG_DATA_HOME/note-it/trash/` | Notas excluídas de forma recuperável | `~/.local/share/note-it/trash/` |
-| `$XDG_DATA_HOME/note-it/assets/` | Imagens locais referenciadas por notas | `~/.local/share/note-it/assets/` |
-| `$XDG_DATA_HOME/note-it/study.json` | Log e agendamento de repetição espaçada Study Hub | `~/.local/share/note-it/study.json` |
-| `$XDG_DATA_HOME/note-it/backups/` | Snapshots locais recuperáveis do store | `~/.local/share/note-it/backups/` |
-| `$XDG_CONFIG_HOME/note-it/` | Preferências de configuração da aplicação | `~/.config/note-it/config.toml` |
-| `$XDG_STATE_HOME/note-it/` | Estado de janelas, posições e geometrias persistidos | `~/.local/state/note-it/state.json` |
+| `$XDG_DATA_HOME/note-it/notes/` | Arquivos de notas Markdown persistentes (`<uuid>.md`) | `~/.local/share/note-it/notes/` |
+| `$XDG_DATA_HOME/note-it/trash/` | Notas excluídas, aguardando para serem restauradas | `~/.local/share/note-it/trash/` |
+| `$XDG_DATA_HOME/note-it/assets/` | Imagens que as notas contêm, um diretório por nota | `~/.local/share/note-it/assets/` |
+| `$XDG_DATA_HOME/note-it/backups/` | Instantâneos locais do store recuperável | `~/.local/share/note-it/backups/` |
+| `$XDG_DATA_HOME/note-it/study.json` | Cronogramas versionados e atividades de estudo agregadas | `~/.local/share/note-it/study.json` |
+| `$XDG_CONFIG_HOME/note-it/config.toml` | Opções de configuração do usuário | `~/.config/note-it/config.toml` |
+| `$XDG_STATE_HOME/note-it/state.json` | Geometria da janela, modo ativo e estado transitório UI | `~/.local/state/note-it/state.json` |
+| `$XDG_RUNTIME_DIR/note-it/<store>/` | Lease de escrita e soquete de controle para um store | `/run/user/<uid>/note-it/<store>/` |
 
-Todas as gravações no sistema de arquivos em `notes/`, `trash/`, `config.toml` e `state.json` são atômicas: os dados são gravados primeiro em um arquivo temporário exclusivo no mesmo diretório, liberados para o disco via `fsync` e renomeados atomicamente sobre o destino final. O salvamento de imagens valida cada arquivo contra o estado do store e o confirma com a mesma primitiva atômica antes que a aplicação o adote.
+`study.json` contém apenas chaves de revisão SHA-256 opacas, níveis, carimbos de data/hora absolutos UTC, classificações e contadores diários codificados por data civil local. Perguntas, respostas, Markdown, títulos, HTML, bytes de imagem e caminhos absolutos nunca entram nele. Ausente significa uma história vazia; dados corrompidos ou mais recentes são deixados byte por byte e tornam o Estudo indisponível em vez de serem substituídos. Cada classificação cria um próximo estado e o confirma com a mesma primitiva de gravação atômica das notas antes de o aplicativo adotá-lo.
 
 ## Coordenação de gravação em runtime
 
-Exatamente um processo Note-it pode gravar em um store por vez. A posse exclusiva é garantida por um `flock` consultivo em um arquivo de bloqueio no diretório de runtime, nunca pela mera existência de um arquivo: um processo que encerra inesperadamente libera o lock no instante em que o kernel fecha seus descritores de arquivo, e um arquivo de lock residual deixado por um processo encerrado não bloqueia ninguém.
+Exatamente um processo Note-it pode gravar em um store por vez. A exclusividade é garantida por um `flock` consultivo sobre um arquivo de bloqueio no diretório de runtime, nunca pela mera existência do arquivo: se um processo falha, o bloqueio é liberado assim que o kernel fecha seus descritores, e um arquivo deixado por um processo morto não bloqueia ninguém.
 
 ```text
 $XDG_RUNTIME_DIR/note-it/            0700
   <store key>/                       0700
-    store                            0600   o diretório de notas representado por esta chave
-    writer.lock                      0600   o lease de escritor
-    control.sock                     0600   o socket privado da autoridade
+    store                            0600   diretório de notas representado pela chave
+    writer.lock                      0600   lease
+    control.sock                     0600   soquete privado da autoridade
 ```
 
-`<store key>` é o digest FNV-1a 64 do caminho do diretório de notas, formatado como dezesseis caracteres hexadecimais minúsculos. Usar uma chave baseada no store permite que um store de teste isolado e o store real do usuário possuam cada um seu próprio escritor legítimo simultaneamente, sem interferências mútuas.
+`<store key>` é o digest FNV-1a de 64 bits do caminho do diretório de notas, escrito como dezesseis caracteres hexadecimais minúsculos. A chave por store permite que um store de teste isolado e o store real tenham, ao mesmo tempo, um gravador legítimo cada um, sem que um espere pelo outro.
 
-Nenhum arquivo nesta hierarquia de runtime pertence ao store persistido. Eles descrevem apenas a sessão atual, perdem o sentido após uma reinicialização e nunca entram em backups. Quando a sessão não possui `$XDG_RUNTIME_DIR`, o sistema recorre a `/tmp/note-it-<uid>`, com escopo restrito ao UID do usuário em vez de um caminho público previsível — e, em ambos os casos, os diretórios são rejeitados se forem symlinks, se pertencerem a outro usuário ou se puderem ser acessados por terceiros.
+Nada aqui pertence ao store. Ele descreve esta inicialização, não tem sentido após uma reinicialização e nunca é feito backup. Quando a sessão não tem `$XDG_RUNTIME_DIR`, o substituto é `/tmp/note-it-<uid>`, com escopo definido para o usuário em vez de um nome que qualquer um poderia usar primeiro - e de qualquer forma, ambos os diretórios são recusados ​​se forem um link simbólico, pertencerem a outro usuário ou forem acessíveis por um.
 
-A instância desktop adquire o lease antes de poder realizar salvamentos e o mantém até o encerramento do processo. A CLI `noteit` adquire o lease durante a execução de um comando quando ele estiver livre; quando estiver ocupado, encaminha a alteração para o detentor através de `control.sock`; quando estiver ocupado e inacessível, não altera nada e relata o fato de modo seguro (fail-closed). Consulte ADR-038.
+A instância de desktop adquire o lease antes de poder salvar qualquer coisa e o mantém até o processo terminar. `noteit` o adquire durante um comando quando está livre; quando o lease está retido, envia a alteração ao proprietário por `control.sock`; quando está retido e o proprietário está inacessível, não altera nada e informa o problema. Consulte o ADR-038.
 
-## Campos de aparência da nota
+## Campos de aparência de nota
 
 | Campo | Significado | Padrão quando ausente |
 | --- | --- | --- |
 | `color` | Cor do papel: `yellow`, `blue`, `green`, `pink`, `purple`, `gray`, `black` | `yellow` |
 | `paper_type` | Padrão de fundo: `blank`, `lined`, `dotted`, `grid-small`, `grid-large` | `blank` |
-| `paper_intensity` | Intensidade do padrão desenhado: `subtle`, `normal`, `strong` | `normal` |
-| `font_size` | Tamanho base da fonte da nota | `15` |
+| `paper_intensity` | Quão fortemente esse padrão é desenhado: `subtle`, `normal`, `strong` | `normal` |
+| `font_size` | Tamanho base do texto da nota | `15` |
 
-Estes campos descrevem como a nota é exibida; portanto, residem no front matter junto à própria nota e não no `state.json`, viajando com o arquivo Markdown. Alterar qualquer um deles salva a nota sem modificar seu conteúdo textual nem alterar seu `updated_at`, e — assim como no salvamento de conteúdo — a alteração é adotada na memória somente após ter sido gravada em disco com sucesso.
+Eles descrevem como a nota é exibida, de modo que ficam no front matter ao lado da nota, e não em `state.json`, e acompanham o arquivo. Alterar qualquer um deles salva a nota sem tocar em seu conteúdo ou em seu `updated_at` e - como um salvamento de conteúdo - a alteração é adotada na memória apenas depois de escrita, de modo que aquela que falha não é deixada para trás como se tivesse sido armazenado.
 
-Cada campo é armazenado como texto simples e validado contra o conjunto suportado durante a leitura; dessa forma, um valor gravado por uma versão futura — ou editado manualmente — degrada de maneira segura para o padrão em vez de falhar no parsing. Uma nota criada antes da introdução desses campos abre como papel liso em intensidade normal e recebe os campos na próxima vez em que for salva.
+Cada um é armazenado como uma string simples e resolvido em relação ao conjunto suportado na leitura, portanto, um valor escrito por uma versão mais recente — ou manualmente — é degradado para o padrão em vez de falhar na análise e levar a anotação com ele. Uma nota escrita antes da existência desses campos abre como papel comum com intensidade normal e ganha os campos na próxima vez que for salva.
 
-`paper_intensity` é preservado mesmo quando `paper_type` for `blank`, garantindo que alternar o tipo de papel não descarte a preferência prévia de intensidade.
+`paper_intensity` é mantido par para `blank`, onde não há padrão para agir, portanto, alternar o papel para frente e para trás nunca perde a escolha.
 
-## Configuração da aplicação
+## Configuração do aplicativo
 
-`config.toml` armazena preferências compartilhadas por todas as notas:
+`config.toml` mantém preferências compartilhadas por cada nota:
 
 | Campo | Significado | Padrão |
 | --- | --- | --- |
-| `default_color` | Cor padrão de papel para novas notas | `yellow` |
-| `default_font_size` | Tamanho de fonte padrão para novas notas | `15` |
-| `default_width`, `default_height` | Dimensões padrão para novas notas | `360`, `300` |
-| `autosave_interval_ms` | Intervalo de debounce antes de gravar edições | `300` |
+| `default_color` | Cor do papel dada a uma nova nota | `yellow` |
+| `default_font_size` | Tamanho base do texto atribuído a uma nova nota | `15` |
+| `default_width`, `default_height` | Tamanho dado a uma nova nota | `360`, `300` |
+| `autosave_interval_ms` | Debounce antes que uma edição seja escrita | `300` |
 | `theme` | Tema da interface: `system`, `light`, `dark` | `system` |
 
-O tema define a aparência do chrome da aplicação — menus, popovers, bordas e estados de foco — e deliberadamente **não** é configurado por nota: cada nota preserva a cor e o papel atribuídos independentemente do tema ativo. O modo `system` segue dinamicamente o esquema de cores do desktop enquanto a aplicação estiver em execução.
+O tema é a aparência do chrome do aplicativo – menus, popovers, bordas, estados de foco – e deliberadamente **não** por nota: uma nota mantém a cor e o papel que recebeu, seja qual for o tema. `system` segue o esquema de cores da área de trabalho e continua seguindo-o enquanto o aplicativo é executado.
 
-## Timestamps no front matter da nota
+## Carimbos de data e hora no front matter da nota
 
-`created_at` registra o momento de criação da nota e nunca é alterado posteriormente.
-`updated_at` registra a última alteração no **conteúdo** da nota.
+`created_at` registra quando a nota foi criada e nunca muda depois. `updated_at` registra a última alteração no **conteúdo** da nota.
 
-Conteúdo refere-se ao Markdown persistido. Se o texto diferir do que já está armazenado em disco, a alteração é registrada — tenha ela sido originada por digitação, títulos, listas, tarefas, negrito, itálico, tachado, cores de texto, destaques ou tamanhos inline, pois todos esses elementos são gravados no corpo da nota.
+Conteúdo significa o Markdown que é persistido. Se esse texto for diferente do que já está armazenado, a alteração é registrada - seja por digitação, título, lista, tarefa, negrito, itálico, tachado, cor do texto, realce ou tamanho embutido, já que tudo isso está escrito na nota.
 
-Quaisquer outras operações deliberadamente não alteram `updated_at`:
-- alterações de aparência: cor do papel, tipo de papel, intensidade do padrão, tamanho base da fonte;
-- tema da interface, que não é armazenado no arquivo da nota;
-- estado de janelas e visualização: arrastar, redimensionar, zoom, recolher/expandir, modo de camada;
-- abertura de menus ou foco na barra de cabeçalho;
-- **e visualização da nota.** Abrir, fechar, invocar (summon), ocultar, exibir ou sair da aplicação sem editar o texto mantém o arquivo intocado.
+Todo o resto deixa `updated_at` deliberadamente em paz:
 
-Este último comportamento é rigorosamente validado. O fechamento de notas e a sincronização de buffer enviam o estado do editor, esteja ele editado ou não; portanto, o caminho único de salvamento de conteúdo compara o texto recebido com o que já está persistido em disco e não executa gravações caso sejam idênticos. Uma nota inalterada não é reescrita: nenhum arquivo temporário é gerado, nenhum rename ocorre, nenhum fsync é disparado e o arquivo preserva seu timestamp de modificação (`mtime`) original.
+- aparência: cor do papel, tipo de papel, intensidade do padrão, tamanho da fonte;
+- o tema da interface, que não é armazenado na nota;
+- janela e estado de visualização: arrastar, redimensionar, ampliar, recolher/expandir, modo de camada;
+- abrindo o menu ou passando o mouse sobre o cabeçalho;
+- **e visitando a nota.** Abrir e fechar, convocar, ocultar, mostrar ou sair sem editar, tudo deixa-a intacta.
 
-Essa verificação só é confiável enquanto a nota mantida em memória for idêntica à do disco; portanto, alterações são preparadas sobre cópias temporárias, persistidas e adotadas na memória apenas após a gravação em disco ter sido concluída com sucesso. Um salvamento com falha deixa a nota em memória descrevendo exatamente o que está no disco, e a repetição do mesmo texto continua sendo detectada como alteração pendente para nova tentativa real.
+Este último ponto é aplicado e não assumido. Fechar e liberar envia tudo o que o editor contém, editado ou não, de modo que o caminho único pelo qual todo o conteúdo salva o funil compara o texto recebido com o que já está armazenado e não faz nada quando eles correspondem. Uma nota inalterada não é reescrita: nenhum arquivo temporário, nenhuma renomeação, nenhum fsync e o arquivo mantém seu próprio horário de modificação.
 
-Ambos os campos são opcionais na leitura. Uma nota cujo front matter os omita abre normalmente; valores ausentes são exibidos como desconhecidos (`—`) em vez de substituídos por datas fictícias, e salvar a nota novamente não gera valores inventados.
+Essa comparação é apenas sólida enquanto a nota mantida na memória é a nota que está no disco, por isso é mantida dessa forma: uma alteração é preparada em uma cópia, escrita e adotada na memória somente quando a gravação for bem-sucedida. Um salvamento que falha, portanto, deixa a nota descrevendo exatamente o que está armazenado, e o mesmo texto chegando novamente - que é o que cada um desses caminhos reenvia - ainda é uma diferença e é escrito de verdade. Uma carga útil nunca é tratada como armazenada porque corresponde a um estado que veio de uma gravação que nunca ocorreu, e salvar e fechar nunca finaliza um fechamento sobre um salvamento que falhou.
+
+Ambos os campos são opcionais na leitura. Uma nota cujo front matter os omite ainda será aberta; o valor ausente é relatado como desconhecido (`—`) em vez de substituído por uma data fabricada, e salvar novamente a nota também não inventa nenhuma.
 
 ## Qual nota uma invocação traz de volta
 
-Quando todas as janelas de notas estão fechadas, a aplicação reabre a nota gravada mais recentemente, ordenada pelo campo `updated_at` de seu front matter — o campo que registra a última alteração em seu **texto**. Fechar uma nota na qual nada foi digitado não a coloca no topo da ordenação, pois notas inalteradas não são regravadas; alterar sua cor, papel ou tamanho de fonte regrava o arquivo, mas não constitui edição de conteúdo. Uma nota sem `updated_at` legível recorre ao `mtime` do arquivo no sistema de arquivos. Empates são desfeitos deterministicamente pelo identificador UUID, garantindo que o mesmo store produza sempre a mesma ordem.
+Quando cada nota é fechada, o aplicativo reabre a última escrita, ordenada pelo próprio `updated_at` de cada nota — o campo front matter que registra a última alteração em seu **texto**. Fechar uma nota que você não digitou não a move para frente, porque uma nota inalterada nunca é reescrita; nem alterar sua cor, papel, intensidade do padrão ou tamanho da fonte, o que reescreve o arquivo, mas não é uma edição. Uma nota sem `updated_at` legível - uma escrita antes da existência do campo, uma sem front matter, uma cujo cabeçalho não pode ser analisado - volta para o próprio `mtime` do arquivo, que é o que cada nota usava antes de haver um campo para ler. Os empates são desfeitos por identificador, portanto a mesmo store lista sempre na mesma ordem.
 
-Essa mesma ordenação é compartilhada pela busca e pelo seletor rápido (quick switcher), unificando a semântica de "mais recente" em toda a aplicação. A leitura desse dado consome uma leitura limitada do cabeçalho de cada arquivo; nada é gravado em disco, e um cabeçalho corrompido custa à nota apenas seu timestamp, sem interromper a listagem geral.
+A mesma ordem é o que a pesquisa e o alternador rápido mostram, portanto, "mais recente" significa uma coisa em todo o aplicativo. Ler custa uma leitura limitada do cabeçalho de cada nota; nada está escrito e um cabeçalho ilegível custa registrar seu carimbo de data e hora em vez de falhar na listagem.
 
-Essa é a definição pretendida de "a última nota utilizada" — a nota na qual se escreveu por último. Reaberturas, invocações globais e despacho de instância única seguem essa regra.
+Esta é a leitura pretendida de "a nota usada por último" - a nota realmente escrita. A reabertura, a invocação e o envio de instância única não são afetados. Uma necessidade futura de "a nota que abri pela última vez", como algo distinto de "a nota que escrevi pela última vez", pertence a `state.json` como um estado explícito, e não a um carimbo de data / hora do sistema de arquivos.
 
 ## Campos de estado da janela
 
@@ -96,79 +97,105 @@ Essa é a definição pretendida de "a última nota utilizada" — a nota na qua
 | Campo | Significado |
 | --- | --- |
 | `x`, `y` | Posição da nota em seu monitor |
-| `width`, `height` | Dimensão atual da superfície; enquanto recolhida, `height` é a altura do cabeçalho |
+| `width`, `height` | Tamanho atual da superfície; enquanto recolhido, `height` é a altura da barra de cabeçalho |
 | `is_open` | Se a nota é restaurada na inicialização |
-| `monitor` | Nome do conector do monitor ao qual a nota pertence |
-| `collapsed` | Se a nota está recolhida exibindo apenas a barra de cabeçalho |
-| `expanded_width`, `expanded_height` | Dimensões a restaurar ao expandir; significativo apenas quando `collapsed` |
-| `zoom_percent` | Escala de visualização do conteúdo da nota, 75–300, padrão 100 |
+| `monitor` | Nome do conector ao qual a nota pertence |
+| `collapsed` | Se a nota é reduzida à barra de cabeçalho |
+| `expanded_width`, `expanded_height` | Tamanho para restaurar ao expandir; apenas significativo enquanto `collapsed` |
+| `zoom_percent` | Escala de visualização (zoom) do conteúdo da nota, 75–300, padrão 100 |
 
-Todos os campos possuem valores padrão, garantindo que um `state.json` gravado por versões anteriores carregue perfeitamente: a ausência de `collapsed` implica estado expandido, e a ausência de geometrias expandidas recorre às dimensões padrão.
+Cada campo tem um padrão, portanto, um `state.json` escrito por uma versão anterior é carregado inalterado: ausente `collapsed` significa expandido, e ausência de geometria expandida volta ao tamanho de nota padrão.
 
-## Formatação inline em Markdown
+## Formatação embutida em Markdown
 
-O Markdown padrão não possui sintaxe para cor, destaque ou tamanho de fonte no texto; portanto, esses dados são representados como um conjunto controlado de elementos HTML seguros. Apenas atributos exclusivos do Note-it são aceitos, e estritamente com valores validados por allowlist — quaisquer outros atributos são descartados no carregamento.
+Markdown não possui sintaxe para cor, realce ou tamanho de fonte, portanto, eles são armazenados como um pequeno conjunto de elementos HTML controlados. Somente os atributos próprios de Note-it são aceitos, e apenas com valores da lista de permissões correspondente — qualquer outra coisa é descartada quando a nota é carregada.
 
 | Formatação | Representação | Valores aceitos |
 | --- | --- | --- |
 | Cor do texto | `<span data-note-it-color="#2563EB">` | `#rgb` / `#rrggbb` |
 | Destaque | `<mark data-note-it-highlight="#FDE68A">` | `#rgb` / `#rrggbb` |
 | Tamanho do texto | `<span data-note-it-font-size="22">` | 12, 14, 16, 18, 22, 26, 32 |
-| Conclusão da tarefa | `- [x] texto <!-- note-it:completed_at=… -->` | ISO 8601 com offset ou `Z` |
+| Conclusão da tarefa | `- [x] texto <!-- note-it:completed_at=… -->` | ISO 8601 com deslocamento ou `Z` |
 
-Nenhum desses marcadores é exibido como texto bruto no editor. O comentário de metadados da tarefa é o único comentário HTML preservado pelo sanitizador; todos os demais comentários HTML são removidos.
+Nenhum deles é visível como marcação no editor. O comentário dos metadados da tarefa é o único comentário HTML que o sanitizador preserva; todos os outros comentários ainda serão removidos.
 
 ## Lixeira
 
 Excluir uma nota move seu arquivo para fora do store ativo:
 
 ```text
-notes/<uuid>.md   →   trash/<uuid>.<timestamp>.md
+notes/<uuid>.md   →   trash/<uuid>.md
+                      trash/<uuid>.json   (quando foi excluída)
 ```
 
-`<timestamp>` é o horário UTC em que a nota foi enviada para a lixeira, formatado como `YYYYMMDDTHHMMSSZ`. O identificador UUID é preservado, permitindo restaurar a nota ou inspecionar suas tarefas e metadados históricos.
+Uma nota em `trash/` não é uma nota. Ele não está listado, não é pesquisado, não é oferecido pelo switcher rápido, não é restaurado na inicialização e não é trazido de volta por uma invocação - não porque cada um deles o exclui, mas porque cada um deles lê `notes/`, e o arquivo não está mais lá.
 
-A movimentação é atômica no mesmo sistema de arquivos através de `std::fs::rename`. Caso a movimentação falhe, a nota original permanece intacta em `notes/`. Se o arquivo de destino em `trash/` já existir, a operação falha de modo seguro (fail-closed) sem sobrescrever dados.
+**A movimentação é o ponto de commit.** A sequência é:
 
-A lixeira pode ser listada e esvaziada através da interface gráfica (*Notas › Lixeira*) ou via CLI (`noteit lixeira listar`, `noteit lixeira limpar`). Restaurar uma nota move o arquivo de volta para `notes/<uuid>.md`. Se uma nota ativa com o mesmo UUID já existir no store, a restauração é recusada.
+```text
+flush da nota   →   mover o arquivo   →   atualizar o estado da janela   →   fechar a janela
+```
+
+Tudo antes da movimentação pode falhar com a nota ainda aberta, ativa e editável — inclusive, principalmente, um flush que não conseguiu escrever o texto mais recente. Uma nota cujo texto não é seguro nunca desaparece. A partir do movimento, a nota *está* na lixeira, então nada depois informa o contrário: a gravação do estado da janela é o melhor esforço e a janela fecha de qualquer maneira.
+
+**O arquivo não é lido, analisado ou reescrito.** Mover para a lixeira é `rename` e restaurar é `hard_link` mais `remove_file`; ambos preservam o byte da nota por byte, front matter, aparência, tarefas, links e cálculos incluídos. Uma nota cujo front matter está danificado - uma Note-it nem consegue abrir - ainda vai para a lixeira e volta inalterada.
+
+**A restauração nunca substitui uma nota ativa.** A restauração cria o nome em `notes/` com `hard_link`, o que falhará se o nome já existir. Essa é uma propriedade do syscall, não uma verificação que possa ser executada: se uma nota com o mesmo identificador já estiver ativa, nenhum dos arquivos será tocado e o leitor será informado disso.
+
+**Nem é uma edição.** `updated_at` não se move quando uma nota é excluída ou restaurada, portanto, uma nota recuperada retorna à posição no alternador rápido que estava, em vez de fingir que acabou de ser escrita.
+
+**Quando ele foi excluído fica ao lado da nota, nunca dentro dela.** O sidecar `<uuid>.json` contém `deleted_at` e nada mais. Se estiver ausente ou ilegível, a listagem da lixeira retornará ao horário de modificação do próprio arquivo; nada está escrito para repará-lo. Qualquer coisa em `trash/` que não seja `<uuid>.md` é ignorada pela listagem.
+
+**Não há exclusão permanente nem "esvaziar a lixeira".** A lixeira cresce até que você mesmo remova os arquivos dela, o que é uma escolha deliberada para uma fase de recuperação - e possível com qualquer gerenciador de arquivos, porque uma nota na lixeira é um `.md` comum no disco.
 
 ## Backups locais
 
-O Note-it cria snapshots locais automáticos do store para proteger contra exclusões acidentais ou corrupções de dados.
+Um snapshot é um diretório de arquivos comuns:
 
-Cada snapshot é um diretório autônomo dentro de `$XDG_DATA_HOME/note-it/backups/<timestamp>/`, nomeado com o timestamp ISO 8601 de sua criação. Um arquivo `manifest.json` na raiz do snapshot registra a versão do manifesto, a contagem de notas, a contagem de imagens, a contagem de notas na lixeira e se arquivos de configuração, estado de janela e histórico de estudo estavam presentes. Um diretório em `backups/` é considerado um snapshot válido apenas se for um diretório real, se seu nome não começar com `.` e se contiver um manifesto legível.
+```text
+backups/2026-08-29T09-30-00Z/
+  manifest.json
+  notes/<uuid>.md …
+  trash/<uuid>.md, <uuid>.json …
+  assets/<note-uuid>/<asset-uuid>.<ext> …
+  config.toml
+  state.json
+  study.json
+```
 
-O manifesto **versão 3** inclui a versão 2 mais o indicador opcional de histórico de estudo; a versão 2 inclui a versão 1 mais a contagem de imagens. Snapshots mais antigos permanecem totalmente válidos.
+`manifest.json` registra a versão, quando o instantâneo foi tirado, se foi automático ou manual, quantas notas, entradas de lixo e imagens ele contém e se a configuração, o estado da janela e o histórico de estudo estavam presentes. Um diretório em `backups/` conta como um instantâneo somente se for um diretório real, seu nome não começar com `.` e contiver um manifesto legível.
 
-**O que é incluído no backup:** `notes/`, `trash/`, `assets/`, `config.toml`, `state.json` e `study.json` quando presentes. Um arquivo de estudo existente é dado recuperável: se não puder ser copiado como arquivo regular, o snapshot não é comitado como completo.
+Manifesto **versão 3** é a versão 2 mais o sinalizador opcional de histórico de estudo; a versão 2 é a versão 1 mais a contagem de imagens. Os instantâneos mais antigos permanecem válidos porque ambos os campos posteriores são padronizados como ausente/zero.
 
-Uma nota que referencie `![](../assets/…)` depende do arquivo de imagem correspondente; portanto, `assets/` é copiado com as mesmas garantias das notas: mesma estrutura, um subdiretório por nota, byte a byte, e um snapshot que falhe ao copiar uma imagem não é confirmado. Imagens que não sejam mais referenciadas por nenhuma nota também são copiadas — um backup é uma fotografia do store gerenciado, não uma triagem de arquivos.
+**O que entra:** `notes/`, `trash/`, `assets/`, `config.toml`, `state.json` e `study.json` quando existe. Um arquivo de estudo existente é um dado recuperável: se não puder ser copiado como um arquivo normal, o instantâneo não será confirmado como completo.
 
-`assets/` é copiado com validação mais estrita que `notes/`: uma anomalia em `notes/` é ignorada com aviso, mas em `assets/`, qualquer entrada que não corresponda ao padrão `<note-uuid>/<asset-uuid>.<ext>` indica que o store não está no estado esperado pelo Note-it, fazendo o backup falhar em vez de omitir silenciosamente conteúdo gerenciado. Um store criado antes da existência do suporte a imagens não possui o diretório `assets/`, o que é tratado como um store sem imagens e não como um store quebrado.
+Uma nota que diz `![](../assets/…)` é apenas meia nota sem o arquivo para o qual a referência aponta, então `assets/` é copiado com as mesmas garantias que as próprias notas: a mesma forma, um diretório por nota, byte por byte, e um instantâneo que não pôde copiar um não é confirmado. Uma imagem que nenhuma nota aponta mais também é copiada – um backup é um instantâneo do store gerenciado, não uma decisão sobre quais de seus arquivos ainda são desejados.
 
-**O que nunca entra no backup:** o próprio diretório `backups/`, impedindo aninhamento recursivo; arquivos e diretórios iniciados por `.`, o que impede a inclusão de arquivos temporários (`.tmp.…`); qualquer item que não seja arquivo regular; e links simbólicos, que nunca são seguidos — garantindo que entradas forjadas no store não façam o backup copiar caminhos externos como `/etc` ou o diretório home do usuário.
+`assets/` é copiado de forma mais estrita do que `notes/` e deliberadamente. Uma pessoa pode razoavelmente ter colocado algo próprio em `notes/`, então uma estranheza é ignorada com um aviso; `assets/` foi escrito por Note-it e por nada mais, então qualquer coisa que não seja `<note-uuid>/<asset-uuid>.<ext>` significa que o store não está no estado que Note-it acredita que esteja e o backup falha em vez de omitir silenciosamente o conteúdo gerenciado enquanto relata o sucesso. Uma store criado antes da existência de imagens não tem `assets/`, e essa é um store sem fotos, em vez de um store quebrado.
 
-**Quando ocorre:** no máximo um snapshot automático a cada 24 horas, executado **antes da primeira alteração elegível** após esse período — salvamento de nota ou envio para a lixeira. Executar antes da alteração é a essência do backup: a finalidade é permitir retornar ao estado anterior, de modo que o momento crucial a capturar é o instante imediatamente anterior à edição. Não há threads em segundo plano nem temporizadores contínuos; um daemon sem uso não consome recursos, e um processo mantido aberto por dias dispara o snapshot no instante em que o usuário recomeça a digitar. A data do último backup é determinada pelo próprio manifesto do snapshot mais recente, evitando arquivos auxiliares de controle que possam divergir do disco.
+**O que nunca entra:** `backups/` em si, portanto, um instantâneo nunca pode conter instantâneos; qualquer coisa cujo nome comece com `.`, que é o que impede um `.tmp.…` de um salvamento interrompido fora de um snapshot; qualquer coisa que não seja um arquivo normal; e qualquer coisa alcançada através de um link simbólico, que nunca é seguido — uma entrada criada no store não pode fazer a cópia de backup `/etc` ou um diretório inicial.
 
-**Backup manual:** a opção *Dados › Fazer backup agora* gera um snapshot imediatamente, nunca é ignorada e sempre reporta sucesso ou falha, satisfazendo a janela de 24 horas como qualquer snapshot automático.
+**Quando isso acontecer.** No máximo um instantâneo automático a cada 24 horas, tirado **antes da primeira alteração qualificada** depois que esse período tiver passado — uma nota salva ou uma movimentação para a lixeira. A questão é considerar primeiro: a finalidade de um backup é voltar a ser como as coisas eram, então o momento que vale a pena capturar é aquele antes da edição. Não há cronômetro nem thread; um daemon que ninguém está usando não funciona, e um daemon deixado aberto por dias tira seu instantâneo no momento em que seu proprietário começa a digitar novamente. "Quando foi o último backup" é respondido pelo próprio manifesto do snapshot mais recente, portanto não há nenhum arquivo de contabilidade que possa discordar do disco.
 
-**Atomicidade:** um snapshot é montado em `backups/.tmp.<pid>.<n>/` e renomeado atomicamente para o caminho definitivo; o rename é o ponto de commit. Um processo interrompido deixa apenas um diretório temporário com prefixo `.tmp.`, que não é um snapshot válido e é removido na execução de backup seguinte. Apenas diretórios com esse prefixo temporário são removidos na limpeza.
+**Backup manual.** *Dados › Fazer backup agora* faz um backup imediatamente, nunca é ignorado e sempre relata sucesso ou falha. Ele satisfaz a regra das 24 horas como qualquer outro instantâneo.
 
-**Retenção:** são mantidos os sete snapshots mais recentes em um pool unificado, e a retenção é aplicada **somente após um novo snapshot ter sido confirmado com sucesso**. Backups antigos nunca são removidos para abrir espaço antes que o novo backup esteja plenamente gravado.
+**Atomicidade.** Um instantâneo é criado em `backups/.tmp.<pid>.<n>/` e renomeado para o local inteiro; a renomeação é o ponto de commit. Um processo eliminado no meio deixa um diretório `.tmp.…`, que não é um instantâneo – nome errado, sem manifesto – e o próximo backup o remove. Somente os diretórios que carregam esse prefixo são varridos.
 
-**Tratamento de falhas:** a falha ao gerar um snapshot nunca bloqueia o salvamento de uma nota: o erro é emitido em `stderr`, a nota é persistida normalmente e nova tentativa de backup ocorre na próxima alteração elegível.
+**Retenção.** Sete snapshots são mantidos em um pool, independentemente do que os tenha gerado, e a retenção é executada **somente depois que um novo snapshot for confirmado**. Um backup antigo nunca é excluído para dar espaço a um que possa falhar. Um instantâneo que não pode ser removido é relatado e o novo backup ainda permanece.
 
-### Recuperando a partir de um snapshot
+**Falha.** Um instantâneo que não pode ser feito nunca bloqueia um salvamento: o erro vai para `stderr` e a nota é escrita normalmente, e a tentativa é repetida na próxima alteração elegível, em vez de a cada pressionamento de tecla.
 
-Não existe um botão de "restaurar tudo com um clique" na interface gráfica: sobrescrever um store ativo por um snapshot é uma operação transacional de múltiplos arquivos, e um botão automatizado seria o controle mais destrutivo da aplicação. O procedimento manual recomendado, com a aplicação fechada, é:
+### Recuperando-se de um instantâneo
+
+Deliberadamente, não há "restaurar tudo" com um clique no aplicativo: colocar um instantâneo de volta em um store ativo é uma transação de vários arquivos, e um botão para isso seria o controle mais destrutivo que Note-it possui. O procedimento manual, com o aplicativo fechado, é:
 
 ```bash
 note-it quit                       # nenhum processo pode estar em execução
 
 SNAP=~/.local/share/note-it/backups/2026-08-29T09-30-00Z
-cat "$SNAP/manifest.json"          # confirme se é o snapshot desejado
+cat "$SNAP/manifest.json"          # confira se este é o instantâneo desejado
 
-# Preserve o estado atual para que o procedimento seja reversível
+# Preserve o conteúdo atual para que esta etapa também seja reversível.
 mv ~/.local/share/note-it/notes  ~/.local/share/note-it/notes.antes
 mv ~/.local/share/note-it/trash  ~/.local/share/note-it/trash.antes
 mv ~/.local/share/note-it/assets ~/.local/share/note-it/assets.antes
@@ -182,30 +209,30 @@ cp -a "$SNAP/state.json"  ~/.local/state/note-it/state.json   # se existir
 cp -a "$SNAP/study.json"  ~/.local/share/note-it/study.json   # se existir
 ```
 
-Para recuperar uma **única** nota, copie apenas o arquivo `<uuid>.md` desejado do diretório `notes/` do snapshot — e, caso contenha imagens, o diretório correspondente `assets/<note-uuid>/` ao lado. A nota referencia suas imagens por caminhos relativos a `notes/`, portanto ambos caminham juntos sem necessidade de edições manuais.
+Para recuperar uma **única** nota, copie apenas esse `<uuid>.md` do diretório `notes/` do instantâneo — e, se contiver imagens, o diretório `assets/<note-uuid>/` correspondente ao lado dele. A nota refere-se às suas imagens por um caminho relativo a `notes/`, então as duas viajam juntas e nenhuma delas precisa de edição.
 
-A legibilidade dos dados restaurados é garantida por testes de integração: o teste `a_snapshot_round_trips_into_a_fresh_isolated_store` copia snapshots para árvores XDG limpas exatamente dessa forma, abre os arquivos e valida notas, identificadores, Markdown, lixeira, configurações, estado de janelas e agendamento de estudos.
+Que o resultado seja legível não é uma esperança: `a_snapshot_round_trips_into_a_fresh_isolated_store` copia um instantâneo em uma árvore XDG vazia exatamente desta forma, abre-o e verifica se as notas, identificadores, Markdown, lixo, configuração, estado da janela e cronograma de estudo voltaram.
 
-### Contra o que um backup local protege e não protege
+### Contra o que um backup local protege e o que não protege
 
-O backup local protege contra: exclusão acidental, corrupção lógica de arquivos, edições indesejadas e necessidade de reverter para versões anteriores.
+Ele protege contra: exclusão acidental, corrupção lógica, edição que você deseja desfazer, versão para a qual deseja voltar.
 
-Ele **não** protege contra: falhas físicas de hardware de disco, perda ou roubo do computador ou corrupção global de sistemas de arquivos, pois os snapshots residem no mesmo meio de armazenamento físico das notas. Não há criptografia de backup. Caso seja necessária proteção contra falhas de hardware, deve-se manter cópias externas em outro dispositivo.
+Ele **não** protege contra um disco morto, uma máquina perdida ou roubada ou um sistema de arquivos que falha como um todo — os instantâneos estão no mesmo disco que as notas. Não é criptografado. Qualquer pessoa que precise de proteção contra falhas de hardware precisa de uma cópia em outro hardware, e Note-it não faz uma.
 
 ## Gravação atômica de arquivos
 
-Para prevenir corrupção de dados em quedas de energia ou encerramento abrupto de processos:
-1. Grava o conteúdo da nota em um arquivo temporário (`.tmp.<uuid>.<nanos>`) no mesmo diretório.
-2. Executa flush e sincronização de dados (`fsync`) para o disco.
-3. Renomeia e substitui atomicamente o arquivo de destino através de `std::fs::rename`.
-4. Executa sync no diretório de notas, assegurando que o próprio rename seja durável em disco.
+Para evitar a corrupção de dados durante perdas inesperadas de energia ou falhas de processo:
+1. Grave o conteúdo da nota em um arquivo temporário (`.tmp.<uuid>.<nanos>`) no mesmo diretório.
+2. Libere e sincronize dados no disco.
+3. Renomeie/substitua atomicamente o arquivo de destino usando `std::fs::rename`.
+4. Sincronize o diretório de notas para que a renomeação seja durável.
 
-**A renomeação atômica (rename) é o ponto de commit.** Ou o rename se completa e a nota passa a ser a nova versão, ou não se completa e o arquivo permanece na versão anterior; não existe estado intermediário e um leitor nunca se depara com um arquivo corrompido ou parcialmente gravado (torn file). Se qualquer etapa até o rename falhar, o arquivo temporário é removido em vez de ser deixado como resíduo no diretório de notas.
+**A renomeação é o ponto de commit.** Ou ela chega e a nota é a nova, ou não e a nota ainda é a anterior; não há estado intermediário e o leitor nunca vê um arquivo corrompido / parcialmente gravado (torn file). Se alguma coisa, incluindo a renomeação, falhar, o arquivo temporário será removido em vez de deixado no diretório de notas, já que nada mais o coletaria.
 
-O salvamento reporta erro para qualquer falha anterior ou durante o rename, e sucesso a partir do momento em que o rename é concluído. Essa é a regra fundamental da qual o documento em memória depende: ele é substituído apenas por uma versão que foi efetivamente gravada em disco com sucesso.
+Um salvamento relata falha em qualquer coisa antes ou durante a renomeação e sucesso a partir da renomeação. Essa é a regra da qual depende o documento na memória: ele é substituído apenas por uma versão que realmente foi escrita e é sempre substituído por uma que já foi escrita.
 
-A etapa 4 ocorre após o ponto de commit. Os bytes da nota já estão persistidos com segurança no disco pela etapa 2 (`fsync`), de modo que o benefício obtido com a sincronização do diretório é garantir que o **rename** sobreviva a uma eventual queda de energia. Caso a sincronização do diretório falhe, a gravação em si foi bem-sucedida e é reportada como tal; um aviso (warning) é emitido porque o que ficou em dúvida foi a durabilidade da entrada de diretório, não a gravação dos dados da nota. Reportar como falha deixaria a aplicação com um estado em memória divergente do arquivo já gravado.
+A etapa 4 vem após o ponto de commit. Os bytes da nota já estão em storage estável - a etapa 2 os sincroniza - então o que a sincronização de diretório compra é que **renomear** sobrevive a uma perda de energia. Se falhar, o salvamento ainda será bem-sucedido e ainda será relatado como tal; é impresso um aviso, pois o que está em dúvida é a durabilidade e não se a nota foi escrita. Chamar isso de falha no salvamento deixaria o aplicativo descrevendo uma nota que o arquivo não contém mais.
 
-Nenhum mecanismo rastreia sincronizações de diretório pendentes. Executar sync em um diretório descarrega todas as entradas pendentes nele, de modo que o próximo salvamento bem-sucedido de qualquer nota torna durável também o rename anterior.
+Nada rastreia uma sincronização perdida. A sincronização de um diretório libera todas as entradas pendentes nele, não apenas a última, de modo que o próximo salvamento bem-sucedido de qualquer nota torna a renomeação anterior também durável.
 
-O que esta garantia **não** assegura: o sync não é indefinidamente repetido em caso de falha de hardware, um salvamento cujo sync de diretório falhou não tem durabilidade imediata garantida contra corte instantâneo de energia e o arquivo de notas não é resincronizado após o rename. A garantia inviolável é que uma nota nunca fica semi-escrita e nunca sofre reversão silenciosa enquanto a aplicação está em execução; uma queda de energia nessa janela estreita pode custar o último salvamento, mas nunca a integridade estrutural do arquivo.
+O que isso **não** afirma: a sincronização não é repetida, um salvamento cuja sincronização falhou não tem durabilidade garantida e o arquivo de notas não é sincronizado novamente após a renomeação. A garantia é que uma nota nunca é escrita pela metade e nunca é revertida silenciosamente enquanto o aplicativo está em execução; uma perda de energia dentro dessa janela pode custar o último salvamento, nunca o arquivo.
