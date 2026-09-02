@@ -129,7 +129,7 @@ if [[ -n "$ROOT" ]]; then
   if [[ -n "$SYSTEM_USER_HOME_RESOLVED" && ( "$ROOT_RESOLVED" == "$SYSTEM_USER_HOME_RESOLVED" || "$ROOT_RESOLVED" == "$SYSTEM_USER_HOME_RESOLVED"/* ) ]]; then
     die "--root must not be or sit inside the real home directory ($SYSTEM_USER_HOME_RESOLVED)"
   fi
-  if [[ "$ROOT_RESOLVED" == "/" || "$ROOT_RESOLVED" == "/etc"* || "$ROOT_RESOLVED" == "/usr"* || "$ROOT_RESOLVED" == "/var"* ]]; then
+  if [[ "$ROOT_RESOLVED" == "/" || "$ROOT_RESOLVED" == "/root"* || "$ROOT_RESOLVED" == "/etc"* || "$ROOT_RESOLVED" == "/usr"* || "$ROOT_RESOLVED" == "/var"* ]]; then
     die "--root must not be a system directory ($ROOT_RESOLVED)"
   fi
   mkdir -p "$ROOT"

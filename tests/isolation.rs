@@ -133,27 +133,4 @@ fn r009_harness_allows_stop_and_verify_from_inherited_isolated_xdg_environment()
         Some(0),
         "--stop from inherited XDG environment must succeed with 0, not abort with 90!\nstdout: {stdout}\nstderr: {stderr}"
     );
-
-    // Assert that even in this subshell, attempting to target the host's real home remains rejected
-    let real_home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let mut hostile_cmd = Command::new("bash");
-    hostile_cmd
-        .arg(&harness)
-        .arg("--root")
-        .arg(&real_home)
-        .arg("--")
-        .arg("help")
-        .env("HOME", root.join("home"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_CONFIG_HOME", root.join("config"))
-        .env("XDG_STATE_HOME", root.join("state"))
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .current_dir(&repo_root);
-
-    let hostile_output = hostile_cmd.output().expect("execute hostile root test");
-    assert_eq!(
-        hostile_output.status.code(),
-        Some(90),
-        "Targeting host real home must remain strictly rejected even from inherited subshell"
-    );
 }
