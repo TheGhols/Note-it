@@ -104,29 +104,43 @@ stage_workspace_tests() { cargo test --workspace; }
 # no fallback to npm, yarn or bun: a different package manager resolves a
 # different tree, and a build that quietly changed its dependencies is worse
 # than a build that stopped.
-require_pnpm() {
-  if ! command -v pnpm >/dev/null 2>&1; then
-    printf 'scripts/check: pnpm não encontrado.\n' >&2
-    printf 'O projeto usa pnpm e o lockfile é pnpm; npm e yarn não são alternativas.\n' >&2
+stage_frontend_install() { cd "$REPO_ROOT/ui" && pnpm install --frozen-lockfile; }
+stage_frontend_lint() { cd "$REPO_ROOT/ui" && pnpm run lint; }
+stage_frontend_test() { cd "$REPO_ROOT/ui" && pnpm run test; }
+stage_frontend_build() { cd "$REPO_ROOT/ui" && pnpm run build; }
+
+# --- the one tool a stage cannot start without -----------------------------
+
+# Checked here, before anything runs, because otherwise a missing `cargo` is
+# the shell's 127 from inside a stage rather than this script's documented 1 —
+# and in an aggregate it would surface halfway through instead of up front.
+# This is the whole preflight: everything else about the environment is
+# `scripts/doctor`'s question, and this script does not ask it.
+require_command() {
+  local tool="$1" note="$2"
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf 'scripts/check: %s não encontrado. %s\n' "$tool" "$note" >&2
+    printf 'Use `scripts/doctor` para diagnosticar o ambiente.\n' >&2
     exit "$EXIT_MISSING_TOOL"
   fi
 }
 
-stage_frontend_install() {
-  require_pnpm
-  cd "$REPO_ROOT/ui" && pnpm install --frozen-lockfile
-}
-stage_frontend_lint() {
-  require_pnpm
-  cd "$REPO_ROOT/ui" && pnpm run lint
-}
-stage_frontend_test() {
-  require_pnpm
-  cd "$REPO_ROOT/ui" && pnpm run test
-}
-stage_frontend_build() {
-  require_pnpm
-  cd "$REPO_ROOT/ui" && pnpm run build
+# Every Rust stage needs Cargo — the boundary scripts included, since they read
+# `cargo tree`. Every frontend stage needs pnpm.
+preflight() {
+  local name needs_cargo=0 needs_pnpm=0
+  for name in "$@"; do
+    case "$name" in
+      frontend-*) needs_pnpm=1 ;;
+      *) needs_cargo=1 ;;
+    esac
+  done
+  if ((needs_cargo)); then
+    require_command cargo "Instale a toolchain Rust."
+  fi
+  if ((needs_pnpm)); then
+    require_command pnpm "O projeto usa pnpm; npm e yarn não são alternativas."
+  fi
 }
 
 # --- running them ----------------------------------------------------------
@@ -157,6 +171,7 @@ run_stage() {
 }
 
 run_stages() {
+  preflight "$@"
   local name
   for name in "$@"; do
     run_stage "$name"
@@ -189,7 +204,7 @@ main() {
       ;;
     *)
       if is_stage "$target"; then
-        run_stage "$target"
+        run_stages "$target"
       else
         printf 'scripts/check: alvo desconhecido `%s`\n\n' "$target" >&2
         usage

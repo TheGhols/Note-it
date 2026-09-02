@@ -223,8 +223,9 @@ scripts/note-it-isolated --keep   # mantém a árvore para inspeção
 
 ### Diagnosticar, verificar, construir
 
-Três comandos canônicos, e o CI executa exatamente eles — não existe uma segunda
-lista de comandos para manter sincronizada:
+Três comandos canônicos para uso local. Os gates que eles rodam são os mesmos do
+CI — não existe uma segunda lista de comandos para manter sincronizada —, embora o
+CI os invoque um estágio por vez em vez de chamar `scripts/check all`:
 
 ```bash
 scripts/doctor all    # a máquina tem o necessário? (somente leitura)

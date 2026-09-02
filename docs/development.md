@@ -13,15 +13,29 @@ sudo pacman -S --needed gtk4 gtk4-layer-shell webkitgtk-6.0 rust nodejs pnpm pkg
 
 ## Os três comandos
 
-O repositório tem três entrypoints canônicos, e o CI executa exatamente eles.
-Não há uma segunda lista de comandos para manter sincronizada: o workflow
-invoca os mesmos estágios que você invoca localmente.
+O repositório tem três entrypoints canônicos para uso local:
 
 ```bash
 scripts/doctor all    # a máquina tem o necessário?
 scripts/check all     # todos os gates
 scripts/build.sh      # build release do projeto inteiro
 ```
+
+Não há uma segunda lista de comandos para manter sincronizada — os gates são os
+mesmos —, mas **o CI não executa estes três comandos**. Ele reutiliza
+`scripts/doctor` por domínio e invoca os estágios de `scripts/check` um a um, de
+propósito: um step por gate é o que faz um run vermelho apontar exatamente o que
+quebrou, coisa que um único `scripts/check all` perderia. O que o workflow roda,
+step a step:
+
+| Job | Comandos |
+| --- | --- |
+| Rust Checks & Tests | `scripts/doctor rust`, depois `scripts/check` com `rust-format`, `rust-check`, `rust-clippy`, `core-boundary`, `cli-boundary`, `core-tests`, `cli-tests`, `workspace-tests` |
+| Frontend Checks & Tests | `scripts/doctor frontend`, depois `scripts/check` com `frontend-install`, `frontend-lint`, `frontend-test`, `frontend-build` |
+
+`scripts/build.sh` **não** faz parte do CI: o build release é entrypoint local. O
+que o CI compila, ele compila pelos próprios estágios (`rust-check` e as suítes de
+teste) e pelo `frontend-build`.
 
 Os três funcionam de qualquer diretório — cada um resolve a raiz do repositório
 a partir do próprio caminho, então `cd /tmp && /caminho/Note-it/scripts/check
@@ -112,9 +126,16 @@ harness **abre brevemente uma janela real do Note-it**, apontada o tempo todo
 para um store descartável em um barramento próprio — comportamento esperado e
 descrito em **O teste de regressão**, mais abaixo.
 
-**Artefatos.** Os gates escrevem apenas onde o desenvolvimento normalmente
-escreve e o Git já ignora: `target/`, `ui/node_modules/` e `ui/dist/`. Nenhum
-deles toca o store real, instala binário em `~/.local/bin` ou cria hook de Git.
+**Artefatos.** Os artefatos do projeto vão para onde o Git já os ignora:
+`target/`, `ui/node_modules/` e `ui/dist/`. Nenhum gate toca o store real de
+notas, instala binário em `~/.local/bin`, altera o PATH, usa `sudo`, executa
+gerenciador de pacotes do sistema ou cria hook de Git.
+
+Isso não é o mesmo que prometer que nada é escrito fora do repositório. Cargo e
+pnpm usam a infraestrutura normal de desenvolvimento — o registry e os caches
+do Cargo, o store do pnpm — como fariam em qualquer outro projeto. É esperado, é
+compartilhado com o resto da máquina e não tem relação com o store de notas nem
+com instalar o Note-it.
 
 ### `scripts/build.sh` — o build
 

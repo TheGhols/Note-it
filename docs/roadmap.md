@@ -603,7 +603,8 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       nos mesmos canais, com os mesmos códigos, provado agora também sobre um terminal real.
       **Nenhuma TUI foi implementada** — ela foi movida para a Fase 5.0.
 - [x] **Fase 4.0H — Ferramentas de desenvolvedor e automação.** O ciclo diagnosticar → verificar →
-      construir passou a ter três entrypoints canônicos, e o CI executa exatamente eles.
+      construir passou a ter três entrypoints canônicos para uso local, e o CI passou a reutilizar
+      `scripts/doctor` e os mesmos estágios de `scripts/check`, invocados um a um.
       `scripts/doctor` diagnostica o ambiente sem alterá-lo — presença e versão de `bash`, `git`,
       `cargo`, `rustc`, `pkg-config`, dos módulos `gtk4`, `gtk4-layer-shell-0` e `webkitgtk-6.0`, de
       `dbus-daemon`/`dbus-send`, de `node` e de `pnpm` —, lendo a versão mínima do Rust do

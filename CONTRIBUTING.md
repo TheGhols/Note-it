@@ -11,8 +11,10 @@ Obrigado pelo seu interesse em contribuir para Note-it!
 
 ## Fluxo de trabalho de desenvolvimento
 
-Três comandos, nesta ordem. São os mesmos que o CI executa — não há uma segunda
-lista para manter em dia.
+Três comandos, nesta ordem, para uso local. Os gates que eles rodam são os mesmos
+do CI — não há uma segunda lista para manter em dia —, mas o CI não executa estes
+três comandos: ele chama `scripts/doctor` por domínio e os estágios de
+`scripts/check` um a um, e o build release fica só aqui.
 
 ```bash
 scripts/doctor all    # a máquina tem o necessário?

@@ -122,7 +122,10 @@ check_rust() {
       fi
     done
   else
-    problem "sem pkg-config não é possível verificar gtk4, gtk4-layer-shell-0 e webkitgtk-6.0"
+    # A consequence of the failure already counted just above, not a second
+    # missing requirement: installing pkg-config is one thing to do, and the
+    # summary has to say one.
+    warn "gtk4, gtk4-layer-shell-0 e webkitgtk-6.0 não puderam ser verificados sem pkg-config"
   fi
 
   printf '\nBarramento de sessão (harness de testes isolados)\n'

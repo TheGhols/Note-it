@@ -2,9 +2,16 @@
 #
 # A release build of the whole project, from any directory.
 #
-# Builds and nothing else: it does not install, does not put binaries on the
-# PATH, does not touch a store and does not write outside the repository's own
-# ignored build directories (`ui/node_modules`, `ui/dist`, `target`).
+# Builds and nothing else: it does not install anything, does not put binaries on
+# the PATH, does not copy into `~/.local/bin`, does not run a system package
+# manager or `sudo`, and does not touch a Note-it store. The project's own
+# artefacts go where the repository already ignores them — `ui/node_modules`,
+# `ui/dist`, `target`.
+#
+# That is not a claim that nothing is written anywhere else: Cargo and pnpm use
+# their normal development infrastructure — the Cargo registry and git caches,
+# the pnpm store — exactly as they do for any other project. That is expected,
+# and it is not an installation of Note-it.
 #
 # It says "pronto" only after checking that both binaries are actually there
 # and actually executable. A build script that announces success without
