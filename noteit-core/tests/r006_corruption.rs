@@ -9,8 +9,8 @@
 //! 6. Preservation before replacement -> proves quarantined bytes match original before new write
 //! 7. Preservation failure -> fail-safe: original corrupted file is never overwritten
 
-use noteit_core::settings::{AppConfig, ConfigLoadOutcome};
-use noteit_core::state::{AppState, LayerMode, StateLoadOutcome};
+use noteit_core::settings::{resolve_startup_config, AppConfig, ConfigLoadOutcome};
+use noteit_core::state::{resolve_startup_state, AppState, LayerMode, StateLoadOutcome};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -405,36 +405,278 @@ fn r006_application_startup_callsite_path_safely_quarantines_and_recovers() {
     fs::write(&config_path, bad_config).unwrap();
     fs::write(&state_path, bad_state).unwrap();
 
-    // Emulate exact application startup in src/app.rs
+    // Call identical startup resolvers used by runtime in src/app.rs
     let config_outcome = AppConfig::load_detailed(&config_path);
-    let config = match &config_outcome {
-        ConfigLoadOutcome::Valid(c) | ConfigLoadOutcome::Missing(c) => c.clone(),
-        ConfigLoadOutcome::CorruptedRecovered {
-            value,
-            quarantine_path,
-            ..
-        } => {
-            assert!(quarantine_path.exists());
-            assert_eq!(fs::read(quarantine_path).unwrap(), bad_config);
-            value.clone()
-        }
-        other => panic!("Expected CorruptedRecovered for corrupted config, got {other:?}"),
-    };
-    assert_eq!(config, AppConfig::default());
+    let resolved_config = resolve_startup_config(config_outcome);
+    assert!(resolved_config.can_persist);
+    assert_eq!(resolved_config.config, AppConfig::default());
+    assert!(resolved_config.log_message.is_some());
+
+    // Verify quarantine file exists on disk holding original bad bytes
+    let quarantine_configs: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("config.toml.corrupted.")
+        })
+        .collect();
+    assert_eq!(quarantine_configs.len(), 1);
+    assert_eq!(fs::read(quarantine_configs[0].path()).unwrap(), bad_config);
 
     let state_outcome = AppState::load_detailed(&state_path);
-    let state = match &state_outcome {
-        StateLoadOutcome::Valid(s) | StateLoadOutcome::Missing(s) => s.clone(),
-        StateLoadOutcome::CorruptedRecovered {
-            value,
-            quarantine_path,
-            ..
-        } => {
-            assert!(quarantine_path.exists());
-            assert_eq!(fs::read(quarantine_path).unwrap(), bad_state);
-            value.clone()
-        }
-        other => panic!("Expected CorruptedRecovered for corrupted state, got {other:?}"),
+    let resolved_state = resolve_startup_state(state_outcome);
+    assert!(resolved_state.can_persist);
+    assert_eq!(resolved_state.state, AppState::default());
+    assert!(resolved_state.log_message.is_some());
+
+    let quarantine_states: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("state.json.corrupted.")
+        })
+        .collect();
+    assert_eq!(quarantine_states.len(), 1);
+    assert_eq!(fs::read(quarantine_states[0].path()).unwrap(), bad_state);
+}
+
+#[test]
+fn r006_config_8_unreadable_regular_file_fails_closed_and_preserves_original() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("config.toml");
+
+    let precious_bytes = b"precious_key = 'irreplaceable user configuration'\n";
+    fs::write(&path, precious_bytes).expect("write regular config file");
+
+    // Parent dir remains fully writable (0700)
+    assert!(tmp.path().is_dir());
+
+    // Ensure it is a regular file
+    let meta = fs::symlink_metadata(&path).expect("metadata");
+    assert!(meta.file_type().is_file(), "Target must be a regular file");
+
+    // Make the regular file itself unreadable
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        return;
+    }
+
+    // 1. load_detailed must report ReadFailed
+    let outcome = AppConfig::load_detailed(&path);
+    assert!(
+        matches!(outcome, ConfigLoadOutcome::ReadFailed(_)),
+        "Expected ReadFailed on unreadable regular file, got {outcome:?}"
+    );
+
+    // 2. save_to_file must FAIL CLOSED and refuse to overwrite
+    let default_config = AppConfig::default();
+    let save_res = default_config.save_to_file(&path);
+    assert!(
+        save_res.is_err(),
+        "save_to_file must fail closed when unable to read existing regular file"
+    );
+
+    // Restore permissions for inspection
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restore 0600");
+
+    // 3. Bytes on disk must remain 100% intact
+    assert_eq!(
+        fs::read(&path).expect("read path"),
+        precious_bytes,
+        "Original regular file must not be overwritten"
+    );
+
+    // 4. No quarantine debris or temp files
+    let dir_entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        dir_entries.len(),
+        1,
+        "No unexpected files should be created in directory"
+    );
+    assert_eq!(dir_entries[0].file_name(), "config.toml");
+}
+
+#[test]
+fn r006_config_9_deterministic_read_failure_fails_closed_and_preserves_disk_file() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("config.toml");
+
+    let precious_bytes = b"precious_key = 'never replace me on error'\n";
+    fs::write(&path, precious_bytes).expect("write regular config file");
+
+    // Reader that injects a simulated PermissionDenied / I/O error deterministically across all environments
+    let failing_reader = |_p: &Path| -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "deterministic simulated permission denial",
+        ))
     };
-    assert_eq!(state, AppState::default());
+
+    // 1. load_detailed_with_reader must report ReadFailed
+    let outcome = AppConfig::load_detailed_with_reader(&path, failing_reader);
+    match &outcome {
+        ConfigLoadOutcome::ReadFailed(err) => {
+            assert!(err.contains("deterministic simulated permission denial"));
+        }
+        other => panic!("Expected ReadFailed, got {other:?}"),
+    }
+
+    // 2. save_to_file_with_reader must FAIL CLOSED
+    let default_config = AppConfig::default();
+    let save_res = default_config.save_to_file_with_reader(&path, failing_reader);
+    assert!(
+        save_res.is_err(),
+        "save_to_file must return Err on unreadable existing file"
+    );
+    let err_msg = save_res.unwrap_err();
+    assert!(err_msg.contains("unable to read existing content for preservation"));
+
+    // 3. Disk file must remain untouched
+    assert_eq!(
+        fs::read(&path).expect("read real file"),
+        precious_bytes,
+        "Real file on disk must be completely unmodified"
+    );
+
+    // 4. No quarantine files created
+    let dir_entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(dir_entries.len(), 1);
+}
+
+#[test]
+fn r006_state_8_unreadable_regular_file_fails_closed_and_preserves_original() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("state.json");
+
+    let precious_state_bytes = b"{\"precious_window\": [1, 2, 3]}\n";
+    fs::write(&path, precious_state_bytes).expect("write regular state file");
+
+    assert!(tmp.path().is_dir());
+    let meta = fs::symlink_metadata(&path).expect("metadata");
+    assert!(meta.file_type().is_file(), "Target must be a regular file");
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        return;
+    }
+
+    let outcome = AppState::load_detailed(&path);
+    assert!(
+        matches!(outcome, StateLoadOutcome::ReadFailed(_)),
+        "Expected ReadFailed on unreadable regular state file, got {outcome:?}"
+    );
+
+    let default_state = AppState::default();
+    let save_res = default_state.save_to_file(&path);
+    assert!(
+        save_res.is_err(),
+        "save_to_file must fail closed when unable to read existing state file"
+    );
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restore 0600");
+
+    assert_eq!(
+        fs::read(&path).expect("read path"),
+        precious_state_bytes,
+        "Original regular state file must not be overwritten"
+    );
+
+    let dir_entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(dir_entries.len(), 1);
+    assert_eq!(dir_entries[0].file_name(), "state.json");
+}
+
+#[test]
+fn r006_state_9_deterministic_read_failure_fails_closed_and_preserves_disk_file() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("state.json");
+
+    let precious_state_bytes = b"{\"precious_data\": true}\n";
+    fs::write(&path, precious_state_bytes).expect("write regular state file");
+
+    let failing_reader = |_p: &Path| -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "deterministic state read failure",
+        ))
+    };
+
+    let outcome = AppState::load_detailed_with_reader(&path, failing_reader);
+    match &outcome {
+        StateLoadOutcome::ReadFailed(err) => {
+            assert!(err.contains("deterministic state read failure"));
+        }
+        other => panic!("Expected ReadFailed, got {other:?}"),
+    }
+
+    let default_state = AppState::default();
+    let save_res = default_state.save_to_file_with_reader(&path, failing_reader);
+    assert!(
+        save_res.is_err(),
+        "save_to_file must fail closed when unable to read existing state file"
+    );
+    let err_msg = save_res.unwrap_err();
+    assert!(err_msg.contains("unable to read existing content for preservation"));
+
+    assert_eq!(
+        fs::read(&path).expect("read real file"),
+        precious_state_bytes,
+        "Real state file on disk must be completely unmodified"
+    );
+
+    let dir_entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(dir_entries.len(), 1);
+}
+
+#[test]
+fn r006_startup_resolvers_block_persistence_on_read_failure_or_preservation_failure() {
+    // ConfigLoadOutcome::ReadFailed blocks persistence
+    let rec = resolve_startup_config(ConfigLoadOutcome::ReadFailed("read err".into()));
+    assert!(!rec.can_persist, "ReadFailed must block persistence");
+    assert!(rec.log_message.unwrap().contains("Persistência bloqueada"));
+
+    // ConfigLoadOutcome::CorruptedPreservationFailed blocks persistence
+    let rec = resolve_startup_config(ConfigLoadOutcome::CorruptedPreservationFailed {
+        error: "disk full".into(),
+    });
+    assert!(
+        !rec.can_persist,
+        "CorruptedPreservationFailed must block persistence"
+    );
+
+    // StateLoadOutcome::ReadFailed blocks persistence
+    let rec = resolve_startup_state(StateLoadOutcome::ReadFailed("read err".into()));
+    assert!(!rec.can_persist, "ReadFailed must block persistence");
+    assert!(rec.log_message.unwrap().contains("Persistência bloqueada"));
+
+    // StateLoadOutcome::CorruptedPreservationFailed blocks persistence
+    let rec = resolve_startup_state(StateLoadOutcome::CorruptedPreservationFailed {
+        error: "disk full".into(),
+    });
+    assert!(
+        !rec.can_persist,
+        "CorruptedPreservationFailed must block persistence"
+    );
 }

@@ -418,7 +418,9 @@ fn r008_7_metadata_catalog_with_warnings_direct_domain_api() {
     )
     .expect("write bad");
 
-    let (catalog, warnings) = core.metadata_catalog_with_warnings();
+    let (catalog, warnings) = core
+        .metadata_catalog_with_warnings()
+        .expect("metadata catalog with warnings");
     assert_eq!(catalog.tags.len(), 1);
     assert_eq!(catalog.tags[0].tag, "tag1");
     assert_eq!(catalog.property_keys.len(), 1);
@@ -427,4 +429,117 @@ fn r008_7_metadata_catalog_with_warnings_direct_domain_api() {
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].kind, ReadWarningKind::CorruptedFrontMatter);
     assert_eq!(warnings[0].note_id, Some(bad_id));
+}
+
+#[test]
+fn r008_8_global_notes_dir_scan_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let (core, notes_dir) = setup_store(tmp.path());
+
+    // Create a note first
+    let mut doc = NoteDocument::new_empty();
+    doc.content = "# Header\nContent".into();
+    doc.user_metadata = NoteMetadata::try_new(vec!["rust".into()], vec![]).expect("metadata");
+    core.storage().save_note_atomic(&doc).expect("save note");
+
+    // Make notes_dir unreadable
+    fs::set_permissions(&notes_dir, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        let _ = fs::set_permissions(&notes_dir, fs::Permissions::from_mode(0o700));
+        return;
+    }
+
+    // 1. Direct domain API must return Err, NOT empty catalog
+    let catalog_res = core.metadata_catalog_with_warnings();
+    assert!(
+        catalog_res.is_err(),
+        "metadata_catalog_with_warnings must fail when notes directory is unreadable"
+    );
+
+    // 2. CLI --json tags must return status error and exit code != 0
+    let (status, stdout, stderr) = run_cli(&["tags", "--json"], tmp.path());
+    assert_ne!(
+        status, 0,
+        "CLI --json tags must exit non-zero on scan failure"
+    );
+    let json_text = if !stdout.is_empty() { &stdout } else { &stderr };
+    let json: serde_json::Value =
+        serde_json::from_str(json_text).expect("valid json error envelope");
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["error"]["code"], "read_failed");
+
+    // 3. CLI --json propriedades must return status error and exit code != 0
+    let (status, stdout, stderr) = run_cli(&["propriedades", "--json"], tmp.path());
+    assert_ne!(
+        status, 0,
+        "CLI --json propriedades must exit non-zero on scan failure"
+    );
+    let json_text = if !stdout.is_empty() { &stdout } else { &stderr };
+    let json: serde_json::Value =
+        serde_json::from_str(json_text).expect("valid json error envelope");
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["error"]["code"], "read_failed");
+
+    // 4. Human CLI tags must exit non-zero and report failure
+    let (status, _stdout, stderr) = run_cli(&["tags"], tmp.path());
+    assert_ne!(status, 0, "Human CLI tags must exit non-zero");
+    assert!(
+        stderr.contains("Erro ao acessar o armazenamento") || stderr.contains("Failed to read")
+    );
+
+    // 5. Human CLI propriedades must exit non-zero and report failure
+    let (status, _stdout, stderr) = run_cli(&["propriedades"], tmp.path());
+    assert_ne!(status, 0, "Human CLI propriedades must exit non-zero");
+    assert!(
+        stderr.contains("Erro ao acessar o armazenamento") || stderr.contains("Failed to read")
+    );
+
+    // Restore permissions for cleanup
+    fs::set_permissions(&notes_dir, fs::Permissions::from_mode(0o700)).expect("restore 0700");
+}
+
+#[test]
+fn r008_9_individual_metadata_failure_emits_typed_warning() {
+    let tmp = tempdir().expect("tempdir");
+    let (core, notes_dir) = setup_store(tmp.path());
+
+    // Valid note
+    let mut good = NoteDocument::new_empty();
+    good.content = "# Boa".into();
+    good.user_metadata = NoteMetadata::try_new(vec!["valid".into()], vec![]).expect("metadata");
+    core.storage().save_note_atomic(&good).expect("save");
+
+    // Create a regular file whose content cannot be read (unreadable note)
+    let bad_id = Uuid::new_v4();
+    let unreadable_path = notes_dir.join(format!("{bad_id}.md"));
+    fs::write(
+        &unreadable_path,
+        b"---\nnote_it:\n  id: test\n---\nprecious",
+    )
+    .unwrap();
+    fs::set_permissions(&unreadable_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        let _ = fs::set_permissions(&unreadable_path, fs::Permissions::from_mode(0o600));
+        return;
+    }
+
+    let res = core.metadata_catalog_with_warnings();
+    assert!(
+        res.is_ok(),
+        "metadata scan must succeed with warnings on single unreadable note"
+    );
+    let (catalog, warnings) = res.unwrap();
+
+    assert_eq!(catalog.tags.len(), 1);
+    assert_eq!(catalog.tags[0].tag, "valid");
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, ReadWarningKind::UnreadableNote);
+    assert_eq!(warnings[0].note_id, Some(bad_id));
+
+    fs::set_permissions(&unreadable_path, fs::Permissions::from_mode(0o600)).unwrap();
 }

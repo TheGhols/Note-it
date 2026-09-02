@@ -305,19 +305,37 @@ describe('how a picture sits in the text', () => {
 });
 
 describe('what the page is allowed to load', () => {
-  it('permits only the scheme the host serves', () => {
+  it('enforces the hardened Content-Security-Policy exactly', () => {
     // No `http:`, no `https:`, no `data:`, no `file:`. A note displays what
     // the store holds, and reaches the network for nothing.
     const csp = /http-equiv="Content-Security-Policy"\s+content="([^"]*)"/.exec(
       inject('indexHtml'),
     )![1];
-    expect(csp).toContain("img-src 'self' note-it-asset:");
-    expect(csp).toContain("connect-src 'none'");
+
+    // Explicitly required directives
+    expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("img-src 'self' note-it-asset:");
+
+    // Strict negative checks
+    expect(csp).not.toContain('unsafe-eval');
+    expect(csp).not.toContain('script-src *');
+    expect(csp).not.toContain('connect-src *');
     expect(csp).not.toContain('img-src *');
+    expect(csp).not.toContain('http:');
+    expect(csp).not.toContain('https:');
+    expect(csp).not.toContain('file:');
+
+    const imgSrc = csp.split(';').find((part) => part.trim().startsWith('img-src'));
+    expect(imgSrc).toBeDefined();
     for (const scheme of ['http:', 'https:', 'data:', 'file:']) {
-      expect(csp.split(';').find((part) => part.includes('img-src'))).not.toContain(scheme);
+      expect(imgSrc).not.toContain(scheme);
     }
   });
 });
