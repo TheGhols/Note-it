@@ -7,6 +7,7 @@ use crate::metadata::{
 use crate::model::{NoteDocument, NoteFrontMatterWrapper};
 use crate::study::{self, Rating, StudyState};
 use crate::trash::{self, TrashEntry};
+use crate::warning::{ReadWarning, ReadWarningKind};
 use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -554,28 +555,68 @@ impl StorageManager {
     }
 
     /// Every `.md` in the store whose name is a note identifier, with the
-    /// file's own modification time. Nothing is opened here: this is the
-    /// directory and nothing more.
-    fn note_files(&self) -> Result<Vec<(Uuid, SystemTime)>, String> {
+    /// file's own modification time, alongside any non-fatal scan warnings.
+    pub fn note_files_with_warnings(
+        &self,
+    ) -> Result<(Vec<(Uuid, SystemTime)>, Vec<ReadWarning>), String> {
         if !self.paths.notes_dir.is_dir() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let entries = fs::read_dir(&self.paths.notes_dir)
             .map_err(|e| format!("Failed to read notes directory: {e}"))?;
 
         let mut files = Vec::new();
-        for entry in entries.flatten() {
+        let mut warnings = Vec::new();
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    warnings.push(ReadWarning {
+                        note_id: None,
+                        kind: ReadWarningKind::IoError,
+                        message: format!("Failed to read directory entry in notes: {e}"),
+                    });
+                    continue;
+                }
+            };
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                 continue;
             }
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_symlink() || !file_type.is_file() {
+
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    warnings.push(ReadWarning {
+                        note_id: None,
+                        kind: ReadWarningKind::IoError,
+                        message: format!("Failed to determine file type for {}: {e}", path.display()),
+                    });
                     continue;
                 }
-            } else {
+            };
+
+            if file_type.is_symlink() {
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|stem| Uuid::parse_str(stem).ok());
+                warnings.push(ReadWarning {
+                    note_id: id,
+                    kind: ReadWarningKind::SymlinkRefused,
+                    message: format!(
+                        "Leitura recusada: o arquivo `{}` é um link simbólico.",
+                        path.display()
+                    ),
+                });
                 continue;
             }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
             let Some(id) = path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -583,38 +624,23 @@ impl StorageManager {
             else {
                 continue;
             };
+
             let modified = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .unwrap_or(UNIX_EPOCH);
             files.push((id, modified));
         }
-        Ok(files)
+
+        Ok((files, warnings))
     }
 
-    /// Note identifiers ordered by the last change to their **text**, most
-    /// recent first.
-    ///
-    /// Used to decide which note to bring back when every note has been
-    /// closed, and to order what search shows — one idea of "most recent"
-    /// everywhere rather than two that disagree.
-    ///
-    /// The ordering key is the note's own `updated_at`, not the file's
-    /// modification time. Phase 3.4R defined `updated_at` as the last change
-    /// to the note's content, and appearance — colour, paper, pattern
-    /// intensity, font size — deliberately does not move it. But every one of
-    /// those rewrites the file, so ordering by `mtime` meant recolouring a
-    /// note counted as writing in it. Reading the field the contract is
-    /// already written in is what makes the two agree.
-    ///
-    /// A note whose front matter has no `updated_at`, cannot be parsed or
-    /// cannot be read falls back to the file's modification time: the best
-    /// evidence left, and the rule every note followed before there was a
-    /// field to read. Nothing here writes, and no failure here is fatal — an
-    /// unreadable header costs that note its timestamp, not the listing.
-    pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
-        let mut notes: Vec<Listed> = self
-            .note_files()?
+    /// Note identifiers ordered by recency, alongside any non-fatal scan warnings.
+    pub fn list_notes_by_recency_with_warnings(
+        &self,
+    ) -> Result<(Vec<Uuid>, Vec<ReadWarning>), String> {
+        let (file_entries, scan_warnings) = self.note_files_with_warnings()?;
+        let mut notes: Vec<Listed> = file_entries
             .into_iter()
             .map(|(id, modified)| Listed {
                 id,
@@ -627,7 +653,13 @@ impl StorageManager {
             .collect();
 
         newest_first(&mut notes);
-        Ok(notes.into_iter().map(|note| note.id).collect())
+        Ok((notes.into_iter().map(|note| note.id).collect(), scan_warnings))
+    }
+
+    /// Note identifiers ordered by the last change to their **text**, most
+    /// recent first.
+    pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
+        self.list_notes_by_recency_with_warnings().map(|(ids, _)| ids)
     }
 
     /// Derives autocomplete catalogs from live note front matter.

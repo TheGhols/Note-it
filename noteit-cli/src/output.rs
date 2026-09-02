@@ -317,6 +317,15 @@ pub fn sanitize_for_terminal(input: &str) -> String {
             continue;
         }
 
+        // Neutralize Unicode bidirectional control characters (Trojan Source)
+        // by replacing them with an explicit, visible, non-spoofing representation.
+        if is_bidi_control(ch) {
+            use std::fmt::Write;
+            let _ = write!(out, "[U+{:04X}]", ch as u32);
+            i += 1;
+            continue;
+        }
+
         // Neutralize dangerous control characters
         match ch {
             // Carriage return: normalize \r\n to \n; standalone \r becomes space
@@ -340,7 +349,7 @@ pub fn sanitize_for_terminal(input: &str) -> String {
             '\x00'..='\x08' | '\x0b' | '\x0c' | '\x0e'..='\x1f' | '\x7f' => {
                 i += 1;
             }
-            // Everything else (Unicode, letters, punctuation, emojis) is preserved
+            // Everything else (Unicode letters, punctuation, emojis, natural RTL) is preserved
             _ => {
                 out.push(ch);
                 i += 1;
@@ -349,6 +358,18 @@ pub fn sanitize_for_terminal(input: &str) -> String {
     }
 
     out
+}
+
+/// Identifies invisible Unicode bidirectional override/isolate/embedding control characters.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{061C}'
+    )
 }
 
 /// Formats a UTC timestamp in the machine's local timezone matching the GUI contract (dd/MM/yyyy HH:mm).

@@ -203,10 +203,10 @@ impl NoteItCore {
         filter: &NoteFilter,
         limit: Option<usize>,
     ) -> Result<ReadBatch<NoteSummary>, String> {
-        let ids = self.storage.list_notes_by_recency()?;
+        let (ids, scan_warnings) = self.storage.list_notes_by_recency_with_warnings()?;
         let max = limit.unwrap_or(20).clamp(1, 100);
         let mut summaries = Vec::new();
-        let mut warnings = Vec::new();
+        let mut warnings = scan_warnings;
 
         for id in ids {
             if summaries.len() >= max {
@@ -261,9 +261,8 @@ impl NoteItCore {
         limit: Option<usize>,
     ) -> Result<ReadBatch<SearchResult>, String> {
         let max = limit.unwrap_or(20).clamp(1, 100);
-        let mut warnings = Vec::new();
-
-        let ids = self.storage.list_notes_by_recency()?;
+        let (ids, scan_warnings) = self.storage.list_notes_by_recency_with_warnings()?;
+        let mut warnings = scan_warnings;
         let mut matching_bodies = Vec::new();
 
         for id in ids {
@@ -306,10 +305,10 @@ impl NoteItCore {
         filter: &NoteFilter,
         limit: Option<usize>,
     ) -> Result<ReadBatch<TaskEntry>, String> {
-        let ids = self.storage.list_notes_by_recency()?;
+        let (ids, scan_warnings) = self.storage.list_notes_by_recency_with_warnings()?;
         let max = limit.unwrap_or(20).clamp(1, 100);
         let mut results = Vec::new();
-        let mut warnings = Vec::new();
+        let mut warnings = scan_warnings;
 
         for id in ids {
             if results.len() >= max {
