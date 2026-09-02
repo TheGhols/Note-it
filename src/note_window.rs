@@ -104,7 +104,8 @@ const FLUSH_TIMEOUT_ERROR: &str = "timed out waiting for latest WebView content"
 /// paragraph in it and giving up on that is expensive. Bounded all the same: a
 /// page that never answers must not leave the editor held for ever, and it
 /// must not leave the writer that asked waiting for ever either.
-const EXTERNAL_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(4000);
+const EXTERNAL_WRITE_TIMEOUT: std::time::Duration =
+    noteit_core::coordination::PROTOCOL_FREEZE_TIMEOUT;
 const EXTERNAL_WRITE_TIMEOUT_ERROR: &str =
     "a nota aberta não respondeu a tempo. Nada foi alterado.";
 
@@ -113,7 +114,8 @@ const EXTERNAL_WRITE_TIMEOUT_ERROR: &str =
 /// This one runs *after* the commit, so it can never decide whether the write
 /// happened — only whether the window is known to be showing it. Running out is
 /// a warning on a completed write, never a failure.
-const EXTERNAL_WRITE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(4000);
+const EXTERNAL_WRITE_ACK_TIMEOUT: std::time::Duration =
+    noteit_core::coordination::PROTOCOL_ACK_TIMEOUT;
 const EXTERNAL_WRITE_ACK_TIMEOUT_ERROR: &str = "a nota aberta não confirmou a atualização a tempo";
 const EXTERNAL_WRITE_ACK_REFUSED_ERROR: &str =
     "a nota aberta não conseguiu adotar o documento gravado";

@@ -94,22 +94,39 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# The real home directory, captured before any overriding.
+readonly REAL_HOME="${HOME:-$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)}"
+
 # The real base directories, resolved with the same XDG rules the application
 # uses, so nothing personal is hard-coded here.
 real_dir() {
   local var="$1" fallback="$2"
   local value="${!var:-}"
-  printf '%s' "${value:-$HOME/$fallback}"
+  printf '%s' "${value:-$REAL_HOME/$fallback}"
 }
 
 REAL_BASES=(
+  "$REAL_HOME/.config"
+  "$REAL_HOME/.local/share"
+  "$REAL_HOME/.local/state"
+  "$REAL_HOME/.cache"
   "$(real_dir XDG_CONFIG_HOME .config)"
   "$(real_dir XDG_DATA_HOME .local/share)"
   "$(real_dir XDG_STATE_HOME .local/state)"
   "$(real_dir XDG_CACHE_HOME .cache)"
 )
 
+set_private_mode() {
+  if command -v chmod >/dev/null 2>&1; then
+    chmod 0700 "$@" 2>/dev/null || true
+  fi
+}
+
 if [[ -n "$ROOT" ]]; then
+  # Path traversal protection: --root must not contain '..' components
+  if [[ "$ROOT" =~ (^|/)\.\.(/|$) ]]; then
+    die "--root must not contain path traversal components (..)"
+  fi
   # A caller-supplied root is checked before anything is created under it.
   ROOT_CHECK="$(readlink -f "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
   for base in "${REAL_BASES[@]}"; do
@@ -118,27 +135,35 @@ if [[ -n "$ROOT" ]]; then
       die "--root $ROOT is inside the real XDG tree ($base_resolved)"
     fi
   done
-  if [[ "$ROOT_CHECK" == "$(readlink -f "$HOME")" ]]; then
-    die "--root must not be the home directory"
+  if [[ "$ROOT_CHECK" == "$(readlink -f "$REAL_HOME")" || "$ROOT_CHECK" == "$(readlink -f "$REAL_HOME")"/* ]]; then
+    die "--root must not be or sit inside the real home directory"
   fi
   mkdir -p "$ROOT"
+  set_private_mode "$ROOT"
 else
   if [[ "$STOP" -eq 1 || "$VERIFY" -eq 1 ]]; then
     die "--stop and --verify need the --root of the session they act on"
   fi
   ROOT="$(mktemp -d "${TMPDIR:-/tmp}/note-it-test-XXXXXX")"
+  set_private_mode "$ROOT"
   # Only an invocation that made its own throwaway root owns the bus it starts;
   # a named root keeps its session alive for the commands that follow.
   OWNS_BUS=1
 fi
 
 SESSION_DIR="$ROOT/session"
+ISOLATED_HOME="$ROOT/home"
 
+export HOME="$ISOLATED_HOME"
 export XDG_CONFIG_HOME="$ROOT/config"
 export XDG_DATA_HOME="$ROOT/data"
 export XDG_STATE_HOME="$ROOT/state"
 export XDG_CACHE_HOME="$ROOT/cache"
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$SESSION_DIR"
+mkdir -p "$ISOLATED_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$SESSION_DIR"
+set_private_mode "$ISOLATED_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$SESSION_DIR"
+
+# Cleanse any custom Note-it environment variables that could hijack paths
+unset NOTEIT_DATA_DIR NOTEIT_NOTES_DIR NOTEIT_CONFIG_DIR NOTEIT_STATE_DIR NOTEIT_RUNTIME_DIR NOTEIT_STORE
 
 # Abort rather than risk the real store: no configured directory may be, or sit
 # inside, any real XDG base directory.
@@ -152,11 +177,12 @@ abort_if_real() {
       die "$name resolves into the real XDG tree ($resolved)"
     fi
   done
-  if [[ "$resolved" == "$(readlink -f "$HOME")" ]]; then
-    die "$name resolves to the home directory"
+  if [[ "$resolved" == "$(readlink -f "$REAL_HOME")" || "$resolved" == "$(readlink -f "$REAL_HOME")"/* ]]; then
+    die "$name resolves to or inside the real home directory ($resolved)"
   fi
 }
 
+abort_if_real HOME "$ISOLATED_HOME"
 abort_if_real XDG_CONFIG_HOME "$XDG_CONFIG_HOME"
 abort_if_real XDG_DATA_HOME "$XDG_DATA_HOME"
 abort_if_real XDG_STATE_HOME "$XDG_STATE_HOME"
@@ -262,6 +288,7 @@ start_private_bus() {
   # The socket lives in a short path of its own rather than under the root: a
   # unix socket path is capped near 107 bytes and a throwaway root can be deep.
   BUS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/note-it-bus-XXXXXX")"
+  set_private_mode "$BUS_SOCKET_DIR"
 
   local reported=()
   mapfile -t reported < <(
@@ -439,7 +466,7 @@ verify_child_environment() {
   child_env="$(tr '\0' '\n' < "$environ" 2>/dev/null || printf '')"
   [[ -n "$child_env" ]] || return 0
 
-  for variable in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
+  for variable in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
                   DBUS_SESSION_BUS_ADDRESS; do
     expected="${!variable}"
     if ! grep -qxF "$variable=$expected" <<<"$child_env"; then

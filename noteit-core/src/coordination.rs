@@ -70,6 +70,32 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+/// Protocol timeout budget hierarchy constants (R-011).
+///
+/// Note-it coordinates write mutations between client processes (such as the CLI)
+/// and running server/daemon processes (such as the Desktop application) across
+/// local domain sockets, event queues, and WebView editor boundaries.
+///
+/// To prevent deadlocks, race conditions, and hung processes, the timeout budget
+/// obeys a strict, mathematically ordered causal hierarchy:
+///
+/// 1. `PROTOCOL_FREEZE_TIMEOUT` (4s): Maximum duration allowed for an open WebView
+///    editor to flush pending inputs and freeze its document state.
+/// 2. `PROTOCOL_ACK_TIMEOUT` (4s): Maximum duration allowed for an open note window
+///    to acknowledge that an external mutation was applied.
+/// 3. `PROTOCOL_CLI_AUTHORITY_TIMEOUT` (15s): Total duration the CLI client will wait
+///    for the running write authority to process, commit, and respond to a request.
+/// 4. `PROTOCOL_DESKTOP_WORKER_TIMEOUT` (30s): Upper bound for asynchronous worker
+///    thread reply dispatch within the desktop authority.
+///
+/// Invariant:
+/// PROTOCOL_FREEZE_TIMEOUT <= PROTOCOL_ACK_TIMEOUT < PROTOCOL_CLI_AUTHORITY_TIMEOUT < PROTOCOL_DESKTOP_WORKER_TIMEOUT
+pub const PROTOCOL_FREEZE_TIMEOUT: Duration = Duration::from_millis(4000);
+pub const PROTOCOL_ACK_TIMEOUT: Duration = Duration::from_millis(4000);
+pub const PROTOCOL_CLI_AUTHORITY_TIMEOUT: Duration = Duration::from_secs(15);
+pub const PROTOCOL_DESKTOP_WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 const MAX_SYMLINK_DEPTH: usize = 40;
 

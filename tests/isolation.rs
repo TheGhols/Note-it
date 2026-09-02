@@ -43,3 +43,51 @@ fn the_isolation_harness_cannot_reach_the_ambient_session() {
         );
     }
 }
+
+#[test]
+fn r009_harness_rejects_path_traversal_in_root() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let harness = repo_root.join("scripts/note-it-isolated");
+
+    let output = Command::new("bash")
+        .arg(&harness)
+        .arg("--root")
+        .arg("/tmp/note-it-test-12345/../escape")
+        .arg("--")
+        .arg("help")
+        .output()
+        .expect("run harness");
+
+    assert_eq!(output.status.code(), Some(90));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("path traversal components (..)"),
+        "Harness must reject path traversal, got: {stderr}"
+    );
+}
+
+#[test]
+fn r009_harness_rejects_root_inside_real_home() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let harness = repo_root.join("scripts/note-it-isolated");
+
+    let real_home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let hostile_target = format!("{real_home}/malicious_isolated_target");
+
+    let output = Command::new("bash")
+        .arg(&harness)
+        .arg("--root")
+        .arg(&hostile_target)
+        .arg("--")
+        .arg("help")
+        .output()
+        .expect("run harness");
+
+    assert_eq!(output.status.code(), Some(90));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("inside the real XDG tree") || stderr.contains("real home directory"),
+        "Harness must reject root inside real home, got: {stderr}"
+    );
+}
+

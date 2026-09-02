@@ -58,7 +58,7 @@ const BUSY_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 /// putting the committed note back on screen. Generous, because the
 /// alternative to waiting is an unknown outcome, and an unknown outcome is the
 /// expensive one.
-const AUTHORITY_TIMEOUT: Duration = Duration::from_secs(15);
+const AUTHORITY_TIMEOUT: Duration = noteit_core::coordination::PROTOCOL_CLI_AUTHORITY_TIMEOUT;
 
 /// A runtime directory that cannot be trusted is reported as an unreachable
 /// authority: from the caller's side both mean the same thing — the store was

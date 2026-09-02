@@ -59,7 +59,7 @@ use uuid::Uuid;
 /// Comfortably longer than the editor barrier it may have to wait for, so this
 /// is a backstop against a main loop that has stopped answering rather than a
 /// second deadline competing with the first.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+const REPLY_TIMEOUT: Duration = noteit_core::coordination::PROTOCOL_DESKTOP_WORKER_TIMEOUT;
 
 /// How long a client is given to send its request once connected.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
