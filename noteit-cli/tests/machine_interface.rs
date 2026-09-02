@@ -15,7 +15,8 @@ use noteit_core::write::{WriteOutcome, WriteOutcomeKind};
 use noteit_core::Uuid;
 use serde::Deserialize;
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::process::Stdio;
 use support::{prefix, AuthorityBehaviour, FakeAuthority, Sandbox};
 
 /// Words that only ever appear in output meant for a person.
@@ -853,24 +854,63 @@ fn an_authority_speaking_another_protocol_is_a_request_this_build_cannot_make() 
 fn a_store_that_cannot_be_written_reports_it_and_leaves_the_note_alone() {
     let sandbox = Sandbox::new();
     let id = sandbox.seed("intocada");
-    let notes = sandbox.notes_dir();
-    let original = std::fs::metadata(&notes).expect("metadata").permissions();
+    let before = sandbox.note_file(id);
 
-    let mut readonly = original.clone();
-    readonly.set_mode(0o500);
-    std::fs::set_permissions(&notes, readonly).expect("make the store read-only");
+    // The atomic writer builds `.tmp.<name>.<pid>` beside the target before it
+    // renames. A directory already sitting on that exact name makes creating
+    // the temp file fail — for every user, root included, because it is path
+    // resolution and not a permission bit — so the failure lands strictly
+    // before the commit point.
+    //
+    // The child's identifier is only known once it exists, so it is started
+    // reading its payload from standard input and left waiting there: the
+    // payload is read before any lease is taken or any file is touched, which
+    // makes this deterministic rather than a race.
+    let mut child = sandbox
+        .command(&["--json", "adicionar", &prefix(id), "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn noteit");
 
-    let result = sandbox.run(&["--json", "adicionar", &prefix(id), "mais"]);
+    let blocker = sandbox
+        .notes_dir()
+        .join(format!(".tmp.{id}.md.{}", child.id()));
+    std::fs::create_dir(&blocker).expect("block the temp file");
 
-    // Restored before any assertion, so a failing assertion still leaves a
-    // directory the temporary tree can be removed from.
-    std::fs::set_permissions(&notes, original).expect("restore");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"mais")
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("wait");
 
-    let answer = failure(result, 1);
+    std::fs::remove_dir(&blocker).expect("unblock");
+
+    let answer = failure(
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ),
+        1,
+    );
     assert_eq!(answer["status"], "error");
     assert_eq!(answer["error"]["code"], "persistence");
     assert_eq!(answer["error"]["commit_state"], "not_committed");
-    assert_eq!(sandbox.body(id), "intocada");
+    assert_eq!(
+        sandbox.note_file(id),
+        before,
+        "a write that failed before the commit point changed the file"
+    );
+
+    // And the same command works once the obstruction is gone, which is what
+    // `not_committed` promised.
+    let retried = success(sandbox.run(&["--json", "adicionar", &prefix(id), "mais"]));
+    assert_eq!(retried["data"]["write"]["commit_state"], "committed");
+    assert_eq!(sandbox.body(id), "intocada\nmais");
 }
 
 #[test]
