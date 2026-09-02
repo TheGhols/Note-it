@@ -272,7 +272,7 @@ pub fn import_image(
 
     let path = asset.file_path(assets_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|_| ImportError::Empty)?;
+        crate::permissions::create_private_dir_all(parent).map_err(|_| ImportError::Empty)?;
     }
     write_atomic(&path, bytes, "the image").map_err(|_| ImportError::Empty)?;
     Ok(asset)

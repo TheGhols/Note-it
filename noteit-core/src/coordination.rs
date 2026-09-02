@@ -316,12 +316,7 @@ impl WriteCoordinationPaths {
     pub fn prepare(&self) -> Result<(), CoordinationError> {
         create_private_directory(&self.runtime_root)?;
         create_private_directory(&self.store_dir)?;
-        fs::create_dir_all(&self.notes_dir).map_err(|error| {
-            CoordinationError::Unavailable(format!(
-                "could not create store directory {}: {error}",
-                self.notes_dir.display()
-            ))
-        })?;
+        create_private_directory(&self.notes_dir)?;
 
         // Written *inside* the directory that was just made or validated, so
         // its owner is this process by construction. That is what the two
@@ -560,18 +555,9 @@ fn write_marker(path: &Path, notes_dir: &Path) -> Result<(), CoordinationError> 
     }
     let mut contents = notes_dir.as_os_str().as_encoded_bytes().to_vec();
     contents.push(b'\n');
-    // Written in place rather than through the atomic writer: this names the
-    // directory it already sits in, so a torn write costs a comment and
-    // nothing else. It is deliberately not a note.
-    fs::write(path, &contents).map_err(|error| {
+    crate::permissions::write_private_file(path, &contents).map_err(|error| {
         CoordinationError::Unavailable(format!(
             "could not record the store marker at {}: {error}",
-            path.display()
-        ))
-    })?;
-    fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE)).map_err(|error| {
-        CoordinationError::Unsafe(format!(
-            "could not narrow the store marker at {}: {error}",
             path.display()
         ))
     })

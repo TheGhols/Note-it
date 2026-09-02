@@ -4,7 +4,7 @@ use crate::timer::NoteTimerState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use uuid::Uuid;
@@ -180,16 +180,92 @@ pub struct AppState {
     pub notes: HashMap<Uuid, NoteWindowState>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StateLoadOutcome {
+    Missing(AppState),
+    Valid(AppState),
+    CorruptedRecovered {
+        value: AppState,
+        quarantine_path: PathBuf,
+        error: String,
+    },
+    CorruptedPreservationFailed {
+        error: String,
+    },
+    ReadFailed(String),
+}
+
+impl StateLoadOutcome {
+    pub fn value(&self) -> AppState {
+        match self {
+            StateLoadOutcome::Missing(s) => s.clone(),
+            StateLoadOutcome::Valid(s) => s.clone(),
+            StateLoadOutcome::CorruptedRecovered { value, .. } => value.clone(),
+            StateLoadOutcome::CorruptedPreservationFailed { .. } => AppState::default(),
+            StateLoadOutcome::ReadFailed(_) => AppState::default(),
+        }
+    }
+}
+
 impl AppState {
     pub fn load_from_file(path: &Path) -> Self {
+        Self::load_detailed(path).value()
+    }
+
+    pub fn load_detailed(path: &Path) -> StateLoadOutcome {
         if !path.exists() {
-            return Self::default();
+            return StateLoadOutcome::Missing(Self::default());
         }
 
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<AppState>(&content).ok())
-            .unwrap_or_default()
+        let raw_bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("Failed to read state file at {}: {e}", path.display());
+                return StateLoadOutcome::ReadFailed(e.to_string());
+            }
+        };
+
+        let content_str = match std::str::from_utf8(&raw_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("State file at {} is not valid UTF-8: {e}", path.display());
+                return Self::handle_corruption(path, &raw_bytes, &e.to_string());
+            }
+        };
+
+        match serde_json::from_str::<AppState>(content_str) {
+            Ok(state) => StateLoadOutcome::Valid(state),
+            Err(parse_err) => {
+                eprintln!("State file at {} is malformed: {parse_err}", path.display());
+                Self::handle_corruption(path, &raw_bytes, &parse_err.to_string())
+            }
+        }
+    }
+
+    fn handle_corruption(path: &Path, raw_bytes: &[u8], reason: &str) -> StateLoadOutcome {
+        match crate::quarantine::quarantine_corrupted_file(path, raw_bytes) {
+            Ok(quarantine_path) => {
+                eprintln!(
+                    "Warning: State file at {} was corrupted ({reason}). Original preserved at {}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                StateLoadOutcome::CorruptedRecovered {
+                    value: Self::default(),
+                    quarantine_path,
+                    error: reason.to_string(),
+                }
+            }
+            Err(quarantine_err) => {
+                eprintln!(
+                    "Error: State file at {} is corrupted ({reason}) and preservation failed: {quarantine_err}. Original file will NOT be overwritten.",
+                    path.display()
+                );
+                StateLoadOutcome::CorruptedPreservationFailed {
+                    error: format!("{reason}; preservation failed: {quarantine_err}"),
+                }
+            }
+        }
     }
 
     /// Writes the window state under the same commit-point rule as a note: see
@@ -197,6 +273,10 @@ impl AppState {
     /// when this fails, so a failure must mean the file was genuinely not
     /// replaced — a directory sync that fails *after* the rename is a
     /// durability warning, not a failed save.
+    ///
+    /// Invariant (R-006): If an existing file at `path` is currently malformed or
+    /// corrupted, it must be preserved via quarantine before replacement.
+    /// If preservation fails, fail-closed: do not overwrite the corrupted file.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         let started = Instant::now();
         let write = STATE_WRITE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -205,6 +285,25 @@ impl AppState {
             write,
             self.active_layer_mode.as_str()
         ));
+
+        // Before replacing an existing file, if it is currently malformed/corrupted,
+        // ensure it has been safely quarantined so unparsed data is never lost!
+        if path.exists() {
+            if let Ok(existing_bytes) = fs::read(path) {
+                let is_valid = serde_json::from_slice::<serde_json::Value>(&existing_bytes).is_ok();
+                if !is_valid {
+                    crate::quarantine::quarantine_corrupted_file(path, &existing_bytes).map_err(
+                        |e| {
+                            format!(
+                                "Refusing to overwrite corrupted state file at {}: preservation failed: {e}",
+                                path.display()
+                            )
+                        },
+                    )?;
+                }
+            }
+        }
+
         let result = Self::ensure_parent(path)
             .and_then(|_| write_atomic(path, self.serialize()?.as_bytes(), "the window state"));
         diagnostics::log(format_args!(
@@ -221,7 +320,7 @@ impl AppState {
         let Some(parent) = path.parent() else {
             return Ok(());
         };
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create state directory: {e}"))
+        crate::permissions::create_private_dir_all(parent)
     }
 
     #[cfg(test)]

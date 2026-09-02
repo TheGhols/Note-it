@@ -298,20 +298,14 @@ impl StorageManager {
     }
 
     pub fn ensure_directories(&self) -> Result<(), String> {
-        fs::create_dir_all(&self.paths.notes_dir)
-            .map_err(|e| format!("Failed to create notes directory: {e}"))?;
-        fs::create_dir_all(&self.paths.trash_dir)
-            .map_err(|e| format!("Failed to create trash directory: {e}"))?;
-        fs::create_dir_all(&self.paths.backups_dir)
-            .map_err(|e| format!("Failed to create backups directory: {e}"))?;
-        fs::create_dir_all(&self.paths.assets_dir)
-            .map_err(|e| format!("Failed to create assets directory: {e}"))?;
-        fs::create_dir_all(&self.paths.config_dir)
-            .map_err(|e| format!("Failed to create config directory: {e}"))?;
-        fs::create_dir_all(&self.paths.state_dir)
-            .map_err(|e| format!("Failed to create state directory: {e}"))?;
-        fs::create_dir_all(&self.paths.runtime_dir)
-            .map_err(|e| format!("Failed to create runtime directory: {e}"))?;
+        crate::permissions::create_private_dir_all(&self.paths.data_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.notes_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.trash_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.backups_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.assets_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.config_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.state_dir)?;
+        crate::permissions::create_private_dir_all(&self.paths.runtime_dir)?;
         Ok(())
     }
 

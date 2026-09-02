@@ -102,7 +102,7 @@ fn write_and_rename(
     what: &str,
 ) -> Result<(), String> {
     {
-        let mut file = File::create(temp_path).map_err(|e| {
+        let mut file = crate::permissions::create_private_file(temp_path).map_err(|e| {
             format!(
                 "Failed to create the temp file for {what} at {}: {e}",
                 temp_path.display()
@@ -115,7 +115,18 @@ fn write_and_rename(
     }
 
     fs::rename(temp_path, target_path)
-        .map_err(|e| format!("Failed to atomically replace {what}: {e}"))
+        .map_err(|e| format!("Failed to atomically replace {what}: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(
+            target_path,
+            fs::Permissions::from_mode(crate::permissions::PRIVATE_FILE_MODE),
+        );
+    }
+
+    Ok(())
 }
 
 /// Makes a rename that already happened durable. Post-commit: see

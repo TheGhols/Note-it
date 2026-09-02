@@ -227,7 +227,7 @@ pub fn create_snapshot(
     now: DateTime<Utc>,
     keep: usize,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(backups_dir)
+    crate::permissions::create_private_dir_all(backups_dir)
         .map_err(|e| format!("Failed to create the backups directory: {e}"))?;
 
     // Before anything of this run exists, so it can never sweep its own work.
@@ -275,7 +275,7 @@ fn build_snapshot(
     now: DateTime<Utc>,
     backups_dir: &Path,
 ) -> Result<PathBuf, String> {
-    fs::create_dir(temp)
+    crate::permissions::create_private_dir_all(temp)
         .map_err(|e| format!("Failed to create the scratch directory for the snapshot: {e}"))?;
 
     let notes = copy_directory(&sources.notes_dir, &temp.join("notes"))?;
@@ -300,7 +300,7 @@ fn build_snapshot(
     };
     let serialized = serde_json::to_string_pretty(&manifest)
         .map_err(|e| format!("Failed to serialize the snapshot manifest: {e}"))?;
-    fs::write(temp.join(MANIFEST_FILE), serialized)
+    crate::permissions::write_private_file(&temp.join(MANIFEST_FILE), serialized.as_bytes())
         .map_err(|e| format!("Failed to write the snapshot manifest: {e}"))?;
 
     // Best effort, and before the commit: the snapshot's own files are on disk
@@ -343,12 +343,7 @@ fn reserve_snapshot_name(backups_dir: &Path, now: DateTime<Utc>) -> Result<PathB
 /// nothing and calling it a backup of everything is the one thing a backup may
 /// never do.
 fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
-    fs::create_dir_all(destination).map_err(|e| {
-        format!(
-            "Failed to create {} inside the snapshot: {e}",
-            destination.display()
-        )
-    })?;
+    crate::permissions::create_private_dir_all(destination)?;
 
     if !source.exists() {
         return Ok(0);
@@ -369,11 +364,20 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
             continue;
         }
 
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "Skipping unreadable entry in {}: {error}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+
         if metadata.file_type().is_symlink() {
             eprintln!(
-                "Backup skipped {}: it is a symbolic link, and a backup never follows one",
+                "Skipping symbolic link in {}: backups do not follow links",
                 path.display()
             );
             continue;
@@ -420,12 +424,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
 ///
 /// Returns the number of image files copied.
 fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> {
-    fs::create_dir_all(destination).map_err(|e| {
-        format!(
-            "Failed to create {} inside the snapshot: {e}",
-            destination.display()
-        )
-    })?;
+    crate::permissions::create_private_dir_all(destination)?;
 
     // A store written before images existed has no assets directory at all,
     // and that is a store with no pictures rather than a broken one.
@@ -449,32 +448,38 @@ fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> 
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             return Err(format!(
-                "Failed to back up the managed images: {} has a name that is not text",
-                path.display()
+                "Failed to back up {}: an entry has a name that is not text",
+                source.display()
             ));
         };
+
         if name.starts_with('.') {
             continue;
         }
 
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
+        let metadata = fs::symlink_metadata(&path).map_err(|e| {
+            format!(
+                "Failed to inspect the managed images at {}: {e}",
+                path.display()
+            )
+        })?;
         if metadata.file_type().is_symlink() {
             return Err(format!(
-                "Failed to back up the managed images: {} is a symbolic link, \
-                 and a backup never follows one",
+                "Failed to back up the managed images: {} is a symbolic link",
                 path.display()
             ));
         }
         if !metadata.file_type().is_dir() {
             return Err(format!(
-                "Failed to back up the managed images: {} is not a note's image directory",
+                "Failed to back up the managed images: {} is not a directory",
                 path.display()
             ));
         }
+
+        // Must be a valid note UUID, matching parse_asset_request's rule.
         if uuid::Uuid::parse_str(name).is_err() {
             return Err(format!(
-                "Failed to back up the managed images: {} is not named after a note",
+                "Failed to back up the managed images: {} is not a note identifier",
                 path.display()
             ));
         }
@@ -485,7 +490,7 @@ fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> 
     Ok(copied)
 }
 
-/// Copies one note's images. The second and last level of the tree.
+/// Copies the images belonging to one note.
 ///
 /// Each name is validated by [`crate::assets::parse_asset_request`] — the same
 /// function that decides what the page is allowed to ask the host for — so a
@@ -497,12 +502,7 @@ fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> 
 /// names the file that exists and a backup that "tidied" it would restore a
 /// broken link.
 fn copy_note_assets(source: &Path, destination: &Path, note: &str) -> Result<usize, String> {
-    fs::create_dir_all(destination).map_err(|e| {
-        format!(
-            "Failed to create {} inside the snapshot: {e}",
-            destination.display()
-        )
-    })?;
+    crate::permissions::create_private_dir_all(destination)?;
 
     let entries = fs::read_dir(source)
         .map_err(|e| format!("Failed to read {} for the backup: {e}", source.display()))?;

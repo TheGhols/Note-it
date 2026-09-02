@@ -2,7 +2,7 @@ use crate::atomic_file::write_atomic;
 use crate::autopaste::DEFAULT_CAPTURE_DELIMITER;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Interface themes, in the order the menu offers them.
 ///
@@ -126,33 +126,130 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigLoadOutcome {
+    Missing(AppConfig),
+    Valid(AppConfig),
+    CorruptedRecovered {
+        value: AppConfig,
+        quarantine_path: PathBuf,
+        error: String,
+    },
+    CorruptedPreservationFailed {
+        error: String,
+    },
+    ReadFailed(String),
+}
+
+impl ConfigLoadOutcome {
+    pub fn value(&self) -> AppConfig {
+        match self {
+            ConfigLoadOutcome::Missing(c) => c.clone(),
+            ConfigLoadOutcome::Valid(c) => c.clone(),
+            ConfigLoadOutcome::CorruptedRecovered { value, .. } => value.clone(),
+            ConfigLoadOutcome::CorruptedPreservationFailed { .. } => AppConfig::default(),
+            ConfigLoadOutcome::ReadFailed(_) => AppConfig::default(),
+        }
+    }
+}
+
 impl AppConfig {
     pub fn load_from_file(path: &Path) -> Self {
+        Self::load_detailed(path).value()
+    }
+
+    pub fn load_detailed(path: &Path) -> ConfigLoadOutcome {
         if !path.exists() {
             let config = Self::default();
             if let Err(error) = config.save_to_file(path) {
                 eprintln!("Failed to persist default configuration: {error}");
             }
-            return config;
+            return ConfigLoadOutcome::Missing(config);
         }
 
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|content| toml::from_str::<AppConfig>(&content).ok())
-            .unwrap_or_default()
+        let raw_bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("Failed to read configuration at {}: {e}", path.display());
+                return ConfigLoadOutcome::ReadFailed(e.to_string());
+            }
+        };
+
+        let content_str = match std::str::from_utf8(&raw_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Configuration at {} is not valid UTF-8: {e}", path.display());
+                return Self::handle_corruption(path, &raw_bytes, &e.to_string());
+            }
+        };
+
+        match toml::from_str::<AppConfig>(content_str) {
+            Ok(config) => ConfigLoadOutcome::Valid(config),
+            Err(parse_err) => {
+                eprintln!("Configuration at {} is malformed: {parse_err}", path.display());
+                Self::handle_corruption(path, &raw_bytes, &parse_err.to_string())
+            }
+        }
+    }
+
+    fn handle_corruption(path: &Path, raw_bytes: &[u8], reason: &str) -> ConfigLoadOutcome {
+        match crate::quarantine::quarantine_corrupted_file(path, raw_bytes) {
+            Ok(quarantine_path) => {
+                eprintln!(
+                    "Warning: Configuration at {} was corrupted ({reason}). Original preserved at {}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                ConfigLoadOutcome::CorruptedRecovered {
+                    value: Self::default(),
+                    quarantine_path,
+                    error: reason.to_string(),
+                }
+            }
+            Err(quarantine_err) => {
+                eprintln!(
+                    "Error: Configuration at {} is corrupted ({reason}) and preservation failed: {quarantine_err}. Original file will NOT be overwritten.",
+                    path.display()
+                );
+                ConfigLoadOutcome::CorruptedPreservationFailed {
+                    error: format!("{reason}; preservation failed: {quarantine_err}"),
+                }
+            }
+        }
     }
 
     /// Writes the configuration under the same commit-point rule as a note and
     /// the window state: see [`crate::atomic_file::write_atomic`].
     ///
-    /// This used to write straight over the real file, which truncates it
-    /// first, so an interrupted write left a half-written `config.toml` — and
-    /// loading falls back to the defaults without a word, silently resetting
-    /// every preference. The file is now replaced whole or not at all.
+    /// The file is replaced whole or not at all.
+    /// Invariant (R-006): If an existing file at `path` is currently malformed or
+    /// corrupted, it must be preserved via quarantine before replacement.
+    /// If preservation fails, fail-closed: do not overwrite the corrupted file.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
+            crate::permissions::create_private_dir_all(parent)
                 .map_err(|e| format!("Failed to create configuration directory: {e}"))?;
+        }
+
+        // Before replacing an existing file, if it is currently malformed/corrupted,
+        // ensure it has been safely quarantined so unparsed data is never lost!
+        if path.exists() {
+            if let Ok(existing_bytes) = fs::read(path) {
+                let is_valid = std::str::from_utf8(&existing_bytes)
+                    .ok()
+                    .and_then(|s| toml::from_str::<toml::Value>(s).ok())
+                    .is_some();
+                if !is_valid {
+                    crate::quarantine::quarantine_corrupted_file(path, &existing_bytes).map_err(
+                        |e| {
+                            format!(
+                                "Refusing to overwrite corrupted configuration at {}: preservation failed: {e}",
+                                path.display()
+                            )
+                        },
+                    )?;
+                }
+            }
         }
 
         let toml_str = toml::to_string_pretty(self)
