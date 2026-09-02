@@ -1,143 +1,71 @@
-# Security & Content Sanitization
+# Segurança e higienização de conteúdo
 
-## Security Principles
+## Princípios de segurança
 
-Note-it handles local Markdown content, but because it renders rich text within a WebKit webview, it treats all input HTML with strict sanitization:
+Note-it lida com conteúdo local Markdown, mas como renderiza rich text em uma webview do WebKit, ele trata todas as entradas HTML com limpeza estrita:
 
-1. **Restricted HTML Whitelist:**
-   - Permitted inline tags: `<u>`, `<span data-note-it-color="...">`, `<mark data-note-it-highlight="...">`.
-   - Permitted attributes: `style="color: #..."`, `style="background-color: #..."`, `data-note-it-color`, `data-note-it-highlight`.
-2. **Blocked Elements & Vectors:**
-   - `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<style>` (standalone blocks).
-   - Event attributes (`onclick`, `onload`, `onerror`, etc.).
-   - Executable URI schemes (`javascript:`, dangerous `data:` URIs).
-3. **External Links:**
-   - Links in notes do not navigate the WebKit webview.
-   - Clicking a link dispatches a request to the Rust host to open the system's default browser via `xdg-open` / GIO.
-   - The Rust host independently parses the URI and allows only `https:`, `http:`, and `mailto:` before invoking GIO.
-4. **Content Security Policy (CSP):**
-   - The webview enforces strict CSP forbidding inline scripts from remote sources and restricting network connections.
+1. **Lista de permissões HTML restrita:**
+   - Tags embutidas permitidas: `<u>`, `<span data-note-it-color="...">`, `<mark data-note-it-highlight="...">`.
+   - Atributos permitidos: `style="color: #..."`, `style="background-color: #..."`, `data-note-it-color`, `data-note-it-highlight`.
+2. **Elementos e vetores bloqueados:**
+   - `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<style>` (blocos independentes).
+   - Atributos de evento (`onclick`, `onload`, `onerror`, etc.).
+   - Esquemas URI executáveis ​​(`javascript:`, URIs `data:` perigosos).
+3. **Links externos:**
+   - Links em notas não navegam na webview do WebKit.
+   - Clicar em um link envia uma solicitação ao host Rust para abrir o navegador padrão do sistema via `xdg-open`/GIO.
+   - O host Rust analisa independentemente o URI e permite apenas `https:`, `http:` e `mailto:` antes de invocar GIO.
+4. **Política de segurança de conteúdo (CSP):**
+   - O webview impõe CSP estrito, proibindo scripts embutidos de fontes remotas e restringindo conexões de rede.
 
-## The math engine has no evaluator
+## O mecanismo matemático não tem avaliador
 
-Calculations in a note are read by a lexer and a recursive-descent parser written
-for that grammar alone (`ui/src/math/`). There is no `eval`, no `Function`, no
-dynamic import, no timer, no property access and no call syntax anywhere in it,
-and no library was added to provide any. An expression is a sequence of ten
-token shapes and becomes a tree of six node kinds, which is then walked to do
-arithmetic.
+Os cálculos em uma nota são lidos por um lexer e um analisador descendente recursivo escrito apenas para aquela gramática (`ui/src/math/`). Não há `eval`, nem `Function`, nem importação dinâmica, nem cronômetro, nem acesso de propriedade e nem sintaxe de chamada em nenhum lugar dele, e nenhuma biblioteca foi adicionada para fornecer alguma. Uma expressão é uma sequência de dez formas de token e se torna uma árvore de seis tipos de nós, que é então percorrida para fazer aritmética.
 
-That is why `= window.location`, `= process.exit()`, `= fetch(...)` and
-`= constructor.constructor("return 1")()` are not inputs to be filtered. They
-cannot be spelled: the grammar has no token for `.`, `[`, `"` or a call, so they
-stop at the first character that is not one of the shapes above and are reported
-as an invalid expression.
+É por isso que `= window.location`, `= process.exit()`, `= fetch(...)` e `= constructor.constructor("return 1")()` não são entradas a serem filtradas. Eles não podem ser escritos: a gramática não possui token para `.`, `[`, `"` ou uma chamada, então eles param no primeiro caractere que não é uma das formas acima e são relatados como uma expressão inválida.
 
-Variables are held in a `Map`, never in an object. An object would resolve
-`constructor`, `__proto__`, `toString` and `valueOf` to real JavaScript values;
-a `Map` has no inherited keys, so an unknown name is unknown whatever it is
-called, and declaring one stores a key rather than reaching a prototype.
+Variáveis ​​são mantidas em `Map`, nunca em um objeto. Um objeto resolveria `constructor`, `__proto__`, `toString` e `valueOf` para valores reais JavaScript; um `Map` não tem chaves herdadas, portanto, um nome desconhecido é desconhecido, seja qual for o seu nome, e declarar um armazena uma chave em vez de chegar a um protótipo.
 
-Expression length, token count and nesting depth are all capped, so a hostile or
-accidental paste costs a fixed amount rather than the stack. Error messages are
-seven constants; no part of a note is ever echoed back through one.
+O comprimento da expressão, a contagem de tokens e a profundidade do aninhamento são todos limitados, portanto, uma colagem hostil ou acidental custa um valor fixo em vez da pilha. As mensagens de erro são sete constantes; nenhuma parte de uma nota é ecoada através dela.
 
-Units are resolved the same way, and for the same reason. `ui/src/units/registry.ts`
-builds one `Map` from a literal table and every lookup goes through it, so
-`= 10 constructor em m` and `= 10 km em __proto__` are unknown units rather than
-reaching a JavaScript property. Nothing is ever indexed dynamically off a host
-object, and the two characters conversions added to the lexer — `°` for `°C` and
-`²`/`³` for `m²` and `cm³` — are identifier characters and grant no new
-capability. The rule for what a *variable* may be called is unchanged and still
-ASCII.
+As unidades são resolvidas da mesma maneira e pelo mesmo motivo. `ui/src/units/registry.ts` constrói um `Map` a partir de uma tabela literal e cada pesquisa passa por ela, então `= 10 constructor em m` e `= 10 km em __proto__` são unidades desconhecidas em vez de alcançar uma propriedade JavaScript. Nada é indexado dinamicamente a partir de um objeto host, e as duas conversões de caracteres adicionadas ao lexer — `°` para `°C` e `²`/`³` para `m²` e `cm³` — são caracteres identificadores e não concedem nenhum novo recurso. A regra para como uma *variável* pode ser chamada permanece inalterada e ainda ASCII.
 
-Nothing in the engine reaches the network, and a test asserts it: no `fetch`, no
-`XMLHttpRequest`, no `WebSocket`, no `navigator`, no storage. Every unit Note-it
-converts is a constant, which is exactly why currencies are not among them.
+Nada no mecanismo chega à rede e um teste afirma isso: não há `fetch`, não há `XMLHttpRequest`, não há `WebSocket`, não há `navigator`, não há armazenamento. Cada unidade Note-it convertida é uma constante, e é exatamente por isso que as moedas não estão entre elas.
 
-## Production Markdown pipeline
+## Pipeline de produção Markdown
 
-Raw Markdown remains the source format and is never passed wholesale through `DOMParser`. Before Tiptap parses it, Note-it inspects only embedded HTML fragments, removes dangerous blocks and unsupported tags, canonicalizes the supported custom tags, and validates their colors as 3- or 6-digit HEX. The same HEX validator is used by the custom Markdown tokenizers and serializers. Clipboard HTML is sanitized separately before ProseMirror parses it.
+O Markdown bruto continua sendo o formato de origem e nunca é transmitido por inteiro por meio de `DOMParser`. Antes de Tiptap analisá-lo, Note-it inspeciona apenas fragmentos HTML incorporados, remove blocos perigosos e tags não suportadas, canoniza as tags personalizadas suportadas e valida suas cores como HEX de 3 ou 6 dígitos. O mesmo validador HEX é usado pelos tokenizadores e serializadores Markdown personalizados. A área de transferência HTML é higienizada separadamente antes que ProseMirror a analise.
 
-## Search reads notes; it never executes them
+## A pesquisa lê notas; nunca os executa
 
-A query is text. It is folded for accents, lower-cased and matched as a literal substring — there
-is no regex engine, so `.*`, `[a-z]` and `(foo|bar)` are those characters and cost what those
-characters cost. Nothing is passed to a shell, to SQL or to any interpreter, because there is none
-to pass it to.
+Uma consulta é texto. Ele é dobrado para acentos, em letras minúsculas e correspondido como uma substring literal - não há mecanismo de regex, então `.*`, `[a-z]` e `(foo|bar)` são esses caracteres e custam o que esses caracteres custam. Nada é passado para um shell, para SQL ou para qualquer interpretador, porque não há ninguém para quem passá-lo.
 
-The limits are explicit, and they say exactly what they bound: 512 characters of query, 100
-results, about 240 characters of snippet. A query longer than the ceiling is refused rather than
-truncated, and a store of any size produces at most a hundred rows. The scan reads note bodies
-rather than loading a WebView for each one — searching a thousand notes creates zero additional
-WebViews.
+Os limites são explícitos e dizem exatamente o que vinculam: 512 caracteres de consulta, 100 resultados, cerca de 240 caracteres de snippet. Uma consulta maior que o teto é recusada em vez de truncada, e um armazenamento de qualquer tamanho produz no máximo cem linhas. A varredura lê o corpo das notas em vez de carregar um WebView para cada uma – pesquisar mil notas cria zero WebViews adicionais.
 
-**What those limits do not bound is the note.** A note is a text file and anything can be pasted
-into one, and search reads all of it: finding a word at the end of a large note requires reading to
-the end of a large note, and cutting that short would mean text in the store that no search could
-ever return. So a single enormous note costs what its size costs. That cost is measured rather
-than capped — a thousand notes totalling about 1.1 MB are searched in roughly 40 ms, and a 2 MB
-single note is searched, with its accents intact and without writing anything, in
-`a_very_large_note_is_searched_correctly_and_never_written`. There is no formal guarantee that some
-arbitrarily large individual file cannot make one keystroke slow, and this document does not
-claim one.
+**O que esses limites não limitam é a nota.** Uma nota é um arquivo de texto e qualquer coisa pode ser colada em um, e a pesquisa lê tudo: encontrar uma palavra no final de uma nota grande requer a leitura até o final de uma nota grande, e cortar esse trecho curto significaria um texto no armazenamento que nenhuma pesquisa poderia retornar. Portanto, uma única nota enorme custa o que custa o seu tamanho. Esse custo é medido e não limitado – mil notas totalizando cerca de 1,1 MB são pesquisadas em aproximadamente 40 ms, e uma única nota de 2 MB é pesquisada, com seus acentos intactos e sem escrever nada, em `a_very_large_note_is_searched_correctly_and_never_written`. Não há nenhuma garantia formal de que algum arquivo individual arbitrariamente grande não possa tornar um pressionamento de tecla lento, e este documento não reivindica isso.
 
-**A snippet is text.** Labels and snippets are written with `textContent`, never `innerHTML`. A
-note containing `<script>alert(1)</script>` or `<img onerror=...>` shows those characters in the
-result list; no element is created from them and nothing runs. The note is a file the user
-controls, and a search result is a rendering of it, not an execution of it.
+**Um snippet é texto.** Rótulos e snippets são escritos com `textContent`, nunca com `innerHTML`. Uma nota contendo `<script>alert(1)</script>` ou `<img onerror=...>` mostra esses caracteres na lista de resultados; nenhum elemento é criado a partir deles e nada é executado. A nota é um arquivo que o usuário controla, e o resultado da pesquisa é uma renderização dele, não uma execução dele.
 
-**The interface cannot name a file.** A search result carries a `note_id`, and the message the
-WebView sends back to open one carries a `Uuid` — a path cannot be spelled in it, so
-`../../etc/passwd` is not a request that exists. The host resolves the identifier through the same storage
-rules everything else uses and reports a missing note rather than creating one.
+**A interface não pode nomear um arquivo.** Um resultado de pesquisa carrega um `note_id`, e a mensagem que o WebView envia de volta para abrir um carrega um `Uuid` — um caminho não pode ser escrito nele, então `../../etc/passwd` não é uma solicitação que existe. O host resolve o identificador por meio das mesmas regras de armazenamento que todo o resto usa e relata uma nota perdida em vez de criar uma.
 
-**Searching does not write.** No note is saved, flushed or rewritten to answer a query, no
-`updated_at` moves, and there is no index file, so there is no second copy of the user's notes on
-disk to protect, back up or leak.
+**A pesquisa não grava.** Nenhuma nota é salva, liberada ou reescrita para responder a uma consulta, nenhum movimento `updated_at` e não há arquivo de índice, portanto não há uma segunda cópia das notas do usuário no disco para proteger, fazer backup ou vazar.
 
-## The trash and the backup never take a path from the page
+## A lixeira e o backup nunca seguem o caminho da página
 
-Every data action the interface can ask for names a note by identifier. The bridge messages carry a
-`Uuid`, which `serde` will only accept as one, so `../../etc/passwd`, `notes/a.md` and
-`/home/…/state.json` are not requests that exist — they fail to parse before any code sees them. The
-host builds every path itself, from the store's own directories, exactly as it does for opening a
-search result.
+Cada ação de dados que a interface pode solicitar nomeia uma nota por identificador. As mensagens de ponte carregam um `Uuid`, que `serde` aceitará apenas como um, então `../../etc/passwd`, `notes/a.md` e `/home/…/state.json` não são solicitações que existem - elas falham ao serem analisadas antes que qualquer código as veja. O host constrói cada caminho sozinho, a partir dos próprios diretórios do store, exatamente como faz para abrir um resultado de pesquisa.
 
-**A trash listing is text.** Labels and previews are written with `textContent`, never `innerHTML`,
-the same rule search results follow. A note containing `<script>alert(1)</script>` or
-`<img onerror=…>` shows those characters in the list; no element is created from them and nothing
-runs. Nothing from a note in the trash is ever parsed as Markdown or as HTML, and nothing in a
-backup is ever executed, opened or interpreted — a snapshot is copied and listed, never run.
+**Uma lista de lixeira é um texto.** Os rótulos e as visualizações são escritos com `textContent`, nunca com `innerHTML`. Seguem as mesmas regras dos resultados da pesquisa. Uma nota contendo `<script>alert(1)</script>` ou `<img onerror=…>` mostra esses caracteres na lista; nenhum elemento é criado a partir deles e nada é executado. Nada de uma nota na lixeira é analisado como Markdown ou como HTML, e nada em um backup é executado, aberto ou interpretado – um instantâneo é copiado e listado, nunca executado.
 
-**A backup never follows a symbolic link, and never leaves the two directories it was asked to
-copy.** Every candidate is checked with `symlink_metadata`, and only regular files are copied;
-symlinks are skipped and reported, directories are not descended into, and names beginning with `.`
-are skipped — which is also what keeps a `.tmp.…` from an interrupted save out of a snapshot. A
-crafted entry inside the store therefore cannot make the backup copy `/etc`, `/home`, a mount point
-or anything else outside `notes/` and `trash/`. `config.toml` and `state.json` are checked the same
-way, so a configuration file replaced by a link to something else is skipped rather than copied.
+**Um backup nunca segue um link simbólico e nunca sai dos dois diretórios que foi solicitado a copiar.** Cada candidato é verificado com `symlink_metadata` e apenas os arquivos normais são copiados; links simbólicos são ignorados e relatados, diretórios não são baixados e nomes que começam com `.` são ignorados - o que também impede um `.tmp.…` de ser interrompido no salvamento de um instantâneo. Uma entrada criada dentro do armazenamento, portanto, não pode fazer a cópia de backup `/etc`, `/home`, um ponto de montagem ou qualquer outra coisa fora de `notes/` e `trash/`. `config.toml` e `state.json` são verificados da mesma maneira, portanto, um arquivo de configuração substituído por um link para outra coisa é ignorado em vez de copiado.
 
-**The scratch sweep removes only its own scratch.** Cleaning up after an interrupted backup deletes
-directories in `backups/` whose name begins with `.tmp.`, and nothing else — not a snapshot, not a
-file, not anything a person put there. Mistaking a user's file for debris would be a worse failure
-than the debris.
+**A varredura de rascunho remove apenas seu próprio rascunho.** A limpeza após um backup interrompido exclui diretórios em `backups/` cujo nome começa com `.tmp.` e nada mais — nem um instantâneo, nem um arquivo, nem qualquer coisa que uma pessoa tenha colocado lá. Confundir o arquivo de um usuário com detritos seria uma falha pior do que os detritos.
 
-**Zero network, still.** The trash and the backup added no HTTP client, no socket and no service.
-Nothing in either reaches outside the machine, and nothing in either uses `eval` or `Function`.
+**Rede zero, ainda.** A lixeira e o backup não adicionaram nenhum cliente HTTP, nenhum soquete e nenhum serviço. Nada chega fora da máquina e nada usa `eval` ou `Function`.
 
-## Pasting a URL creates a link through one gate
+## Colar um URL cria um link através de um portão
 
-Pasting a URL over selected text makes that text a link, and the URL is judged by `safeLinkUrl` —
-the same allowlist the rest of the application uses. `http`, `https` and `mailto` pass; everything
-else, `javascript:`, `data:`, `file:`, `vbscript:` and `ftp:` among them, is pasted as ordinary
-text. Whitespace, control characters, a scheme-only string and a hostless `http://` are all
-refused.
+Colar um URL sobre o texto selecionado transforma esse texto em um link, e o URL é avaliado por `safeLinkUrl` — a mesma lista de permissões que o restante do aplicativo usa. `http`, `https` e `mailto` são aprovados; todo o resto, `javascript:`, `data:`, `file:`, `vbscript:` e `ftp:` entre eles, é colado como texto comum. Espaços em branco, caracteres de controle, uma string somente de esquema e um `http://` sem host são todos recusados.
 
-There is deliberately exactly one opinion in the application about what a URL is. Tiptap's own
-`linkOnPaste` is switched off, because it uses `linkifyjs` — a second parser, with a different
-answer, that accepted schemes this application does not allow. A test asserts that pasting
-`ftp://…`, `ssh://…` or `www.…` produces no link at all.
+Há deliberadamente exatamente uma opinião no aplicativo sobre o que é uma URL. O próprio `linkOnPaste` de Tiptap está desligado, porque usa `linkifyjs` — um segundo analisador, com uma resposta diferente, que aceita esquemas que esta aplicação não permite. Um teste afirma que colar `ftp://…`, `ssh://…` ou `www.…` não produz nenhum link.
 
-Nothing is fetched. No title, no favicon, no OpenGraph, no preview, and no HTTP client was added:
-the clipboard already holds everything the feature needs, so the feature adds no network surface.
+Nada é buscado. Nenhum título, nenhum favicon, nenhum OpenGraph, nenhuma visualização e nenhum cliente HTTP foram adicionados: a área de transferência já contém tudo o que o recurso precisa, portanto, o recurso não adiciona nenhuma superfície de rede.

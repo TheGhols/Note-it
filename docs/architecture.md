@@ -1,310 +1,205 @@
-# Note-it Architecture
+# Arquitetura do Note-it
 
-## Architectural Overview
+## Visão geral da arquitetura
 
-Note-it has one headless domain/persistence authority and adapters around it. The desktop adapter
-adds native system integration and embeds the TypeScript editor; future CLI and MCP adapters must
-call the same Core instead of recreating its rules.
+Note-it tem uma autoridade de domínio/persistência headless e adaptadores em torno dele. O adaptador de desktop adiciona integração nativa do sistema e incorpora o editor TypeScript; futuros adaptadores CLI e MCP devem chamar o mesmo Core em vez de recriar suas regras.
 
 ```text
                          ┌───────────────────────────────┐
-                         │ noteit-core (headless crate)  │
-                         │ domain + XDG persistence      │
+                         │ noteit-core (crate headless)  │
+                         │ domínio + persistência XDG    │
                          └───────▲───────────────▲───────┘
                                  │               │
-                     desktop adapter calls Core  │ headless CLI calls Core
+                  adaptador desktop chama o Core │ CLI headless chama o Core
                                  │               │
  ┌───────────────────────────────┴────────┐     ┌┴──────────────────────────────┐
- │ note-it GUI: GTK4 + layer-shell + WebKit│     │ noteit CLI: headless binary   │
- │ single instance, lifecycle, windows    │     │ pure terminal / script / agent│
+ │ GUI note-it: GTK4 + layer-shell + WebKit│     │ CLI noteit: binário headless   │
+ │ instância única, ciclo de vida, janelas│     │ terminal / script / agente     │
  └───────────────────────────────▲────────┘     └───────────────────────────────┘
-                                 │ JSON messages
+                                 │ mensagens JSON
  ┌───────────────────────────────▼────────┐
  │ TypeScript WebView: Vite + Tiptap      │
- │ editor, Markdown serializer, sanitizer │
+ │ editor, serializador Markdown, sanitizador │
  └────────────────────────────────────────┘
 ```
 
-The dependency direction is enforced by Cargo: both the desktop package (`note-it`) and the CLI
-package (`noteit-cli`) depend on `noteit-core`, while `noteit-core` has zero desktop or CLI
-dependencies. `scripts/check-core-boundary` and `scripts/check-cli-boundary` prevent GUI libraries
-(GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) from entering either headless component.
+A direção da dependência é imposta por Cargo: tanto o pacote desktop (`note-it`) quanto o pacote CLI (`noteit-cli`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop ou CLI. `scripts/check-core-boundary` e `scripts/check-cli-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless.
 
-## Core Components (`noteit-core`, Rust)
+## Componentes do Core (`noteit-core`, Rust)
 
-`NoteItCore` is the small adapter-facing facade. It currently exposes canonical operations for
-listing, reading and searching live notes, deriving metadata catalogs, listing trash, loading Study state,
-and purely resolving store paths (`StorePaths`). Its write and lifecycle consumers use the same
-`StorageManager` held by that facade, so there is still one implementation of atomic writes, recency,
-trash, backup and Study persistence.
+`NoteItCore` é a pequena fachada voltada para o adaptador. Atualmente, ele expõe operações canônicas para listar, ler e pesquisar notas ao vivo, derivar catálogos de metadados, listar lixo, carregar estado de estudo e resolver puramente caminhos de armazenamento (`StorePaths`). Seus consumidores de gravação e ciclo de vida usam o mesmo `StorageManager` mantido por essa fachada, portanto ainda há uma implementação de gravações atômicas, recência, lixo, backup e persistência de estudo.
 
-- `noteit-core/src/model.rs`: Note data models, metadata parsing, and `NoteSummary` projection. `split_front_matter` and
-  `body_of` are shared with search, so "the note's body" means the same thing everywhere.
-- `noteit-core/src/filter.rs`: typed `NoteFilter` with tag/property AND matching via `semantic_identity`, and safe `NoteSelectorError`.
-- `noteit-core/src/task.rs`: one task scanner shared by reading and writing — checkbox states, depth
-  hierarchy, fenced-code exclusion, ISO 8601 `completed_at` extraction, the optimistic `TaskRef`, and
-  the line rewrite that completes or reopens a task. A fake task inside a fence is invisible to both,
-  because there is only one scanner.
-- `noteit-core/src/write.rs`: every mutation as a typed domain operation — `WriteOperation`,
-  `NoteMutation`, `WriteOutcome`, `WriteError` — plus `apply_over_live_body`, the rule for applying a
-  mutation on top of text an editor is holding but has not saved. Both adapters run this one
-  implementation.
-- `noteit-core/src/coordination.rs`: the writer lease. One advisory `flock` per store, in a runtime
-  directory named after that store, with ownership and permission checks that fail closed.
-- `noteit-core/src/control.rs`: the private control protocol — length-prefixed JSON over a local Unix
-  socket, versioned and bounded. **Not a public interface**; see ADR-038.
-- `noteit-core/src/hashing.rs`: one deterministic, documented digest (FNV-1a 64) for the store key and
-  the task reference. Never `DefaultHasher`, whose stability is not promised.
-- `noteit-core/src/warning.rs`: typed, structured non-fatal read anomalies (`ReadWarning`, `ReadBatch<T>`) returned by Core operations without terminal printing.
-- `noteit-core/src/metadata.rs`: validated Tags and textual Properties, semantic identity shared
-  with search folding, deterministic colour buckets and typed catalog entries. Adapters never need
-  `serde_yaml::Value`.
-- `noteit-core/src/storage.rs`: pure XDG directory resolution (`StorePaths`), strictly read-only store opening (`open_read_only`),
-  Markdown disk I/O, atomic saving and the storage operations used by GUI and CLI adapters.
-- `noteit-core/src/search.rs`: accent folding, matching, snippets, labels and ordering — pure
-  functions over `(Uuid, &str)`.
-- `noteit-core/src/trash.rs`: recoverable deletion and read-only trash listing. See ADR-028.
-- `noteit-core/src/backup.rs`: local snapshots, retention and manifest policy. See ADR-029 and
-  ADR-032.
-- `noteit-core/src/study.rs`: the versioned `study.json` model and Ladder-v1 scheduler.
-- `noteit-core/src/assets.rs`: image validation, identifiers, storage references and import rules.
-- `noteit-core/src/autopaste.rs` and `timer.rs`: headless state machines and policies; clipboard and
-  notification integration stay in the desktop host.
-- `noteit-core/src/settings.rs` and `state.rs`: versioned application configuration and operational
-  state, with atomic persistence but no windowing dependency.
-- `atomic_file.rs` and `visible_text.rs` are private implementation modules shared by those public
-  capabilities.
+- `noteit-core/src/model.rs`: modelos de dados da nota, análise de metadados e projeção `NoteSummary`. `split_front_matter` e `body_of` são compartilhados com a pesquisa, então “o corpo da nota” significa a mesma coisa em todos os lugares.
+- `noteit-core/src/filter.rs`: `NoteFilter` tipado, com correspondência AND de tags/propriedades por `semantic_identity`, e `NoteSelectorError` seguro.
+- `noteit-core/src/task.rs`: um scanner de tarefa compartilhado por leitura e gravação - estados de caixa de seleção, hierarquia de profundidade, exclusão de código protegido, extração ISO 8601 `completed_at`, o `TaskRef` otimista e a reescrita de linha que completa ou reabre uma tarefa. Uma tarefa falsa dentro de uma cerca é invisível para ambos, pois existe apenas um scanner.
+- `noteit-core/src/write.rs`: toda mutação como uma operação de domínio digitada — `WriteOperation`, `NoteMutation`, `WriteOutcome`, `WriteError` — mais `apply_over_live_body`, a regra para aplicar uma mutação sobre o texto que um editor está segurando, mas não salvou. Ambos os adaptadores executam esta implementação.
+- `noteit-core/src/coordination.rs`: o lease de escrita. Um `flock` consultivo por armazenamento, em um diretório de tempo de execução nomeado após esse armazenamento, com verificações de propriedade e permissão que falham no fechamento.
+- `noteit-core/src/control.rs`: o protocolo de controle privado — com prefixo de comprimento JSON sobre um soquete Unix local, versionado e limitado. **Não é uma interface pública**; consulte ADR-038.
+- `noteit-core/src/hashing.rs`: um resumo determinístico e documentado (FNV-1a 64) para a chave de armazenamento e a referência da tarefa. Nunca `DefaultHasher`, cuja estabilidade não é prometida.
+- `noteit-core/src/warning.rs`: anomalias de leitura não fatais estruturadas e digitadas (`ReadWarning`, `ReadBatch<T>`) retornadas por operações Core sem impressão de terminal.
+- `noteit-core/src/metadata.rs`: tags validadas e propriedades textuais, identidade semântica compartilhada com dobramento de pesquisa, baldes de cores determinísticas e entradas de catálogo digitadas. Os adaptadores nunca precisam de `serde_yaml::Value`.
+- `noteit-core/src/storage.rs`: resolução de diretório XDG pura (`StorePaths`), abertura de armazenamento estritamente somente leitura (`open_read_only`), E/S de disco Markdown, salvamento atômico e as operações de armazenamento usadas pelos adaptadores GUI e CLI.
+- `noteit-core/src/search.rs`: dobramento acentuado, correspondência, snippets, rótulos e ordenação — funções puras sobre `(Uuid, &str)`.
+- `noteit-core/src/trash.rs`: exclusão recuperável e listagem de lixo somente leitura. Consulte ADR-028.
+- `noteit-core/src/backup.rs`: instantâneos locais, retenção e política de manifesto. Consulte ADR-029 e ADR-032.
+- `noteit-core/src/study.rs`: o modelo `study.json` versionado e o agendador Ladder-v1.
+- `noteit-core/src/assets.rs`: validação de imagens, identificadores, referências de armazenamento e regras de importação.
+- `noteit-core/src/autopaste.rs` e `timer.rs`: headless máquinas e políticas de estado; a área de transferência e a integração de notificação permanecem no host da área de trabalho.
+- `noteit-core/src/settings.rs` e `state.rs`: configuração e estado operacional do aplicativo versionado, com persistência atômica, mas sem dependência de janelas.
+- `atomic_file.rs` e `visible_text.rs` são módulos de implementação privados compartilhados por esses recursos públicos.
 
-Core tests use only temporary synthetic stores. The canonical headless gates are:
+Os testes Core usam apenas armazenamentos sintéticos temporários. As portas canônicas headless são:
 
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
 scripts/check-core-boundary
 ```
 
-## CLI Adapter Components (`noteit-cli`, Rust)
+## Componentes do adaptador CLI (`noteit-cli`, Rust)
 
-- `main.rs`: Entry point for the `noteit` binary, dispatching arguments and mapping standard exit codes.
-- `cli.rs`: Command line parsing using Clap with PT-BR primary commands and international aliases (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`), plus the global `--json` option.
-- `outcome.rs`: what a command produced, before anyone decides how to say it — `Outcome`,
-  `CommandError`, the canonical `Command` names, and `CliResponse` (exit code plus both channels as
-  data). Both renderers read this and neither reads the other.
-- `output.rs`: the human renderer. Terminal presentation, ANSI styling, NO_COLOR/non-TTY detection,
-  and terminal security sanitization (`sanitize_for_terminal`).
-- `machine.rs`: the machine renderer. The public JSON schema as explicit DTOs, one versioned
-  document per execution, stable English tokens for every decision a consumer makes. See
-  `docs/machine-interface.md` and ADR-041.
-- `authority.rs`: the decision of who writes. Takes the writer lease when it is free and writes
-  through the Core; when it is held, sends the change to whoever holds it over the private socket;
-  when it is held and unreachable, fails closed and changes nothing. Never falls back to writing
-  around another writer.
-- `lib.rs`: Programmatic interface (`run_with_args`), filter parsing, Core dispatch, standard exit
-  codes, standard input handling for `--stdin`, and the choice of renderer.
+- `main.rs`: Ponto de entrada para o binário `noteit`, despachando argumentos e mapeando códigos de saída padrão.
+- `cli.rs`: análise de linha de comando usando Clap com comandos primários PT-BR e aliases internacionais (`listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`, `status`, `ajuda`/`help`, `versao`/`version`), mais a opção global `--json`.
+- `outcome.rs`: o que um comando produziu, antes que alguém decida como dizê-lo - `Outcome`, `CommandError`, os nomes canônicos `Command` e `CliResponse` (código de saída mais ambos os canais como dados). Ambos os renderizadores leem isso e nenhum lê o outro.
+- `output.rs`: o renderizador humano. Apresentação do terminal, estilo ANSI, detecção NO_COLOR/não TTY e higienização da segurança do terminal (`sanitize_for_terminal`).
+- `machine.rs`: o renderizador da máquina. O esquema público JSON como DTOs explícitos, um documento versionado por execução, tokens em inglês estáveis ​​para cada decisão tomada por um consumidor. Consulte `docs/machine-interface.md` e ADR-041.
+- `authority.rs`: a decisão de quem escreve. Adquire o lease quando ele está livre e grava pelo Core; quando está ocupado, envia a alteração ao detentor pelo soquete privado; quando está ocupado e inacessível, falha de modo seguro e não altera nada. Nunca tenta contornar outro gravador.
+- `lib.rs`: Interface programática (`run_with_args`), análise de filtro, despacho Core, códigos de saída padrão, tratamento de entrada padrão para `--stdin` e escolha do renderizador.
 
 ```text
-                    ┌──▶ output::render   ──▶ sentences, styling, local dates, 8-char prefixes
-domain ──▶ Outcome ─┤
-       │            └──▶ machine::render  ──▶ one JSON document, UTC, full UUIDs, stable tokens
+                    ┌──▶ output::render   ──▶ frases, estilo, datas locais, prefixos de 8 caracteres
+domínio ─▶ Outcome ─┤
+       │            └──▶ machine::render  ──▶ um documento JSON, UTC, UUIDs completos, tokens estáveis
        └──▶ CommandError
 ```
 
-The two adapters share the operation and share nothing else. A human sentence is never parsed to
-build a document, and no write path exists twice.
+Os dois adaptadores compartilham a operação e não compartilham mais nada. Uma frase humana nunca é analisada para construir um documento e nenhum caminho de gravação existe duas vezes.
 
-The CLI binary has zero graphical dependencies and is tested headless:
+O binário CLI não tem nenhuma dependência gráfica e é testado headless:
 
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
 scripts/check-cli-boundary
 ```
 
-## Desktop Adapter Components (`src`, Rust)
+## Componentes do adaptador de desktop (`src`, Rust)
 
-- `main.rs`: Entry point and single-instance CLI dispatcher (`gtk::Application`).
-- `app.rs`: Application state, lifecycle coordination, and IPC handling.
-- `cli.rs`: Command line parsing (`--background`, `new`, `toggle`, `show`, `hide`, `quit`).
-- `layer_shell.rs`: Wayland Layer Shell initialization, anchors, layers, and focus management.
-- `note_window.rs`: GTK4 window wrapper embedding WebKitGTK 6.0 webviews.
-- `webview_bridge.rs`: Bidirectional messaging between Rust host and TypeScript WebView. Message
-  types reuse Core domain types, while the actual WebView send path remains desktop-specific.
-- `write_authority.rs`: the desktop instance as the store's writer. `claim` takes the lease, binds and
-  narrows the socket, and returns a `WriteAuthority` **only on complete success**; `AppContext` holds
-  that by value, so a running instance that does not own its store is not a state the program can
-  describe. Startup refuses rather than degrading — see ADR-039. `serve` then runs the external-write
-  pipeline: freeze the editor, collect its live text, mutate, commit, adopt, move the generation on,
-  hand the committed note back, and wait for the page to say it took it.
+- `main.rs`: Ponto de entrada e despachante CLI de instância única (`gtk::Application`).
+- `app.rs`: estado do aplicativo, coordenação do ciclo de vida e manipulação de IPC.
+- `cli.rs`: análise de linha de comando (`--background`, `new`, `toggle`, `show`, `hide`, `quit`).
+- `layer_shell.rs`: Wayland Layer Shell inicialização, âncoras, camadas e gerenciamento de foco.
+- `note_window.rs`: GTK4 wrapper de janela incorporando WebKitGTK webviews 6.0.
+- `webview_bridge.rs`: Mensagens bidirecionais entre o host Rust e TypeScript WebView. Os tipos de mensagens reutilizam tipos de domínio Core, enquanto o caminho de envio real WebView permanece específico do desktop.
+- `write_authority.rs`: a instância do desktop como gravador do store. `claim` pega o lease, vincula e restringe o soquete e retorna um `WriteAuthority` **somente em caso de sucesso completo**; `AppContext` mantém isso por valor, portanto, uma instância em execução que não possui seu armazenamento não é um estado que o programa possa descrever. A inicialização recusa em vez de degradar — consulte ADR-039. `serve` então executa o pipeline de gravação externa: congela o editor, coleta seu texto ativo, modifica, confirma, adota, avança a geração, devolve a nota confirmada e espera que a página diga que a aceitou.
 
-### The write path when a note is open
+### O caminho de gravação quando uma nota está aberta
 
 ```text
-noteit adicionar        lease held by the desktop instance
+noteit adicionar        lease mantido pela instância desktop
       │                        │
-      └── control socket ──────┤
-                               ├─ 1. refuse if hiding, quitting or deleting
-                               ├─ 2. freeze the editor  ── then ──▶ read its text
-                               ├─ 3. fold that text into the committed document
-                               ├─ 4. apply the mutation to *that*
-                               ├─ 5. commit through the atomic writer
-                               ├─ 6. adopt it, generation += 1
-                               ├─ 7. hand it back to the page and unfreeze
-                               └─ 8. wait for the page to say it adopted it
+      └── soquete de controle ─┤
+                               ├─ 1. recusar se estiver ocultando, saindo ou excluindo
+                               ├─ 2. congelar o editor ── então ──▶ ler seu texto
+                               ├─ 3. incorporar esse texto ao documento a confirmar
+                               ├─ 4. aplicar a mutação sobre *esse* documento
+                               ├─ 5. confirmar pelo gravador atômico
+                               ├─ 6. adotar o documento; geração += 1
+                               ├─ 7. devolvê-lo à página e descongelar
+                               └─ 8. esperar a página confirmar que o adotou
 ```
 
-Step 2 is in that order and no other: reading first leaves a gap in which a keystroke lands, and that
-keystroke is then written over. Step 6 is what makes every message still in flight from the previous
-run refusable. Step 8 is the page's own word — `ExternalWriteApplied`, naming the note, the request
-and the generation — because a script having evaluated says nothing about whether a document was
-adopted. Everything from step 5 onwards is past the commit point, so step 8 can only decide whether
-the answer carries a warning; it can never turn a completed write into a failure. See ADR-038 and
-ADR-039.
+A etapa 2 ocorre nessa ordem e em nenhuma outra: a leitura primeiro deixa uma lacuna na qual uma tecla é digitada e essa tecla é então reescrita. A etapa 6 é o que torna recusáveis ​​todas as mensagens ainda em trânsito da execução anterior. O passo 8 é a própria palavra da página — `ExternalWriteApplied`, nomeando a nota, a solicitação e a geração — porque um script avaliado não diz nada sobre se um documento foi adotado. Tudo a partir da etapa 5 já passou do ponto de confirmação, portanto a etapa 8 só pode decidir se a resposta contém um aviso; ele nunca pode transformar uma gravação concluída em uma falha. Consulte ADR-038 e ADR-039.
 
-Before any of it: the store is claimed. There is no window, no document and no autosave until this
-process is its one writer, and if it cannot be, it says so and exits.
+Antes de tudo, o processo adquire o store. Nenhuma janela, documento ou salvamento automático existe até que esse processo seja o único gravador; se não puder sê-lo, informa o problema e encerra.
 
 ```text
-desktop startup
-   → prepare coordination   ─┐
-   → acquire writer lease    ├─ any failure: release, explain, exit non-zero
-   → bind + narrow socket   ─┘
-   → build the application
+inicialização do desktop
+   → preparar coordenação       ─┐
+   → adquirir lease do gravador  ├─ qualquer falha: liberar, explicar, sair com código diferente de zero
+   → vincular e restringir soquete ─┘
+   → construir o aplicativo
 ```
 
-## Frontend Components (TypeScript / Vite / Tiptap)
+## Componentes de front-end (TypeScript / Vite / Tiptap)
 
-- `ui/src/main.ts`: Webview entry point and bridge bootstrap.
-- `ui/src/bridge/externalWrite.ts`: the page's half of an external write — freeze, snapshot, adopt,
-  and a queue that holds every edit arriving meanwhile so none is lost.
-- `ui/src/editor/documentLock.ts`: one ProseMirror `filterTransaction` gate. While a write is in
-  flight nothing changes the document — not typing, not a command, not a plugin. The document is
-  released by the host and only by the host: the page has no timeout that could hand it back while a
-  commit is still in flight.
+- `ui/src/main.ts`: ponto de entrada do Webview e bootstrap da ponte.
+- `ui/src/bridge/externalWrite.ts`: a metade da página de uma gravação externa - congelar, capturar instantâneo, adotar e uma fila que contém todas as edições que chegam enquanto isso, para que nenhuma seja perdida.
+- `ui/src/editor/documentLock.ts`: uma porta ProseMirror `filterTransaction`. Enquanto uma gravação está em andamento, nada altera o documento - nem a digitação, nem um comando, nem um plugin. O documento é liberado pelo host e somente pelo host: a página não tem tempo limite que possa devolvê-lo enquanto um commit ainda estiver em andamento.
 
-### When the page may edit again
+### Quando a página poderá ser editada novamente
 
-Once the snapshot has gone out, exactly two answers release the document — and there is a third that
-does not:
+Depois que o instantâneo é divulgado, exatamente duas respostas liberam o documento - e há uma terceira que não:
 
-| host says | file | page | outcome |
+| anfitrião diz | arquivo | página | resultado |
 | --- | --- | --- | --- |
-| `AbortExternalWrite` | unchanged | still matches the file | thaw, drain the queue, same generation |
-| `ApplyExternalDocument`, adopted | changed | now the committed text | thaw, drain, new generation, `ExternalWriteApplied` |
-| `ApplyExternalDocument`, **not** adopted | changed | stale | **stays held**: no thaw, no drain, old generation, `ExternalWriteApplyFailed` |
+| `AbortExternalWrite` | inalterado | ainda corresponde ao arquivo | descongelar, drenar a fila, mesma geração |
+| `ApplyExternalDocument`, adotado | mudado | agora o texto confirmado | descongelar, drenar, nova geração, `ExternalWriteApplied` |
+| `ApplyExternalDocument`, **não** adotado | mudado | obsoleto | **permanece seguro**: sem descongelamento, sem drenagem, geração antiga, `ExternalWriteApplyFailed` |
 
-The third row is the one worth stating plainly. The write is on disk and is reported as committed with
-a `ui_sync_warning`; the window is not released, because a released window would be editing against a
-generation the host has already moved past and every save it made would be refused — work typed and
-silently lost. The note says so, and reopening it is the recovery. See ADR-040.
+A terceira linha é aquela que vale a pena indicar claramente. A gravação está no disco e é relatada como confirmada com `ui_sync_warning`; a janela não é liberada, porque uma janela liberada seria editada em uma geração pela qual o host já passou e cada salvamento feito seria recusado - trabalho digitado e perdido silenciosamente. A nota diz isso, e reabri-la é a recuperação. Consulte ADR-040.
 
-The page holds one phase, and it is the only thing that decides what may happen next:
+A página contém uma fase e é a única coisa que decide o que pode acontecer a seguir:
 
 ```text
-  idle ──begin──▶ syncing ──slow notice──▶ slow
+  idle ──iniciar──▶ syncing ──aviso de lentidão──▶ slow
                      │                      │
-                     ├──abort───────────────┤──▶ idle           (nothing written)
-                     ├──apply, adopted──────┤──▶ idle, gen N+1  (written and shown)
-                     └──apply, not adopted──┴──▶ unsynchronised
+                     ├──abortar─────────────┤──▶ idle           (nada gravado)
+                     ├──aplicar, adotado────┤──▶ idle, gen N+1  (gravado e exibido)
+                     └──aplicar, não adotado┴──▶ unsynchronised
 ```
 
-`unsynchronised` has no outgoing edge. Every transition asks the phase first, so a callback that was
-already queued when the phase changed — a slow notice whose timer had just been cancelled, most
-obviously — finds a phase it may not act on and does nothing. That is what makes the state terminal
-rather than merely usually terminal; cancelling the timer as well only keeps the common case tidy.
-- `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
-- `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
-- `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.
-- `ui/src/study/`: semantic SHA-256 identities, one reusable on-demand Tiptap catalog parser, and
-  pure due/heatmap/streak projections. `ui/src/ui/studyHub.ts` and the existing
-  `flashcardPanel.ts` render the global catalog and scheduled sitting inside the current WebView.
-- `ui/src/math/`: the math engine, independent of the editor — `lexer.ts`, `parser.ts`,
-  `evaluate.ts`, `document.ts` (a note's lines, evaluated top-down) and `format.ts`. It knows
-  nothing about ProseMirror; `ui/src/editor/math.ts` is the only thing that joins the two, reading
-  lines out of the document and painting results back as decorations.
-- `ui/src/units/`: the unit table and the conversion itself — `types.ts`, `registry.ts` and
-  `convert.ts`. It knows nothing about parsing, about notes or about the editor: it is data plus
-  arithmetic. The dependency runs one way, `math/parser.ts` → `units/registry.ts`, because the
-  parser has to know what counts as a unit; nothing in `units/` refers back. That edge is also the
-  boundary a future currency source must sit behind — see ADR-025.
-- `ui/src/editor/find.ts`: find and replace over the live document — matching per textblock,
-  highlight decorations, and `Replace All` as one ProseMirror transaction.
-  `ui/src/editor/linkPaste.ts` is the URL-over-selection paste, gated by the application's own
-  link allowlist.
-- `ui/src/ui/searchPalette.ts`, `ui/src/ui/findBar.ts` and `ui/src/ui/trashPanel.ts`: the three
-  panels. All live in the page rather than in a second window, own their keys, and are not part of
-  the document. `ui/src/ui/status.ts` is the line at the foot of the note that reports what a data
-  action did; it is not a dialog and takes nothing from the reader.
-- `ui/src/ui/metadataPanel.ts`: the single Tags/Properties editor and responsive tag strip. It
-  handles typed values only, renders with `textContent`/`value`, and adopts a draft only after the
-  host acknowledges the Core commit.
-- `ui/src/markdown/assetReference.ts`: what a note is allowed to say about a picture — the managed
-  reference format, the width limits, the three alignments, and the one function that turns a stored
-  reference into something the page may load. A markdown concern rather than an editor one, because
-  the sanitizer recognises it on the way in and the editor writes it on the way out.
-- `ui/src/editor/image.ts` and `ui/src/editor/imageView.ts`: the image node and its own interface —
-  the two stored forms and the round trip between them, and the handles, alignment controls and
-  single-transaction resize that never take the focus or move the selection.
-- `ui/src/flashcards/`: a projection of the live ProseMirror document. `extract.ts` recognises the
-  inline and structural syntax, keeps sides as document fragments and expands reversible sources
-  into review items; `session.ts` owns only the ephemeral order, cursor and reveal state. The editor
-  plugin in `ui/src/editor/flashcardMark.ts` paints delimiters and holds the live count without a
-  document transaction, while `ui/src/ui/flashcardPanel.ts` renders snapshot fragments with the
-  note's `DOMSerializer` and never receives an editor or dispatch function.
-- `ui/src/capture/autoPaste.ts`: what a note becomes when a capture arrives — the plain-text split
-  ProseMirror itself uses for `text/plain`, the three delimiters, and the single transaction that
-  appends at the end without taking focus, moving the selection or scrolling. It reads no clipboard:
-  the page has no part in observing one.
-- `ui/src/timer/`: the countdown itself, independent of the DOM — `engine.ts` (the state machine
-  over a deadline, with the clock injected), `format.ts` (`MM:SS` / `H:MM:SS` and the words for each
-  state) and `controls.ts` (which button applies in which state, as a value rather than as four
-  branches inside a handler). It knows nothing about the header or the popover;
-  `ui/src/ui/timerPanel.ts` is the only thing that joins the two, and it owns the single pending
-  redraw rather than an interval.
-- `ui/src/bridge/`: Native message handlers for load, save, theme, and font changes.
-- `ui/src/styles/`: Minimalist themes, paper color definitions, and layout styling.
+`unsynchronised` não tem vantagem de saída. Cada transição solicita a fase primeiro, então um callback que já estava na fila quando a fase mudou — um aviso lento cujo temporizador acabou de ser cancelado, obviamente — encontra uma fase na qual pode não agir e não faz nada. É isso que torna o estado terminal, em vez de meramente terminal; cancelar o cronômetro também apenas mantém o caso comum organizado.
+- `ui/src/editor/`: configuração do editor Tiptap, extensões, atalhos de teclado e barra de ferramentas.
+- `ui/src/markdown/`: Markdown analisador, serializador e conversores de ida e volta.
+- `ui/src/flashcards/`: a definição única do flashcard ProseMirror e a sessão de revisão efêmera.
+- `ui/src/study/`: identidades semânticas SHA-256, um analisador de catálogo Tiptap reutilizável sob demanda e projeções puras de vencimento/mapa de calor/sequência. `ui/src/ui/studyHub.ts` e o `flashcardPanel.ts` existente renderizam o catálogo global e o agendamento dentro do WebView atual.
+- `ui/src/math/`: o mecanismo matemático, independente do editor — `lexer.ts`, `parser.ts`, `evaluate.ts`, `document.ts` (as linhas de uma nota, avaliadas de cima para baixo) e `format.ts`. Não sabe nada sobre ProseMirror; `ui/src/editor/math.ts` é a única coisa que une os dois, lendo as linhas do documento e pintando os resultados como decoração.
+- `ui/src/units/`: a tabela de unidades e a própria conversão — `types.ts`, `registry.ts` e `convert.ts`. Não sabe nada sobre análise, notas ou editor: são dados mais aritmética. A dependência é executada em uma direção, `math/parser.ts` → `units/registry.ts`, porque o analisador precisa saber o que conta como uma unidade; nada em `units/` se refere de volta. Essa vantagem é também o limite que uma futura fonte de moeda deve respeitar – ver ADR-025.
+- `ui/src/editor/find.ts`: encontre e substitua o documento ativo - correspondência por bloco de texto, decorações de destaque e `Replace All` como uma transação ProseMirror. `ui/src/editor/linkPaste.ts` é a pasta de seleção sobre URL, controlada pela lista de permissões de links do próprio aplicativo.
+- `ui/src/ui/searchPalette.ts`, `ui/src/ui/findBar.ts` e `ui/src/ui/trashPanel.ts`: os três painéis. Todos ficam na página e não em uma segunda janela, possuem suas chaves e não fazem parte do documento. `ui/src/ui/status.ts` é a linha no final da nota que informa o que uma ação de dados fez; não é um diálogo e não tira nada do leitor.
+- `ui/src/ui/metadataPanel.ts`: o editor único de tags/propriedades e a faixa de tags responsiva. Ele lida apenas com valores digitados, renderiza com `textContent`/`value` e adota um rascunho somente depois que o host reconhece o commit de Core.
+- `ui/src/markdown/assetReference.ts`: o que uma nota pode dizer sobre uma imagem — o formato de referência gerenciado, os limites de largura, os três alinhamentos e a única função que transforma uma referência armazenada em algo que a página pode carregar. Uma preocupação de remarcação, e não do editor, porque o sanitizador a reconhece na entrada e o editor a escreve na saída.
+- `ui/src/editor/image.ts` e `ui/src/editor/imageView.ts`: o nó da imagem e sua própria interface — os dois formulários armazenados e o percurso entre eles, e as alças, controles de alinhamento e redimensionamento de transação única que nunca tiram o foco ou movem a seleção.
+- `ui/src/flashcards/`: uma projeção do documento ProseMirror ativo. `extract.ts` reconhece a sintaxe inline e estrutural, mantém os lados como fragmentos de documentos e expande fontes reversíveis em itens de revisão; `session.ts` possui apenas a ordem efêmera, o cursor e o estado de revelação. O plugin do editor em `ui/src/editor/flashcardMark.ts` pinta delimitadores e mantém a contagem ao vivo sem uma transação de documento, enquanto `ui/src/ui/flashcardPanel.ts` renderiza fragmentos de instantâneo com o `DOMSerializer` da nota e nunca recebe um editor ou função de despacho.
+- `ui/src/capture/autoPaste.ts`: o que uma nota se torna quando uma captura chega — a própria divisão de texto simples que ProseMirror usa para `text/plain`, os três delimitadores e a transação única que é anexada no final sem tirar o foco, mover a seleção ou rolar. Ele não lê nenhuma área de transferência: a página não participa da observação de uma.
+- `ui/src/timer/`: a contagem regressiva em si, independente do DOM — `engine.ts` (a máquina de estado dentro de um prazo, com o relógio injetado), `format.ts` (`MM:SS` / `H:MM:SS` e as palavras para cada estado) e `controls.ts` (qual botão se aplica em qual estado, como um valor em vez de quatro ramificações dentro de um manipulador). Não sabe nada sobre o cabeçalho ou o popover; `ui/src/ui/timerPanel.ts` é a única coisa que une os dois e possui o único redesenho pendente em vez de um intervalo.
+- `ui/src/bridge/`: manipuladores de mensagens nativos para carregar, salvar, tema e alterações de fonte.
+- `ui/src/styles/`: Temas minimalistas, definições de cores de papel e estilo de layout.
 
-## Where Search Lives
+## Onde reside a pesquisa
 
-Search is a capability of the domain, not of the interface:
+A pesquisa é uma capacidade do domínio, não da interface:
 
 ```text
 NoteItCore::search_notes
-   ↓ delegates to the existing StorageManager reader
-storage (read_note_bodies_by_recency)
-   ↓  (Uuid, body) pairs — front matter already gone
-search.rs (fold → match → snippet → order → cap)
+   ↓ delega ao leitor existente do StorageManager
+store (read_note_bodies_by_recency)
+   ↓ pares (Uuid, corpo) — front matter já removido
+search.rs (normalizar → comparar → trecho → ordenar → limitar)
    ↓  Vec<SearchResult>
 webview_bridge (SearchResults { request_id, results })
    ↓
-searchPalette.ts (renders, and asks by note_id)
+searchPalette.ts (renderiza e solicita por note_id)
 ```
 
-Two properties of that arrangement are deliberate.
+Duas propriedades desse arranjo são deliberadas.
 
-The frontend never names a file. It receives `note_id` values the host generated and sends one
-back; there is no message in the bridge that carries a path, so there is nothing to traverse.
+O frontend nunca nomeia um arquivo. Ele recebe valores `note_id` gerados pelo host e envia um de volta; não há mensagem na ponte que conduza um caminho, portanto não há nada para atravessar.
 
-And nothing through `Vec<SearchResult>` needs a display. A future CLI calls `NoteItCore::search_notes`
-over the same storage and search implementation the GUI calls; GTK and WebKit enter only after the
-result reaches the desktop adapter.
+E nada através de `Vec<SearchResult>` precisa de exibição. Um futuro CLI chama `NoteItCore::search_notes` pela mesma implementação de armazenamento e pesquisa que GUI chama; GTK e WebKit entram somente depois que o resultado chega ao adaptador de desktop.
 
-## Semantic Metadata Flow
+## Fluxo de metadados semânticos
 
 ```text
-metadata panel confirms a typed draft + current editor Markdown
-  → UUID-addressed WebView message
-  → Core validates NoteMetadata
-  → clone the in-memory NoteDocument candidate
-  → include pending text (and touch updated_at only if text differs)
-  → StorageManager::save_note_atomic (backup → temp → rename commit)
-  → adopt the committed candidate
-  → acknowledge the exact committed MetadataView
+painel de metadados confirma um rascunho tipado + Markdown atual do editor
+  → mensagem do WebView endereçada por UUID
+  → Core valida NoteMetadata
+  → clona o NoteDocument candidato mantido em memória
+  → inclui texto pendente (e altera updated_at somente se o texto diferir)
+  → StorageManager::save_note_atomic (backup → temporário → confirmação por rename)
+  → adota o candidato confirmado
+  → confirma o MetadataView exato que foi persistido
 ```
 
-`note_it` remains application-owned. `tags`, `properties`, and unknown top-level YAML values live
-in the same front matter, but YAML itself never crosses the bridge. Unknown values are retained as
-Core persistence detail; comments, anchors and original formatting cannot be represented by
-`serde_yaml` and may normalize when an actual content/appearance/metadata save reserializes the
-file. An untouched open/close performs no write and therefore stays byte-identical.
+`note_it` permanece de propriedade do aplicativo. `tags`, `properties` e valores desconhecidos de nível superior YAML vivem no mesmo front matter, mas o próprio YAML nunca cruza a ponte. Valores desconhecidos são mantidos como detalhe de persistência Core; comentários, âncoras e formatação original não podem ser representados por `serde_yaml` e podem normalizar quando um salvamento real de conteúdo/aparência/metadados reserializa o arquivo. Uma abertura/fechamento intocada não executa gravação e, portanto, permanece idêntica em bytes.
 
-Catalogs are derived on demand by scanning `notes/` only. There is no `tags.json`, database or
-cache to become stale; trash disappears from a catalog because its file is not live, and restore
-makes it return naturally.
+Os catálogos são derivados sob demanda, digitalizando apenas `notes/`. Não há `tags.json`, banco de dados ou cache para ficar obsoleto; o lixo desaparece de um catálogo porque seu arquivo não está ativo e a restauração faz com que ele retorne naturalmente.

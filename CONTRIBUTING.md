@@ -1,35 +1,35 @@
-# Contributing to Note-it
+# Contribuindo para Note-it
 
-Thank you for your interest in contributing to Note-it!
+Obrigado pelo seu interesse em contribuir para Note-it!
 
-## Guiding Principles
+## Princípios orientadores
 
-1. **Local-First & Private:** Never introduce telemetry, cloud sync lock-in, tracking, or network dependencies into the core note workflow.
-2. **Wayland & Performance First:** Maintain high responsiveness, low idle CPU/RAM usage, and correct Layer Shell protocol usage.
-3. **True WYSIWYG:** Preserve clean Markdown on disk while presenting formatted text in the editor without raw syntax markers interfering with editing.
-4. **Clean Code & Commits:** Keep pull requests focused, write comprehensive tests, and use conventional commit messages.
+1. **Local-First e privacidade:** nunca introduza telemetria, dependência obrigatória de sincronização em nuvem, rastreamento ou dependências de rede no fluxo principal de notas.
+2. **Wayland e desempenho em primeiro lugar:** mantenha alta responsividade, baixo uso ocioso de CPU/RAM e o uso correto do protocolo Layer Shell.
+3. **WYSIWYG verdadeiro:** preserve Markdown limpo no disco enquanto apresenta texto formatado no editor, sem marcadores de sintaxe bruta interferindo na edição.
+4. **Código e commits limpos:** mantenha os pull requests focados, escreva testes abrangentes e use mensagens de commit convencionais.
 
-## Development Workflow
+## Fluxo de trabalho de desenvolvimento
 
-1. Ensure all system dependencies are installed:
+1. Certifique-se de que todas as dependências do sistema estejam instaladas:
    - `gtk4`, `gtk4-layer-shell`, `webkitgtk-6.0`
-   - Rust toolchain
+   - toolchain Rust
    - Node.js & pnpm
-2. Run formatters and linters before submitting changes:
+2. Execute formatadores e linters antes de enviar alterações:
    ```bash
    cargo fmt --check
    cargo clippy -- -D warnings
    cargo test
    cd ui && pnpm lint && pnpm test && pnpm build
    ```
-3. Never include developer-specific paths, credentials, or personal configuration files in commits.
+3. Nunca inclua caminhos, credenciais ou arquivos de configuração pessoais específicos do desenvolvedor em commits.
 
-## Commit Guidelines
+## Diretrizes de commits
 
-Use professional and clear commit messages following Conventional Commits:
+Use mensagens de commit profissionais e claras seguindo os commits convencionais:
 
-- `feat: add markdown note storage`
-- `fix: prevent focus loss on overlay transition`
-- `test: add markdown round-trip coverage`
-- `docs: update niri keybinding examples`
-- `chore: update dependencies`
+- `feat: adicionar armazenamento de notas em Markdown`
+- `fix: impedir perda de foco na transição para overlay`
+- `test: adicionar cobertura de ida e volta do Markdown`
+- `docs: atualizar exemplos de atalhos do Niri`
+- `chore: atualizar dependências`

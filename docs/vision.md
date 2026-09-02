@@ -1,18 +1,18 @@
-# Note-it — Product Vision & Principles
+# Note-it — Visão e princípios do produto
 
-## Vision
+## Visão
 
-Note-it is a minimalist, distraction-free desktop post-it note application crafted for Linux Wayland environments.
+Note-it é um aplicativo minimalista e sem distrações para notas adesivas na área de trabalho, criado para ambientes Linux Wayland.
 
-It does not aim to replace comprehensive knowledge bases like Obsidian or Notion. Instead, it fulfills a single, focused need: **effortlessly creating quick notes that reside naturally on the desktop workspace and can be summoned instantly above active windows when needed.**
+Ele não pretende substituir bases de conhecimento abrangentes como Obsidian ou Notion. Em vez disso, atende a uma necessidade única e focada: **criar notas rápidas sem esforço, mantê-las naturalmente na área de trabalho e invocá-las instantaneamente acima das janelas ativas quando necessário.**
 
-## Core Principles
+## Princípios fundamentais
 
-- **Local-First & Offline-First:** All user data remains entirely on the local filesystem.
-- **No Cloud, No Accounts:** No registration, login, sync servers, or external services required.
-- **Privacy by Design:** Zero analytics, telemetry, crash reporting pings, or background network calls.
-- **Wayland Native:** Designed for modern Wayland compositors using the `wlr-layer-shell` protocol, with first-class support for Niri.
-- **Standard Storage:** Every note is a standard, portable Markdown (`.md`) file on disk. No proprietary databases for note text.
-- **True WYSIWYG:** What you see is formatted text. Markdown syntax markers never clutter the editing flow.
-- **Keyboard-Centric:** Instant note creation (`Ctrl+N`), quick dismiss (`Ctrl+W`), and intuitive formatting controls.
-- **High Performance:** Minimal resource footprint, near-zero idle CPU usage, and fast startup.
+- **Local-First e Offline-First:** Todos os dados do usuário permanecem inteiramente no sistema de arquivos local.
+- **Sem nuvem, sem contas:** Não é necessário registro, login, servidores de sincronização ou serviços externos.
+- **Privacidade desde o projeto:** nenhuma análise de uso, telemetria, envio de relatórios de falha ou chamada de rede em segundo plano.
+- **Wayland Nativo:** Projetado para compositores Wayland modernos que usam o protocolo `wlr-layer-shell`, com suporte de primeira classe para Niri.
+- **Armazenamento padrão:** Cada nota é um arquivo Markdown (`.md`) portátil e padrão em disco. Nenhum banco de dados proprietário para texto de notas.
+- **Verdadeiro WYSIWYG:** O que você vê é texto formatado. Os marcadores de sintaxe Markdown nunca atrapalham o fluxo de edição.
+- **Centrado no teclado:** Criação instantânea de notas (`Ctrl+N`), dispensa rápida (`Ctrl+W`) e controles de formatação intuitivos.
+- **Alto desempenho:** consumo mínimo de recursos, uso de CPU ocioso próximo de zero e inicialização rápida.

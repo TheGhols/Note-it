@@ -1,14 +1,12 @@
-# Machine Interface — `noteit --json`
+# Interface da máquina — `noteit --json`
 
-The stable, versioned contract between the `noteit` command line and the scripts and agents that
-call it. Everything a consumer needs in order to decide what to do next is a typed field. No
-decision requires reading, translating or pattern-matching a sentence.
+O contrato estável e versionado entre a linha de comando `noteit` e os scripts e agentes que o chamam. Tudo o que um consumidor precisa para decidir o que fazer a seguir é um campo digitado. Nenhuma decisão requer leitura, tradução ou correspondência de padrões de uma frase.
 
-This document is the contract. If the implementation and this file disagree, that is a bug.
+Este documento é o contrato. Se a implementação e este arquivo discordarem, isso é um bug.
 
 ---
 
-## 1. Turning it on
+## 1. Ativação
 
 ```bash
 noteit --json listar
@@ -18,43 +16,37 @@ noteit adicionar <ID> "texto" --json
 noteit tags adicionar <ID> Medicina --json
 ```
 
-`--json` is a global option: it is accepted before the command, after it, and at every level of a
-grouped command. It works with the international aliases exactly as it does with the Portuguese
-spellings, and produces the same document either way.
+`--json` é uma opção global: é aceita antes do comando, depois dele e em todos os níveis de um comando agrupado. Funciona com os aliases internacionais exatamente como funciona com a grafia portuguesa e produz o mesmo documento de qualquer maneira.
 
-**`--json` is an option, never a word.** After the `--` escape everything is a value:
+**`--json` é uma opção, nunca uma palavra.** Após o escape `--` tudo é um valor:
 
 ```bash
-noteit adicionar <ID> -- --json      # appends the literal text "--json"; human output
+noteit adicionar <ID> -- --json      # acrescenta o texto literal "--json"; saída para pessoas
 ```
 
-The mode is decided from the real option and never from a substring, never from standard input, and
-never from anything after `--`.
+O modo é decidido a partir da opção real e nunca a partir de uma substring, nunca a partir da entrada padrão e nunca a partir de nada após `--`.
 
 ---
 
-## 2. One document per execution
+## 2. Um documento por execução
 
-Exactly one JSON document is written, ending in a single `\n`:
+Exatamente um documento JSON é escrito, terminando em um único `\n`:
 
-| result                     | stdout            | stderr            | exit |
+| resultado                     | stdout            | stderr            | saída |
 | -------------------------- | ----------------- | ----------------- | ---- |
-| success                    | the document      | *empty*           | 0    |
-| success carrying a warning | the document      | *empty*           | 0    |
-| execution error            | *empty*           | the document      | 1    |
-| usage error                | *empty*           | the document      | 2    |
-| indeterminate              | *empty*           | the document      | 1    |
+| sucesso                    | o documento      | *vazio*           | 0    |
+| sucesso com aviso            | o documento      | *vazio*           | 0    |
+| erro de execução            | *vazio*           | o documento      | 1    |
+| erro de uso                | *vazio*           | o documento      | 2    |
+| indeterminado              | *vazio*           | o documento      | 1    |
 
-Nothing else is ever written to either channel in machine mode: no `Aviso:`, no `Erro:`, no usage
-prose, no progress, no ANSI. Parsing a whole channel always works. There is never a second document
-— NDJSON is deliberately not part of this contract.
+Nada mais é gravado em nenhum dos canais no modo máquina: nenhum `Aviso:`, nenhum `Erro:`, nenhuma prosa de uso, nenhum progresso, nenhum ANSI. Analisar um canal inteiro sempre funciona. Nunca existe um segundo documento – NDJSON deliberadamente não faz parte deste contrato.
 
-ANSI is never emitted in machine mode, whether or not the process is attached to a terminal.
-`NO_COLOR` is irrelevant here because there is nothing to turn off.
+ANSI nunca é emitido no modo máquina, esteja o processo conectado a um terminal ou não. `NO_COLOR` é irrelevante aqui porque não há nada para desligar.
 
 ---
 
-## 3. The envelope
+## 3. O envelope
 
 ```json
 {
@@ -67,33 +59,32 @@ ANSI is never emitted in machine mode, whether or not the process is attached to
 }
 ```
 
-All six keys are always present. `data` is `null` on failure and `error` is `null` on success.
-Key order is not part of the contract.
+Todas as seis chaves estão sempre presentes. `data` é `null` em caso de falha e `error` é `null` em caso de sucesso. A ordem das chaves não faz parte do contrato.
 
 ### `schema_version`
 
-An integer. `1` today.
+Um número inteiro. `1` hoje.
 
-- New **optional** fields may be added without changing it.
-- Renaming a field, removing one, or changing what one means requires an explicit new version.
-- Consumers must ignore fields they do not know and must not depend on key order.
+- Novos campos **opcionais** podem ser adicionados sem alterá-los.
+- Renomear um campo, removê-lo ou alterar seu significado requer uma nova versão explícita.
+- Os consumidores devem ignorar os campos que não conhecem e não devem depender da ordem das chaves.
 
 ### `status`
 
-Stable machine tokens, never translated:
+Tokens de máquina estáveis, nunca traduzidos:
 
-| value           | meaning                                                                 |
+| valor           | significado                                                                 |
 | --------------- | ----------------------------------------------------------------------- |
-| `ok`            | the command did what was asked and reported nothing else                |
-| `warning`       | the command did what was asked and `warnings` is not empty              |
-| `error`         | the command did not do what was asked                                   |
-| `indeterminate` | the request went out and the result is genuinely unknown — see §8       |
+| `ok`            | o comando fez o que foi solicitado e não relatou mais nada                |
+| `warning`       | o comando fez o que foi pedido e `warnings` não está vazio              |
+| `error`         | o comando não fez o que foi pedido                                   |
+| `indeterminate` | o pedido foi enviado e o resultado é genuinamente desconhecido — ver §8       |
 
-`status` is `warning` if and only if `warnings` is non-empty on a successful command.
+`status` é `warning` se e somente se `warnings` não estiver vazio em um comando bem-sucedido.
 
 ### `command`
 
-The canonical name of the logical command, independent of how it was spelled:
+O nome canônico do comando lógico, independente de como foi escrito:
 
 ```text
 welcome   help    version   status
@@ -105,25 +96,21 @@ task_complete  task_reopen
 trash_restore
 ```
 
-`listar` and `list` both produce `"command": "list"`. `command` is `null` only when the arguments
-never named a command this build recognises — a parse error that failed before a command was
-identified.
+`listar` e `list` produzem `"command": "list"`. `command` é `null` somente quando os argumentos nunca nomearam um comando que esta compilação reconhece — um erro de análise que falhou antes de um comando ser identificado.
 
 ### `warnings`
 
-An array of objects. Each has `code` (a stable token), `message` (diagnostic prose) and `note_id`
-(a full UUID or `null`).
+Uma matriz de objetos. Cada um tem `code` (um token estável), `message` (prosa de diagnóstico) e `note_id` (um UUID ou `null` completo).
 
 ```text
-unreadable_note              a note could not be read and was left out of the result
-corrupted_front_matter       a note's front matter could not be parsed
-symlink_refused              a note file is a symbolic link and was refused
-io_error                     the store could not be read at that point
-ui_sync_window_not_confirmed the write committed; the open window did not confirm it — see §7
+unreadable_note              uma nota não pôde ser lida e foi omitida do resultado
+corrupted_front_matter       não foi possível analisar o front matter de uma nota
+symlink_refused              o arquivo de uma nota é um link simbólico e foi recusado
+io_error                     o store não pôde ser lido naquele ponto
+ui_sync_window_not_confirmed a gravação foi confirmada; a janela aberta não a confirmou — consulte §7
 ```
 
-A warning never means data was lost from the result: the notes that *could* be read are still in
-`data`, and the exit code is still `0`.
+Um aviso nunca significa que os dados foram perdidos do resultado: as notas que *poderiam* ser lidas ainda estão em `data` e o código de saída ainda é `0`.
 
 ### `error`
 
@@ -131,42 +118,39 @@ A warning never means data was lost from the result: the notes that *could* be r
 { "code": "not_found", "message": "…", "commit_state": "not_committed" }
 ```
 
-`commit_state` is `null` for a command that could not have committed anything (any read, and a parse
-error that named no command).
+`commit_state` é `null` para um comando que não poderia ter confirmado nada (qualquer leitura e um erro de análise que não nomeou nenhum comando).
 
 ---
 
-## 4. Data by command
+## 4. Dados por comando
 
-Timestamps are always RFC 3339 in UTC (`2026-09-02T00:35:58Z`), or `null` when the store has none.
-Identifiers are always full UUIDs — never the eight-character prefix the human output abbreviates
-to. Booleans are booleans, counts are numbers, lists are arrays.
+Os carimbos de data e hora são sempre RFC 3339 em UTC (`2026-09-02T00:35:58Z`) ou `null` quando o armazenamento não possui nenhum. Os identificadores são sempre UUIDs completos - nunca o prefixo de oito caracteres para o qual a saída humana é abreviada. Booleanos são booleanos, contagens são números, listas são matrizes.
 
 ```jsonc
-// welcome
+// boas-vindas
 { "version": "0.1.0", "machine_interface": true }
 
-// help
-{ "usage": "noteit [--json] <comando> [opções]", "help": "…plain text…" }
+// ajuda
+{ "usage": "noteit [--json] <comando> [opções]", "help": "…texto simples…" }
 
-// version
+// versão
 { "version": "0.1.0" }
 
 // status
 { "version": "0.1.0", "cli_ready": true, "core_available": true, "store_exists": true,
   "data_path": "…", "config_path": "…", "state_path": "…" }
 
-// list
+// listagem
 { "notes": [ { "note_id": "…", "label": "…", "snippet": "…", "tags": [],
                "properties": [ { "key": "…", "value": "…" } ],
                "created_at": "…Z", "updated_at": "…Z" } ],
   "count": 1 }
 
-// read
-{ "note": { "note_id": "…", "label": "…", "content": "…raw Markdown…", "tags": [],
+// leitura
+{ "note": { "note_id": "…", "label": "…", "content": "…Markdown bruto…", "tags": [],
             "properties": [], "created_at": "…Z", "updated_at": "…Z" } }
 
-// search
+// pesquisa
 { "query": "biopsia",
   "results": [ { "note_id": "…", "label": "…", "snippet": "…",
                  "match_count": 2, "matched_text": "Biópsia" } ],
@@ -175,39 +159,32 @@ to. Booleans are booleans, counts are numbers, lists are arrays.
 // tags
 { "tags": [ { "name": "Medicina", "note_count": 3 } ], "count": 1 }
 
-// properties
+// propriedades
 { "properties": [ { "key": "fonte", "note_count": 3 } ], "count": 1 }
 
-// tasks
+// tarefas
 { "state": "pending",
   "tasks": [ { "task_ref": "a71bc920", "note_id": "…", "note_label": "…",
                "text": "Revisar noradrenalina", "checked": false,
                "completed_at": null, "depth": 0 } ],
   "count": 1 }
 
-// trash
+// lixeira
 { "entries": [ { "note_id": "…", "label": "…", "snippet": "…", "deleted_at": "…Z" } ],
   "count": 1 }
 ```
 
-`state` is `pending`, `completed` or `all`. An empty result is `[]` with `"count": 0` and
-`"status": "ok"` — never a sentence.
+`state` é `pending`, `completed` ou `all`. Um resultado vazio é `[]` com `"count": 0` e `"status": "ok"` — nunca uma frase.
 
-`content` is the note's Markdown exactly as the Core holds it. The terminal sanitizer that protects
-a person's terminal is **not** applied to it: JSON escaping is what makes a control character safe
-in a document nobody is rendering as text, and mangling the body would hand a script text the note
-does not contain. Quotes, backslashes, newlines, tabs, emoji and escape sequences round-trip
-unchanged through any JSON parser.
+`content` é o Markdown da nota exatamente como o Core o contém. O sanitizador de terminal que protege o terminal de uma pessoa **não** é aplicado a ele: o escape JSON é o que torna um caractere de controle seguro em um documento que ninguém está renderizando como texto, e mutilar o corpo entregaria um texto de script que a nota não contém. Aspas, barras invertidas, novas linhas, tabulações, emoji e sequências de escape passam de ida e volta inalterados por qualquer analisador JSON.
 
-`task_ref` is produced by the Core and is directly usable in `tasks complete` and `tasks reopen`.
-`note_id` from `trash` is directly usable in `trash restore`. No text needs to be parsed to move
-between listing and acting.
+`task_ref` é produzido por Core e pode ser usado diretamente em `tasks complete` e `tasks reopen`. `note_id` de `trash` pode ser usado diretamente em `trash restore`. Nenhum texto precisa ser analisado para alternar entre listagem e atuação.
 
 ---
 
-## 5. Write results
+## 5. Resultados das gravações
 
-Every write command answers with the same shape:
+Cada comando de gravação responde com a mesma forma:
 
 ```json
 {
@@ -228,7 +205,7 @@ Every write command answers with the same shape:
 }
 ```
 
-`kind` is one of:
+`kind` é um dos:
 
 ```text
 note_created   content_appended   content_replaced   content_cleared
@@ -238,46 +215,40 @@ task_completed task_reopened      note_restored
 
 ### `commit_state`
 
-The one field a consumer must read before deciding whether to run a command again.
+O único campo que um consumidor deve ler antes de decidir se deseja executar um comando novamente.
 
-| value           | meaning                                                            |
+| valor           | significado                                                            |
 | --------------- | ------------------------------------------------------------------ |
-| `committed`     | the change is on disk                                              |
-| `not_needed`    | the store already said exactly that; nothing was written           |
-| `not_committed` | nothing was written                                                |
-| `unknown`       | the request went out and whether it committed cannot be determined |
+| `committed`     | a mudança está no disco                                              |
+| `not_needed`    | o store já estava exatamente nesse estado; nada foi gravado  |
+| `not_committed` | nada foi escrito                                                |
+| `unknown`       | a solicitação foi enviada e se ela foi confirmada não pode ser determinada |
 
-On success `commit_state` follows `changed`: `true` → `committed`, `false` → `not_needed`.
-A `changed: false` result is a **success**, not a failure — asking for a tag a note already has is a
-valid request whose desired state already held.
+Em caso de sucesso, `commit_state` segue `changed`: `true` → `committed`, `false` → `not_needed`. Um resultado `changed: false` é um **sucesso**, não um fracasso — solicitar uma tag que uma nota já possui é uma solicitação válida cujo estado desejado já foi mantido.
 
-### Retry rule
+### Regra de nova tentativa
 
-| status          | commit_state    | meaning                             | repeat automatically?           |
+| status          | commit_state    | significado                             | repetir automaticamente?           |
 | --------------- | --------------- | ----------------------------------- | ------------------------------- |
-| `ok`            | `committed`     | the change was written              | **no**                          |
-| `warning`       | `committed`     | written, plus something to report   | **no**                          |
-| `ok`            | `not_needed`    | the state asked for already held    | unnecessary                     |
-| `error`         | `not_committed` | nothing was written                 | only after fixing the cause     |
-| `indeterminate` | `unknown`       | it may or may not have been written | **never** — a person must look  |
+| `ok`            | `committed`     | a mudança foi gravada              | **não**                         |
+| `warning`       | `committed`     | gravada, com algo adicional a relatar | **não**                       |
+| `ok`            | `not_needed`    | o estado solicitado já existia     | desnecessário                   |
+| `error`         | `not_committed` | nada foi escrito                 | só depois de consertar a causa     |
+| `indeterminate` | `unknown`       | pode ou não ter sido escrito | **nunca** — uma pessoa deve olhar  |
 
-`not_committed` does not mean "retry now". It means nothing was written; whether repeating helps
-depends on `error.code` — a `not_found` will not become a `found` on the second try.
-
----
-
-## 6. Which note is open is not the consumer's problem
-
-The same operation produces the same public document whether `noteit` wrote the file itself or a
-running Note-it desktop instance wrote it on request. Which of the two happened is an implementation
-detail and is deliberately not reported: there is nothing a consumer can do differently about it.
-
-The one legitimate difference is `ui_sync`, because a window can only be out of step when there is
-a window.
+`not_committed` não significa "tentar novamente agora". Significa que nada foi escrito; se a repetição ajuda depende de `error.code` — um `not_found` não se tornará um `found` na segunda tentativa.
 
 ---
 
-## 7. `ui_sync` — committed, with the window behind
+## 6. Qual nota está aberta não é problema do consumidor
+
+A mesma operação produz o mesmo documento público, quer `noteit` tenha escrito o arquivo sozinho ou uma instância de desktop Note-it em execução o tenha escrito mediante solicitação. Qual dos dois aconteceu é um detalhe de implementação e não é deliberadamente relatado: não há nada que um consumidor possa fazer de diferente a respeito.
+
+A única diferença legítima é `ui_sync`, porque uma janela só pode estar descompassada quando há uma janela.
+
+---
+
+## 7. `ui_sync` — gravação confirmada, janela desatualizada
 
 ```json
 "ui_sync": {
@@ -287,12 +258,9 @@ a window.
 }
 ```
 
-When a note is open on screen, Note-it freezes its editor, folds any unsaved text into the same
-commit, writes the file, and then hands the committed document back to the window. If the window
-does not confirm that it took the document, the write is **still committed** — the file on disk holds
-the new text — and only the screen is behind.
+Quando uma nota é aberta na tela, Note-it congela seu editor, dobra qualquer texto não salvo no mesmo commit, grava o arquivo e então devolve o documento confirmado para a janela. Se a janela não confirmar que pegou o documento, a gravação **ainda será confirmada** — o arquivo no disco contém o novo texto — e apenas a tela ficará para trás.
 
-That case is reported as:
+Esse caso é relatado como:
 
 ```text
 status              warning
@@ -300,25 +268,20 @@ data.write.changed  true
 commit_state        committed
 ui_sync.status      warning
 ui_sync.code        window_not_confirmed
-warnings[]          contains ui_sync_window_not_confirmed
-exit code           0
-stderr              empty
+warnings[]          contém ui_sync_window_not_confirmed
+código de saída     0
+stderr              vazio
 ```
 
-It is never `status: error`, never `commit_state: not_committed`, and never a non-zero exit.
-**Repeating the command would append the same text twice.** A consumer that branches on
-`ui_sync.status` and `commit_state` cannot make that mistake; one that reads the message might.
+Nunca é `status: error`, nunca `commit_state: not_committed` e nunca é uma saída diferente de zero. **Repetir o comando acrescentaria o mesmo texto duas vezes.** Um consumidor que ramifica em `ui_sync.status` e `commit_state` não pode cometer esse erro; aquele que lê a mensagem pode.
 
-`ui_sync.status` is `ok` whenever nothing reported the window as out of step, which includes every
-write made with no window involved at all.
+`ui_sync.status` é `ok` sempre que nada reporta a janela como fora de sintonia, o que inclui cada gravação feita sem nenhuma janela envolvida.
 
 ---
 
-## 8. `indeterminate` — the result is unknown
+## 8. `indeterminate` — o resultado é desconhecido
 
-The request reached the authority and the answer did not come back: the connection dropped, or the
-response did not belong to this request. The authority may have committed before that happened, and
-there is no way to tell from the calling side.
+A solicitação chegou à autoridade, mas a resposta não retornou: a conexão caiu ou a resposta não pertencia à solicitação. A autoridade pode ter confirmado a gravação antes disso, e o chamador não tem como saber.
 
 ```json
 {
@@ -331,92 +294,78 @@ there is no way to tell from the calling side.
 }
 ```
 
-Exit code is non-zero, but this is **not** "the write failed". `commit_state` is `unknown` and never
-`not_committed`, precisely so an agent cannot treat it as a clean failure and retry.
+O código de saída é diferente de zero, mas **não** "a gravação falhou". `commit_state` é `unknown` e nunca `not_committed`, precisamente para que um agente não possa tratá-lo como uma falha limpa e tentar novamente.
 
-**Never repeat an operation automatically after `unknown`.** Read the note, decide what the store
-actually holds, and act on that.
+**Nunca repita uma operação automaticamente após `unknown`.** Leia a nota, decida o que o store realmente possui e aja de acordo.
 
 ---
 
-## 9. Error codes
+## 9. Códigos de erro
 
-Stable tokens. The `message` beside them is human-readable diagnostic prose; its wording, and even
-its language, are not part of the contract.
+Tokens estáveis. O `message` ao lado deles é uma prosa de diagnóstico legível por humanos; a sua redação, e mesmo a sua linguagem, não fazem parte do contrato.
 
-| code                    | exit  | commit_state on a write | meaning                                              |
+| código                    | saída  | commit_state em uma gravação | significado                                              |
 | ----------------------- | ----- | ----------------------- | ---------------------------------------------------- |
-| `usage_error`           | 2     | `not_committed` \*      | the request was not well formed                      |
-| `invalid_input`         | 2 / 1 | `not_committed`         | a selector, payload or reference that is not one     |
-| `validation`            | 2     | `not_committed`         | a domain rule refused the value                      |
-| `not_found`             | 1     | `not_committed`         | no note or trash entry answers to that selector      |
-| `ambiguous_selector`    | 1     | `not_committed`         | more than one note answers to that selector          |
-| `stale_task_ref`        | 1     | `not_committed`         | the note changed; that reference no longer names it  |
-| `ambiguous_task_ref`    | 1     | `not_committed`         | the reference matches more than one task             |
-| `writer_busy`           | 1     | `not_committed`         | another Note-it writer holds the store               |
-| `authority_unavailable` | 1     | `not_committed`         | the store is held and the holder could not be asked  |
-| `trash_target_occupied` | 1     | `not_committed`         | a live note already carries that identifier          |
-| `persistence`           | 1     | `not_committed`         | the write was attempted and did not happen           |
-| `store_unavailable`     | 1     | `not_committed`         | the store itself could not be read                   |
-| `indeterminate`         | 1     | `unknown`               | the result is unknown — see §8                       |
-| `read_failed`           | 1     | `null`                  | a note or the store could not be read                |
-| `internal_error`        | 1     | `null`                  | the answer itself could not be produced              |
+| `usage_error`           | 2     | `not_committed` \*      | o pedido não foi bem formulado                      |
+| `invalid_input`         | 2 / 1 | `not_committed`         | seletor, conteúdo ou referência inválidos             |
+| `validation`            | 2     | `not_committed`         | uma regra de domínio recusou o valor                      |
+| `not_found`             | 1     | `not_committed`         | nenhuma nota ou entrada de lixo responde a esse seletor      |
+| `ambiguous_selector`    | 1     | `not_committed`         | mais de uma nota responde a esse seletor          |
+| `stale_task_ref`        | 1     | `not_committed`         | a nota mudou; essa referência já não nomeia a tarefa  |
+| `ambiguous_task_ref`    | 1     | `not_committed`         | a referência corresponde a mais de uma tarefa             |
+| `writer_busy`           | 1     | `not_committed`         | outro gravador Note-it mantém o store               |
+| `authority_unavailable` | 1     | `not_committed`         | o store está ocupado e não foi possível solicitar ao detentor |
+| `trash_target_occupied` | 1     | `not_committed`         | uma nota ativa já carrega esse identificador          |
+| `persistence`           | 1     | `not_committed`         | a gravação foi tentada e não aconteceu           |
+| `store_unavailable`     | 1     | `not_committed`         | o próprio store não pôde ser lido                   |
+| `indeterminate`         | 1     | `unknown`               | o resultado é desconhecido — ver §8                       |
+| `read_failed`           | 1     | `null`                  | uma nota ou o store não pôde ser lida                |
+| `internal_error`        | 1     | `null`                  | a resposta em si não pôde ser produzida              |
 
-\* `usage_error` carries `not_committed` when it was raised against a command that writes, and
-`null` when the command was a read or could not be identified.
+\* `usage_error` carrega `not_committed` quando foi gerado contra um comando que grava e `null` quando o comando foi lido ou não pôde ser identificado.
 
-`invalid_input` is the one code that carries two exit codes, and it is inherited rather than
-introduced here: a malformed selector given to a **write** has always exited `2` and the same
-selector given to a **read** has always exited `1`. The machine interface preserves both rather than
-quietly renumbering a sealed contract. Branch on `error.code`, not on the exit code, whenever the two
-could differ.
+`invalid_input` é o único código associado a dois códigos de saída, comportamento herdado em vez de introduzido aqui: um seletor malformado fornecido a uma **gravação** sempre retornou `2`, enquanto o mesmo seletor fornecido a uma **leitura** sempre retornou `1`. A interface da máquina preserva ambos, em vez de renumerar silenciosamente um contrato selado. Ramifique por `error.code`, não pelo código de saída, sempre que os dois puderem ser diferentes.
 
-Every one of these except `indeterminate` means, under the current contract, that nothing was
-written.
+Cada um deles, exceto `indeterminate`, significa, sob o contrato atual, que nada foi escrito.
 
-### Parse errors keep machine mode
+### Erros de análise mantêm o modo máquina
 
-Machine mode survives an argument list the parser could not read at all:
+O modo máquina sobrevive a uma lista de argumentos que o analisador não conseguiu ler:
 
 ```bash
-noteit --json batata                  # → usage_error on stderr, exit 2
-noteit --json adicionar               # → usage_error on stderr, exit 2
-noteit --json --flag-inexistente      # → usage_error on stderr, exit 2
-noteit --json buscar                  # → usage_error on stderr, exit 2
+noteit --json batata                  # → usage_error em stderr, saída 2
+noteit --json adicionar               # → usage_error em stderr, saída 2
+noteit --json --flag-inexistente      # → usage_error em stderr, saída 2
+noteit --json buscar                  # → usage_error em stderr, saída 2
 ```
 
-A consumer that asked for JSON never receives a paragraph of Portuguese instead.
+Um consumidor que solicitou JSON nunca recebe um parágrafo em português.
 
 ---
 
-## 10. What is deliberately not here
+## 10. O que deliberadamente não está aqui
 
-- **The private control protocol.** Request identifiers, the protocol version, the socket path, the
-  writer lock, the window generation and which write path ran are a conversation between two Note-it
-  processes. They are not this API and are never serialised into it, even though both happen to use
-  JSON.
-- **Filesystem paths**, except in `status`, where they are the point of the command.
-- **Input in JSON.** `--json` describes output only. Payloads still arrive as arguments or on
-  standard input via `--stdin`, unchanged and unencoded.
-- **Pretty printing, NDJSON, batching, streaming, a daemon, MCP.** One command, one document.
+- **O protocolo de controle privado.** Os identificadores de solicitação, a versão do protocolo, o caminho do soquete, o bloqueio do gravador, a geração da janela e o caminho de gravação executado são uma conversa entre dois processos Note-it. Eles não fazem parte desta API e nunca são serializados nela, embora ambos usem JSON.
+- **Caminhos do sistema de arquivos**, exceto em `status`, onde são o ponto do comando.
+- **Entrada em JSON.** `--json` descreve apenas a saída. As cargas ainda chegam como argumentos ou na entrada padrão via `--stdin`, inalteradas e não codificadas.
+- **Impressão bonita, NDJSON, lote, streaming, um daemon, MCP.** Um comando, um documento.
 
 ---
 
-## 11. Answering the questions that matter, without reading a word
+## 11. Responder às perguntas importantes, sem ler uma palavra
 
-| question                             | field                                             |
+| pergunta                             | campo                                             |
 | ------------------------------------ | ------------------------------------------------- |
-| did the command work?                | `status`                                          |
-| was there something to report?       | `warnings`, `status == "warning"`                 |
-| was anything actually changed?       | `data.write.changed`                              |
-| did the commit happen?               | `data.write.commit_state == "committed"`          |
-| was a commit even needed?            | `commit_state == "not_needed"`                    |
-| did the commit definitely not happen?| `commit_state == "not_committed"`                 |
-| is the commit result unknown?        | `status == "indeterminate"`, `commit_state == "unknown"` |
-| which note was affected?             | `data.write.note_id` (a full UUID)                |
-| which operation happened?            | `command`, `data.write.kind`                      |
-| is the open window out of step?      | `data.write.ui_sync.status`                       |
-| what went wrong?                     | `error.code`                                      |
+| o comando funcionou?                | `status`                                          |
+| havia algo a relatar?       | `warnings`, `status == "warning"`                 |
+| alguma coisa realmente mudou?       | `data.write.changed`                              |
+| o commit aconteceu?               | `data.write.commit_state == "committed"`          |
+| um commit era mesmo necessário?            | `commit_state == "not_needed"`                    |
+| o commit definitivamente não aconteceu?| `commit_state == "not_committed"`                 |
+| o resultado do commit é desconhecido?        | `status == "indeterminate"`, `commit_state == "unknown"` |
+| qual nota foi afetada?             | `data.write.note_id` (um UUID completo)                |
+| qual operação aconteceu?            | `command`, `data.write.kind`                      |
+| a janela aberta está descompassada?      | `data.write.ui_sync.status`                       |
+| o que deu errado?                     | `error.code`                                      |
 
-`message` fields exist for a person reading a log. A consumer that branches on one has misread this
-interface.
+Existem campos `message` para uma pessoa que lê um registro. Um consumidor que ramifica em uma delas interpretou mal essa interface.

@@ -1,209 +1,145 @@
-# Features
+# Funcionalidades
 
-## Window & Layer Modes
+## Modos de janela e camada
 
-Note-it leverages Wayland Layer Shell to provide three distinct surface modes:
+Note-it aproveita Wayland Layer Shell para fornecer três modos de superfície distintos:
 
-1. **Desktop Mode (`bottom` layer):**
-   - Post-it surfaces remain pinned above the desktop wallpaper but behind application windows.
-   - Non-intrusive keyboard mode to avoid stealing focus during normal window navigation.
+1. **Modo Desktop (camada `bottom`):**
+   - As superfícies post-it permanecem fixadas acima do papel de parede da área de trabalho, mas atrás das janelas do aplicativo.
+   - Modo de teclado não intrusivo para evitar roubar o foco durante a navegação normal pela janela.
 
-2. **Overlay Mode (`overlay` layer):**
-   - Post-it surfaces surface above all active applications, including maximized and fullscreen windows.
-   - Interactive focus is enabled for swift editing.
+2. **Modo de sobreposição (camada `overlay`):**
+   - Superfícies post-it aparecem acima de todos os aplicativos ativos, incluindo janelas maximizadas e em tela cheia.
+   - O foco interativo está habilitado para edição rápida.
 
-3. **Hidden Mode:**
-   - Surfaces are detached/hidden while the background daemon remains ready for instant activation.
+3. **Modo Oculto:**
+   - As superfícies são desanexadas/ocultadas enquanto o daemon de segundo plano permanece pronto para ativação instantânea.
 
-## Note Header
+## Cabeçalho da nota
 
-- An expanded note keeps one overlay header, and it paints nothing at all until it is asked for.
-  Moving the pointer into the strip along the top of the note reveals the controls over about
-  120 ms; leaving the bar lets them recede. Keyboard focus inside the header, an open quick-action
-  panel and a collapsed note each hold the chrome out on their own.
-- The editor reserves only that strip — `--note-chrome-gutter`, not the bar's full height — so the
-  note starts near its own top edge. The strip is the one part of the surface that is always a
-  pointer target, and it is exactly the editor's top padding, so no line of text ever sits under
-  it: the first line stays clickable, selectable and caret-addressable everywhere. While the
-  chrome is hidden the controls take no pointer event at all, so an invisible button can never
-  claim a click meant for the text below it.
-- **Quick actions:** six icon-only buttons, each opening a panel the menu already owns —
-  **Cor da nota**, **Tamanho do texto**, **Cor do texto**, **Marca-texto**, **Blocos** and
-  **Buscar**. None of them has logic of its own; they are a second way into the same panel and the
-  same handler. They are hidden while the note is collapsed.
-  - Their drawings are inline SVG written into `index.html` at build time from six files in the
-    supplied icon collection — `bucket`, `larger-text`, `text`, `edite`, `Category` and `Search`.
-    Those six are the only ones the build releases, and each is the single source for its icon.
-    Nothing is fetched: the page's own `default-src 'self'` blocks an image request for a CSS mask
-    or a `data:` URL, which is why the earlier masked icons came out blank on WebKitGTK.
-  - Every shape inherits `currentColor` at full strength, so one file serves all seven papers and
-    both interface themes and clears 3:1 against every one of them.
-- **Clipper (paperclip):** a seventh icon in the bar, between **Buscar** and the timer, that opens
-  the image chooser straight away — the same chooser, the same import and the same asset directory
-  as *☰ › Mídia › Inserir imagem…*, which stays exactly where it is. It is the one header button
-  that does something rather than opening a panel, and putting a picture in a note is the commonest
-  thing anyone does with the Mídia section, so a panel in front of it would be a click for no
-  reading. Its drawing is inline SVG from the same collection (`attach-svgrepo-com5`), it is hidden
-  while the note is collapsed like the six, and there is no keyboard shortcut for it.
-  - It is also the one control that gives way on a note narrower than 300 px: the bar has a hard
-    budget at `MIN_NOTE_WIDTH`, and with the clock and the capture indicator on it something has to
-    yield before the close cross does. The paperclip is a shortcut to what the menu still offers in
-    full, so losing it costs a click and nothing else — where losing ☰, the clock, the indicator or
-    the cross would cost a control with nowhere else to be.
-- **Settings Menu (`☰`):**
-  - A three-line button on the left of the header opens a small popover anchored to the bar.
+- Uma nota expandida mantém um cabeçalho sobreposto e não pinta nada até que seja solicitado. Mover o ponteiro para a faixa na parte superior da nota revela os controles ao longo de cerca de 120 ms; sair da barra permite que eles recuem. O foco do teclado dentro do cabeçalho, um painel de ação rápida aberto e uma nota recolhida mantêm o chrome por conta própria.
+- O editor reserva apenas essa faixa — `--note-chrome-gutter`, e não a altura total do barra — para que a nota comece perto de sua borda superior. A faixa é a única parte da superfície que é sempre um alvo do ponteiro e é exatamente o preenchimento superior do editor, portanto, nenhuma linha de texto fica abaixo dela: a primeira linha permanece clicável, selecionável e endereçável por cursor em qualquer lugar. Enquanto o chrome está oculto, os controles não recebem nenhum evento de ponteiro, portanto, um botão invisível nunca pode reivindicar um clique destinado ao texto abaixo dele.
+- **Ações rápidas:** seis botões somente ícones, cada um abrindo um painel que o menu já possui — **Cor da nota**, **Tamanho do texto**, **Cor do texto**, **Marca-texto**, **Blocos** e **Buscar**. Nenhum deles tem lógica própria; eles são uma segunda maneira de entrar no mesmo painel e no mesmo manipulador. Eles ficam ocultos enquanto a nota está recolhida.
+  - Seus desenhos são SVG embutidos escritos em `index.html` no momento da construção a partir de seis arquivos no
+coleção de ícones fornecida — `bucket`, `larger-text`, `text`, `edite`, `Category` e `Search`.
+Esses seis são os únicos que a compilação lança e cada um é a única fonte de seu ícone.
+Nada é buscado: o próprio `default-src 'self'` da página bloqueia uma solicitação de imagem para uma máscara CSS
+ou um URL `data:`, razão pela qual os ícones mascarados anteriores apareciam em branco em WebKitGTK.
+  - Cada forma herda `currentColor` com força total, então um arquivo serve todos os sete papéis e
+ambos os temas de interface e limpa 3:1 contra cada um deles.
+- **Clipper (clip de papel):** um sétimo ícone na barra, entre **Buscar** e o timer, que abre imediatamente o seletor de imagens — o mesmo seletor, a mesma importação e o mesmo diretório de ativos de *☰ › Mídia › Inserir imagem…*, que fica exatamente onde está. É o único botão do cabeçalho que faz alguma coisa em vez de abrir um painel, e colocar uma imagem em uma nota é a coisa mais comum que alguém faz na seção Mídia, então um painel na frente seria um clique para não ler. Seu desenho é SVG embutido da mesma coleção (`attach-svgrepo-com5`), fica oculto enquanto a nota está recolhida como o seis e não há atalho de teclado para ele.
+  - É também o único controle que cede em uma nota mais estreita que 300 px: a barra tem um formato rígido
+orçamento em `MIN_NOTE_WIDTH`, e com o relógio e o indicador de captura nele, algo precisa
+rende antes que o cruzamento próximo o faça. O clipe de papel é um atalho para o que o cardápio ainda oferece em
+cheio, então perdê-lo custa um clique e nada mais - onde perder ☰, o relógio, o indicador ou
+a cruz custaria um controle sem nenhum outro lugar para estar.
+- **Menu Configurações (`☰`):**
+  - Um botão de três linhas à esquerda do cabeçalho abre um pequeno popover ancorado na barra.
   - Entries: **Tipo de papel**, **Intensidade**, **Dados**, **Zoom da nota**, **Interface**,
-    **Tema**, **Camada**, and **Recolher nota** / **Expandir nota**. Formatting quick actions are not repeated here — one
-    function, one place to reach it — but the panels they open are the menu's own.
-  - The menu shows the current paper, intensity, zoom, theme and layer on their own rows, so none
-    of them depends on opening a submenu or knowing a shortcut.
-  - On a short note the popover is capped at the WebView's remaining height and scrolls vertically;
-    a large note keeps the original natural-height menu.
-  - Closes on outside click, `Escape`, or selecting an entry; only one popover exists per note.
-  - The button and the popover sit outside the drag region, so using them never moves the note.
-- **Note Information Tooltip:**
-  - Resting the cursor on the free area of the header for ~450 ms shows the note's creation and
-    modification dates in pt-BR `dd/MM/aaaa HH:mm`.
-  - The tooltip never takes the pointer (`pointer-events: none`) and is dismissed by leaving the
-    bar, clicking, starting a drag, or opening the menu.
-- **Collapse / Expand:**
-  - Collapsing reduces the note to its header bar; the editor is hidden, never unmounted, so the
-    content, formatting and the Tiptap instance are preserved.
-  - The expanded width and height are recorded before collapsing and restored on expand, at
-    whatever position the collapsed bar was left.
-  - A collapsed note can still be dragged; resizing is unavailable until it is expanded again.
-  - Its header stays visible and names the note from the first useful content line. A heading marker
-    is removed for presentation, an empty note says **Nota sem título**, and long names end in `…`.
-    The label is never written into the Markdown or front matter.
-  - The collapsed state is persisted, so a note left collapsed reopens collapsed.
+**Tema**, **Camada** e **Recolher nota** / **Expandir nota**. As ações rápidas de formatação não são repetidas aqui - uma
+função, um lugar para alcançá-lo - mas os painéis que eles abrem são os do próprio menu.
+  - O menu mostra o papel atual, intensidade, zoom, tema e camada em suas próprias linhas, portanto, nenhum
+deles depende de abrir um submenu ou conhecer um atalho.
+  - Resumindo, o popover é limitado à altura restante do WebView e rola verticalmente;
+uma nota grande mantém o menu original de altura natural.
+  - Fecha com clique externo, `Escape`, ou seleção de uma entrada; existe apenas um popover por nota.
+  - O botão e o popover ficam fora da região de arrastar, portanto, usá-los nunca move a nota.
+- **Dica de informações de observação:**
+  - Posicionar o cursor na área livre do cabeçalho por aproximadamente 450 ms mostra a criação da nota e
+datas de modificação em pt-BR `dd/MM/aaaa HH:mm`.
+  - A dica de ferramenta nunca pega o ponteiro (`pointer-events: none`) e é descartada deixando o
+barra, clicando, arrastando ou abrindo o menu.
+- **Recolher/Expandir:**
+  - Recolher reduz a nota à sua barra de cabeçalho; o editor fica oculto, nunca desmontado, então o
+o conteúdo, a formatação e a instância Tiptap são preservados.
+  - A largura e a altura expandidas são registradas antes do recolhimento e restauradas na expansão, em
+qualquer que seja a posição em que a barra recolhida foi deixada.
+  - Uma nota recolhida ainda pode ser arrastada; o redimensionamento não estará disponível até que seja expandido novamente.
+  - Seu cabeçalho permanece visível e nomeia a nota a partir da primeira linha de conteúdo útil. Um marcador de rumo
+é retirado para apresentação, uma nota vazia diz **Nota sem título**, e nomes longos terminam em `…`.
+O rótulo nunca é escrito em Markdown ou front matter.
+  - O estado recolhido é persistido, portanto, uma nota deixada recolhida reabre recolhida.
 
-## Paper
+## Papel
 
-Each note carries its own paper, independently of every other note.
+Cada nota carrega seu próprio papel, independentemente de qualquer outra nota.
 
 - **Cor da nota:** the seven colours — Amarelo, Azul, Verde, Rosa, Roxo, Cinza, Preto.
-- **Tipo de papel:** **Liso**, **Pautado**, **Pontilhado**, **Quadriculado pequeno**,
-  **Quadriculado grande**. Plain paper is the original look and draws no pattern at all.
-- **Intensidade:** **Suave**, **Normal**, **Forte** — the opacity the pattern is drawn with, and
-  nothing else. It never changes the paper colour, the text, or the note's geometry. Plain paper
-  keeps whatever intensity it was given; it simply has no pattern to act on.
-- The pattern is pure CSS: one parameterised system where the type picks a pattern and its
-  spacing, the intensity picks the opacity, and the paper colour picks the ink — dark ink on the
-  pale papers, light ink on the dark one, so it stays visible on all seven.
-- Spacing is in pixels, so zoom scales the text while the pattern stays put. Ruled paper is spaced
-  to the note's default line box, but it is a background, not a layout grid: lines are not pinned
-  to individual lines of text.
-- The pattern is painted on the scrolling surface, so it travels with the text, and the note's own
-  colour still fills the window underneath — a fast resize exposes paper, never an unpainted strip.
-- A collapsed note's bar shows its colour without the pattern; expanding brings the pattern back.
-- Paper type and intensity are properties of the note, stored in its front matter beside the
-  colour. Changing either saves the note without touching its content or its modification date.
+- **Tipo de papel:** **Liso**, **Pautado**, **Pontilhado**, **Quadriculado pequeno**, **Quadriculado grande**. O papel comum tem a aparência original e não desenha nenhum padrão.
+- **Intensidade:** **Suave**, **Normal**, **Forte** — a opacidade com a qual o padrão é desenhado e nada mais. Nunca altera a cor do papel, o texto ou a geometria da nota. O papel comum mantém a intensidade que lhe foi dada; simplesmente não tem um padrão para agir.
+- O padrão é puro CSS: um sistema parametrizado onde o tipo escolhe um padrão e seu espaçamento, a intensidade escolhe a opacidade e a cor do papel escolhe a tinta – tinta escura nos papéis claros, tinta clara nos papéis escuros, para que permaneça visível em todos os sete.
+- O espaçamento é em pixels, então o zoom dimensiona o texto enquanto o padrão permanece no mesmo lugar. O papel pautado é espaçado na caixa de linha padrão da nota, mas é um plano de fundo, não uma grade de layout: as linhas não são fixadas em linhas individuais de texto.
+- O padrão é pintado na superfície de rolagem, de modo que acompanha o texto, e a própria cor da nota ainda preenche a janela abaixo – um redimensionamento rápido expõe o papel, nunca uma faixa sem pintura.
+- A barra de uma nota recolhida mostra sua cor sem o padrão; expandir traz o padrão de volta.
+- O tipo e a intensidade do papel são propriedades da nota, armazenadas em seu front matter ao lado da cor. Alterar salva a nota sem alterar seu conteúdo ou data de modificação.
 
-## Theme
+## Tema
 
-The theme is the appearance of the **application**, not of a note.
+O tema é a aparência do **aplicativo**, não de uma nota.
 
-- **Sistema**, **Claro**, **Escuro**, chosen from any note's menu and shared by every note. The
-  preference is global and lives in `config.toml`.
-- **Sistema** follows the desktop's colour scheme and keeps following it, so switching the desktop
-  to dark reaches open notes without a restart.
-- It dresses only the chrome: menus, popovers, borders, shadows, hover and focus states, and
-  auxiliary text. Everything drawn on the paper — the note's text, checkboxes, highlights, the
-  header buttons — keeps taking its colour from the paper.
-- A note keeps the colour it was given: a yellow note stays yellow under the dark theme, and a
-  black one stays black under the light theme.
+- **Sistema**, **Claro**, **Escuro**, escolhidos no menu de qualquer nota e compartilhados por todas as notas. A preferência é global e reside em `config.toml`.
+- **Sistema** segue o esquema de cores da área de trabalho e continua seguindo-o, portanto, mudar a área de trabalho para escuro alcança notas abertas sem reiniciar.
+- Ele veste apenas o chrome: menus, popovers, bordas, sombras, estados de foco e foco e texto auxiliar. Tudo o que é desenhado no papel – o texto da nota, as caixas de seleção, os destaques, os botões do cabeçalho – continua tirando a cor do papel.
+- Uma nota mantém a cor que lhe foi dada: uma nota amarela permanece amarela no tema escuro e uma nota preta permanece preta no tema claro.
 
-## Window Positioning & Interactions
+## Posicionamento e interações da janela
 
-- **Drag & Resize:**
-  - Header drag region (`.drag-region`) for moving post-its freely across the workspace.
-  - Discrete bottom-right resize handle (`.resize-handle`) with min-dimension limits (`220x160` px).
-  - A gesture emits geometry deltas only while exactly one pointer is captured; `pointerup`,
-    `pointercancel`, a lost pointer capture, or a move reporting no button held all end it
-    completely, and a frame left over from before the end cannot move the window.
-  - Geometry persisted to `$XDG_STATE_HOME/note-it/state.json` exclusively on gesture end (zero disk I/O during active dragging/resizing).
-- **Safe Geometry Clamping & Monitor Fallback:**
-  - Clamping guarantees notes stay visible on-screen even after monitor resolution changes.
-  - Multi-monitor connector detection with graceful fallback if a display is disconnected.
-- **Smart Cascade Placement:**
-  - New notes cascade incrementally across the screen grid.
+- **Arrastar e redimensionar:**
+  - Região de arrasto do cabeçalho (`.drag-region`) para mover post-its livremente pela área de trabalho.
+  - Alça de redimensionamento discreta no canto inferior direito (`.resize-handle`) com limites de dimensão mínima (`220x160` px).
+  - Um gesto emite deltas geométricos apenas enquanto exatamente um ponteiro é capturado; `pointerup`,
+`pointercancel`, uma captura de ponteiro perdida ou um movimento informando que nenhum botão foi pressionado, tudo encerra
+completamente, e uma moldura que sobrou antes do final não pode mover a janela.
+  - A geometria persistiu para `$XDG_STATE_HOME/note-it/state.json` exclusivamente no final do gesto (zero E/S de disco durante arrastar/redimensionar ativo).
+- **Fixação geométrica segura e substituto do monitor:**
+  - A fixação garante que as notas permaneçam visíveis na tela mesmo após alterações na resolução do monitor.
+  - Detecção de conector de vários monitores com fallback elegante se um monitor for desconectado.
+- **Colease em cascata inteligente:**
+  - Novas notas são exibidas em cascata de forma incremental pela grade da tela.
 
-## Note Lifecycle
+## Ciclo de vida da nota
 
-- **Closing keeps the note:** the `×` button saves the note, records it as closed, and destroys only
-  the window. The Markdown file, its geometry, colour, zoom and collapsed state all stay on disk.
-- **Summoning brings it back:** running `note-it` restores the notes and makes them visible. With
-  every note closed, the one used last is reopened instead of a blank note being created.
-- **One instance:** a second invocation reaches the running instance through the single-instance
-  dispatcher and exits; it never starts a second application.
-- **`note-it new`** is the explicit way to create an additional note.
+- **Fechar mantém a nota:** o botão `×` salva a nota, registra-a como fechada e destrói apenas a janela. O arquivo Markdown, sua geometria, cor, zoom e estado recolhido permanecem no disco.
+- **A invocação o traz de volta:** executar `note-it` restaura as notas e as torna visíveis. Com cada nota fechada, a última usada é reaberta em vez de ser criada uma nota em branco.
+- **Uma instância:** uma segunda invocação atinge a instância em execução por meio do despachante de instância única e sai; ele nunca inicia um segundo aplicativo.
+- **`note-it new`** é a maneira explícita de criar uma nota adicional.
 
-## Tasks
+## Tarefas
 
-- **Markdown Task Lists:**
-  - Typing `- [ ] ` creates a task; `- [x] ` or `- [X] ` creates a completed one.
-  - Real editor nodes with square checkboxes, not text characters, nested up to any depth with
+- **Markdown Listas de tarefas:**
+  - Digitar `- [ ] ` cria uma tarefa; `- [x] ` ou `- [X] ` cria um completo.
+  - Nós de editor reais com caixas de seleção quadradas, não caracteres de texto, aninhados em qualquer profundidade com
     `Tab` / `Shift+Tab`.
-- **Completion:**
-  - Completing a task ticks the box, strikes the text through, and records the moment, shown
-    discreetly as `Concluído dd/MM/aaaa HH:mm`.
-  - Reopening a task clears the date; completing it again records a new one.
-  - A task written elsewhere as `- [x]` loads as completed with no date invented for it.
+- **Conclusão:**
+  - Concluir uma tarefa marca a caixa, risca o texto e registra o momento, mostrado
+discretamente como `Concluído dd/MM/aaaa HH:mm`.
+  - Reabrir uma tarefa limpa a data; completá-lo novamente registra um novo.
+  - Uma tarefa escrita em outro lugar como `- [x]` é carregada como concluída sem nenhuma data inventada para ela.
 
-## Smart Blocks
+## Blocos Inteligentes
 
-Four block kinds, all stored as ordinary Markdown and all reachable from the
-**Blocos** section of the note's own menu — no second toolbar was introduced.
+Quatro tipos de blocos, todos armazenados como Markdown comum e acessíveis a partir da seção **Blocos** do menu da própria nota - nenhuma segunda barra de ferramentas foi introduzida.
 
-- **Bloco de código:** a fenced block whose language survives every round trip
-  untouched, including one nothing here can highlight. Sixteen grammars are
-  loaded: `plaintext`, `bash`, `javascript`, `typescript`, `json`, `html`/`xml`,
-  `css`, `markdown`, `python`, `rust`, `c`, `cpp`, `java`, `sql`, `yaml` and
-  `toml`, plus the aliases each already answers to (`js`, `ts`, `py`, `sh`,
-  `cpp`…). The language is chosen from **Blocos → Linguagem**, which shows the
-  current one and is offered only where it means something.
-- **Callout:** `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` and
-  `> [!CAUTION]` — GitHub's alert syntax, which Obsidian reads too. A callout is
-  a blockquote carrying a kind, so it holds several paragraphs, lists and nested
-  blocks without a content model of its own. An unrecognised kind is left as the
-  blockquote it already is, with its text untouched.
-- **Citação:** the plain blockquote, which stays independent of callouts and is
-  never promoted into one. Indented, ruled down the side, set in the note's own
-  text colour rather than dimmed and italicised.
-- **Comentário:** an `<!-- ... -->` kept in the file and shown as a small
-  labelled block. It is editable — a comment the window never showed would be one
-  nobody could remove — but it is not part of the note's text.
+- **Bloco de código:** um bloco cercado cuja linguagem sobrevive intacta a cada viagem de ida e volta, incluindo uma que nada aqui pode destacar. Dezesseis gramáticas são carregadas: `plaintext`, `bash`, `javascript`, `typescript`, `json`, `html`/`xml`, `css`, `markdown`, `python`, `rust`, `c`, `cpp`, `java`, `sql`, `yaml` e `toml`, além dos aliases que cada um já responde (`js`, `ts`, `py`, `sh`, `cpp`…). O idioma é escolhido em **Blocos → Linguagem**, que mostra o atual e é oferecido apenas onde significa alguma coisa.
+- **Chamada:** `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` e `> [!CAUTION]` — sintaxe de alerta de GitHub, que Obsidian também lê. Um texto explicativo é uma citação em bloco que carrega um tipo, portanto contém vários parágrafos, listas e blocos aninhados sem um modelo de conteúdo próprio. Um tipo não reconhecido é deixado como a citação que já é, com seu texto intacto.
+- **Citação:** a citação em bloco simples, que permanece independente das frases de destaque e nunca é promovida a uma. Recuado, pautado na lateral, definido na própria cor do texto da nota, em vez de esmaecido e em itálico.
+- **Comentário:** um `<!-- ... -->` mantido no arquivo e mostrado como um pequeno bloco rotulado. É editável - um comentário que a janela nunca mostrou seria aquele que ninguém poderia remover - mas não faz parte do texto da nota.
 
-Markdown typed by hand still works: `` ``` `` opens a code block and `> ` opens a
-quote, exactly as before.
+Markdown digitado manualmente ainda funciona: `` ``` `` opens a code block and `> ` abre uma cotação, exatamente como antes.
 
-Highlighting is **presentation only**: editor decorations over the same
-characters, never markup in the file. It is not applied to a block with no
-language, and never guessed for one whose language is unknown — an unhighlighted
-block is the honest answer, not a colour scheme picked by resemblance. Typing
-outside a code block does not re-run it, so a note full of code stays as light
-to edit as any other.
+O destaque é **apenas apresentação**: decorações do editor sobre os mesmos caracteres, nunca marcação no arquivo. Não é aplicado a um bloco sem idioma e nunca é adivinhado para aquele cujo idioma é desconhecido - um bloco não destacado é a resposta honesta, não um esquema de cores escolhido por semelhança. Digitar fora de um bloco de código não o executa novamente, portanto, uma nota cheia de código permanece tão leve para editar quanto qualquer outra.
 
-Every colour a smart block paints — seven syntax tokens and five callout accents
-— is defined once for the pale papers and once for the dark one, and each clears
-4.5:1 against the paper it is actually drawn on. The grounds are tinted from the
-paper rather than being surfaces of their own, so a note keeps its colour under
-every block.
+Cada cor que um bloco inteligente pinta – sete tokens de sintaxe e cinco acentos de texto explicativo – é definida uma vez para os papéis claros e uma vez para os escuros, e cada uma limpa 4,5:1 em relação ao papel em que é realmente desenhado. Os motivos são tingidos do papel, em vez de serem superfícies próprias, de modo que uma nota mantém sua cor sob cada bloco.
 
-## Math Engine
+## Motor matemático
 
-A note calculates as it is written. Nothing is pressed, nothing is re-run, there
-is no calculate button and no mode to enter: a line that looks like arithmetic
-shows its answer beside it, and the answer follows the note as the note changes.
+Uma nota é calculada conforme é escrita. Nada é pressionado, nada é executado novamente, não há botão de cálculo e nenhum modo para entrar: uma linha que parece aritmética mostra sua resposta ao lado dela, e a resposta segue a nota conforme a nota muda.
 
-The result is a **decoration**, not text. It is not in the document, so it is
-not saved, not selected, not copied, and not part of an undo step. The `.md` on
-disk holds exactly what was typed, which is what makes it safe to open the same
-note in another editor.
+O resultado é uma **decoração**, não um texto. Ele não está no documento, portanto não é salvo, selecionado, copiado e não faz parte de uma etapa de desfazer. O `.md` no disco contém exatamente o que foi digitado, o que torna seguro abrir a mesma nota em outro editor.
 
-### Calculating a line
+### Calculando uma linha
 
-A calculation begins with `=`:
+Um cálculo começa com `=`:
 
 ```text
 = 2 + 2                            4
@@ -211,18 +147,13 @@ A calculation begins with `=`:
 = 10 * 8                          80
 ```
 
-`+`, `-`, `*`, `/` and parentheses, with the usual precedence and
-left-associativity. Numbers may be negative and may be written `10.5` or `10,5`
-— both separators are read as decimal. A number with **two** separators
-(`1.234.567`) is refused rather than guessed at: Note-it accepts no thousands
-separator, in either direction, so a result can always be read back as itself.
+`+`, `-`, `*`, `/` e parênteses, com a precedência usual e associatividade à esquerda. Os números podem ser negativos e podem ser escritos `10.5` ou `10,5` — ambos os separadores são lidos como decimais. Um número com **dois** separadores (`1.234.567`) é recusado em vez de adivinhado: Note-it não aceita separador de milhares, em nenhuma direção, portanto, um resultado sempre pode ser lido como ele mesmo.
 
-There is no modulo operator. `%` means percent and only percent, because a
-symbol that means two things is a symbol nobody can rely on.
+Não há operador de módulo. `%` significa porcentagem e apenas porcentagem, porque um símbolo que significa duas coisas é um símbolo no qual ninguém pode confiar.
 
-### Variables
+### Variáveis
 
-A declaration is `nome := expressão`:
+Uma declaração é `nome := expressão`:
 
 ```text
 preco := 120
@@ -231,20 +162,13 @@ subtotal := preco * quantidade    360
 = subtotal + 10%                 396
 ```
 
-- Names are ASCII: a letter or `_`, then letters, digits and `_`. `preço` is not
-  a name, and a line that says `:=` with an unusable name is reported as **nome
-  inválido** rather than quietly read as prose.
-- `sum`, `avg`, `count` and `de` belong to the grammar and cannot be names.
-- Variables are **local to the note** and resolved **top-down**: a variable
-  exists from its declaration downwards. `= preco * 2` written *above*
-  `preco := 100` reports an unknown variable, which is also what makes cycles
-  impossible — `a := b + 1` over `b := a + 1` simply fails on the first line.
-- A later declaration replaces an earlier one from that line down. A declaration
-  that fails un-declares the name, so everything below it says so.
-- A declaration whose right-hand side is a bare number shows no result: the
-  value is already on the line.
+- Os nomes são ASCII: uma letra ou `_`, depois letras, dígitos e `_`. `preço` não é um nome, e uma linha que diz `:=` com um nome inutilizável é relatada como **nome inválido** em vez de ser lida silenciosamente como prosa.
+- `sum`, `avg`, `count` e `de` pertencem à gramática e não podem ser nomes.
+- As variáveis ​​são **locais à nota** e resolvidas **de cima para baixo**: uma variável existe a partir de sua declaração para baixo. `= preco * 2` escrito *acima* `preco := 100` relata uma variável desconhecida, que também torna os ciclos impossíveis - `a := b + 1` sobre `b := a + 1` simplesmente falha na primeira linha.
+- Uma declaração posterior substitui uma anterior dessa linha. Uma declaração que falha desdeclara o nome, então tudo abaixo diz isso.
+- Uma declaração cujo lado direito é um número simples não mostra nenhum resultado: o valor já está na linha.
 
-### Percentages
+### Porcentagens
 
 ```text
 = 10% de 200                      20
@@ -254,16 +178,11 @@ taxa := 10%
 = taxa * 200                      20
 ```
 
-`X%` is a hundredth. The contextual readings — an increase, a discount, and
-`de` — apply to a `%` **written on the line**, never to a value that once came
-from one: `taxa` holds `0.1`, so `= 200 + taxa` is `200,1`. What you can see is
-what applies. `de` requires a percentage on its left; `200 de 10` is an invalid
-expression rather than a number nobody meant.
+`X%` é um centésimo. As leituras contextuais — um aumento, um desconto e `de` — aplicam-se a um `%` **escrito na linha**, nunca a um valor que veio de um: `taxa` contém `0.1`, então `= 200 + taxa` é `200,1`. O que você pode ver é o que se aplica. `de` requer uma porcentagem à sua esquerda; `200 de 10` é uma expressão inválida e não um número que ninguém quis dizer.
 
-### `sum`, `avg` and `count`
+### `sum`, `avg` e `count`
 
-An aggregator is the **whole** expression of its line, and it reads the block of
-consecutive calculation lines directly above it:
+Um agregador é a expressão **inteira** de sua linha e lê o bloco de linhas de cálculo consecutivas diretamente acima dela:
 
 ```text
 = 10                              10
@@ -274,26 +193,17 @@ consecutive calculation lines directly above it:
 = count                            3
 ```
 
-The block is exactly "the `=` lines immediately above that produced a value". A
-line of prose, a heading, a declaration or a failed calculation ends it, so a
-number sitting in a sentence is never added to anything and two lists separated
-by a line of text stay two lists. The three aggregators read the block without
-consuming it, so they stack; the first value under one starts a new block.
+O bloco é exatamente "as linhas `=` imediatamente acima que produziram um valor". Uma linha de prosa, um título, uma declaração ou um cálculo falhado termina-o, de modo que um número colocado numa frase nunca é adicionado a nada e duas listas separadas por uma linha de texto permanecem duas listas. Os três agregadores leem o bloco sem consumi-lo, então empilham; o primeiro valor abaixo de um inicia um novo bloco.
 
-An empty block sums to `0` and counts `0`; its average is `0 / 0` and says so.
+Um bloco vazio soma `0` e conta `0`; sua média é `0 / 0` e diz isso.
 
-### When it will not calculate
+### Quando o cálculo não é executado
 
-Calculation is read from **plain paragraphs only**. Inside a fenced code block,
-an inline code span, a comment, a heading, a list, a task, a quote or a callout,
-`= 2 + 2` is the text it is. This is a deliberate first-version boundary: a line
-that calculates in one place and not in another for invisible reasons is worse
-than one that never calculates in either.
+O cálculo é lido **somente parágrafos simples**. Dentro de um bloco de código protegido, um intervalo de código embutido, um comentário, um título, uma lista, uma tarefa, uma citação ou uma chamada, `= 2 + 2` é o texto que é. Este é um limite deliberado da primeira versão: uma linha que calcula em um lugar e não em outro por razões invisíveis é pior do que uma que nunca calcula em nenhum dos dois.
 
-### When it cannot answer
+### Quando não pode responder
 
-A failure is four words beside the line, in italics, and nothing else — no
-dialog, no popup, no stack trace, and nothing written to the file:
+Uma falha consiste em quatro palavras ao lado da linha, em itálico, e nada mais — nenhuma caixa de diálogo, nenhum pop-up, nenhum rastreamento de pilha e nada escrito no arquivo:
 
 | | |
 | --- | --- |
@@ -302,35 +212,21 @@ dialog, no popup, no stack trace, and nothing written to the file:
 | `= (2 + 3` | expressão inválida |
 | `12preco := 1` | nome inválido |
 
-### Reactivity, and what it costs
+### Reatividade e quanto custa
 
-The whole note is re-evaluated on every document change. That is the entire
-reactivity mechanism: change `preco` and every line under it moves in the same
-pass, with no dependency graph to go stale and no timers. Measured on a note far
-larger than a post-it — 100 paragraphs of prose, 20 variables, 50 expressions
-and all three aggregators — one keystroke costs a fraction of a millisecond.
+Toda a nota é reavaliada a cada alteração no documento. Esse é todo o mecanismo de reatividade: altere `preco` e cada linha abaixo dele se move na mesma passagem, sem nenhum gráfico de dependência para ficar obsoleto e sem temporizadores. Medido em uma nota muito maior do que um post-it – 100 parágrafos de prosa, 20 variáveis, 50 expressões e todos os três agregadores – um pressionamento de tecla custa uma fração de milissegundo.
 
-### There is no evaluator
+### Não há avaliador
 
-Expressions are read by a small lexer and a recursive-descent parser written for
-this and nothing else. There is no `eval`, no `Function`, no property access, no
-call syntax and no host object anywhere in it, and no dependency was added. A
-note writing `window.location`, `constructor.constructor(...)` or `fetch(...)`
-is writing an invalid expression or naming a variable that does not exist —
-variables live in a `Map`, which has no prototype chain to reach into.
+As expressões são lidas por um pequeno lexer e um analisador descendente recursivo escrito para isso e nada mais. Não há `eval`, nem `Function`, nem acesso de propriedade, nem sintaxe de chamada e nenhum objeto host em qualquer lugar dele, e nenhuma dependência foi adicionada. Uma nota escrevendo `window.location`, `constructor.constructor(...)` ou `fetch(...)` está escrevendo uma expressão inválida ou nomeando uma variável que não existe - as variáveis ​​vivem em um `Map`, que não tem nenhuma cadeia de protótipo para acessar.
 
-### How it looks
+### Aparência
 
-Discreet: a small chip at the end of the line, in an ink mixed from the paper's
-own two, over the same faint ground the code block, the callout and the comment
-already use. It clears 4.5:1 on all seven papers, takes no part in selection or
-pointer interaction, and needs no colour or theme override of its own.
+Discreto: uma pequena lasca no final da linha, numa tinta misturada com as duas do próprio papel, sobre o mesmo fundo esmaecido que o bloco de código, o texto explicativo e o comentário já utilizam. Ele limpa 4,5:1 em todos os sete papéis, não participa da seleção ou interação do ponteiro e não precisa de substituição de cor ou tema próprio.
 
-## Conversions
+## Conversões
 
-A conversion is a calculation with a unit on each side, and it works the way
-every other result does: written in the note, computed as you type, shown
-beside the line, and never written into the file.
+Uma conversão é um cálculo com uma unidade de cada lado e funciona da mesma forma que qualquer outro resultado: escrito na nota, calculado conforme você digita, mostrado ao lado da linha e nunca escrito no arquivo.
 
 ```text
 = 10 km em m                      10000 m
@@ -338,17 +234,15 @@ beside the line, and never written into the file.
 = 0 C em F                        32 °F
 ```
 
-### The syntax
+### A sintaxe
 
 ```text
 = <expressão> <unidade> em <unidade>
 ```
 
-`em` is the conversion keyword and the only one — there is no second spelling
-for the same thing. It is a reserved word, so no variable may be called `em`.
+`em` é a palavra-chave de conversão e a única — não há uma segunda grafia para a mesma coisa. É uma palavra reservada, portanto nenhuma variável pode ser chamada `em`.
 
-The left-hand side is a full expression from the math engine, so all of these
-read:
+O lado esquerdo é uma expressão completa do mecanismo matemático, então tudo isso é lido:
 
 ```text
 = (10 + 5) km em m                15000 m
@@ -361,39 +255,30 @@ x := 5
 = x * 2 km em m                   10000 m
 ```
 
-The unit applies to **the whole expression on its left**, so `= 10 + 5 km em m`
-is fifteen kilometres. There is no unit algebra here to give the other reading
-a meaning, and one rule you can hold in your head beats two you have to guess
-between. Use parentheses when the grouping matters to you.
+A unidade se aplica a **toda a expressão à sua esquerda**, então `= 10 + 5 km em m` equivale a quinze quilômetros. Não há álgebra unitária aqui para dar um significado à outra leitura, e uma regra que você pode manter em sua cabeça é melhor do que duas que você precisa adivinhar. Use parênteses quando o agrupamento for importante para você.
 
-A declaration may hold a conversion — `metros := 10 km em m` — and the variable
-then holds `10000`. It holds a **number**, not a quantity: a unit in a variable
-is not part of this version, so `distancia := 10 km` is an invalid expression
-rather than a distance. See the limitation at the end of this section.
+Uma declaração pode conter uma conversão — `metros := 10 km em m` — e a variável então contém `10000`. Ela contém um **número**, não uma quantidade: uma unidade em uma variável não faz parte desta versão, então `distancia := 10 km` é uma expressão inválida em vez de uma distância. Consulte a limitação no final desta seção.
 
-### The units
+### As unidades
 
-Every spelling below is matched **exactly**. There is no case folding: `m` is a
-metre and `M` is nothing at all, because a rule that folded them would fold `MB`
-onto `mb` too. Where a lower-case convenience is safe it is simply listed as an
-alias, which is why `ml` and `l` work and `mb` does not.
+Cada grafia abaixo corresponde **exatamente**. Não há dobramento de caso: `m` é um metro e `M` não é nada, porque uma regra que os dobrasse também dobraria `MB` sobre `mb`. Quando uma conveniência em letras minúsculas é segura, ela é simplesmente listada como um alias, e é por isso que `ml` e `l` funcionam e `mb` não.
 
 ### Comprimento — base `m`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `mm` | `milimetro`, `milimetros` | mm | 0.001 |
 | `cm` | `centimetro`, `centimetros` | cm | 0.01 |
 | `m` | `metro`, `metros` | m | 1 |
 | `km` | `quilometro`, `quilometros` | km | 1000 |
-| `in` | `polegada`, `polegadas` | in | 0.0254 |
+| `in` | `polegada`, `polegadas` | em | 0.0254 |
 | `ft` | `pe`, `pes` | ft | 0.3048 |
 | `yd` | `jarda`, `jardas` | yd | 0.9144 |
 | `mi` | `milha`, `milhas` | mi | 1609.344 |
 
 ### Massa — base `g`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `mg` | `miligrama`, `miligramas` | mg | 0.001 |
 | `g` | `grama`, `gramas` | g | 1 |
@@ -404,7 +289,7 @@ alias, which is why `ml` and `l` work and `mb` does not.
 
 ### Volume — base `mL`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `mL` | `ml`, `mililitro`, `mililitros` | mL | 1 |
 | `cL` | `cl`, `centilitro`, `centilitros` | cL | 10 |
@@ -415,7 +300,7 @@ alias, which is why `ml` and `l` work and `mb` does not.
 
 ### Temperatura — base `K`
 
-| unidade | aliases | exibida | conversão |
+| unidade | apelidos | exibida | conversão |
 | --- | --- | --- | --- |
 | `°C` | `C`, `c`, `celsius` | °C | `K = °C + 273,15` |
 | `°F` | `F`, `f`, `fahrenheit` | °F | `K = (°F + 459,67) × 5/9` |
@@ -423,7 +308,7 @@ alias, which is why `ml` and `l` work and `mb` does not.
 
 ### Tempo — base `s`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `ms` | `milissegundo`, `milissegundos` | ms | 0.001 |
 | `s` | `seg`, `segundo`, `segundos` | s | 1 |
@@ -434,7 +319,7 @@ alias, which is why `ml` and `l` work and `mb` does not.
 
 ### Área — base `m²`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `mm²` | `mm2` | mm² | 0.000001 |
 | `cm²` | `cm2` | cm² | 0.0001 |
@@ -442,12 +327,11 @@ alias, which is why `ml` and `l` work and `mb` does not.
 | `km²` | `km2` | km² | 1000000 |
 | `ha` | `hectare`, `hectares` | ha | 10000 |
 
-An area unit is its own unit with its own factor, not a length with an
-exponent: `= 1 m2 em cm2` is `10000 cm²`.
+Uma unidade de área é sua própria unidade com seu próprio fator, não um comprimento com um expoente: `= 1 m2 em cm2` é `10000 cm²`.
 
 ### Dados digitais — base `B`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `B` | `byte`, `bytes` | B | 1 |
 | `KB` | — | KB | 1000 |
@@ -459,28 +343,23 @@ exponent: `= 1 m2 em cm2` is `10000 cm²`.
 | `GiB` | — | GiB | 1073741824 |
 | `TiB` | — | TiB | 1099511627776 |
 
-The SI prefixes are **decimal** and the IEC prefixes are **binary**, which is
-what the two sets of names exist to distinguish: `= 1 GB em MB` is `1000 MB`
-and `= 1 GiB em MiB` is `1024 MiB`. Note-it never blurs them.
+Os prefixos SI são **decimais** e os prefixos IEC são **binários**, que é o que os dois conjuntos de nomes existem para distinguir: `= 1 GB em MB` é `1000 MB` e `= 1 GiB em MiB` é `1024 MiB`. Note-it nunca os confunde.
 
 ### Velocidade — base `m/s`
 
-| unidade | aliases | exibida | fator |
+| unidade | apelidos | exibida | fator |
 | --- | --- | --- | --- |
 | `m/s` | — | m/s | 1 |
 | `km/h` | — | km/h | 1/3,6 |
 | `mph` | — | mph | 0.44704 |
 
-Three named rows, not a length divided by a time. There is no derived-unit
-algebra behind them, so `kg/L` and `m/s²` are unknown units rather than
-quantities Note-it works out.
+Três linhas nomeadas, não um comprimento dividido por um tempo. Não há álgebra de unidades derivadas por trás deles, então `kg/L` e `m/s²` são unidades desconhecidas em vez de quantidades que Note-it funcionam.
 
-### `m` is a metre, `min` is a minute
+### `m` é um metro, `min` é um minuto
 
-`m` is never a minute, in any context. If minutes ever gained a one-letter
-abbreviation the two would collide, so they do not have one.
+`m` nunca é um minuto, em qualquer contexto. Se os minutos ganhassem uma abreviatura de uma letra, os dois colidiriam, então eles não têm uma.
 
-### What a conversion refuses
+### O que uma conversão recusa
 
 | | |
 | --- | --- |
@@ -488,797 +367,492 @@ abbreviation the two would collide, so they do not have one.
 | `= 10 km em foo` | unidade desconhecida |
 | `= 10 kg em km` | unidades incompatíveis |
 | `= 1 m2 em m` | unidades incompatíveis |
-| `= -300 C em K` | conversão inválida — nothing is colder than absolute zero |
-| `= 10 km` | expressão inválida — a conversion has no target |
+| `= -300 C em K` | conversão inválida — nada é mais frio que o zero absoluto |
+| `= 10 km` | Expressão inválida — uma conversão não tem alvo |
 | `= banana km em m` | variável desconhecida |
 
-An incompatible pair is refused before the expression is even evaluated: a
-dimension is a property of the spelling, so `= 10 kg em km` cannot become valid
-for some value of the left-hand side.
+Um par incompatível é recusado antes mesmo de a expressão ser avaliada: uma dimensão é uma propriedade da grafia, portanto `= 10 kg em km` não pode se tornar válido para algum valor do lado esquerdo.
 
-### Where a conversion is read
+### Onde uma conversão é lida
 
-Exactly where a calculation is: **plain paragraphs only**. Inside a fenced code
-block, an inline code span, a comment, a heading, a list, a task, a quote or a
-callout, `= 10 km em m` is the text it is.
+Exatamente onde um cálculo é: **somente parágrafos simples**. Dentro de um bloco de código protegido, um intervalo de código embutido, um comentário, um título, uma lista, uma tarefa, uma citação ou uma chamada, `= 10 km em m` é o texto que é.
 
-### Aggregators and converted quantities
+### Agregadores e quantidades convertidas
 
-`sum`, `avg` and `count` add up plain numbers and know nothing about units, so a
-converted line **ends** the block they read rather than being totalled into it.
-Aggregating over units is a real feature; aggregating silently across them is a
-bug.
+`sum`, `avg` e `count` somam números simples e não sabem nada sobre unidades, então uma linha convertida **termina** o bloco que eles lêem em vez de ser totalizada nele. Agregar unidades é um recurso real; agregar silenciosamente entre eles é um bug.
 
-### Precision, and how a result is written
+### Precisão e como um resultado é escrito
 
-The factors are the defined ones and nothing was rounded to tidy a table: an
-inch is exactly 0.0254 m, a pound exactly 453.59237 g, a mile exactly 1609.344 m.
-Temperature carries its own converters rather than a factor, because no
-multiplication takes 0 to 32 and 100 to 212 at the same time.
+Os fatores são os definidos e nada foi arredondado para arrumar uma mesa: uma polegada equivale exatamente a 0,0254 m, uma libra equivale exatamente a 453,59237 g, uma milha equivale exatamente a 1.609,344 m. A temperatura carrega seus próprios conversores em vez de um fator, porque nenhuma multiplicação leva de 0 a 32 e de 100 a 212 ao mesmo tempo.
 
-Results are written by the same formatter the math engine has always used:
-comma for the decimal separator, no thousands separator, twelve significant
-digits. The missing grouping is deliberate — `.` and `,` are both read as
-decimal separators, so a grouped result would be one this same engine reads back
-as a different number.
+Os resultados são escritos pelo mesmo formatador que o mecanismo matemático sempre usou: vírgula para o separador decimal, sem separador de milhar, doze dígitos significativos. O agrupamento ausente é deliberado — `.` e `,` são ambos lidos como separadores decimais, portanto, um resultado agrupado seria aquele que esse mesmo mecanismo lê de volta como um número diferente.
 
-`dia` and `semana` are the only units whose displayed name changes with the
-value, because `1 dia` and `7 dias` both have to read as Portuguese.
+`dia` e `semana` são as únicas unidades cujo nome exibido muda com o valor, porque `1 dia` e `7 dias` devem ser lidos em português.
 
-### Currencies are not here
+### As moedas não estão aqui
 
-`USD em BRL` has no answer without a rate, the rate changes every minute, and a
-rate written into a table is wrong before it is committed. Note-it converts only
-quantities that are constants, offline, and identical when the note is reopened
-in ten years. Currencies are a later phase with a source of its own — see
-`docs/decisions.md`, ADR-025.
+`USD em BRL` não tem resposta sem uma taxa, a taxa muda a cada minuto e uma taxa escrita em uma tabela está errada antes de ser confirmada. Note-it converte apenas quantidades constantes, off-line e idênticas quando a nota for reaberta em dez anos. As moedas são uma fase posterior com uma fonte própria — consulte `docs/decisions.md`, ADR-025.
 
-### Known limitation: a unit cannot live in a variable
+### Limitação conhecida: uma unidade não pode viver em uma variável
 
 ```text
 distancia := 10 km     ← expressão inválida
 ```
 
-A variable holds a number, so the unit goes on the line that uses it:
+Uma variável contém um número, então a unidade vai na linha que a utiliza:
 
 ```text
 distancia := 10
 = distancia km em m    10000 m
 ```
 
-Carrying units through variables would mean every value in the engine becoming
-a quantity, and with it percentages, aggregation and every rule already
-established. It is a deliberate boundary for this version rather than a
-half-built one.
+Transportar unidades através de variáveis ​​significaria que cada valor no motor se tornaria uma quantidade, e com ele percentagens, agregações e todas as regras já estabelecidas. É um limite deliberado para esta versão, em vez de um limite incompleto.
 
-## Search
+## Pesquisa
 
-Opened with `Ctrl+K` from inside any note. The palette is a panel in the page, not a second window,
-and not part of the document — nothing typed into it can reach the Markdown.
+Aberto com `Ctrl+K` dentro de qualquer nota. A paleta é um painel na página, não uma segunda janela e não faz parte do documento — nada digitado nela pode chegar ao Markdown.
 
-### What is searched
+### O que é pesquisado
 
-The note's **body**: everything below the front matter. Headings, lists, tasks, quotes, callouts,
-code blocks and comments are all note content and are all searchable.
+**corpo** da nota: tudo abaixo de front matter. Títulos, listas, tarefas, citações, textos explicativos, blocos de código e comentários são todos conteúdos de notas e podem ser pesquisados.
 
-The front matter itself is not. `note_it:`, `created_at:`, `updated_at:` and `paper:` are how the
-file is written, not what the reader wrote, and a search for `paper` must not return every note in
-the store.
+O front matter em si não é. `note_it:`, `created_at:`, `updated_at:` e `paper:` são como o arquivo é escrito, não o que o leitor escreveu, e uma pesquisa por `paper` não deve retornar todas as notas no armazenamento.
 
-Neither is anything the editor merely draws. A `4` shown beside `= 2 + 2`, a `10000 m` shown beside
-`= 10 km em m` and every other decoration are not in the file, so no search can find them.
+Tampouco é algo que o editor apenas desenha. Um `4` mostrado ao lado de `= 2 + 2`, um `10000 m` mostrado ao lado de `= 10 km em m` e todas as outras decorações não estão no arquivo, portanto nenhuma pesquisa pode encontrá-los.
 
-### How a query is matched
+### Como uma consulta é correspondida
 
-| Property | Behaviour |
+| Propriedade | Comportamento |
 | --- | --- |
-| Case | Insensitive — `BIÓPSIA`, `Biópsia` and `biópsia` are one word |
-| Accents | Insensitive — `biopsia` finds `Biópsia`, `coracao` finds `Coração` |
-| Matching | Literal substring. `.*`, `[a-z]` and `(foo\|bar)` are those characters, not a pattern |
-| Query limit | 512 characters; longer is refused rather than truncated silently |
-| Results | 100 notes at most |
-| Snippet | About 240 characters, cut at a character boundary |
-| Order | Most recently written in first |
-| Notes scanned | **All of them.** There is no scan ceiling — the cap is on results, not on how far the search looks |
+| Caso | Insensível — `BIÓPSIA`, `Biópsia` e `biópsia` são uma palavra |
+| Acentos | Insensível — `biopsia` encontra `Biópsia`, `coracao` encontra `Coração` |
+| Correspondência | Substring literal. `.*`, `[a-z]` e `(foo\|bar)` são esses caracteres, não um padrão |
+| Limite de consulta | 512 caracteres; mais é recusado em vez de truncado silenciosamente |
+| Resultados | 100 notas no máximo |
+| Trecho | Cerca de 240 caracteres, cortados no limite do caractere |
+| Ordem | Mais recentemente escrito no primeiro |
+| Notas digitalizadas | **Todos eles.** Não há limite máximo de varredura — o limite está nos resultados, não na extensão da pesquisa |
 
-There is no stemming, no fuzzy matching and no semantic search. `biopsia` finds `biópsia`; it does
-not find `punção`. The rule is one a reader can predict, which is the point.
+Não há lematização, correspondência difusa e pesquisa semântica. `biopsia` encontra `biópsia`; não encontra `punção`. A regra é aquela que o leitor pode prever, e esse é o ponto.
 
-**What the limits do not limit is the note.** They bound the query and the answer; the file is
-read to its end, because a word at the end of a long note has to be findable. A store of a thousand
-notes is searched in about 40 ms and a single 2 MB note is searched correctly and without writing
-anything — both measured by tests — but there is no formal guarantee about an arbitrarily large
-individual file, and none is claimed. See ADR-027.1.
+**O que os limites não limitam é a nota.** Vinculam a consulta e a resposta; o arquivo é lido até o fim, porque uma palavra no final de uma nota longa deve ser localizável. Um armazenamento de mil notas é pesquisado em cerca de 40 ms e uma única nota de 2 MB é pesquisada corretamente e sem escrever nada - ambos medidos por testes - mas não há garantia formal sobre um arquivo individual arbitrariamente grande, e nenhuma é reivindicada. Consulte ADR-027.1.
 
-### What a result looks like
+### Qual é a aparência de um resultado
 
-One note is one result, however many times the word appears in it.
+Uma nota é um resultado, não importa quantas vezes a palavra apareça nela.
 
 ```text
 Biópsia hepática                                    4
 …a biópsia transjugular é utilizada quando…
 ```
 
-- The **label** is the note's first non-empty line, with the most obvious Markdown markers removed
-  for display — `# Biópsia hepática` is shown as `Biópsia hepática`. Nothing is written to the file
-  to create a title. A note with no text is listed as `Nota vazia`.
-- The **snippet** is the text around the first match, rendered as text. A note containing
-  `<script>alert(1)</script>` shows those characters; it does not become an element.
-- The **count** appears when a note holds more than one occurrence.
+- O **rótulo** é a primeira linha não vazia da nota, com os marcadores Markdown mais óbvios removidos para exibição — `# Biópsia hepática` é mostrado como `Biópsia hepática`. Nada é gravado no arquivo para criar um título. Uma nota sem texto é listada como `Nota vazia`.
+- O **snippet** é o texto em torno da primeira correspondência, renderizado como texto. Uma nota contendo `<script>alert(1)</script>` mostra esses caracteres; não se torna um elemento.
+- A **contagem** aparece quando uma nota contém mais de uma ocorrência.
 
-### An empty query lists recent notes
+### Uma consulta vazia lista notas recentes
 
-Opening the palette without typing shows the notes most recently **written in**, so the same
-control is also how you move between them. Appearing in that list is not editing: `updated_at` does
-not move.
+Abrir a paleta sem digitar mostra as notas mais recentemente **escritas**, portanto, o mesmo controle também é como você se move entre elas. Aparecer nessa lista não é edição: `updated_at` não se move.
 
-"Most recently written in" is the note's own `updated_at`, not the date on the file. Changing a
-note's colour, paper, pattern intensity or font size rewrites the file without being an edit, and
-does not move the note up this list — repainting a note is not writing in it. A note with no
-`updated_at` — written before the field existed, or with front matter that cannot be read — falls
-back to the file's own timestamp. The same rule decides which note a summon brings back, so there
-is one idea of "most recent" in the application rather than two that disagree.
+"Escrito mais recentemente" é o próprio `updated_at` da nota, não a data no arquivo. Alterar a cor, o papel, a intensidade do padrão ou o tamanho da fonte de uma nota reescreve o arquivo sem ser uma edição e não move a nota para cima nesta lista - repintar uma nota não é escrever nela. Uma nota sem `updated_at` — escrita antes da existência do campo, ou com front matter que não pode ser lida — retorna ao carimbo de data/hora do próprio arquivo. A mesma regra decide qual nota uma convocação traz de volta, portanto há uma ideia de “mais recente” na aplicação, em vez de duas que discordam.
 
-### Opening a result
+### Abrindo um resultado
 
-`Enter`, or a click:
+`Enter` ou um clique:
 
-- a note **already open** is activated;
-- a note that is **closed** is opened;
-- a note that is **collapsed** is expanded;
-- the note scrolls to the first occurrence and highlights it, with the find bar open so the
-  highlight has a visible cause and an obvious way out.
+- uma nota **já aberta** é ativada;
+- uma nota que está **fechada** é aberta;
+- uma nota **recolhida** é expandida;
+- a nota rola até a primeira ocorrência e a destaca, com a barra de localização aberta para que o destaque tenha uma causa visível e uma saída óbvia.
 
-None of that changes the note's text, and none of it moves `updated_at`. The Desktop/Overlay layer
-is not touched either: opening a note from a search never switches the layer for everything else.
+Nada disso altera o texto da nota e nada move `updated_at`. A camada Desktop/Overlay também não é tocada: abrir uma nota de uma pesquisa nunca troca a camada por todo o resto.
 
-A result the store no longer has — deleted from outside between the search and the `Enter` — says
-`nota não encontrada`, drops the row and searches again. Nothing is recreated.
+Um resultado que o store não possui mais - excluído de fora entre a pesquisa e o `Enter` - diz `nota não encontrada`, descarta a linha e pesquisa novamente. Nada é recriado.
 
-### Keyboard
+### Teclado
 
-| Key | Action |
+| Key | Ação |
 | --- | --- |
-| `Ctrl+K` | Open |
-| `Esc` | Close, returning the keyboard to the editor |
-| `↓` / `↑` | Next / previous result, wrapping |
-| `Enter` | Open the selected result |
-| `Ctrl+Shift+Space` | Deliberately **not** claimed — the layer belongs to the application, and toggling it with the palette open neither closes it nor types a space |
+| `Ctrl+K` | Abrir |
+| `Esc` | Fechar, retornando o teclado ao editor |
+| `↓` / `↑` | Resultado seguinte/anterior, embrulho |
+| `Enter` | Abra o resultado selecionado |
+| `Ctrl+Shift+Space` | Deliberadamente **não** reivindicado — a camada pertence ao aplicativo e alterná-la com a paleta aberta não a fecha nem digita um espaço |
 
-Typing is debounced by 120 ms and every request is numbered. Only the answer to the request
-currently outstanding can change the list, so an answer to `bio` is discarded once `biopsia` has
-been asked — whether it arrives before or after the newer one, and whether or not anything has
-answered yet. An answer arriving after the palette has closed changes nothing.
+A digitação é interrompida em 120 ms e cada solicitação é numerada. Somente a resposta à solicitação atualmente pendente pode alterar a lista, portanto, uma resposta a `bio` é descartada assim que `biopsia` for solicitado - se ela chega antes ou depois da mais recente e se alguma coisa foi ou não respondida ainda. Uma resposta que chega após o fechamento da paleta não altera nada.
 
-### Searching writes nothing
+### Pesquisar não escreve nada
 
-No save, no flush, no `.md` touched, no `updated_at` moved, no index file, and nothing recorded in
-`state.json` — not the query, not the selection, not the palette. Opening a closed note from a
-result does change that note's `is_open`, because the reader really did open it.
+Nenhum salvamento, nenhuma liberação, nenhum `.md` tocado, nenhum `updated_at` movido, nenhum arquivo de índice e nada registrado em `state.json` - nem a consulta, nem a seleção, nem a paleta. Abrir uma nota fechada a partir de um resultado altera o `is_open` dessa nota, porque o leitor realmente a abriu.
 
-### No index
+### Sem índice
 
-There is none, on purpose. A thousand notes are listed, read, folded, matched and turned into
-snippets in about 40 ms, so an index would buy nothing a person could perceive and would cost
-invalidation, rebuilding, a file format to migrate and a second implementation to keep honest. The
-measurement is a test, so the day it stops being true is a day something fails. See ADR-027.
+Não há nenhum, de propósito. Mil notas são listadas, lidas, dobradas, combinadas e transformadas em fragmentos em cerca de 40 ms, de modo que um índice não compraria nada que uma pessoa pudesse perceber e custaria invalidação, reconstrução, um formato de arquivo para migrar e uma segunda implementação para manter a honestidade. A medição é um teste, então o dia em que ela deixa de ser verdadeira é o dia em que algo falha. Consulte ADR-027.
 
-## Find & Replace
+## Localizar e substituir
 
-Inside the note you are looking at, over the live document — including text typed a second ago and
-not yet saved.
+Dentro da nota que você está vendo, sobre o documento ativo – incluindo texto digitado há um segundo e ainda não salvo.
 
-### Find
+### Localizar
 
-| Key | Action |
+| Key | Ação |
 | --- | --- |
-| `Ctrl+F` | Open, seeded from the selection when it is short and on one line |
-| `Enter` | Next occurrence |
-| `Shift+Enter` | Previous occurrence |
-| `Esc` | Close |
-| `Aa` | Match case |
+| `Ctrl+F` | Aberto, propagado a partir da seleção quando é curto e em uma linha |
+| `Enter` | Próxima ocorrência |
+| `Shift+Enter` | Ocorrência anterior |
+| `Esc` | Fechar |
+| `Aa` | Caso de correspondência |
 
-The counter reads `2 de 7`, or `nenhuma`. Navigation wraps in both directions. Every occurrence is
-highlighted, the current one more strongly, using theme tokens so the highlight is visible on light
-paper and on black paper alike.
+O contador indica `2 de 7` ou `nenhuma`. A navegação envolve ambas as direções. Cada ocorrência é destacada, a atual com mais força, usando tokens temáticos para que o destaque fique visível tanto em papel claro quanto em papel preto.
 
-Finding changes nothing: the highlights are decorations, so there is no transaction, no undo step,
-no rewritten Markdown and no change to `updated_at`.
+Encontrar não altera nada: os destaques são decorações, portanto não há transação, nenhuma etapa de desfazer, nenhuma reescrita de Markdown e nenhuma alteração em `updated_at`.
 
-Find searches the document, so it cannot find a calculated or converted result — searching a note
-containing `= 2 + 2` for `4` reports `nenhuma`.
+Find pesquisa o documento, portanto não consegue encontrar um resultado calculado ou convertido — pesquisando uma nota contendo `= 2 + 2` para `4` relatórios `nenhuma`.
 
-### Replace
+### Substituir
 
 `Ctrl+H` adds a second row: **Substituir por…**, **Substituir**, **Todas**.
 
-- **Substituir** replaces the current occurrence and moves to the next. Each is its own undo step.
-- **Todas** replaces every occurrence in **one** transaction, applied last-to-first so earlier
-  positions stay valid. Twenty replacements come back with a single `Ctrl+Z`.
-- Replacement is literal. There is no regex, no `$1`, no `\1` and no capture groups.
-- Marks, lists, headings, tasks, quotes and code blocks survive, because the document is edited
-  rather than serialised, string-replaced and reloaded.
-- Replace is **accent-sensitive**, unlike global search: `saude` does not overwrite `saúde`.
-  Because of that, a note opened from the palette is told the spelling that actually matched in it,
-  so searching `biopsia` still highlights `Biópsia`.
-- Replacing is a real edit, so `updated_at` moves — once, for the edit, and not again for the
-  decorations that follow it.
+- **Substituir** substitui a ocorrência atual e passa para a próxima. Cada um tem sua própria etapa de desfazer.
+- **Todas** substitui todas as ocorrências em **uma** transação, aplicada da última para a primeira para que as posições anteriores permaneçam válidas. Vinte substituições retornam com um único `Ctrl+Z`.
+- A substituição é literal. Não há regex, nem `$1`, nem `\1` nem grupos de captura.
+- Marcas, listas, títulos, tarefas, citações e blocos de código sobrevivem, porque o documento é editado em vez de serializado, substituído por strings e recarregado.
+- A substituição **sensibiliza o sotaque**, ao contrário da pesquisa global: `saude` não substitui `saúde`. Por causa disso, uma nota aberta na paleta recebe a grafia que realmente corresponde a ela, portanto, pesquisar `biopsia` ainda destaca `Biópsia`.
+- A substituição é uma edição real, então `updated_at` se move — uma vez, para a edição, e não novamente para as decorações que a seguem.
 
-Replace acts on the current note only. There is no cross-note replace.
+Substituir atos apenas na nota atual. Não há atualização de notas cruzadas.
 
-## Pasting a URL over selected text
+## Colando um URL sobre o texto selecionado
 
-Select `site oficial`, paste `https://example.com`, and the note holds:
+Selecione `site oficial`, cole `https://example.com` e a nota será válida:
 
 ```markdown
 [site oficial](https://example.com)
 ```
 
-The words you chose are kept and become the link, instead of being replaced by the URL.
+As palavras que você escolheu são mantidas e passam a ser o link, em vez de serem substituídas pela URL.
 
-- The URL is judged by `safeLinkUrl`, the same allowlist the rest of the application uses. `http`,
-  `https` and `mailto` become links; `javascript:`, `data:`, `file:`, `ftp:` and anything else are
-  pasted as ordinary text.
-- Nothing is fetched. No title, no favicon, no OpenGraph, no preview — and therefore no network, no
-  tracking and no waiting.
-- Inside inline code or a code block, or with a selection spanning two blocks, it is an ordinary
-  paste: a URL in source is characters, and a link cannot wrap a structure.
-- It is one undo step.
+- O URL é avaliado por `safeLinkUrl`, a mesma lista de permissões usada pelo restante do aplicativo. `http`, `https` e `mailto` tornam-se links; `javascript:`, `data:`, `file:`, `ftp:` e qualquer outra coisa são colados como texto normal.
+- Nada é buscado. Sem título, sem favicon, sem OpenGraph, sem visualização — e, portanto, sem rede, sem rastreamento e sem espera.
+- Dentro do código embutido ou de um bloco de código, ou com uma seleção abrangendo dois blocos, é uma colagem comum: um URL na origem contém caracteres e um link não pode quebrar uma estrutura.
+- É uma etapa de desfazer.
 
-**Compact link rendering is deliberately not implemented.** Shortening a URL hides part of where it
-leads, and the reader who most needs to see `https://evil.example.com/path` in full is exactly the
-one an abbreviation would fool. See ADR-027.
+**A renderização de link compacto não é implementada deliberadamente.** Encurtar um URL oculta parte de onde ele leva, e o leitor que mais precisa ver `https://evil.example.com/path` por completo é exatamente aquele que uma abreviação enganaria. Consulte ADR-027.
 
-## Trash
+## Lixo
 
-Deleting a note is an explicit action, and it is recoverable.
+Excluir uma nota é uma ação explícita e recuperável.
 
-**Moving a note to the trash.** *☰ › Dados › Mover esta nota para a lixeira*. It asks first:
+**Movendo uma nota para a lixeira.** *☰ › Dados › Mover esta nota para a lixeira*. O aplicativo pede confirmação primeiro:
 
 ```text
 Mover esta nota para a lixeira? Você poderá restaurá-la depois em Dados › Lixeira.
 [Cancelar] [Mover]
 ```
 
-Cancel is focused, so the key already under your finger is the one that does nothing. Escape and a
-click outside are also "no".
+**Cancelar** recebe o foco, portanto a tecla que já está sob seu dedo escolhe a opção que não faz nada. Pressionar `Esc` ou clicar fora também cancela a ação.
 
-- The `×` button and `Ctrl+W` still mean **close the window**. Closing a note has never deleted it
-  and still does not.
-- The note is saved first. If its latest text cannot be written, nothing is moved: the note stays
-  open, the failure is reported, and you can try again.
-- The file leaves `notes/` for `trash/`, byte for byte. Front matter, colour, paper, tasks, links,
-  calculations and comments all travel with it.
-- Moving a note to the trash is not an edit, so its modification date does not change.
+- O botão `×` e `Ctrl+W` ainda significam **fechar a janela**. Fechar uma nota nunca a excluiu e ainda não exclui.
+- A nota é salva primeiro. Se o texto mais recente não puder ser escrito, nada será movido: a nota permanecerá aberta, a falha será relatada e você poderá tentar novamente.
+- O arquivo deixa `notes/` por `trash/`, byte por byte. Front matter, cor, papel, tarefas, links, cálculos e comentários viajam com ele.
+- Mover uma nota para a lixeira não é uma edição, portanto sua data de modificação não muda.
 
-**A note in the trash is not a note.** `Ctrl+K` does not find it, the empty-query list does not
-offer it, a summon does not bring it back, and restarting does not reopen it.
+**Uma nota na lixeira não é uma nota.** `Ctrl+K` não a encontra, a lista de consulta vazia não a oferece, uma invocação não a traz de volta e a reinicialização não a reabre.
 
-**Getting one back.** *☰ › Dados › Lixeira* lists what can be recovered — each note's first line, a
-preview of its opening, and when it was deleted — newest first. Arrow keys walk the list, `Enter`
-restores the selected one, `Esc` closes the panel. Every row also has a named **Restaurar** button.
+**Recuperando uma nota.** *☰ › Dados › Lixeira* lista o que pode ser recuperado — a primeira linha de cada nota, uma prévia de seu início e quando foi excluída — da mais recente para a mais antiga. As teclas de seta percorrem a lista, `Enter` restaura a nota selecionada e `Esc` fecha o painel. Cada linha também possui um botão chamado **Restaurar**.
 
-Restoring puts the file back in `notes/` with the same identifier and the same bytes, and the note
-becomes findable again immediately. It keeps its original modification date: a recovered note goes
-back to where it was in the quick switcher rather than jumping to the top as though it had just
-been written in. It also comes back the size and place it was.
+A restauração coloca o arquivo de volta em `notes/` com o mesmo identificador e os mesmos bytes, e a nota torna-se localizável novamente imediatamente. Ele mantém a data de modificação original: uma nota recuperada volta para onde estava no alternador rápido, em vez de pular para o topo como se tivesse acabado de ser escrita.
 
-**Restoring never overwrites a live note.** If a note carrying the same identifier is already in
-the store, the restore is refused, neither file is changed, and the panel says so.
+**A restauração nunca substitui uma nota ativa.** Se uma nota com o mesmo identificador já estiver no armazenamento, a restauração será recusada, nenhum dos arquivos será alterado e o painel informará isso.
 
-**There is no permanent delete and no "empty the trash"** in this version. That is deliberate: this
-is the phase that makes deletion recoverable, and an irreversible button beside a restore button is
-one wrong click away from the thing it exists to prevent. The trash therefore grows until you clear
-it yourself, which you can do with any file manager — a note in the trash is an ordinary `.md` in
-`~/.local/share/note-it/trash/`.
+**Não há exclusão permanente nem "esvaziar a lixeira"** nesta versão. Isso é deliberado: esta é a fase que torna a exclusão recuperável, e um botão irreversível ao lado de um botão de restauração está a um clique errado do que ele existe para evitar. A lixeira, portanto, cresce até que você mesmo a limpe, o que pode ser feito com qualquer gerenciador de arquivos - uma nota na lixeira é um `.md` comum em `~/.local/share/note-it/trash/`.
 
-## Backups
+## Cópias de segurança
 
-Note-it keeps local snapshots of everything that can be recovered.
+Note-it mantém instantâneos locais de tudo que pode ser recuperado.
 
-**Where.** `~/.local/share/note-it/backups/<data-e-hora>/`, holding `notes/`, `trash/`, `assets/`,
-`config.toml`, `state.json` and a `manifest.json` describing the snapshot. Ordinary directories and
-ordinary files — no archive, no database, no format of Note-it's own.
+**Onde.** `~/.local/share/note-it/backups/<data-e-hora>/`, contendo `notes/`, `trash/`, `assets/`, `config.toml`, `state.json` e um `manifest.json` descrevendo o instantâneo. Diretórios comuns e arquivos comuns — sem arquivo, sem banco de dados, sem formato próprio do Note-it.
 
-**Pictures travel with the notes that hold them.** A note saying `![](../assets/…)` is only half a
-note without the file it points at, so `assets/` is copied with the same guarantees and in the same
-shape, byte for byte. A snapshot that could not copy an image is not committed at all — you never
-get a backup that looks whole and is missing pictures. An image no note points at any more is copied
-too: a backup records the store as it is, and is not the place to decide which files are still
-wanted.
+**As imagens viajam com as notas que as contêm.** Uma nota que diz `![](../assets/…)` é apenas meia nota sem o arquivo para o qual aponta, então `assets/` é copiado com as mesmas garantias e no mesmo formato, byte por byte. Um instantâneo que não conseguiu copiar uma imagem não é confirmado - você nunca obtém um backup que pareça completo e sem imagens. Uma imagem que nenhuma nota aponta mais também é copiada: um backup registra o armazenamento como está e não é o local para decidir quais arquivos ainda são desejados.
 
-**When.** At most one automatic snapshot per 24 hours, taken **before** the first change after that
-window has passed. Taking it first is the point: the state worth being able to go back to is the one
-before the edit. There is no timer — an idle daemon does no work at all, and one left open for days
-takes its snapshot the moment you start typing again.
+**Quando.** No máximo um snapshot automático a cada 24 horas, tirado **antes** da primeira alteração depois que essa janela tiver passado. A questão é considerar primeiro: o estado ao qual vale a pena voltar é aquele antes da edição. Não há cronômetro – um daemon ocioso não funciona e um daemon deixado aberto por dias tira seu instantâneo no momento em que você começa a digitar novamente.
 
-**Now, if you want one.** *☰ › Dados › Fazer backup agora* takes a snapshot immediately and says
-whether it worked, in a line at the foot of the note rather than a dialog over it. Useful before
-doing something you are not sure about.
+**Agora, se você quiser.** *☰ › Dados › Fazer backup agora* tira um instantâneo imediatamente e diz se funcionou, em uma linha no rodapé da nota, em vez de uma caixa de diálogo sobre ele. Útil antes de fazer algo sobre o qual você não tem certeza.
 
-**How many.** The seven most recent are kept. Old ones are removed only **after** a new one has been
-completely written, so a backup that fails never costs you the protection you already had.
+**Quantos.** Os sete mais recentes são mantidos. Os antigos são removidos somente **após** um novo ter sido completamente gravado, portanto, um backup que falha nunca custa a proteção que você já tinha.
 
-**What is never in a snapshot:** previous snapshots, temporary files, and anything reached through a
-symbolic link. A backup copies regular files from the two directories it was asked to copy and
-follows nothing out of them.
+**O que nunca está em um snapshot:** snapshots anteriores, arquivos temporários e qualquer coisa alcançada por meio de um link simbólico. Um backup copia arquivos regulares dos dois diretórios que foi solicitado a copiar e não segue nada deles.
 
-**If a backup fails,** the note is still saved. A snapshot is an extra layer of safety; its failure
-is written to the diagnostic output and retried later, never turned into a refusal to write your
-text.
+**Se um backup falhar,** a nota ainda será salva. Um instantâneo é uma camada extra de segurança; sua falha é gravada na saída de diagnóstico e tentada novamente posteriormente, nunca se transformando em uma recusa em escrever seu texto.
 
-**Getting a snapshot back** is `cp`, with the application closed — see
-[docs/storage.md](storage.md#recovering-from-a-snapshot) for the exact procedure, including how to
-recover a single note rather than the whole store. There is deliberately no one-click "restore
-everything": that is a multi-file transaction, and it deserves its own design rather than a menu
-entry.
+**Recuperar um instantâneo** é `cp`, com o aplicativo fechado — consulte [docs/storage.md](storage.md#recuperando-se-de-um-instantâneo) para obter o procedimento exato, incluindo como recuperar uma única nota em vez de todo o store. Deliberadamente, não existe "restaurar tudo" com um clique: essa é uma transação com vários arquivos e merece seu próprio design, em vez de uma entrada de menu.
 
-> **A local backup is not disaster recovery.** These snapshots sit on the same disk as the notes.
-> They protect against an accidental deletion, a logical corruption, an edit you want to undo or a
-> version you want to go back to. They protect against **none** of a dead drive, a lost machine or a
-> stolen one, and they are not encrypted. Protection from hardware failure needs a copy on other
-> hardware, and Note-it does not make one.
+> **Um backup local não é uma recuperação de desastres.** Esses instantâneos ficam no mesmo disco que as notas.
+> Eles protegem contra exclusão acidental, corrupção lógica, edição que você deseja desfazer ou
+> versão para a qual você deseja voltar. Eles protegem contra **nenhuma** unidade morta, máquina perdida ou
+> roubado e eles não são criptografados. A proteção contra falhas de hardware precisa de uma cópia em outro
+> hardware e Note-it não fabrica um.
 
-## Images
+## Imagens
 
-A picture in a note, kept as a file rather than smuggled into the text.
+Uma imagem em uma nota, mantida como um arquivo em vez de contrabandeada para o texto.
 
-**Putting one in.** Paste it, drop it on the note, or ask for a file chooser — from the paperclip in
-the header, or from *☰ › Mídia › Inserir imagem…*. All of them end in the same place: the bytes are
-written into the store, and the note gains a reference to them. The paperclip and the menu entry are
-two doors into one room: one request, one chooser, one import, so nothing can drift between them.
+**Colocando um.** Cole, solte na nota ou peça um seletor de arquivo — no clipe no cabeçalho ou em *☰ › Mídia › Inserir imagem…*. Todos terminam no mesmo lugar: os bytes são gravados no armazenamento e a nota ganha uma referência a eles. O clipe de papel e a entrada do menu são duas portas para uma sala: uma solicitação, um seletor, uma importação, para que nada possa ficar entre eles.
 
-**PNG, JPEG, WebP and GIF.** What a file *is* decided by its first few bytes, never by its name — so
-a PNG called `.txt` is a PNG, and something called `.png` that is not an image is refused. **SVG is
-not accepted**: it is a document format that can carry script, and admitting it would open a whole
-surface for the sake of a picture. A refusal says so in a line at the foot of the note and leaves
-nothing behind — no directory, no half-written file, no change to the note.
+**PNG, JPEG, WebP e GIF.** O que é um arquivo *é* decidido por seus primeiros bytes, nunca por seu nome — então um PNG chamado `.txt` é um PNG, e algo chamado `.png` que não é uma imagem é recusado. **SVG não é aceito**: é um formato de documento que pode conter script, e admiti-lo abriria uma superfície inteira por causa de uma imagem. Uma recusa diz isso em uma linha no rodapé da nota e não deixa nada para trás – nenhum diretório, nenhum arquivo escrito pela metade, nenhuma alteração na nota.
 
-**Where the bytes go.** `~/.local/share/note-it/assets/<note-id>/<asset-id>.<ext>`, beside `notes/`
-and `trash/`. Ordinary files with ordinary names, copied out with `cp` like everything else here.
-Nothing is ever inlined into the Markdown as base64: a screenshot would turn a note you can read
-into a megabyte you cannot, and would do it to your backups and your diffs too.
+**Para onde vão os bytes.** `~/.local/share/note-it/assets/<note-id>/<asset-id>.<ext>`, ao lado de `notes/` e `trash/`. Arquivos comuns com nomes comuns, copiados com `cp` como tudo aqui. Nada é embutido no Markdown como base64: uma captura de tela transformaria uma nota que você pode ler em um megabyte que você não pode, e faria isso com seus backups e diferenças também.
 
-**What the note stores.** A path relative to `notes/` — `../assets/<note-id>/<asset-id>.png` — and
-never an absolute one, so a note you put in Git says nothing about your home directory. That
-relative form is also why a note reaches the trash and comes back untouched: `notes/` and `trash/`
-are siblings, so `..` climbs to the same place from either, and nothing has to be rewritten.
+**O que a nota armazena.** Um caminho relativo a `notes/` — `../assets/<note-id>/<asset-id>.png` — e nunca absoluto, então uma nota que você coloca no Git não diz nada sobre seu diretório inicial. Essa forma relativa também é a razão pela qual uma nota chega ao lixo e volta intacta: `notes/` e `trash/` são irmãos, então `..` sobe de qualquer um deles para o mesmo lugar e nada precisa ser reescrito.
 
-**Two stored forms, and a rule for which.** While there is nothing to say beyond where the picture
-is, it is plain Markdown — `![](../assets/…)`. Once you choose a width or an alignment, which
-Markdown's image syntax has nowhere to put, it becomes a canonical tag carrying exactly four things:
+**Dois formulários armazenados e uma regra para os quais.** Embora não haja nada a dizer além de onde está a imagem, ela é clara Markdown - `![](../assets/…)`. Depois de escolher uma largura ou alinhamento, que a sintaxe da imagem de Markdown não tem onde colocar, ela se torna uma tag canônica carregando exatamente quatro coisas:
 
 ```html
 <img src="../assets/…" alt="" data-note-it-width="320" data-note-it-align="left">
 ```
 
-Always those attributes, always in that order, and only the ones actually set — so the same picture
-always writes the same bytes and a save that changed nothing changes nothing on disk. Anything else
-in such a tag is dropped rather than kept: an `onerror`, a `style`, a `srcset`, or a source that is
-not one of this store's own assets.
+Sempre esses atributos, sempre nessa ordem, e apenas aqueles realmente definidos — então a mesma imagem sempre grava os mesmos bytes e um salvamento que não alterou nada não altera nada no disco. Qualquer outra coisa nessa tag é descartada em vez de mantida: um `onerror`, um `style`, um `srcset` ou uma fonte que não seja um dos ativos deste store.
 
-**Size.** A new picture opens capped — wide enough to see in a wide note, small enough to fit a
-narrow one — and never larger than its own natural size. Select it and drag either handle to resize:
-proportions are kept because only the width is ever stored, height following from the picture
-itself. A picture can be made as wide as the note and no wider, whatever the pointer does. The whole
-drag is one entry in the history, so `Ctrl+Z` returns the width you started from.
+**Tamanho.** Uma nova imagem abre tampada — larga o suficiente para ser vista em uma nota larga, pequena o suficiente para caber em uma nota estreita — e nunca maior que seu tamanho natural. Selecione-o e arraste uma das alças para redimensionar: as proporções são mantidas porque apenas a largura é armazenada, a altura seguindo a própria imagem. Uma imagem pode ser tão larga quanto a nota e não mais larga, independentemente do que o ponteiro faça. Todo o arrasto é uma entrada no histórico, então `Ctrl+Z` retorna a largura a partir da qual você começou.
 
-**Alignment and wrapping.** Select the picture and choose *Esquerda*, *Centro* or *Direita*.
-Left and right float it, and the text runs down the other side — around the picture, never under it.
-Centre is a block of its own, with the text above and below. Quotes, comments and code blocks sit
-beside a floated picture rather than under it.
+**Alinhamento e empacotamento.** Selecione a foto e escolha *Esquerda*, *Centro* ou *Direita*. Flutuam para a esquerda e para a direita, e o texto percorre o outro lado – ao redor da imagem, nunca abaixo dela. Center é um bloco próprio, com o texto acima e abaixo. Citações, comentários e blocos de código ficam ao lado de uma imagem flutuante, e não abaixo dela.
 
-**Removing one.** Take it out of the note like any other content. **The file is not deleted.** There
-is no automatic collection of pictures no note points at any more, deliberately: deciding a file is
-unused is a guess, and acting on that guess destroys something. If you want the space back, the
-assets are ordinary files in an ordinary directory and `rm` still works.
+**Removendo um.** Retire-o da nota como qualquer outro conteúdo. **O arquivo não é excluído.** Não há mais coleta automática de imagens, nem anotações, deliberadamente: decidir que um arquivo não é utilizado é uma suposição, e agir de acordo com essa suposição destrói algo. Se você quiser o espaço de volta, os ativos são arquivos comuns em um diretório comum e `rm` ainda funciona.
 
-**Nothing is fetched, ever.** There is no way to insert an image by URL, and a remote image somebody
-typed by hand is drawn with no source at all — so opening a note reaches the network for nothing, and
-a note cannot be used to tell anyone that you read it. The page cannot even name a file: it asks the
-application for `note-it-asset:/<note>/<asset>.<ext>`, and the application resolves that inside the
-note's own asset directory or not at all.
+**Nada é buscado, nunca.** Não há como inserir uma imagem por URL, e uma imagem remota que alguém digitou à mão é desenhada sem nenhuma fonte — portanto, abrir uma nota chega à rede de graça, e uma nota não pode ser usada para dizer a ninguém que você a leu. A página não consegue nem nomear um arquivo: ela pede `note-it-asset:/<note>/<asset>.<ext>` ao aplicativo, e o aplicativo resolve isso dentro do próprio diretório de ativos da nota ou não o resolve.
 
-**A picture is not text.** Nothing about how one is stored reaches the collapsed title, a search
-result, the trash, or what the note reads as: searching an identifier, a width, an alignment or
-`assets` finds nothing, and a note holding one picture and no words is still *Nota sem título*. The
-words around a picture stay as findable as they always were.
+**Uma imagem não é texto.** Nada sobre como uma imagem é armazenada chega ao título recolhido, a um resultado de pesquisa, à lixeira ou ao que a nota diz: pesquisar um identificador, uma largura, um alinhamento ou `assets` não encontra nada, e uma nota contendo uma imagem e nenhuma palavra ainda é *Nota sem título*. As palavras em torno de uma imagem permanecem tão fáceis de encontrar como sempre foram.
 
 ## Flashcards
 
-Write the card in the note. `Pergunta :: Resposta` is studied in one direction, and
-`Termo ::: Definição` in both. The spaces around an inline delimiter are part of the syntax:
-`A::B`, `namespace::method`, times, URLs, inline code, code blocks and a line with more than one
-possible delimiter stay ordinary content. Four or more colons are not a card either.
+Escreva o cartão na nota. `Pergunta :: Resposta` é estudado em uma direção e `Termo ::: Definição` em ambas. Os espaços ao redor de um delimitador embutido fazem parte da sintaxe: `A::B`, `namespace::method`, horários, URLs, código embutido, blocos de código e uma linha com mais de um delimitador possível permanecem como conteúdo comum. Quatro ou mais dois pontos também não são uma carta.
 
-For a side that is a whole block, put `::` or `:::` alone in a top-level paragraph between the two
-blocks. Exactly the block immediately before it is the front and exactly the one after it is the
-back. A side may therefore be a heading, paragraph with hard breaks, list, checklist, quote,
-callout, managed image, or image and text together. A marker nested in one of those blocks is just
-text, not structure.
+Para um lado que seja um bloco inteiro, coloque `::` ou `:::` sozinho em um parágrafo de nível superior entre os dois blocos. Exatamente o bloco imediatamente anterior é o da frente e exatamente o bloco posterior é o de trás. Um lado pode, portanto, ser um título, parágrafo com quebras rígidas, lista, lista de verificação, citação, texto explicativo, imagem gerenciada ou imagem e texto juntos. Um marcador aninhado em um desses blocos é apenas texto, não estrutura.
 
-**The document is the deck.** There is no flashcard file, database, hidden identifier or parallel
-copy to synchronize. The detector reads the live ProseMirror document and projects source cards
-from it; Markdown and the existing `assets/` tree remain the only durable source. Deleting the
-delimiter deletes the card, and a backup already carries it because it carries the note and its
-pictures.
+**O documento é o baralho.** Não há arquivo flashcard, banco de dados, identificador oculto ou cópia paralela para sincronizar. O detector lê o documento ProseMirror ativo e projeta cartões de origem a partir dele; Markdown e a árvore `assets/` existente continuam sendo a única fonte durável. Excluir o delimitador exclui o cartão, e um backup já o carrega porque carrega a nota e suas fotos.
 
-Recognised delimiters stay visible and receive a faint editor decoration. The mark is paint over
-the document, never a transaction: it changes no Markdown, timestamp or undo history. The count in
-*☰ › Estudo* follows the live document and states both source cards and review items, because one
-reversible source produces two questions.
+Os delimitadores reconhecidos permanecem visíveis e recebem uma leve decoração do editor. A marca é pintada sobre o documento, nunca uma transação: ela não altera Markdown, carimbo de data/hora ou histórico de desfazer. A contagem em *☰ › Estudo* segue o documento ativo e indica tanto os cartões de origem quanto os itens de revisão, porque uma fonte reversível produz duas perguntas.
 
-**Studying.** *☰ › Estudo › Estudar esta nota* opens an internal panel over the current note. It
-starts on the front with the answer hidden; *Mostrar resposta*, *Anterior*, *Próximo* and
-*Embaralhar* operate on that sitting, with no wrap at either end. `Space` or `Enter` reveals,
-`ArrowLeft` and `ArrowRight` move, and `Escape` closes while the panel has focus. Long cards scroll
-inside the panel, and images use the same `note-it-asset:` reference without editor handles or
-controls.
+**Estudando.** *☰ › Estudo › Estudar esta nota* abre um painel interno sobre a nota atual. Começa na frente com a resposta oculta; *Mostrar resposta*, *Anterior*, *Próximo* e *Embaralhar* operam nessa sessão, sem envoltório em nenhuma das extremidades. `Space` ou `Enter` revela, `ArrowLeft` e `ArrowRight` se movem e `Escape` fecha enquanto o painel está em foco. Cartões longos rolam dentro do painel e as imagens usam a mesma referência `note-it-asset:` sem alças ou controles do editor.
 
-A sitting is a snapshot of the review items at the instant it opens. Editing or AutoPaste can keep
-changing the note underneath without changing the question currently being studied; close and open
-again to take a new snapshot. Shuffle permutes review items, returns to the first one and hides its
-answer. Nothing about order or progress is persisted.
+Uma sessão é um instantâneo dos itens de revisão no instante em que é aberta. A edição ou AutoPaste pode continuar alterando a nota abaixo sem alterar a questão em estudo; feche e abra novamente para tirar um novo instantâneo. Shuffle permuta itens de revisão, retorna ao primeiro e oculta sua resposta. Nada sobre ordem ou progresso persiste.
 
-**Study is read-only with respect to notes.** Opening, revealing, moving, shuffling, rating and
-closing dispatch no editor transaction. Markdown, `updated_at` and undo history stay exactly as
-they were. A Timer or Pomodoro keeps running when its popover makes room for Study; collapsing the
-note closes the sitting, and hiding or quitting destroys it with the WebView.
+**O estudo é somente leitura em relação às notas.** Abertura, revelação, movimentação, embaralhamento, classificação e fechamento de envio sem transação do editor. Markdown, `updated_at` e o histórico de desfazer permanecem exatamente como estavam. Um Timer ou Pomodoro continua funcionando quando seu popover abre espaço para Estudo; recolher a nota fecha a sessão, e ocultar ou desistir a destrói com o WebView.
 
-### Central de estudos and Ladder-v1
+### Central de estudos e Ladder-v1
 
-The deck button in the header opens every review item from every live note, including notes whose
-windows are closed. The host supplies note documents from `notes/`—never `trash/`—and the WebView
-parses them sequentially with one ephemeral Tiptap editor, the same schema and `extractFlashcards`
-used by the visible note. The current note's live Markdown replaces the stored copy for that pass,
-so opening the Hub never needs to force a save. Closing and reopening takes a new catalog snapshot.
+O botão deck no cabeçalho abre todos os itens de revisão de todas as notas ativas, incluindo notas cujas janelas estão fechadas. O host fornece documentos de notas de `notes/` - nunca de `trash/` - e o WebView os analisa sequencialmente com um editor efêmero Tiptap, o mesmo esquema e `extractFlashcards` usados ​​pela nota visível. O Markdown ativo da nota atual substitui a cópia armazenada dessa passagem, portanto, abrir o Hub nunca precisa forçar um salvamento. Fechar e reabrir gera um novo instantâneo do catálogo.
 
-*Revisar agora* shows due items, most overdue first, followed by new items in document order;
-*Todos* also includes future items; *Esta nota* limits the list to the invoking note. Each compact
-row shows the front, projected note title and New/Review Now/future status. Images remain managed
-`note-it-asset:` images and are never copied. The same FlashcardPanel renders local and global
-sessions, now adding the source note, ratings after reveal, interval previews, and a minimal summary.
+*Revisar agora* mostra os itens vencidos, os mais vencidos primeiro, seguidos dos novos itens na ordem do documento; *Todos* também inclui itens futuros; *Esta nota* limita a lista à nota invocadora. Cada linha compacta mostra o título da nota projetada e o status Novo/Revisar agora/futuro. As imagens permanecem imagens gerenciadas `note-it-asset:` e nunca são copiadas. O mesmo FlashcardPanel renderiza sessões locais e globais, agora adicionando a nota de origem, classificações após revelação, visualizações de intervalo e um resumo mínimo.
 
-Progress lives separately in `$XDG_DATA_HOME/note-it/study.json`. A review direction's key is
-SHA-256 over a version, note UUID, semantic front/back, direction and duplicate ordinal. Position,
-bold/italic/highlight/colour/size and image width/alignment do not participate; text, managed image
-source/alt and direction do. Reversible directions therefore schedule independently. Edited or
-removed keys may remain orphaned and naturally reappear if the exact semantic card returns.
+O progresso reside separadamente em `$XDG_DATA_HOME/note-it/study.json`. A chave de uma direção de revisão é SHA-256 sobre uma versão, nota UUID, frente/verso semântico, direção e ordinal duplicado. Posição, negrito/itálico/destaque/cor/tamanho e largura/alinhamento da imagem não participam; texto, fonte/alt e direção da imagem gerenciada fazem. Direções reversíveis, portanto, programadas de forma independente. Chaves editadas ou removidas podem permanecer órfãs e reaparecer naturalmente se o cartão semântico exato retornar.
 
-The fixed Ladder-v1 levels are 10 minutes, 1, 3, 7, 14, 30, 60, 120 and 240 days. A new card starts
-at level 0/1/2 for Difficult/Medium/Easy; an existing card moves −1/+1/+2 within 0–8. The Rust host
-chooses the UTC instant and local civil day and atomically writes the next state. Only its success
-ACK advances the panel and increments daily activity; failure leaves the card, heatmap and persisted
-state unchanged, and double clicks cannot send a second rating.
+Os níveis fixos do Ladder-v1 são 10 minutos, 1, 3, 7, 14, 30, 60, 120 e 240 dias. Uma nova carta começa no nível 0/1/2 para Difícil/Médio/Fácil; uma carta existente se move −1/+1/+2 dentro de 0–8. O host Rust escolhe o dia civil local e instantâneo UTC e escreve atomicamente o próximo estado. Somente o seu sucesso ACK avança o painel e incrementa a atividade diária; a falha deixa o cartão, o mapa de calor e o estado persistente inalterados, e cliques duplos não podem enviar uma segunda classificação.
 
-The Hub distinguishes source cards from review directions: **Cartões** is the number defined in
-Markdown, while **Revisões** is the number of directions that can be scheduled. Thus `A :: B` plus
-`C ::: D` is 2 cards and 3 reviews. It also shows due and new reviews, notes with cards, today's
-reviews, current streak and longest streak. Its 365-day heatmap uses fixed levels (0, 1–4, 5–9,
-10–19, 20+) and every cell names
-its date and review count. Colour is supplementary. The current streak remains alive today when the
-last study was yesterday; the longest streak is derived from civil dates rather than persisted.
+O Hub distingue cartões de origem de direções de revisão: **Cartões** é o número definido em Markdown, enquanto **Revisões** é o número de direções que podem ser agendadas. Assim, `A :: B` mais `C ::: D` são 2 cartas e 3 avaliações. Também mostra avaliações vencidas e novas, notas com cartões, avaliações de hoje, sequência atual e sequência mais longa. Seu mapa de calor de 365 dias usa níveis fixos (0, 1–4, 5–9, 10–19, 20+) e cada célula nomeia sua data e contagem de revisões. A cor é complementar. A tendência atual permanece viva hoje, quando o último estudo foi ontem; a sequência mais longa é derivada de datas civis, e não persistente.
 
-The header also carries Zoom −/+, which use the existing zoom path and 75–300 limits, and a trash
-icon immediately beside X. Trash only opens the existing recoverable confirmation; X remains Close.
-At measured narrow widths optional deck, image, zoom and trash shortcuts yield before Menu, active
-Timer/AutoPaste or Close, and all are hidden on a collapsed note.
+O cabeçalho também carrega Zoom −/+, que usa o caminho de zoom existente e limites de 75–300, e um ícone de lixeira imediatamente ao lado de X. A lixeira abre apenas a confirmação recuperável existente; X permanece Fechado. Em larguras estreitas medidas, os atalhos opcionais de deck, imagem, zoom e lixeira aparecem antes do Menu, ativar Timer/AutoPaste ou Fechar, e todos ficam ocultos em uma nota recolhida.
 
-## Clipboard AutoPaste
+## AutoPaste da área de transferência
 
-Copy something anywhere on the machine, and it lands at the end of a note you chose. No window
-appears, no key is pressed for you, and nothing takes your cursor.
+Copie algo em qualquer lugar da máquina e ele aparecerá no final da nota que você escolheu. Nenhuma janela aparece, nenhuma tecla é pressionada para você e nada ocupa o seu cursor.
 
-> **This is not *Paste URL on Selection*.** That one — select some words, paste a URL, get a link —
-> is a different feature and is still where it was. AutoPaste is a capture mode.
+> **Isso não é *Colar URL na seleção*.** Esse — selecione algumas palavras, cole um URL, obtenha um link —
+> é um recurso diferente e ainda está onde estava. AutoPaste é um modo de captura.
 
-**Off, always, until you say otherwise.** AutoPaste is off when Note-it starts, and switching it on
-is a decision you make in *☰ › Captura*. While it is off there is no clipboard handler connected at
-all: nothing is observed, read, hashed, stored, logged or sent. That is a property of the
-arrangement rather than a promise about it — there is nothing subscribed to observe with.
+**Desativado, sempre, até que você diga o contrário.** O AutoPaste está desativado quando Note-it é iniciado, e ativá-lo é uma decisão que você toma em *☰ › Captura*. Enquanto estiver desligado, não há nenhum manipulador de área de transferência conectado: nada é observado, lido, hash, armazenado, registrado ou enviado. Isso é uma propriedade do acordo e não uma promessa sobre ele – não há nada assinado para ser observado.
 
-**It does not come back on by itself.** Whether AutoPaste was on is written nowhere — not in the
-note, not in `state.json`, not in `config.toml`. A restart, a logout, a crash or an update leaves it
-off, and you decide again. A mode that watches what you copy should never resume without being
-asked, and the only way to guarantee that is to have nothing to resume from.
+**Ele não volta sozinho.** Se o AutoPaste estava ativado não está escrito em lugar nenhum - nem na nota, nem em `state.json`, nem em `config.toml`. Uma reinicialização, um logout, uma falha ou uma atualização o deixam desativado e você decide novamente. Um modo que observa o que você copia nunca deve ser retomado sem ser solicitado, e a única maneira de garantir isso é não ter nada para retomar.
 
-**One note at a time.** The system clipboard is one thing, so exactly one note can be the target.
-Switching it on in a second note switches it off in the first, in the same step, and the first
-note's bar and menu stop claiming it.
+**Uma nota por vez.** A área de transferência do sistema é uma coisa, então exatamente uma nota pode ser o alvo. Ativá-lo em uma segunda nota desliga-o na primeira, na mesma etapa, e a barra e o menu da primeira nota param de reivindicá-lo.
 
-**What it captures.** Text. A copied image, file or unknown format is declined from the formats the
-clipboard offers, without a byte of it being read. An empty or blank copy files nothing — no line,
-no delimiter, no modification date. And the clipboard as it was *before* you switched the mode on is
-never captured: only a change after that moment counts, so whatever was there stays where it was.
+**O que captura.** Texto. Uma imagem, arquivo ou formato desconhecido copiado é recusado dos formatos oferecidos pela área de transferência, sem que um byte dela seja lido. Uma cópia vazia ou em branco não arquiva nada – nenhuma linha, nenhum delimitador, nenhuma data de modificação. E a área de transferência como estava *antes* de você ativar o modo nunca é capturada: apenas uma alteração após esse momento conta, então o que quer que estivesse lá permanece onde estava.
 
-**Where it lands.** At the end of the note, always. Not at your cursor and not over your selection:
-you are in another application, so the caret in that note is wherever you left it and does not mean
-"insert here". The note does not take focus, does not scroll, does not come to the front and does
-not change layer. If you are looking at it you will see the text arrive; that is all that happens.
+**Onde pousa.** No final da nota, sempre. Não no cursor e nem sobre a seleção: você está em outro aplicativo, portanto, o cursor nessa nota está onde você a deixou e não significa "inserir aqui". A nota não tira foco, não rola, não vem para frente e não muda de camada. Se você estiver olhando, verá o texto chegar; isso é tudo o que acontece.
 
-**As text, exactly.** A capture is a paste of plain text, with the same meaning a `Ctrl+V` has here:
-`**isso é literal**` stays asterisks, `<script>alert(1)</script>` stays eleven characters and a
-copied URL stays a URL you can read. Nothing is fetched — no title lookup, no preview, no favicon —
-so AutoPaste works with the network off. Accents, emoji, 日本語 and multi-line copies all survive
-unchanged.
+**Como texto, exatamente.** Uma captura é uma colagem de texto simples, com o mesmo significado que um `Ctrl+V` tem aqui: `**isso é literal**` permanece como asteriscos, `<script>alert(1)</script>` permanece com onze caracteres e um URL copiado permanece como um URL que você pode ler. Nada é buscado – nenhuma pesquisa de título, nenhuma visualização, nenhum favicon – então o AutoPaste funciona com a rede desligada. Acentos, emoji, 日本語 e cópias de várias linhas permanecem inalterados.
 
-**One capture, one undo.** `Ctrl+Z` takes back the last capture whole, delimiter and all, not one
-character at a time.
+**Uma captura, um desfazer.** `Ctrl+Z` recupera toda a última captura, delimitador e tudo, não um caractere por vez.
 
-**Separating captures.** *☰ › Captura › Separar capturas* offers three:
+**Separando capturas.** *☰ › Captura › Separar capturas* oferece três:
 
-| | Between one capture and the next |
+| | Entre uma captura e outra |
 |---|---|
-| **Linha** | the next line of the same paragraph |
-| **Linha em branco** | a paragraph of its own — the default |
-| **Separador** | a horizontal rule |
+| **Linha** | a próxima linha do mesmo parágrafo |
+| **Linha em branco** | um parágrafo próprio – o padrão |
+| **Separador** | uma regra horizontal |
 
-Exactly one is applied between each pair, never two, and never in front of the first capture into an
-empty note. Changing the preference applies to the next capture and rewrites nothing already
-written. The choice is remembered across restarts, because it says how you like captures laid out
-and nothing about what you copied.
+Exatamente um é aplicado entre cada par, nunca dois, e nunca antes da primeira captura em uma nota vazia. A alteração da preferência aplica-se à próxima captura e não reescreve nada já escrito. A escolha é lembrada nas reinicializações, porque diz como você gosta das capturas e nada sobre o que você copiou.
 
-**It will not feed the note its own words back.** Copying or cutting inside the note that is
-capturing does not append what you just copied. That is not a text comparison — it is the toolkit's
-own answer to "did this application put that on the clipboard", checked before any read begins. The
-distinction matters: copying `ABC` twice from another application, in two separate actions, files it
-twice, because you asked for it twice.
+**Isso não devolverá à nota suas próprias palavras.** Copiar ou recortar dentro da nota que está capturando não anexa o que você acabou de copiar. Isso não é uma comparação de texto - é a resposta do próprio kit de ferramentas para "este aplicativo colocou isso na área de transferência", verificada antes de qualquer leitura começar. A distinção é importante: copiar `ABC` duas vezes de outro aplicativo, em duas ações separadas, arquiva-o duas vezes, porque você o solicitou duas vezes.
 
-**While it is on** the note keeps its bar out with a 📋 beside the other controls, so a mode that is
-watching every copy is never running invisibly. The indicator is on the bar of a collapsed note too,
-and pressing it opens the panel that switches it off.
+**Enquanto estiver ativado** a nota mantém sua barra com um 📋 ao lado dos outros controles, de modo que um modo que monitora cada cópia nunca seja executado de forma invisível. O indicador também está na barra de uma nota recolhida e pressioná-lo abre o painel que o desliga.
 
-**What it never does:** take ownership of the clipboard (after a capture, what you copied still
-pastes normally anywhere else), keep a history of what you have copied, reach the network, write
-clipboard content to any log, or put a marker of its own into your note. A capture is ordinary
-content once it lands — searchable, deletable, and part of the note's own title if the note was
-empty.
+**O que isso nunca faz:** apropriar-se da área de transferência (após uma captura, o que você copiou ainda cola normalmente em qualquer outro lugar), manter um histórico do que você copiou, acessar a rede, gravar o conteúdo da área de transferência em qualquer registro ou colocar um marcador próprio em sua nota. Uma captura é um conteúdo comum quando chega - pesquisável, excluível e parte do próprio título da nota, se a nota estiver vazia.
 
-**It switches itself off** when the note is closed, sent to the trash, when Note-it is hidden and
-when it quits — before any of those finish, so a read still in flight cannot arrive afterwards.
-Collapsing the note, changing layer or switching to another application all leave it on; that last
-one is what the mode is for.
+**Ele desliga sozinho** quando a nota é fechada, enviada para a lixeira, quando Note-it está oculto e quando sai - antes de qualquer uma delas terminar, então uma leitura ainda em andamento não pode chegar depois. Recolher a nota, alterar a camada ou mudar para outro aplicativo, deixe-o ativado; esse último é para que serve o modo.
 
-## Timer & Pomodoro
+## Timer e Pomodoro
 
-A countdown on the note you are working in, without leaving it and without a second window.
+Uma contagem regressiva na nota em que você está trabalhando, sem sair dela e sem segunda janela.
 
-**Where.** The ⏱ button at the end of the header bar opens a small panel under it. There are two
-modes in the panel and one countdown per note: a note runs a Timer or a Pomodoro, never both, so the
-mode tabs are unavailable while a run is live rather than being a way to end up with two.
+**Onde.** O botão ⏱ no final da barra de cabeçalho abre um pequeno painel abaixo dela. Existem dois modos no painel e uma contagem regressiva por nota: uma nota executa um Timer ou um Pomodoro, nunca ambos, então as guias de modo ficam indisponíveis enquanto uma execução está ao vivo, em vez de ser uma forma de terminar com duas.
 
-**Timer.** Seven presets — 5, 10, 15, 25, 30, 45 and 60 minutes — and a field for anything else from
-1 to 600 whole minutes. A duration that is not one of those is refused and says so; nothing is
-rounded into range, because a timer that quietly ran for a duration you did not choose is worse than
-one that declined to start. `Enter` in the field starts it.
+**Temporizador.** Sete predefinições — 5, 10, 15, 25, 30, 45 e 60 minutos — e um campo para qualquer outra coisa de 1 a 600 minutos inteiros. Uma duração que não é uma dessas é recusada e o diz; nada é arredondado para o intervalo, porque um cronômetro que funcionou silenciosamente por um período que você não escolheu é pior do que um que se recusou a iniciar. `Enter` no campo inicia.
 
-**Pomodoro.** The classic cycle: 25 minutes of focus, 5 minutes of short break, and a 15-minute long
-break after the fourth focus session, after which the count begins again. The panel shows which
-phase you are on, which session of the four, and four marks for the cycle.
+**Pomodoro.** O ciclo clássico: 25 minutos de foco, 5 minutos de intervalo curto e um intervalo longo de 15 minutos após a quarta sessão de foco, após o qual a contagem começa novamente. O painel mostra em qual fase você está, em qual sessão das quatro e quatro notas do ciclo.
 
-**Nothing starts on its own.** When a phase runs out it is marked finished and the *next* one is
-offered on the button — "Iniciar pausa curta" — for you to start when you are ready. A break that
-began by itself while you were still mid-sentence would be a Pomodoro you never agreed to. *Pular
-etapa* moves to the next step without waiting for this one.
+**Nada começa sozinho.** Quando uma fase termina ela é marcada como concluída e a *próxima* é oferecida no botão — "Iniciar pausa curta" — para você começar quando estiver pronto. Uma pausa que começasse sozinha enquanto você ainda estava no meio da frase seria um Pomodoro com o qual você nunca concordou. *Pular etapa* passa para a próxima etapa sem esperar por esta.
 
-**Start, pause, continue, cancel.** Only the controls that apply are shown, so there is no Pause on a
-paused timer and no Continue on one that never started. Cancelling a Timer keeps the duration you
-chose; cancelling a Pomodoro keeps your place in the cycle, and *Reiniciar ciclo* is what goes back
-to the beginning.
+**Iniciar, pausar, continuar, cancelar.** Somente os controles aplicáveis ​​são mostrados, portanto, não há Pausa em um cronômetro pausado e nem Continuação em um que nunca foi iniciado. Cancelar um temporizador mantém a duração que você escolheu; cancelar um Pomodoro mantém o seu lugar no ciclo, e *Reiniciar ciclo* é o que volta ao início.
 
-**It is honest about time.** A running countdown is stored as the *instant it ends*, not as a number
-something has to decrement. Every reading is that instant minus the clock now, so nothing drifts, and
-nothing is lost to a WebView that was throttled, a machine that was busy, or a laptop that was shut
-for ten minutes. Suspend the machine for ten minutes with fifteen left and you come back to five.
-Pausing is the mirror: the instant is discarded and the remainder frozen, so paused time cannot be
-spent — not while the note is hidden, and not while the application is closed.
+**É honesto sobre o tempo.** Uma contagem regressiva em execução é armazenada como o *instante em que termina*, não como um número que algo precisa ser diminuído. Cada leitura é aquele instante menos o relógio agora, então nada muda e nada é perdido para um WebView que foi acelerado, uma máquina que estava ocupada ou um laptop que foi desligado por dez minutos. Suspenda a máquina por dez minutos faltando quinze e você volta para cinco. A pausa é o espelho: o instante é descartado e o restante congelado, portanto o tempo de pausa não pode ser gasto – nem enquanto a nota estiver oculta, nem enquanto o aplicativo estiver fechado.
 
-**It survives the note going away.** Collapse the note, hide everything, close the application and
-come back: a run resumes with the time that really passed already taken off, and one whose end has
-gone by comes back **finished** rather than counting through zero. A run that ended while the
-application was not open does not ring when you return — an alarm about the past is not an alarm —
-but the finished state is right there on the bar.
+**Ele sobrevive à nota indo embora.** Recolha a nota, esconda tudo, feche o aplicativo e volte: uma corrida é retomada com o tempo que realmente passou já decorrido, e aquela cujo fim já passou volta **terminada** em vez de contar até zero. Uma execução que terminou enquanto o aplicativo não estava aberto não toca quando você retorna – um alarme sobre o passado não é um alarme – mas o estado finalizado está ali na barra.
 
-**On a collapsed note** the bar keeps the clock beside the ⏱, next to the note's name, so a running
-countdown never needs the note expanded to be trusted. On a note too narrow to carry both, the digits
-give way and the icon stays; the name and the close button never do.
+**Em uma nota recolhida** a barra mantém o relógio ao lado de ⏱, próximo ao nome da nota, para que uma contagem regressiva em execução nunca precise que a nota seja expandida para ser confiável. Numa nota estreita demais para conter ambos, os dígitos cederam e o ícone permaneceu; o nome e o botão Fechar nunca funcionam.
 
-**When it ends** the clock reads `00:00`, the bar and the panel say *Concluído*, a line at the foot
-of the note says what finished, and the desktop gets one notification — "Timer concluído", or
-"Pomodoro — Sessão de foco concluída." The notification carries nothing from the note: not its title,
-not a line of its text. Exactly one is sent per run, however long the note sits at zero. A desktop
-with no notification daemon simply gets no notification; nothing about the timer depends on it.
+**Quando termina** o relógio indica `00:00`, a barra e o painel dizem *Concluído*, uma linha no final da nota indica o que terminou e a área de trabalho recebe uma notificação — "Timer concluído" ou "Pomodoro — Sessão de foco concluída." A notificação não traz nada da nota: nem seu título, nem uma linha de seu texto. Exatamente um é enviado por execução, independentemente do tempo em que a nota fique em zero. Uma área de trabalho sem daemon de notificação simplesmente não recebe notificação; nada sobre o cronômetro depende disso.
 
-**A timer is not part of the note.** It is never written into the Markdown — no comment, no
-front-matter key, no marker. Starting, pausing, finishing or cancelling one leaves the note file byte
-for byte as it was and leaves its modification date where it was, so a note with a timer does not
-jump to the top of the quick switcher. It is invisible to search, to the collapsed title and to the
-trash: searching `25:00` will not find a note merely because it has a 25-minute Pomodoro running. The
-state lives beside the window geometry in `state.json`, and it is written only when something
-actually happens — a start, a pause, a resume, a cancel, a phase change or a completion. A running
-countdown writes nothing at all, once a second or otherwise.
+**Um cronômetro não faz parte da nota.** Ele nunca é escrito no Markdown — nenhum comentário, nenhuma chave de front matter, nenhum marcador. Iniciar, pausar, terminar ou cancelar deixa o arquivo de notas byte por byte como estava e deixa sua data de modificação onde estava, para que uma nota com um cronômetro não salte para o topo do alternador rápido. É invisível para pesquisa, para o título recolhido e para a lixeira: pesquisar `25:00` não encontrará uma nota apenas porque tem um Pomodoro de 25 minutos em execução. O estado fica ao lado da geometria da janela em `state.json` e é escrito apenas quando algo realmente acontece – um início, uma pausa, uma retomada, um cancelamento, uma mudança de fase ou uma conclusão. Uma contagem regressiva em execução não escreve absolutamente nada, uma vez por segundo ou não.
 
-## View Controls
+## Controles de visualização
 
 - **Zoom da nota (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`):**
-  - Scales the note's content between 75% and 300% in 10% steps, without changing the window size,
-    the Markdown, or the note's modification date. The header bar keeps its size.
-  - Persisted per note in `state.json`; notes without a stored zoom open at 100%.
+  - Dimensiona o conteúdo da nota entre 75% e 300% em passos de 10%, sem alterar o tamanho da janela,
+o Markdown ou a data de modificação da nota. A barra de cabeçalho mantém seu tamanho.
+  - Persistido por nota em `state.json`; notas sem zoom armazenado abrem em 100%.
 - **Escala da interface (menu):**
-  - Scales the application chrome from 90% to 160% in 10% steps: toolbar hit targets, menu text,
-    SearchPalette, Find, Trash, Timer, Study and image controls all receive real layout metrics.
-  - Shared by every open note and persisted once in `config.toml`; an older configuration defaults
-    to 100%. It does not touch the document, its text-size marks, per-note zoom or `updated_at`.
-  - A collapsed note's host height follows the same scale while its expanded geometry remains
-    stored unchanged.
+  - Dimensiona o chrome do aplicativo de 90% a 160% em etapas de 10%: alvos de acertos da barra de ferramentas, texto do menu,
+Os controles SearchPalette, Find, Trash, Timer, Study e image recebem métricas de layout reais.
+  - Compartilhado por todas as notas abertas e persistido uma vez em `config.toml`; uma configuração mais antiga padrão
+para 100%. Não afeta o documento, suas marcas de tamanho de texto, zoom por nota ou `updated_at`.
+  - A altura do hospedeiro de uma nota recolhida segue a mesma escala enquanto sua geometria expandida permanece
+armazenado inalterado.
 - **Tema (menu):**
-  - Sistema / Claro / Escuro, applied at once to every open note and persisted globally.
-- **Layer (`Ctrl+Shift+Space`):**
-  - Switches between **Sempre no topo** (above other windows) and **Área de trabalho** (behind
-    them, still open). This is the same application-wide switch as `note-it toggle`.
-- **Collapse (`Ctrl+Shift+M`):**
-  - The same action as the menu entry, reducing the note to its header bar and back. It applies to
-    the focused note alone.
-- **Collapse everything (`note-it toggle-collapse-all`):**
-  - Collapses every note still expanded, and expands them all once they are all collapsed. Each
-    note keeps its own collapsed flag and expanded size.
-- **A collapsed note expands when clicked:**
-  - Clicking anywhere on the bar restores the previous size in place. The close button still
-    closes, dragging the bar still moves it, and the `☰` button expands the note and opens its menu
-    in a single click.
+  - Sistema / Claro / Escuro, aplicado imediatamente a todas as notas abertas e persistido globalmente.
+- **Camada (`Ctrl+Shift+Space`):**
+  - Alterna entre **Sempre no topo** (acima de outras janelas) e **Área de trabalho** (atrás
+eles, ainda abertos). Esta é a mesma opção para todo o aplicativo que `note-it toggle`.
+- **Recolher (`Ctrl+Shift+M`):**
+  - A mesma ação da entrada do menu, reduzindo a nota à barra de cabeçalho e vice-versa. Aplica-se a
+apenas a nota focada.
+- **Recolher tudo (`note-it toggle-collapse-all`):**
+  - Recolhe todas as notas ainda expandidas e expande todas elas quando todas estão recolhidas. Cada
+note mantém seu próprio sinalizador recolhido e tamanho expandido.
+- **Uma nota recolhida se expande quando clicada:**
+  - Clicar em qualquer lugar da barra restaura o tamanho anterior. O botão Fechar ainda
+fecha, arrastar a barra ainda a move, e o botão `☰` expande a nota e abre seu menu
+em um único clique.
 
-## Editing Experience
+## Experiência de edição
 
-- **Rich WYSIWYG Formatting:**
-  - Paragraphs and Headings (H1, H2, H3)
-  - Bold, Italic, Underline (`<u>`)
-  - Semantic text color (`<span data-note-it-color="...">`) from a compact palette
-  - Highlight marker (`<mark data-note-it-highlight="...">`) from a compact palette, always drawn
-    with a dark foreground so highlighted text stays readable on every paper colour
-  - Discrete text sizes (12–32 px) applied to a selection, independent of headings and of the zoom
-  - Bullet lists and numbered lists
-  - Interactive checklists (`- [ ]` / `- [x]`)
-  - Typing `->` becomes a real `➜`, stored as the character itself rather than relying on a font
-    with ligatures, and left untouched inside inline code and code blocks
-  - Blockquotes and inline code / code blocks
-- **Font Scaling:**
-  - The note's base font size is stored in its front matter and applied when the note loads.
-    `Ctrl+=` / `Ctrl+-` drive the view zoom rather than this base size.
-- **Paper Themes:**
-  - 7 curated soft pastel paper colors: Yellow, Blue, Green, Pink, Purple, Gray, Black (with high-contrast light text).
-- **Keyboard Shortcuts:**
-  - `Ctrl+N` to create a new note in cascade.
-  - `Ctrl+W` to save and dismiss current note.
-  - `Ctrl+K` to search every note, `Ctrl+F` to find in this one, `Ctrl+H` to find and replace.
-    All three were free before Phase 3.8 and collide with nothing above.
+- **Formatação rica em WYSIWYG:**
+  - Parágrafos e títulos (H1, H2, H3)
+  - Negrito, Itálico, Sublinhado (`<u>`)
+  - Cor do texto semântico (`<span data-note-it-color="...">`) de uma paleta compacta
+  - Marcador de destaque (`<mark data-note-it-highlight="...">`) de uma paleta compacta, sempre desenhado
+com um primeiro plano escuro para que o texto destacado permaneça legível em todas as cores de papel
+  - Tamanhos de texto discretos (12–32 px) aplicados a uma seleção, independentemente dos títulos e do zoom
+  - Listas com marcadores e listas numeradas
+  - Listas de verificação interativas (`- [ ]` / `- [x]`)
+  - Digitar `->` torna-se um `➜` real, armazenado como o próprio caractere, em vez de depender de uma fonte
+com ligaduras e deixado intacto dentro do código embutido e dos blocos de código
+  - Blockquotes e código / blocos de código embutidos
+- **Escala de fonte:**
+  - O tamanho base da fonte da nota é armazenado em seu front matter e aplicado quando a nota é carregada.
+`Ctrl+=` / `Ctrl+-` direcionam o zoom da visualização em vez desse tamanho base.
+- **Temas de papel:**
+  - 7 cores de papel pastel suave selecionadas: Amarelo, Azul, Verde, Rosa, Roxo, Cinza, Preto (com texto claro de alto contraste).
+- **Atalhos de teclado:**
+  - `Ctrl+N` para criar uma nova nota em cascata.
+  - `Ctrl+W` para salvar e descartar a nota atual.
+  - `Ctrl+K` para pesquisar cada nota, `Ctrl+F` para encontrar nesta, `Ctrl+H` para localizar e substituir.
+Todos os três estavam livres antes da Fase 3.8 e não colidiram com nada acima.
 
-## Storage & Reliability
+## Armazenamento e confiabilidade
 
-### Tags and Properties
+### Tags e propriedades
 
-- Tags and textual Properties are structured top-level YAML beside the reserved `note_it` block,
-  never Markdown body content. Missing fields are empty in memory and omitted on disk.
-- Core owns validation and the shared search-fold identity: up to 32 tags (64 characters each) and
-  32 properties (64-character keys, 512-character values). Inputs over a limit are rejected, never
-  truncated; duplicate tag identities collapse to the first spelling and duplicate property-key
-  identities are rejected.
-- One **Metadados** entry opens the only editor. Tags are accessible deterministic-colour pills in
-  a responsive single row; Properties stay inside the internally scrolling panel. Autocomplete is
-  derived on demand from live notes and never writes on suggestion.
-- Semantic values are inserted with DOM text/value APIs and never become HTML, style, class, URL or
-  arbitrary DOM identifiers. They do not enter ProseMirror, visible text, search, titles, Study or
-  flashcards.
-- Metadata uses the same transactional note writer and backup-before-mutation policy. A confirmed
-  draft carries current WebView Markdown, preventing a stale host document from replacing pending
-  text. Metadata-only writes preserve both timestamps.
-- Catalogs scan live `notes/`; trash is naturally absent and restore naturally returns. No index,
-  database or sidecar exists.
+- Tags e propriedades textuais são estruturadas em nível superior YAML ao lado do bloco reservado `note_it`, nunca no conteúdo do corpo Markdown. Os campos ausentes ficam vazios na memória e omitidos no disco.
+- Core possui validação e identidade de pesquisa compartilhada: até 32 tags (64 caracteres cada) e 32 propriedades (chaves de 64 caracteres, valores de 512 caracteres). As entradas acima de um limite são rejeitadas, nunca truncadas; identidades de tags duplicadas são reduzidas à primeira ortografia e identidades de chave de propriedade duplicadas são rejeitadas.
+- Uma entrada **Metadados** abre o único editor. As tags são pílulas de cores determinísticas acessíveis em uma única linha responsiva; As propriedades ficam dentro do painel de rolagem interna. O preenchimento automático é derivado sob demanda de notas ao vivo e nunca escreve por sugestão.
+- Os valores semânticos são inseridos com APIs de texto/valor DOM e nunca se tornam HTML, estilo, classe, URL ou identificadores DOM arbitrários. Eles não inserem ProseMirror, texto visível, pesquisa, títulos, estudo ou flashcards.
+- Os metadados usam o mesmo redator de notas transacionais e a mesma política de backup antes da mutação. Um rascunho confirmado carrega o WebView Markdown atual, evitando que um documento host obsoleto substitua o texto pendente. As gravações somente de metadados preservam ambos os carimbos de data/hora.
+- Varredura de catálogos ao vivo `notes/`; o lixo está naturalmente ausente e a restauração retorna naturalmente. Não existe índice, banco de dados ou arquivo secundário.
 
-- **Recoverable Deletion:**
-  - Deleting a note moves its file to `trash/`, from where it can be restored with its identifier,
-    its bytes and its modification date intact. The save comes first: a note whose text could not be
-    written is never moved.
-- **Local Snapshots:**
-  - At most one automatic backup per 24 hours, taken before the first change after that window, plus
-    a manual one on request. Seven are kept, old ones removed only after a new one is complete.
-- **Atomic Autosave:**
-  - Debounced write (300 ms) via temporary file replacement and directory sync to prevent data corruption.
-  - Close and `Ctrl+W` send the latest editor content in one save-and-close request; the window closes only after persistence succeeds.
-- **Transactional Flush on Hide and Quit:**
-  - `note-it hide` and `note-it quit` explicitly request latest buffer content from all active WebViews, cancel debounces, and await atomic write confirmation for every note before destroying surfaces or exiting.
-  - A missing, expired, or invalid WebView response is a flush failure; the host never substitutes its potentially stale in-memory document as a successful confirmation.
-  - If any note fails to confirm or save, the operation aborts: hide keeps every surface open in the previous mode, and quit keeps the daemon running. Without confirmation of current WebView content, neither operation destroys surfaces or exits.
-- **Standard YAML Front Matter:**
-  - Note ID, paper colour, paper type, pattern intensity, font size, and timestamps stored cleanly
-    in note headers.
-  - `created_at` is fixed at creation; `updated_at` follows content edits only, not appearance or
-    window changes. A note without timestamps still opens and reports them as unknown.
-  - Visiting a note is not editing it: opening and closing, summoning, hiding, showing or quitting
-    without changing the text leaves `updated_at` alone, and the file is not rewritten at all.
+- **Exclusão recuperável:**
+  - A exclusão de uma nota move seu arquivo para `trash/`, de onde ela pode ser restaurada com seu identificador,
+seus bytes e sua data de modificação intactos. O salvamento vem primeiro: uma nota cujo texto não pôde ser
+escrito nunca é movido.
+- **Instantâneos locais:**
+  - No máximo um backup automático a cada 24 horas, feito antes da primeira alteração após essa janela, mais
+um manual a pedido. Sete são mantidos, os antigos são removidos somente após a conclusão de um novo.
+- **Salvamento automático atômico:**
+  - Gravação eliminada (300 ms) por meio de substituição temporária de arquivos e sincronização de diretórios para evitar corrupção de dados.
+  - Fechar e `Ctrl+W` enviar o conteúdo mais recente do editor em uma solicitação de salvar e fechar; a janela fecha somente após a persistência ser bem-sucedida.
+- **Liberação transacional ao ocultar e sair:**
+  - `note-it hide` e `note-it quit` solicitam explicitamente o conteúdo do buffer mais recente de todos os WebViews ativos, cancelam rebotes e aguardam a confirmação de gravação atômica para cada nota antes de destruir superfícies ou sair.
+  - Uma resposta WebView ausente, expirada ou inválida é uma falha de liberação; o host nunca substitui seu documento potencialmente obsoleto na memória como uma confirmação bem-sucedida.
+  - Se alguma nota não for confirmada ou salva, a operação será abortada: hide mantém todas as superfícies abertas no modo anterior e quit mantém o daemon em execução. Sem a confirmação do conteúdo atual de WebView, nenhuma operação destrói superfícies ou saídas.
+- **Front matter YAML padrão:**
+  - ID da nota, cor do papel, tipo de papel, intensidade do padrão, tamanho da fonte e carimbos de data/hora armazenados de forma limpa
+nos cabeçalhos das notas.
+  - `created_at` é corrigido na criação; `updated_at` segue apenas edições de conteúdo, não de aparência ou
+mudanças na janela. Uma nota sem carimbos de data e hora ainda será aberta e os reportará como desconhecidos.
+  - Visitar uma nota não é editá-la: abrir e fechar, convocar, ocultar, mostrar ou sair
+sem alterar o texto, deixa `updated_at` em paz e o arquivo não é reescrito.
 
-## Headless CLI (`noteit`)
+## CLI headless (`noteit`)
 
-- **Separation of Concerns:** `noteit` is a standalone, lightweight CLI binary without GUI, GTK,
-  WebKitGTK, Wayland or display server dependencies.
-- **Orientation & Guidance:** running `noteit` without arguments renders a concise welcome screen with
-  guidance for available commands.
-- **Bilingual Interface & Human Errors:** primary commands in Portuguese (`listar`, `ler`, `buscar`,
-  `tags`, `propriedades`, `tarefas`, `lixeira`, `status`, `ajuda`, `versao`) with canonical international
-  aliases (`list`, `read`, `search`, `properties`, `tasks`, `trash`, `help`, `version`, `status`, `--help`,
-  `-h`, `--version`, `-V`). Usage errors are presented as friendly Portuguese messages on stderr with exit code 2.
-- **Headless Read API Subcommands:**
-  - `noteit listar` / `noteit list`: lists live notes in canonical recency order with identifiers, labels, tags, and timestamps.
-  - `noteit ler <ID>` / `noteit read <ID>`: reads and renders note header, metadata, properties and body by full UUID or unique prefix (>= 8 hex characters).
-  - `noteit buscar <Q>` / `noteit search <Q>`: case and accent-insensitive body search returning matching labels, snippets, and occurrence counts.
-  - `noteit tags`: lists derived tag catalog with live note usage counts.
-  - `noteit propriedades` / `noteit properties`: lists derived property key catalog with live note usage counts.
-  - `noteit tarefas` / `noteit tasks`: extracts tasks grouped by note, preserving depth hierarchy, checkbox state, and ISO 8601 completion dates.
-  - `noteit lixeira` / `noteit trash`: lists recoverable deleted notes in trash with deletion timestamps.
-- **Filtering & Limiting:**
-  - `--limite N` / `--limit N`: clamps output to 1..=100 results (default 20).
-  - `--tag <TAG>`: repeatable filter applying boolean AND across tags (case and accent insensitive).
-  - `--propriedade <K=V>` / `--property <K=V>`: repeatable filter applying boolean AND across properties.
-  - `--estado <ESTADO>` / `--state <STATE>`: task filtering by state (`pendentes`, `concluidas`, `todas` / `pending`, `completed`, `all`).
-- **Terminal Security Sanitization:** all untrusted strings rendered to stdout/stderr (note content, search queries, selectors, reflected argument contexts, and XDG paths) are sanitized prior to styling and output, neutralizing ANSI escape sequences (CSI, OSC, OSC 52 clipboard injection), BEL, backspace, and control characters while preserving valid Unicode and Markdown.
-- **Local Timezone Consistency:** human timestamps across all CLI subcommands (`listar`, `ler`, `tarefas`, `lixeira`) are formatted in the machine's local timezone (`dd/MM/yyyy HH:mm`) matching the desktop GUI contract, while Core models remain strictly UTC (`DateTime<Utc>`).
-- **Typed Warnings Decoupling:** non-fatal read anomalies produce typed `ReadWarning` items inside `ReadBatch<T>` in `noteit-core` without printing. The CLI renders these cleanly to stderr in Portuguese (`Aviso: ...`).
-- **Strictly Read-Only Reads:** all Read API operations inspect the store purely without creating
-  missing directories, state files, backups — or any write-coordination file. Reading never takes a
-  lease and never opens a socket.
-- **Coordinated Write API Subcommands:**
-  - `noteit criar [TEXTO]` / `noteit create`: creates a note and answers with its UUID. Accepts
-    `--stdin` for multi-line Markdown, and `--tag` / `--propriedade` to apply metadata at creation.
-    Opens no window, takes no focus and records nothing as open — with or without Note-it running.
-  - `noteit adicionar <ID> <TEXTO>` / `noteit append`: appends Markdown to the end of the body. The
-    join rule is fixed and documented: an empty body becomes the payload; otherwise exactly one line
-    break is inserted first. The payload is never trimmed or reflowed.
-  - `noteit editar <ID> <TEXTO>` / `noteit edit`: replaces the whole body. Not an `$EDITOR` — the text
-    comes from the argument or `--stdin`, never both. Emptying a note requires `--vazio`, so an
-    accidental empty pipe cannot destroy one.
-  - `noteit tags adicionar|remover <ID> <TAG>` / `tags add|remove`: tag identity stays case- and
-    accent-insensitive; adding one already present or removing one absent is a no-op success that
-    rewrites nothing.
-  - `noteit propriedades definir|remover <ID> <K=V>` / `properties set|remove`: same no-op rules, with
-    all limits, Unicode handling and key identity decided by Core. The CLI never parses YAML.
-  - `noteit tarefas concluir|reabrir <ID> <REF>` / `tasks complete|reopen`: completing writes the
-    canonical `<!-- note-it:completed_at=... -->` comment with an explicit timezone; reopening removes
-    only that comment, preserving indentation, bullet, nesting and anyone else's HTML comments.
-  - `noteit lixeira restaurar <ID>` / `trash restore`: restores data and nothing else — no window, no
-    focus, no layer or geometry change. A live note carrying the same identifier is never overwritten.
-- **Task References:** `noteit tarefas` shows an eight-character reference beside each task. It is an
-  *optimistic snapshot token*, not an identity: nothing is stored, no sidecar is created, and it is
-  recomputed against the note at the moment of the write. If the task changed in between, the command
-  is refused and you list the tasks again — far better than quietly ticking off a different one.
-- **Exactly One Writer per Store:** writes are serialised by an advisory lock. With Note-it running,
-  the change is carried out by the running instance; without it, the CLI writes directly through Core.
-  Two simultaneous commands both survive. If the store is held and its owner cannot be reached,
-  nothing at all is written and the CLI says so — it never writes around another writer.
-- **A Running Note-it Owns Its Notes:** the desktop application takes the writer lease and opens its
-  control channel before it opens anything else. If another writer holds the store, or the channel
-  cannot be opened, it explains why in one sentence and does not start — no window, no note, no
-  autosave, nothing written. It never runs as a second writer.
-- **The Window Confirms, It Is Not Assumed:** after a change is committed the note on screen says
-  that it adopted it. Until it does, the command reports the change as written *and* warns that the
-  window may still be showing the older text — so nobody repeats a change that already happened. A
-  write that is taking a while says so and keeps the note held; it is never handed back mid-commit.
-- **A Window That Falls Behind Stops Rather Than Pretending:** in the rare case where a change is
-  written to disk but the open note cannot take it on, the note is held and says so
-  ("A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota."). It does not
-  go back to accepting typing it would be unable to save — an editor that quietly discards work is
-  worse than one that visibly stops. The change is safe on disk; reopening the note brings the window
-  back onto it exactly, with nothing lost and nothing duplicated.
-- **Nothing Unsaved Is Ever Lost:** changing a note that is open on screen freezes its editor *before*
-  reading it, folds the text you have typed but not yet saved into the same commit, and hands the
-  committed note back to the window. An edit that had not reached disk yet is never overwritten, and
-  an autosave already in flight cannot undo the change once it lands.
-- **Timestamps Follow Meaning:** appending, editing and toggling a task move `updated_at` only when
-  the body really changed. Tags and properties move neither timestamp — they say what a note is
-  *about*, not that it was edited. `created_at` never moves.
-- **Honest Outcomes:** a write that failed before the commit point changed nothing and can be safely
-  repeated. A write that committed but could not refresh the window reports a warning, never a
-  failure, so nobody appends the same paragraph twice. A connection that dropped after the request
-  went out is reported as unknown rather than guessed at.
-- **Note Writes Touch Only Notes:** no write command modifies `config.toml`, `state.json`, the cache,
-  geometry, layer, theme or zoom.
-- **Presentation & Terminal Compatibility:** clean formatting with discreet ANSI styling on interactive terminals, automatically falling back to plain text when redirected, piped, or when `NO_COLOR` is set.
-- **Standard Exit Codes:** exit code `0` for success, `2` for invalid syntax or unknown arguments, and `1` for execution errors.
+- **Separação de preocupações:** `noteit` é um binário CLI independente e leve, sem GUI, GTK, WebKitGTK, Wayland ou dependências de servidor de exibição.
+- **Orientação e orientação:** executar `noteit` sem argumentos gera uma tela de boas-vindas concisa com orientação para os comandos disponíveis.
+- **Interface bilíngue e erros humanos:** comandos primários em português (`listar`, `ler`, `buscar`, `tags`, `propriedades`, `tarefas`, `lixeira`, `status`, `ajuda`, `versao`) com aliases internacionais canônicos (`list`, `read`, `search`, `properties`, `tasks`, `trash`, `help`, `version`, `status`, `--help`, `-h`, `--version`, `-V`). Erros de uso são apresentados como mensagens amigáveis ​​em português no stderr com código de saída 2.
+- **Subcomandos de leitura sem cabeça API:**
+  - `noteit listar` / `noteit list`: lista notas ao vivo em ordem canônica de atualidade com identificadores, rótulos, tags e carimbos de data/hora.
+  - `noteit ler <ID>` / `noteit read <ID>`: lê e renderiza cabeçalho, metadados, propriedades e corpo da nota por UUID completo ou prefixo exclusivo (>= 8 caracteres hexadecimais).
+  - `noteit buscar <Q>` / `noteit search <Q>`: pesquisa corporal sem distinção entre maiúsculas e minúsculas e acentos, retornando rótulos, snippets e contagens de ocorrências correspondentes.
+  - `noteit tags`: lista o catálogo de tags derivadas com contagens de uso de notas ativas.
+  - `noteit propriedades` / `noteit properties`: lista o catálogo de chaves de propriedades derivadas com contagens de uso de notas ativas.
+  - `noteit tarefas` / `noteit tasks`: extrai tarefas agrupadas por nota, preservando hierarquia de profundidade, estado de caixa de seleção e datas de conclusão ISO 8601.
+  - `noteit lixeira` / `noteit trash`: lista notas excluídas recuperáveis ​​na lixeira com carimbos de data e hora de exclusão.
+- **Filtragem e Limitação:**
+  - `--limite N` / `--limit N`: fixa a saída em 1..=100 resultados (padrão 20).
+  - `--tag <TAG>`: filtro repetível aplicando AND booleano entre tags (sem distinção entre maiúsculas e minúsculas e acentos).
+  - `--propriedade <K=V>` / `--property <K=V>`: filtro repetível aplicando AND booleano entre propriedades.
+  - `--estado <ESTADO>` / `--state <STATE>`: filtragem de tarefas por estado (`pendentes`, `concluidas`, `todas` / `pending`, `completed`, `all`).
+- **Limpeza de segurança do terminal:** todas as strings não confiáveis ​​renderizadas para stdout/stderr (conteúdo de notas, consultas de pesquisa, seletores, contextos de argumentos refletidos e caminhos XDG) são limpas antes do estilo e da saída, neutralizando sequências de escape ANSI (CSI, OSC, injeção de área de transferência OSC 52), BEL, backspace e caracteres de controle, preservando Unicode e Markdown válidos.
+- **Consistência de fuso horário local:** carimbos de data/hora humanos em todos os subcomandos CLI (`listar`, `ler`, `tarefas`, `lixeira`) são formatados no fuso horário local da máquina (`dd/MM/yyyy HH:mm`) correspondente ao contrato GUI do desktop, enquanto os modelos Core permanecem estritamente UTC (`DateTime<Utc>`).
+- **Desacoplamento de avisos digitados:** anomalias de leitura não fatais produzem itens `ReadWarning` digitados dentro de `ReadBatch<T>` em `noteit-core` sem impressão. O CLI os renderiza de forma limpa para stderr em português (`Aviso: ...`).
+- **Leituras estritamente somente leitura:** todas as operações de leitura API inspecionam o armazenamento puramente, sem criar diretórios ausentes, arquivos de estado, backups — ou qualquer arquivo de coordenação de gravação. A leitura nunca é alugada e nunca abre uma tomada.
+- **Subcomandos de gravação coordenada API:**
+  - `noteit criar [TEXTO]` / `noteit create`: cria uma nota e responde com seu UUID. Aceita
+`--stdin` para Markdown multilinha e `--tag` / `--propriedade` para aplicar metadados na criação.
+Não abre janela, não foca e não registra nada como aberto — com ou sem Note-it em execução.
+  - `noteit adicionar <ID> <TEXTO>` / `noteit append`: anexa Markdown ao final do corpo. O
+a regra de junção é fixa e documentada: um corpo vazio se torna a carga útil; caso contrário, exatamente uma linha
+break é inserido primeiro. A carga útil nunca é cortada ou refluída.
+  - `noteit editar <ID> <TEXTO>` / `noteit edit`: substitui todo o corpo. Não é um `$EDITOR` — o texto
+vem do argumento ou `--stdin`, nunca ambos. Esvaziar uma nota requer `--vazio`, então um
+um cano vazio acidental não pode destruir um.
+  - `noteit tags adicionar|remover <ID> <TAG>` / `tags add|remove`: a identidade da tag permanece maiúscula e minúscula
+insensível ao sotaque; adicionar um já presente ou remover um ausente é um sucesso autônomo que
+não reescreve nada.
+  - `noteit propriedades definir|remover <ID> <K=V>` / `properties set|remove`: mesmas regras autônomas, com
+todos os limites, manipulação de Unicode e identidade de chave decidida por Core. O CLI nunca analisa YAML.
+  - `noteit tarefas concluir|reabrir <ID> <REF>` / `tasks complete|reopen`: completar escreve o
+comentário canônico `<!-- note-it:completed_at=... -->` com fuso horário explícito; reabertura remove
+apenas esse comentário, preservando recuo, marcador, aninhamento e comentários HTML de qualquer outra pessoa.
+  - `noteit lixeira restaurar <ID>` / `trash restore`: restaura dados e nada mais — sem janela, não
+foco, nenhuma camada ou alteração de geometria. Uma nota ativa com o mesmo identificador nunca é substituída.
+- **Referências de tarefas:** `noteit tarefas` mostra uma referência de oito caracteres ao lado de cada tarefa. É um *token de instantâneo otimista*, não uma identidade: nada é armazenado, nenhum arquivo secundário é criado e é recalculado em relação à nota no momento da gravação. Se a tarefa mudar nesse meio tempo, o comando será recusado e você listará as tarefas novamente – muito melhor do que marcar silenciosamente uma tarefa diferente.
+- **Exatamente um gravador por armazenamento:** as gravações são serializadas por um bloqueio de aconselhamento. Com Note-it em execução, a alteração é realizada pela instância em execução; sem ele, o CLI escreve diretamente através do Core. Dois comandos simultâneos sobrevivem. Se o store for mantida e seu proprietário não puder ser contatado, nada será escrito e o CLI diz isso - ele nunca escreve em torno de outro gravador.
+- **Um Note-it em execução possui suas notas:** o aplicativo de desktop recebe o lease de escrita e abre seu canal de controle antes de abrir qualquer outra coisa. Se outro gravador mantém o store, ou o canal não pode ser aberto, isso explica o porquê em uma frase e não inicia - nenhuma janela, nenhuma nota, nenhum salvamento automático, nada escrito. Nunca funciona como um segundo gravador.
+- **A janela confirma, não é presumido:** depois que uma alteração é confirmada, a nota na tela diz que ela foi adotada. Até que isso aconteça, o comando relata a alteração conforme escrita *e* avisa que a janela ainda pode estar mostrando o texto antigo — para que ninguém repita uma alteração que já aconteceu. Uma escrita que demora um pouco diz isso e mantém a nota segura; ele nunca é devolvido no meio do commit.
+- **Uma janela que fica para trás para em vez de fingir:** no raro caso em que uma alteração é gravada no disco, mas a nota aberta não pode aceitá-la, a nota é retida e diz isso ("A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota."). Ele não volta a aceitar a digitação que não conseguiria salvar - um editor que descarta silenciosamente o trabalho é pior do que aquele que para visivelmente. A alteração está segura no disco; reabrir a nota traz a janela de volta exatamente, sem nada perdido e nada duplicado.
+- **Nada que não foi salvo é perdido:** alterar uma nota que está aberta na tela congela seu editor *antes* de lê-la, dobra o texto que você digitou, mas ainda não salvou, no mesmo commit e devolve a nota enviada de volta para a janela. Uma edição que ainda não chegou ao disco nunca é substituída, e um salvamento automático já em andamento não pode desfazer a alteração quando ela chegar.
+- **Timestamps Follow Significado:** anexar, editar e alternar uma tarefa move `updated_at` somente quando o corpo realmente mudou. Tags e propriedades não movem nenhum carimbo de data/hora — elas dizem sobre o que é uma nota *sobre*, não que ela foi editada. `created_at` nunca se move.
+- **Resultados honestos:** uma gravação que falhou antes do ponto de confirmação não mudou nada e pode ser repetida com segurança. Uma gravação que foi confirmada, mas não conseguiu atualizar a janela, relata um aviso, nunca uma falha, portanto, ninguém anexa o mesmo parágrafo duas vezes. Uma conexão que caiu após a solicitação ser encerrada é relatada como desconhecida, em vez de adivinhada.
+- **Nota escreve notas apenas por toque:** nenhum comando de gravação modifica `config.toml`, `state.json`, o cache, geometria, camada, tema ou zoom.
+- **Apresentação e compatibilidade de terminal:** formatação limpa com estilo ANSI discreto em terminais interativos, voltando automaticamente para texto simples quando redirecionado, canalizado ou quando `NO_COLOR` é definido.
+- **Códigos de saída padrão:** código de saída `0` para sucesso, `2` para sintaxe inválida ou argumentos desconhecidos e `1` para erros de execução.

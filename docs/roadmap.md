@@ -1,648 +1,603 @@
-# Note-it Roadmap
+# Roadmap do Note-it
 
-## Phase 0: Public Foundation (Completed)
-- [x] Repository initialization, `.gitignore`, licensing, and documentation.
-- [x] Rust and TypeScript build scaffolding.
-- [x] Project architecture and storage specification.
+## Fase 0: Fundação Pública (Concluída)
+- [x] Inicialização do repositório, `.gitignore`, licenciamento e documentação.
+- [x] Rust e TypeScript constroem estrutura inicial.
+- [x] Arquitetura do projeto e especificação de armazenamento.
 
-## Phase 1: Vertical Slice & Markdown Integrity (Completed)
-- [x] Working GTK4 + `gtk4-layer-shell` + WebKitGTK 6.0 note window.
-- [x] Bidirectional IPC bridge between native host and webview editor.
-- [x] Load and atomic autosave of `.md` files with YAML front matter.
-- [x] ProseMirror / Tiptap 3 Markdown round-trip serializer and sanitizer.
-- [x] Native Markdown code preservation (fenced blocks, inline spans, and literal syntax).
-- [x] GitHub Actions CI pipeline running natively in Arch Linux container environment.
+## Fase 1: Fatia Vertical e Integridade Markdown (Concluída)
+- [x] Trabalhando na janela de notas GTK4 + `gtk4-layer-shell` + WebKitGTK 6.0.
+- [x] Ponte bidirecional IPC entre o host nativo e o editor de webview.
+- [x] Carregue e salve automaticamente os arquivos `.md` com YAML front matter.
+- [x] ProseMirror / Tiptap 3 Markdown serializador e sanitizador de ida e volta.
+- [x] Preservação de código nativo Markdown (blocos protegidos, extensões inline e sintaxe literal).
+- [x] Pipeline de ações GitHub CI em execução nativa no ambiente de contêiner Arch Linux.
 
-## Phase 2: Shell, Lifecycle, Layers & Geometry (Completed with Phase 2R)
-- [x] Strict distinction between on-disk `.md`, `is_open` state, instantiated WebViews, and visible surfaces.
-- [x] Lazy daemon lifecycle: `--background` starts with 0 WebViews created (idle ~0% CPU).
-- [x] Wayland Layer Shell modes: Desktop (`bottom`), Overlay (`overlay`), and Hidden.
-- [x] Dynamic single-instance CLI dispatcher (`new`, `toggle`, `show`, `hide`, `quit`).
-- [x] Window drag handle (header `.drag-region`) and discrete resize handle (`.resize-handle`).
-- [x] Window geometry persistence in `$XDG_STATE_HOME/note-it/state.json` (persisted only on drag/resize end).
-- [x] Safe geometry clamping, cascade positioning, and multi-monitor connector fallback.
-- [x] Canonical autolink policy (`https`, `http`, `mailto`) with safe non-destructive escaping.
-- [x] Transactional flush protocol before `hide` and `quit` to prevent data loss from debounced edits.
-- [x] End-to-end testing and validation on Niri compositor.
+## Fase 2: Shell, ciclo de vida, camadas e geometria (concluída com a Fase 2R)
+- [x] Distinção estrita entre estado `.md`, `is_open` no disco, WebViews instanciados e superfícies visíveis.
+- [x] Ciclo de vida do daemon lento: `--background` começa com 0 WebViews criados (inativo ~0% CPU).
+- [x] Modos Wayland Layer Shell: Desktop (`bottom`), Sobreposição (`overlay`) e Oculto.
+- [x] Despachante CLI dinâmico de instância única (`new`, `toggle`, `show`, `hide`, `quit`).
+- [x] Alça de arrastar janela (cabeçalho `.drag-region`) e alça de redimensionamento discreta (`.resize-handle`).
+- [x] Persistência da geometria da janela em `$XDG_STATE_HOME/note-it/state.json` (persistiu apenas no final de arrastar/redimensionar).
+- [x] Fixação segura de geometria, posicionamento em cascata e reserva de conector para vários monitores.
+- [x] Política de link automático canônico (`https`, `http`, `mailto`) com escape seguro e não destrutivo.
+- [x] Protocolo de liberação transacional antes de `hide` e `quit` para evitar perda de dados devido a edições rejeitadas.
+- [x] Teste e validação ponta a ponta no compositor Niri.
 
-## Phase 3: Editor, UX & Antinote-inspired Features (In Progress)
+## Fase 3: Editor, UX e recursos inspirados no Antinote (em andamento)
 
-### Phase 3.0R.1: Editor & Geometry Stabilisation (Completed)
-- [x] Physical pt-BR keyboard, dead keys, and IME composition preserved inside the WebView.
-- [x] Markdown formatting shortcuts including `Ctrl+R` strikethrough.
-- [x] Sub-pixel accurate drag and resize with the final `pointerup` delta applied.
-- [x] Window geometry persisted on gesture end and restored on reopen.
+### Fase 3.0R.1: Editor e Estabilização Geométrica (Concluído)
+- [x] Teclado físico pt-BR, teclas mortas e composição IME preservadas dentro do WebView.
+- [x] Atalhos de formatação Markdown incluindo `Ctrl+R` tachado.
+- [x] Arrastar e redimensionar com precisão de subpixel com o delta final `pointerup` aplicado.
+- [x] A geometria da janela persistiu no final do gesto e foi restaurada na reabertura.
 
-### Phase 3.1: Note Chrome, Settings Menu, Collapse & Information (Completed)
-- [x] Header `☰` settings popover replacing the direct colour dot.
-- [x] Paper colour palette moved inside the menu, with persistence preserved.
-- [x] Collapse / expand reducing the note to its header bar, with the expanded geometry restored.
-- [x] Collapsed state persisted across restarts, with backward-compatible state migration.
-- [x] Note creation and modification dates on header hover, formatted in pt-BR.
-- [x] Pointer gesture lifecycle hardened: one captured pointer per gesture, no geometry change
-      without an active gesture.
+### Fase 3.1: Chrome da nota, menu de configurações, recolhimento e informações (concluída)
+- [x] Popover de configurações do cabeçalho `☰` substituindo o ponto colorido direto.
+- [x] Paleta de cores do papel movida dentro do menu, com persistência preservada.
+- [x] Recolher/expandir reduzindo a nota à sua barra de cabeçalho, com a geometria expandida restaurada.
+- [x] O estado recolhido persistiu durante as reinicializações, com migração de estado compatível com versões anteriores.
+- [x] Observe as datas de criação e modificação ao passar o cabeçalho, formatado em pt-BR.
+- [x] Ciclo de vida do gesto do ponteiro aprimorado: um ponteiro capturado por gesto, sem alteração de geometria
+sem um gesto ativo.
 
-### Phase 3.2: Tasks, View Controls & Inline Formatting (Completed)
-- [x] Host surface backed with the note's paper colour, so a fast resize no longer exposes a dark
-      strip before the WebView repaints.
-- [x] Markdown task lists with square checkboxes, nesting, and automatic strikethrough.
-- [x] Per-task completion timestamps that travel with their task and are never invented.
-- [x] View zoom (75–300%) persisted per note, independent of the document.
-- [x] Inline text size, text colour and highlight, applied from the settings menu.
-- [x] `Ctrl+Shift+M` collapse, `Ctrl+Shift+Space` layer switch, `Ctrl+Shift+>` / `Ctrl+Shift+<`
-      text size, all routed through the single keyboard controller.
+### Fase 3.2: Tarefas, controles de visualização e formatação embutida (concluída)
+- [x] Superfície do host apoiada na cor do papel da nota, para que um redimensionamento rápido não exponha mais uma cor escura
+tira antes do WebView repintar.
+- [x] Listas de tarefas Markdown com caixas de seleção quadradas, aninhamento e tachado automático.
+- [x] Carimbos de data e hora de conclusão por tarefa que acompanham a tarefa e nunca são inventados.
+- [x] O zoom de visualização (75–300%) persistiu por nota, independente do documento.
+- [x] Tamanho do texto embutido, cor e destaque do texto, aplicados no menu de configurações.
+- [x] `Ctrl+Shift+M` colapso, `Ctrl+Shift+Space` troca de camada, `Ctrl+Shift+>` / `Ctrl+Shift+<`
+tamanho do texto, todos roteados através do único controlador de teclado.
 
-### Phase 3.2R: Summon, Reopen & Typography (Completed)
-- [x] `note-it` summons the running instance from any focused application, raising a desktop-layer
-      note temporarily without losing the stored preference.
-- [x] Closing the last note no longer strands it: the note used last is reopened on the next summon.
-- [x] Typing `->` produces a real `→`, outside code.
+### Fase 3.2R: convocação, reabertura e tipografia (concluída)
+- [x] `note-it` invoca a instância em execução de qualquer aplicativo em foco, criando uma camada de desktop
+nota temporariamente sem perder a preferência armazenada.
+- [x] Fechar a última nota não a deixa mais presa: a nota usada por último é reaberta na próxima convocação.
+- [x] Digitar `->` produz um código real `→`, externo.
 
-### Phase 3.3: Multi-note Collapse & UX Refinements (Completed)
-- [x] `note-it toggle-collapse-all` for every note, with `Ctrl+Shift+M` still per-note.
-- [x] A collapsed note expands when clicked, and `☰` expands and opens the menu in one click.
-- [x] The settings menu is no longer clipped on a collapsed note.
-- [x] `->` produces the heavier `➜`, readable at every text size.
-- [x] Highlighted text is readable on every paper colour, including the dark one.
+### Fase 3.3: Colapso de múltiplas notas e refinamentos UX (concluído)
+- [x] `note-it toggle-collapse-all` para cada nota, com `Ctrl+Shift+M` ainda por nota.
+- [x] Uma nota recolhida se expande quando clicada e `☰` se expande e abre o menu com um clique.
+- [x] O menu de configurações não fica mais recortado em uma nota recolhida.
+- [x] `->` produz o `➜` mais pesado, legível em qualquer tamanho de texto.
+- [x] O texto destacado pode ser lido em todas as cores de papel, incluindo o escuro.
 
-### Phase 3.4: Paper & Themes (Completed)
-- [x] Five paper types per note — Liso, Pautado, Pontilhado, Quadriculado pequeno, Quadriculado
-      grande — as one parameterised CSS system rather than five implementations.
-- [x] Pattern intensity per note (Suave / Normal / Forte), affecting the pattern's opacity only.
-- [x] Pattern ink chosen from the paper colour, so it stays visible on all seven, including the
-      dark one, without ever competing with the text.
-- [x] Paper type and intensity persisted in the note's front matter, without touching the content
-      or the note's modification date; notes predating the fields open as plain paper.
-- [x] Pattern spacing fixed in pixels, so the view zoom scales the text and leaves it alone.
-- [x] Interface theme (Sistema / Claro / Escuro) stored once in `config.toml` and broadcast to
-      every open note, dressing the chrome and never a note's own colour.
-- [x] `--ui-*` token set separating the application's chrome from the note's paper, so a menu is
-      legible over a black note and a yellow one in either theme.
+### Fase 3.4: Papel e temas (concluída)
+- [x] Cinco tipos de papel por nota — Liso, Pautado, Pontilhado, Quadriculado pequeno e Quadriculado grande — implementados como um sistema CSS parametrizado, não como cinco implementações distintas.
+- [x] Intensidade do padrão por nota (Suave/Normal/Forte), afetando apenas a opacidade do padrão.
+- [x] Tinta padrão escolhida a partir da cor do papel, para que permaneça visível em todas as sete cores, inclusive a escura, sem competir com o texto.
+- [x] Tipo e intensidade do papel persistidos no front matter da nota, sem alterar seu conteúdo nem sua data de modificação; notas anteriores a esses campos abrem como papel liso.
+- [x] O espaçamento do padrão é fixado em pixels, para que o zoom da visualização dimensione o texto e o deixe como está.
+- [x] Tema da interface (Sistema/Claro/Escuro) armazenado uma vez em `config.toml` e transmitido a cada nota aberta, aplicado ao chrome sem alterar a cor própria da nota.
+- [x] Conjunto de tokens `--ui-*` que separa o chrome do aplicativo do papel da nota, mantendo o menu legível tanto sobre uma nota preta quanto sobre uma amarela, em qualquer tema.
 
-### Phase 3.4R: `updated_at` Integrity (Completed)
-- [x] `updated_at` moves only when the note's persisted content actually changes. Opening and
-      closing, summoning, hiding, showing and quitting without editing all leave it alone.
-- [x] The comparison lives in the one path every content save funnels through — autosave, the
-      flush before hide and quit, and save-and-close — rather than in each caller.
-- [x] A note whose content is unchanged is not rewritten at all: no temp file, no rename, no fsync.
-- [x] Close and flush still report success on an identical save, so the lifecycle never stalls.
-- [x] Recency, which decides the note a summon brings back, now follows the last edit rather than
-      the last close. See the note under Phase 4 below.
+### Fase 3.4R: `updated_at` Integridade (concluída)
+- [x] `updated_at` muda somente quando o conteúdo persistido da nota realmente muda. Abrir, fechar, convocar, ocultar, mostrar e sair sem editar deixam o campo intacto.
+- [x] A comparação reside no único caminho pelo qual passa todo conteúdo salvo — salvamento automático, flush antes de ocultar ou sair e salvar e fechar —, não em cada chamador.
+- [x] Uma nota cujo conteúdo permanece inalterado não é reescrita: nenhum arquivo temporário, nenhuma renomeação, nenhum fsync.
+- [x] Fechar e liberar ainda relatam sucesso em um salvamento idêntico, para que o ciclo de vida nunca pare.
+- [x] A recência, que decide qual nota uma convocação traz, agora acompanha a última edição, não o último fechamento. Consulte a observação na Fase 4 abaixo.
 
-### Phase 3.4R.1: Persistence Transactional Integrity (Completed)
-- [x] A content or appearance change is prepared on a copy and adopted in memory only once
-      `save_note_atomic` has confirmed the write, so the document always describes the note on disk.
-- [x] A save that fails leaves the stored note and the in-memory note untouched, and the same
-      payload arriving again is written for real rather than answered by the identical-content
-      shortcut.
-- [x] Save-and-close never finalises a close over a failed save, and closes normally once the
-      retry succeeds.
-- [x] The flushes before hide and quit report a failed write as a failure rather than as success.
-- [x] Appearance saves — paper colour, type, intensity, font size — take the same route, so a
-      failed one is not masked by the content no-op that follows a close.
-- [x] A failed save removes its own temporary file instead of leaving `.tmp.*` debris behind.
-- [x] Everything Phase 3.4R established is unchanged: identical persisted content writes nothing,
-      `updated_at` moves only on a real edit, `created_at` never moves, and an untouched note keeps
-      its file's modification time.
+### Fase 3.4R.1: Integridade Transacional de Persistência (Concluída)
+- [x] Uma alteração de conteúdo ou aparência é preparada em uma cópia e adotada na memória somente depois que `save_note_atomic` confirma a gravação; assim, o documento sempre descreve a nota em disco.
+- [x] Uma falha de salvamento deixa intactas tanto a nota armazenada quanto a nota em memória; se o mesmo conteúdo chegar novamente, ele será realmente gravado, sem cair indevidamente no atalho de conteúdo idêntico.
+- [x] Salvar e fechar nunca finaliza um fechamento após uma falha no salvamento e fecha normalmente quando o
+nova tentativa foi bem-sucedida.
+- [x] As liberações antes de ocultar e sair relatam uma falha na gravação como uma falha, e não como um sucesso.
+- [x] Os salvamentos de aparência — cor, tipo e intensidade do papel e tamanho da fonte — seguem o mesmo caminho; uma falha não é mascarada pelo salvamento independente de conteúdo que acompanha o fechamento.
+- [x] Uma falha ao salvar remove seu próprio arquivo temporário em vez de deixar detritos `.tmp.*` para trás.
+- [x] Tudo o que a Fase 3.4R estabeleceu permanece inalterado: conteúdo persistente idêntico não grava nada,
+`updated_at` muda apenas em uma edição real, `created_at` nunca muda e uma nota intocada preserva o horário de modificação do arquivo.
 
-### Phase 3.4R.2: Commit Point (Completed)
-- [x] The rename is the commit point: a save reports failure for anything before or at it, and
-      success from it onwards.
-- [x] A directory sync that fails after the rename is a durability warning, not a failed save, so
-      memory and file can never end up describing opposite versions of a note.
-- [x] Nothing tracks a missed sync: a directory sync flushes every pending entry, so the next
-      successful save makes the earlier rename durable too.
-- [x] What is not guaranteed is written down rather than implied — the sync is not retried and a
-      save whose sync failed is not guaranteed durable.
-- [x] Everything Phases 3.4R and 3.4R.1 established is unchanged.
+### Fase 3.4R.2: Ponto de Compromisso (Concluído)
+- [x] A renomeação é o ponto de confirmação: um salvamento relata falha em qualquer coisa antes ou durante ele, e
+sucesso a partir daí.
+- [x] Uma sincronização de diretório que falha após a renomeação gera um aviso de durabilidade, não uma falha de salvamento; assim, memória e arquivo nunca terminam descrevendo versões diferentes da nota.
+- [x] Nada rastreia uma sincronização perdida: uma sincronização de diretório libera todas as entradas pendentes, então a próxima
+o salvamento bem-sucedido também torna a renomeação anterior durável.
+- [x] O que não é garantido fica explícito: a sincronização não é repetida, e um salvamento cuja sincronização falhou não tem durabilidade garantida.
+- [x] Tudo o que as Fases 3.4R e 3.4R.1 estabeleceram permanece inalterado.
 
-### Phase 3.5: Smart Blocks (Completed)
-- [x] Code blocks whose language survives the Markdown round trip exactly as written, including a
-      fence with no language and one nothing here can highlight.
-- [x] Syntax highlighting for sixteen grammars and their aliases, as editor decorations only, with
-      no guessing and nothing written into the file.
-- [x] Callouts in GitHub's alert syntax — NOTE, TIP, IMPORTANT, WARNING, CAUTION — holding several
-      paragraphs, lists and nested blocks, and degrading to a plain blockquote when the kind is not
-      recognised.
-- [x] Blockquotes as their own structure, presented properly and never promoted into callouts.
-- [x] Comments stored as `<!-- ... -->`, editable in the editor, and never part of the note's text.
-- [x] All four reachable from the existing note menu, under one **Blocos** section rather than a
-      second toolbar.
-- [x] No block architecture was extracted. The four have almost nothing in common — see ADR-021.
+### Fase 3.5: Blocos Inteligentes (Concluído)
+- [x] Blocos de código cuja linguagem sobrevive à ida e volta pelo Markdown exatamente como escrita, inclusive uma cerca sem linguagem, caso em que nada é realçado.
+- [x] Destaque de sintaxe para dezesseis gramáticas e seus aliases, apenas como decoração do editor, com
+sem suposições e nada escrito no arquivo.
+- [x] Chamadas na sintaxe de alerta de GitHub — NOTA, DICA, IMPORTANTE, AVISO, CUIDADO — contendo vários
+parágrafos, listas e blocos aninhados, e degradando para uma citação simples quando o tipo não é
+reconhecido.
+- [x] Citações em bloco como estrutura própria, apresentadas corretamente e nunca promovidas a alertas.
+- [x] Comentários armazenados como `<!-- ... -->`, editáveis ​​no editor e nunca fazem parte do texto da nota.
+- [x] Todos os quatro acessíveis a partir do menu de notas existente, em uma seção **Blocos** em vez de uma
+segunda barra de ferramentas.
+- [x] Nenhuma arquitetura de bloco foi extraída. Os quatro não têm quase nada em comum — veja ADR-021.
 
-### Phase 3.5R: Regression Audit & Stabilization (Completed)
-- [x] `Ctrl+Shift+Space` toggles the layer again. The break was host-side focus, not the shortcut:
-      a layer-shell window is mapped with no focus widget, so GDK received keys and dropped them
-      before WebKit, and a layer change cleared the focus again. The WebView is now focused whenever
-      the window is active. Isolating the three entry points is what located it — the menu and
-      `note-it toggle` both worked, the keyboard did not.
-- [x] Every in-note shortcut benefits: `Ctrl+N`, `Ctrl+W`, `Ctrl+R`, `Ctrl+=`/`-`/`0` and
-      `Ctrl+Shift+M` were dead for the same reason whenever the note had not been clicked.
-- [x] The shortcut never types a space into the note, is ignored during pt-BR composition, and
-      leaves AltGr — reported as `Ctrl+Alt` — to the editor.
-- [x] A note is compared and stored in one canonical spelling, so neither the newline a file is
-      terminated with nor the blank line the serializer puts after a trailing block is mistaken for
-      an edit. Everything Phase 3.4R established still holds: a real edit still moves `updated_at`.
-- [x] A note created during a summon elevation opens on the layer the other notes are on rather
-      than on the stored preference.
-- [x] `state.json` and `config.toml` are written under the same commit-point rule as a note, in one
-      shared atomic write: the rename commits, a directory sync failing after it is a durability
-      warning, and a configuration is replaced whole or not at all.
-- [x] Audited without finding a defect: the lifecycle coordinator and flush batching, the URL
-      allowlist and the Markdown/HTML sanitizers, the smart blocks and their round trips, geometry
-      clamping and collapse, and the summon/hide/show/restart layer transitions.
+### Fase 3.5R: Auditoria de Regressão e Estabilização (Concluída)
+- [x] `Ctrl+Shift+Space` alterna a camada novamente. A ruptura foi o foco do host, não o atalho:
+uma janela de shell de camada é mapeada sem widget de foco, então GDK recebeu chaves e as descartou
+antes do WebKit, e uma mudança de camada limpava o foco novamente. O WebView agora recebe foco sempre que a janela está ativa. Isolar os três pontos de entrada revelou a causa: o menu e `note-it toggle` funcionavam, mas o teclado não.
+- [x] Todos os atalhos dentro da nota se beneficiam: `Ctrl+N`, `Ctrl+W`, `Ctrl+R`, `Ctrl+=`/`-`/`0` e
+`Ctrl+Shift+M` morreram pelo mesmo motivo sempre que a nota não foi clicada.
+- [x] O atalho nunca digita um espaço na nota, é ignorado durante a composição pt-BR e
+deixa AltGr — relatado como `Ctrl+Alt` — para o editor.
+- [x] Uma nota é comparada e armazenada em uma grafia canônica, portanto, nem a nova linha de um arquivo é
+terminado com nem a linha em branco que o serializador coloca depois que um bloco final é confundido com
+uma edição. Tudo o que a Fase 3.4R estabeleceu ainda se mantém: uma edição real ainda se move `updated_at`.
+- [x] Uma nota criada durante uma elevação por convocação abre na camada em que as outras notas estão, não na preferência armazenada.
+- [x] `state.json` e `config.toml` são escritos sob a mesma regra de ponto de confirmação que uma nota, em um
+gravação atômica compartilhada: a renomeação é confirmada, uma sincronização de diretório falha após ser uma durabilidade
+aviso e uma configuração é totalmente substituída ou não é substituída.
+- [x] Auditado sem encontrar um defeito: o coordenador do ciclo de vida e lote de liberação, o URL
+lista de permissões e os sanitizadores Markdown/HTML, os blocos inteligentes e suas viagens de ida e volta, geometria
+fixação e colapso, e as transições da camada invocar/ocultar/mostrar/reiniciar.
 
-### Phase 3.5R.1: Global Layer Toggle Refinement
-- [x] Niri owns the authoritative `Ctrl+Shift+Space`; the WebView shortcut is a local fallback.
-- [x] The direct `toggle-layer` GAction reaches one shared layer decision without launching a
-      second GTK process.
-- [x] Desktop-to-Overlay promotion forces a timely Wayland commit without stealing focus from the
-      normal application; the reverse transition stays live and does not re-present the surface.
-- [x] Layer persistence is debounced and reads current state, while lifecycle commits retain the
-      existing atomic durability guarantees.
-- [x] Auto-repeat is suppressed for discrete note commands and for the Niri binding.
+### Fase 3.5R.1: Refinamento de alternância de camada global
+- [x] Niri possui o `Ctrl+Shift+Space` oficial; o atalho WebView é um substituto local.
+- [x] A GAction `toggle-layer` direta atinge uma decisão de camada compartilhada sem lançar um
+segundo processo GTK.
+- [x] A promoção de desktop para overlay força um commit Wayland oportuno sem roubar o foco do aplicativo normal; a transição reversa permanece ao vivo e não remapeia a superfície.
+- [x] A persistência da camada é debounce e lê o estado atual, enquanto os commits do ciclo de vida retêm o
+garantias de durabilidade atômica existentes.
+- [x] A repetição automática é suprimida para comandos de notas discretas e para a ligação Niri.
 
-### Phase 3.6: Math Engine (Completed)
-- [x] Contextual inline calculation, evaluated as the note is written: a line beginning with `=`
-      shows its result beside it, and a `nome := expressão` line declares a value the lines below
-      it can use.
-- [x] Percentages in the forms people actually write — `10% de 200`, `200 + 10%`, `200 - 10%` —
-      with the contextual reading tied to a `%` written on the line rather than to a value that
-      once came from one.
-- [x] Variables local to the note, resolved top-down, so a variable exists from its declaration
-      downwards and cycles are impossible without a resolver to prevent them.
-- [x] Reactive results: the whole note is re-evaluated on every document change, so changing one
-      declaration moves every result under it with no dependency tracking to go stale.
-- [x] `sum`, `avg` and `count` over the block of consecutive calculation lines directly above them.
-- [x] Results are ProseMirror decorations and never content: nothing is written into the `.md`,
-      `updated_at` does not move for a recalculation, and reopening a note recomputes it.
-- [x] A parser with no evaluator behind it — no `eval`, no `Function`, no property access, no call
-      syntax — and no new dependency of any kind.
+### Fase 3.6: Mecanismo Matemático (Concluído)
+- [x] Cálculo contextual, avaliado conforme a nota é escrita: uma linha começando com `=`
+mostra seu resultado ao lado e uma linha `nome := expressão` declara um valor nas linhas abaixo
+ele pode usar.
+- [x] Porcentagens nos formulários que as pessoas realmente escrevem — `10% de 200`, `200 + 10%`, `200 - 10%` —
+com a leitura contextual vinculada a um `%` escrito na linha e não a um valor que
+uma vez veio de um.
+- [x] Variáveis ​​locais para a nota, resolvidas de cima para baixo, portanto existe uma variável a partir de sua declaração
+para baixo e os ciclos são impossíveis sem um resolvedor para evitá-los.
+- [x] Resultados reativos: toda a nota é reavaliada a cada alteração no documento, alterando assim uma
+A declaração move todos os resultados abaixo dela sem nenhum rastreamento de dependência para ficar obsoleto.
+- [x] `sum`, `avg` e `count` sobre o bloco de linhas de cálculo consecutivas diretamente acima deles.
+- [x] Os resultados são decorações ProseMirror e nunca conteúdo: nada é escrito em `.md`,
+`updated_at` não se move para um recálculo e a reabertura de uma nota o recalcula.
+- [x] Um analisador sem avaliador por trás dele — sem `eval`, sem `Function`, sem acesso à propriedade, sem chamada
+sintaxe — e nenhuma nova dependência de qualquer tipo.
 
-### Phase 3.7: Conversions (Completed)
-- [x] Unit conversions written as `= 10 km em m`, evaluated as the note is written and shown as a
-      decoration beside the line, exactly as a calculation is.
-- [x] Eight dimensions, all deterministic and offline: length, mass, volume, temperature, time,
-      area, digital data and speed. Every spelling is listed in `docs/features.md`.
-- [x] The left-hand side is a full math-engine expression, so parentheses, arithmetic and variables
-      all feed a conversion.
-- [x] Temperature as scales with different zeroes rather than a factor, and area as its own unit
-      rather than a length with an exponent.
-- [x] SI and IEC prefixes kept apart: `1 GB` is 1000 MB and `1 GiB` is 1024 MiB.
-- [x] Unknown units, incompatible dimensions and impossible conversions each reported in their own
-      words, discreetly, with nothing written to the file.
-- [x] Nothing new in the file format, nothing new in the visual mechanism, and no new dependency:
-      the unit table is data and the result is the decoration the math engine already draws.
-- [x] Currencies deliberately **not** implemented, and no rate hardcoded. The boundary a future
-      source has to sit behind is written down in `ui/src/units/convert.ts` and ADR-025.
+### Fase 3.7: Conversões (concluídas)
+- [x] Conversões de unidades escritas como `= 10 km em m`, avaliadas conforme a nota é escrita e mostradas como um
+decoração ao lado da linha, exatamente como é um cálculo.
+- [x] Oito dimensões, todas determinísticas e off-line: comprimento, massa, volume, temperatura, tempo,
+área, dados digitais e velocidade. Cada grafia está listada em `docs/features.md`.
+- [x] O lado esquerdo é uma expressão completa do mecanismo matemático, então parênteses, aritmética e variáveis
+todos alimentam uma conversão.
+- [x] Temperatura como escalas com zeros diferentes em vez de um fator, e área como sua própria unidade
+em vez de um comprimento com um expoente.
+- [x] Prefixos SI e IEC mantidos separados: `1 GB` tem 1.000 MB e `1 GiB` tem 1.024 MiB.
+- [x] Unidades desconhecidas, dimensões incompatíveis e conversões impossíveis, cada uma relatada em seu próprio idioma
+palavras, discretamente, sem nada escrito no arquivo.
+- [x] Nada de novo no formato do arquivo, nada de novo no mecanismo visual e nenhuma nova dependência:
+a tabela de unidades são dados e o resultado é a decoração que o mecanismo matemático já desenha.
+- [x] Moedas deliberadamente **não** implementadas e nenhuma taxa codificada. A fronteira um futuro
+a fonte deve ficar para trás está anotada em `ui/src/units/convert.ts` e ADR-025.
 
-### Phase 3.7R: Test Harness Isolation (Completed)
-- [x] `scripts/note-it-isolated` isolates the **session bus** as well as XDG. Note-it is a
-      single-instance `GApplication`, so with a daemon already running on the real bus an "isolated"
-      command was forwarded to it and the real store did the writing — which is how a test note
-      reached the user's own notes directory during Phase 3.7's physical testing.
-- [x] A private `dbus-daemon` per test run, with `DBUS_SESSION_BUS_ADDRESS` pointed at it and the
-      D-Bus starter variables cleared. The real daemon is never stopped and never notices.
-- [x] Fail-closed throughout: the bus is started, proved distinct from the real one and proved
-      reachable *before* Note-it is launched, and the launched process's environment is read back
-      from `/proc` and checked. Exit codes 90–93 say which guarantee could not be met.
-- [x] `--root DIR` keeps the private bus alive across invocations, so a daemon started by one
-      command and a `new` sent by the next reach the same instance; `--stop` ends it and `--verify`
-      asserts the instance really is on the private bus.
-- [x] `scripts/test-isolation` reproduces the incident — an ambient session with its own bus, store
-      and, where a display exists, a genuine daemon owning the well-known name — and asserts the
-      note lands only in the throwaway store while the ambient one is unchanged to the nanosecond.
-      It runs under `cargo test`.
-- [x] No application code changed. The defect was in the harness, not in Note-it.
+### Fase 3.7R: Teste do ambiente de isolamento (concluído)
+- [x] `scripts/note-it-isolated` isola o **barramento de sessão** e também o XDG. Note-it é uma `GApplication` de instância única; portanto, quando já havia um daemon no barramento real, um comando supostamente “isolado” era encaminhado a ele e o store real recebia a gravação. Foi assim que uma nota de teste chegou ao diretório de notas do próprio usuário durante os testes físicos da Fase 3.7.
+- [x] Um `dbus-daemon` privado por execução de teste, com `DBUS_SESSION_BUS_ADDRESS` apontado para ele e o
+variáveis de inicialização do D-Bus removidas. O daemon real nunca é interrompido e nem percebe a execução.
+- [x] Falha segura em toda parte: o barramento é iniciado, comprovadamente distinto do real e acessível
+alcançável *antes* de Note-it ser iniciado e o ambiente do processo iniciado ser lido novamente
+de `/proc` e verificado. Os códigos de saída 90–93 indicam qual garantia não pôde ser cumprida.
+- [x] `--root DIR` mantém o barramento privado ativo durante as invocações, portanto, um daemon iniciado por um
+comando e um `new` enviado pelo próximo atingem a mesma instância; `--stop` termina e `--verify`
+afirma que a instância realmente está no barramento privado.
+- [x] `scripts/test-isolation` reproduz o incidente — uma sessão de ambiente com barramento e store próprios e, quando há display, um daemon real que possui o nome conhecido — e confirma que a nota chega apenas ao store descartável, enquanto o store do ambiente permanece inalterado até os nanossegundos.
+Ele é executado em `cargo test`.
+- [x] Nenhum código do aplicativo foi alterado. O defeito estava no harness e não em Note-it.
 
-### Phase 3.8: Search & Productivity (Completed)
-- [x] Global search across every note, opened with `Ctrl+K` from any note. Case-insensitive and
-      accent-insensitive, so `biopsia` finds `Biópsia` — the property Portuguese needs most.
-- [x] No persistent index. A thousand notes are listed, read, folded, matched and turned into
-      snippets in tens of milliseconds, which is faster than anything a person can notice and cheaper than
-      an index that would have to be invalidated, rebuilt and kept honest. The measurement is a
-      test, so the claim keeps being checked — see ADR-027.
-- [x] Search lives in `src/search.rs` and `StorageManager`, not in the window or the WebView: it
-      needs no GTK, no WebKit and no display, which is what a future CLI will need too.
-- [x] An empty query lists the most recently written notes, so the same control is also the way to
-      move between them.
-- [x] A result is one note, addressed by `note_id` — never by path, and never by the label, which
-      two notes may share. Opening one activates it, opens it if it was closed, expands it if it
-      was collapsed, and scrolls to the match, all without touching `updated_at`.
-- [x] Find inside a note with `Ctrl+F`, replace with `Ctrl+H`. Enter and Shift+Enter walk the
-      occurrences and wrap at both ends; `Replace All` is a single ProseMirror transaction, so one
-      `Ctrl+Z` puts all of it back.
-- [x] Neither search nor find can find what is not in the file: a calculation's `4` and a
-      conversion's `10000 m` are decorations, and searching for them finds nothing.
-- [x] Paste URL on Selection: pasting a URL over selected text makes that text the link, judged by
-      the link allowlist the application already had, with no network, no metadata lookup and one
-      undo step.
-- [x] Compact link rendering evaluated and deliberately deferred: shortening a URL hides where it
-      leads, which is a security regression sold as tidiness. Recorded in ADR-027 rather than
-      quietly skipped.
+### Fase 3.8: Pesquisa e Produtividade (Concluída)
+- [x] Pesquisa global em todas as notas, aberta com `Ctrl+K` em qualquer nota. Não diferencia maiúsculas de minúsculas e
+insensível ao sotaque, então `biopsia` encontra `Biópsia` — a propriedade que o português mais precisa.
+- [x] Nenhum índice persistente. Mil notas são listadas, lidas, dobradas, combinadas e transformadas em
+trechos em dezenas de milissegundos, o que é mais rápido do que qualquer coisa que uma pessoa possa perceber e mais barato do que
+um índice que teria que ser invalidado, reconstruído e mantido honesto. A medição é uma
+teste, para que a reclamação continue sendo verificada — consulte ADR-027.
+- [x] A pesquisa reside em `src/search.rs` e `StorageManager`, não na janela ou no WebView:
+não precisa de GTK, WebKit e display, que é o que um futuro CLI também precisará.
+- [x] Uma consulta vazia lista as notas escritas mais recentemente, portanto, o mesmo controle também é a maneira de
+mover-se entre eles.
+- [x] Um resultado é uma nota, endereçada por `note_id` — nunca pelo caminho, e nunca pelo rótulo, que
+duas notas podem compartilhar. Abrir um ativa-o, abre-o se estiver fechado, expande-o se estiver
+foi recolhido e rola para a partida, tudo sem tocar em `updated_at`.
+- [x] Encontre dentro de uma nota com `Ctrl+F`, substitua por `Ctrl+H`. Enter e Shift+Enter percorrem
+ocorrências e envoltório em ambas as extremidades; `Replace All` é uma única transação ProseMirror, então uma
+`Ctrl+Z` coloca tudo de volta.
+- [x] Nem a pesquisa nem a localização podem encontrar o que não está no arquivo: um cálculo `4` e um
+os `10000 m` da conversão são decorações e procurá-los não encontra nada.
+- [x] Colar URL na seleção: colar um URL sobre o texto selecionado transforma esse texto em link, conforme a lista de permissões que o aplicativo já possuía, sem rede nem busca de metadados e como uma única etapa de desfazer.
+- [x] Renderização compacta de links avaliada e deliberadamente adiada: encurtar um URL oculta seu destino, o que seria uma regressão de segurança vendida como organização. A decisão foi registrada no ADR-027, não omitida silenciosamente.
 
-### Phase 3.8R: Search Refinement (Completed)
+### Fase 3.8R: Refinamento da Pesquisa (Concluído)
 
-Four things Phase 3.8 said that were not quite what it did. No new feature, no fuzzy search, no
-index, no threads — the smallest correct change to each, and a test for each. See ADR-027.1.
+Quatro coisas que a Fase 3.8 disse que não foram exatamente o que fez. Nenhum recurso novo, nenhuma pesquisa difusa, nenhum índice, nenhum thread — a menor alteração correta para cada um e um teste para cada um. Consulte ADR-027.1.
 
-- [x] "Every note" now means every note. The scan stopped at 5 000, so the 5 001st note was
-      unfindable and nothing would have said so. The scan reads the whole store; the **result**
-      list is still capped at 100, because a hundred rows is what a person reads and the reader can
-      see there are a hundred. A test puts a note at position 5 001 and finds it.
-- [x] The empty-query listing keeps its cap: it shows at most a hundred notes, so reading past them
-      would answer no question.
-- [x] The search palette drops any answer to a question that is no longer being asked. Numbering
-      caught a slow reply arriving *after* a fast one and missed the opposite order — `bio`
-      answering while `biopsia` is still in flight. Only the outstanding request's answer may
-      change the list.
-- [x] The limits are described as what they are: ceilings on the query and on the answer, not on
-      the note. Search reads a note to its end, because a word at the end has to be findable. The
-      cost of a large note is measured — a 2 MB note is searched correctly, with its accents
-      intact and without writing — rather than claimed to be bounded. No asynchronous machinery was
-      introduced to make a sentence true; the sentence was corrected.
-- [x] "Most recent" is the note's own `updated_at`, not the file's `mtime`. Appearance — colour,
-      paper, pattern intensity, font size — rewrites the file without being an edit, so ordering by
-      `mtime` made repainting a note count as writing in it. A note with no readable `updated_at`
-      falls back to `mtime`, ties are broken by identifier, and listing still writes nothing.
-- [x] No regression in Search, Quick Switcher, Find, Replace, Paste URL on Selection, the shared
-      layer or the lifecycle; `updated_at` and the undo history are untouched.
+- [x] "Cada nota" agora significa cada nota. A varredura parou em 5.000, então a nota 5.001 foi
+inencontrável e nada teria dito isso. A varredura lê todo o armazenamento; o **resultado**
+lista ainda está limitada a 100, porque cem linhas é o que uma pessoa lê e o leitor pode
+veja que são cem. Um teste coloca uma nota na posição 5 001 e a encontra.
+- [x] A listagem de consulta vazia mantém seu limite: mostra no máximo cem notas, portanto, lendo além delas
+não responderia a nenhuma pergunta.
+- [x] A paleta de pesquisa elimina qualquer resposta a uma pergunta que não está mais sendo feita. Numeração
+peguei uma resposta lenta chegando *depois* de uma rápida e perdi a ordem oposta — `bio`
+atendendo enquanto `biopsia` ainda está em vôo. Somente a resposta da solicitação pendente poderá
+mude a lista.
+- [x] Os limites são descritos como são: limites para a pergunta e para a resposta, não para
+a nota. A pesquisa lê uma nota até o final, porque uma palavra no final deve ser localizável. O
+o custo de uma nota grande é medido — uma nota de 2 MB é pesquisada corretamente, com seus acentos
+intacto e sem escrita - em vez de reivindicado como limitado. Nenhuma maquinaria assíncrona foi
+introduzido para tornar uma frase verdadeira; a frase foi corrigida.
+- [x] "Mais recente" é o `updated_at` da própria nota, não o `mtime` do arquivo. Aparência – cor,
+papel, intensidade do padrão, tamanho da fonte — reescreve o arquivo sem ser uma edição, portanto, ordenar por
+`mtime` fez com que a repintura de uma nota contasse como escrita nela. Uma nota sem leitura `updated_at`
+volta para `mtime`, os empates são quebrados pelo identificador e a listagem ainda não grava nada.
+- [x] Sem regressão na Pesquisa, Troca Rápida, Localizar, Substituir, Colar URL na Seleção, o compartilhado
+camada ou ciclo de vida; `updated_at` e o histórico de desfazer permanecem intactos.
 
-### Phase 3.9: Reliability (Completed)
+### Fase 3.9: Confiabilidade (concluída)
 
-No new productivity surface. One question only: can any action Note-it offers turn a recoverable
-mistake into lost text? See ADR-028 and ADR-029.
+Nenhuma nova superfície de produtividade. Apenas uma pergunta: alguma ação que Note-it oferece pode transformar um erro recuperável em texto perdido? Consulte ADR-028 e ADR-029.
 
-- [x] **Recoverable trash.** *Dados › Mover esta nota para a lixeira* moves `notes/<uuid>.md` to
-      `trash/<uuid>.md`, with a confirmation that says the deletion can be undone. `×` and `Ctrl+W`
-      still mean close, as they always have.
-- [x] The order is flush → move → state → surface, and the move is the commit point. A note whose
-      latest text could not be written is never moved and never disappears; past the move the note
-      *is* in the trash, and neither the state write nor the window teardown may report otherwise.
-- [x] A note in the trash is not a note: not searched, not in the quick switcher, not summoned, not
-      reopened on restart — because all of those read `notes/`, and the file is not there.
-- [x] Restoring puts the file back with the same identifier and the same bytes. `hard_link` refuses
-      an existing name, so a live note carrying that identifier is never overwritten — a property of
-      the syscall, not of a check that could be raced.
-- [x] Neither deleting nor restoring is an edit: `updated_at` does not move, so a recovered note
-      returns to its place in the quick switcher instead of jumping to the top. Its geometry comes
-      back too.
-- [x] The deletion date lives in a `<uuid>.json` sidecar, never in the Markdown, so a note whose
-      front matter is damaged still goes to the trash and still comes back byte for byte.
-- [x] **Local automatic backup.** `backups/<timestamp>/` holding `notes/`, `trash/`, `config.toml`,
-      `state.json` and a manifest — ordinary directories of ordinary files, recoverable with `cp`.
-- [x] At most one automatic snapshot per 24 hours, taken **before** the first eligible change after
-      that window rather than after it, so the state captured is the one worth going back to. No
-      timer, no thread, no polling: an idle daemon does no work at all.
-- [x] *Dados › Fazer backup agora* for a snapshot on demand, reported in a line at the foot of the
-      note rather than a dialog over it.
-- [x] Built in `.tmp.…` and renamed into place: a snapshot is valid or it does not exist. Scratch
-      left by a crash is swept by the next backup, and only directories carrying that prefix are
-      ever removed.
-- [x] Seven kept, pruned **only after** a new snapshot has been committed. A backup that fails never
-      costs the protection already on disk, and never blocks a note save.
-- [x] Snapshots never contain snapshots, temp files, or anything reached through a symlink.
-- [x] Recovery is proved rather than promised: a snapshot is copied into a second, empty XDG tree
-      and opened, and the notes, identifiers, Markdown, trash, configuration and window state all
-      come back. The manual procedure is in `docs/storage.md`.
-- [x] Reliability audit over fifteen failure cases — a note that vanished, one that cannot be read,
-      a trash entry removed externally, a restore onto a live identifier, a backups directory that
-      cannot be created, a store that cannot be read, a commit that cannot land, scratch left by a
-      crash, stale state, missing state, damaged front matter, an absent configuration, and a flush
-      that fails with several notes open.
-- [x] Terminology: what Phase 3.8 called "AutoPaste" is **Paste URL on Selection**
-      (`ui/src/editor/linkPaste.ts`). Behaviour unchanged; the name is freed for the real Clipboard
-      AutoPaste in Phase 3.11.
+- [x] **Lixeira recuperável.** *Dados › Mover esta nota para a lixeira* move `notes/<uuid>.md` para
+`trash/<uuid>.md`, com uma confirmação informando que a exclusão pode ser desfeita. `×` e `Ctrl+W`
+ainda significam fechar, como sempre significaram.
+- [x] A ordem é flush → movimento → estado → superfície, e o movimento é o ponto de confirmação. Uma nota cujo
+o último texto que não pôde ser escrito nunca é movido e nunca desaparece; além do movimento da nota
+*está* na lixeira, e nem a redação do estado nem a desmontagem da janela podem informar o contrário.
+- [x] Uma nota na lixeira não é uma nota: não aparece na pesquisa nem no alternador rápido, não é convocada nem reaberta na inicialização, pois todos esses recursos leem `notes/` e o arquivo já não está lá.
+- [x] A restauração coloca o arquivo de volta com o mesmo identificador e os mesmos bytes. `hard_link` recusa
+um nome existente, portanto, uma nota ativa contendo esse identificador nunca será substituída - uma propriedade de
+o syscall, não de uma verificação que possa ser executada.
+- [x] Nem excluir nem restaurar é uma edição: `updated_at` não se move, portanto, uma nota recuperada
+retorna ao seu lugar no switcher rápido em vez de pular para o topo. Sua geometria vem
+de volta também.
+- [x] A data de exclusão fica em um arquivo secundário `<uuid>.json`, nunca em Markdown, portanto, uma nota cuja
+front matter está danificado ainda vai para a lixeira e ainda volta byte por byte.
+- [x] **Backup automático local.** `backups/<timestamp>/` contém `notes/`, `trash/`, `config.toml`,
+`state.json` e um manifesto — diretórios comuns de arquivos comuns, recuperáveis ​​com `cp`.
+- [x] No máximo um instantâneo automático a cada 24 horas, criado **antes** da primeira alteração qualificada após esse intervalo, não depois dela, para que valha a pena voltar ao estado capturado. Sem temporizador, thread ou polling: um daemon inativo não trabalha.
+- [x] *Dados › Fazer backup agora* para um instantâneo sob demanda, relatado em uma linha no final do
+nota em vez de um diálogo sobre ela.
+- [x] Construído em `.tmp.…` e renomeado: um instantâneo é válido ou não existe. Resíduos deixados por uma falha são removidos pelo próximo backup, e somente diretórios com esse prefixo são removidos.
+- [x] Sete instantâneos mantidos, removidos **somente depois** que um novo instantâneo é confirmado. Um backup que falha nunca
+custa a proteção já existente no disco e nunca bloqueia o salvamento de uma nota.
+- [x] Os instantâneos nunca contêm instantâneos, arquivos temporários ou qualquer coisa alcançada por meio de um link simbólico.
+- [x] A recuperação é provada e não prometida: um instantâneo é copiado para uma segunda árvore XDG vazia
+e aberto, e as notas, identificadores, Markdown, lixo, configuração e estado da janela, todos
+voltar. O procedimento manual está em `docs/storage.md`.
+- [x] Auditoria de confiabilidade em quinze casos de falha – uma nota que desapareceu, uma que não pode ser lida,
+uma entrada de lixo removida externamente, uma restauração em um identificador ativo, um diretório de backups que
+não pode ser criado, um armazenamento que não pode ser lido, um commit que não pode ser acessado, um arranhão deixado por um
+falha, estado obsoleto, estado ausente, front matter danificado, configuração ausente e liberação
+que falha com várias notas abertas.
+- [x] Terminologia: o que a Fase 3.8 chama de "AutoPaste" é **Colar URL na seleção**
+(`ui/src/editor/linkPaste.ts`). Comportamento inalterado; o nome está liberado para a área de transferência real
+AutoPaste na Fase 3.11.
 
-**Deliberately not in this phase:** permanent delete, empty-the-trash, and a one-click restore of a
-whole store. The first two are irreversible controls in the phase whose subject is reversibility;
-the third is a multi-file transaction that deserves its own design rather than a menu entry.
+**Deliberadamente não nesta fase:** exclusão permanente, esvaziamento da lixeira e restauração de um store inteiro com um clique. Os dois primeiros são controles irreversíveis na fase cujo tema é a reversibilidade; a terceira é uma transação de vários arquivos que merece seu próprio design, em vez de uma entrada de menu.
 
-### Phase 3.10: Timer & Pomodoro (Complete)
+### Fase 3.10: Timer e Pomodoro (concluída)
 
-- [x] A countdown on the note, reached from a ⏱ in the header bar and shown in a small panel under
-      it. No second window, no permanent strip taken from the note.
-- [x] Presets at 5, 10, 15, 25, 30, 45 and 60 minutes, and a field for anything else from 1 to 600
-      whole minutes. A duration outside that — zero, negative, fractional, `NaN`, absurd — is
-      refused and said so, never rounded into range.
-- [x] Pomodoro 25/5/15: four focus sessions to a cycle, the fourth followed by the long break, then
-      the count begins again. The phase is an explicit model, not behaviour spread across handlers.
-- [x] Start, pause, continue, cancel and reset, with only the controls that apply on show. Skip
-      moves to the next Pomodoro step without waiting for this one.
-- [x] Nothing starts on its own. A finished phase is marked finished and **offers** the next one;
-      the reader begins it.
-- [x] **The truth is an instant, not a counter.** A running timer is stored as the wall-clock moment
-      it ends, and every reading is `deadline - now`. Nothing decrements, so nothing drifts and
-      nothing is lost to a throttled WebView, a busy machine or a suspended laptop.
-- [x] Pausing discards the instant and freezes the remainder, so paused time cannot be spent —
-      through a hide, through a restart, through any number of pause/resume cycles.
-- [x] The run survives the note being collapsed, hidden, or the application being closed: it comes
-      back with the time that really passed taken off, and one whose end has gone by comes back
-      **finished** rather than counting through zero.
-- [x] A collapsed note keeps the clock on its bar beside the note's name; a note too narrow for both
-      gives up the digits and never the name or the close control.
-- [x] Completion happens exactly once, guarded by the state transition itself rather than by a flag:
-      one line at the foot of the note and one desktop notification, however long the note sits at
+- [x] Uma contagem regressiva na nota, alcançada a partir de um ⏱ na barra de cabeçalho e mostrada em um pequeno painel abaixo
+isto. Nenhuma segunda janela, nenhuma faixa permanente retirada da nota.
+- [x] Predefinições em 5, 10, 15, 25, 30, 45 e 60 minutos e um campo para qualquer outra coisa de 1 a 600
+minutos inteiros. Uma duração fora disso — zero, negativa, fracionária, `NaN`, absurda — é
+recusou e disse isso, nunca arredondado para o alcance.
+- [x] Pomodoro 25/5/15: quatro sessões de foco em um ciclo, a quarta seguida pelo intervalo longo, depois
+a contagem começa novamente. A fase é um modelo explícito, não um comportamento espalhado pelos manipuladores.
+- [x] Inicie, pause, continue, cancele e reinicie, exibindo apenas os controles aplicáveis. Pular
+passa para a próxima etapa do Pomodoro sem esperar por esta.
+- [x] Nada começa sozinho. Uma fase concluída é marcada como concluída e **oferece** a próxima;
+o leitor começa.
+- [x] **A verdade é um instante, não um contador.** Um cronômetro em execução é armazenado como o momento do relógio de parede
+termina e cada leitura é `deadline - now`. Nada diminui, então nada flutua e
+nada é perdido para um WebView estrangulado, uma máquina ocupada ou um laptop suspenso.
+- [x] Pausar descarta o instante e congela o restante, então o tempo pausado não pode ser gasto –
+através de uma ocultação, através de uma reinicialização, através de qualquer número de ciclos de pausa/retomada.
+- [x] A execução sobrevive à nota ser recolhida, ocultada ou ao aplicativo ser fechado: ela vem
+volta com o tempo que realmente passou, e aquele cujo fim já passou volta
+**concluído** em vez de contar até zero.
+- [x] Uma nota recolhida mantém o relógio na barra ao lado do nome da nota; uma nota muito estreita para ambos
+abre mão dos dígitos e nunca do nome ou do controle próximo.
+- [x] A conclusão acontece exatamente uma vez, protegida pela própria transição de estado e não por uma bandeira:
+uma linha no final da nota e uma notificação na área de trabalho, independentemente do tempo que a nota permanecer
       zero.
-- [x] Notifications carry nothing from the note — no title, no text. The page reports *which* kind
-      of run ended, from a closed set, and the host owns the words.
-- [x] **Not content.** The timer is never written into the Markdown in any form. Starting, pausing,
-      finishing and cancelling leave the note file byte for byte as it was and leave `updated_at`
-      where it was; search, the collapsed title and the trash never see it. It lives beside the
-      window geometry in `state.json`, written only on a semantic change and never on a tick.
-- [x] One countdown per note, keyed by the note's identifier, so two notes cannot mix their timers
-      and there is no global timer manager.
+- [x] As notificações não trazem nada da nota – nenhum título, nenhum texto. A página informa *qual* tipo
+da execução terminou, de um conjunto fechado, e o host possui as palavras.
+- [x] **Não conteúdo.** O cronômetro nunca é gravado no Markdown de nenhuma forma. Começando, pausando,
+finalizando e cancelando deixe o arquivo de notas byte por byte como estava e deixe `updated_at`
+onde estava; pesquisa, o título recolhido e a lixeira nunca o veem. Ele mora ao lado
+geometria da janela em `state.json`, escrita apenas em uma mudança semântica e nunca em um tick.
+- [x] Uma contagem regressiva por nota, codificada pelo identificador da nota, para que duas notas não possam misturar seus temporizadores
+e não há gerenciador de cronômetro global.
 
-**Deliberately not in this phase:** the stopwatch and named timers this entry once listed. A
-stopwatch counts *up* and has no deadline, which is a second temporal model rather than a second
-button on this one; naming a timer is a label with nowhere to be read from — the note is already the
-name. Both belong to whatever asks for them with a reason, not to the phase whose subject is a
-countdown that can be trusted.
+**Deliberadamente não nesta fase:** o cronômetro e os cronômetros nomeados esta entrada uma vez listada. Um cronômetro conta *acima* e não tem prazo, que é um segundo modelo temporal em vez de um segundo botão neste; nomear um cronômetro é um rótulo sem lugar para ser lido - a nota já é o nome. Ambos pertencem a tudo o que os pede com um motivo, não à fase cujo assunto é uma contagem regressiva confiável.
 
-### Phase 3.11: Clipboard AutoPaste (Complete)
+### Fase 3.11: AutoPaste da área de transferência (concluído)
 
-The real one, in the sense Antinote uses the word: a capture mode, not the URL-over-selection paste
-Phase 3.8 shipped under that name. That one is still there, still called Paste URL on Selection, and
-untouched by this.
+O verdadeiro, no sentido em que o Antinote usa a palavra: um modo de captura, não a pasta de seleção sobre URL Fase 3.8 enviada com esse nome. Esse ainda está lá, ainda chamado Colar URL na seleção, e intocado por isso.
 
-- [x] An explicit capture mode, off by default, switched on in *☰ › Captura* with one line saying
-      exactly what it will do.
-- [x] **Off means off, as a property rather than a promise.** While AutoPaste is off there is no
-      handler connected to the clipboard at all, so nothing is observed, read, hashed, stored or
-      sent. Measured on a real Niri session: three copies with the mode off produced zero clipboard
-      events of any kind.
-- [x] Event-driven through GDK's own `changed` signal. No polling, no interval, no
-      `navigator.clipboard`, and no new dependency: the toolkit already in the process answers this.
-- [x] **The mode is session-only and is never written down.** Not in the Markdown, not in
-      `state.json`, not in `config.toml`. A restart, a crash or an update leaves it off, and the
-      reader decides again.
-- [x] One target for the whole application, because the system clipboard is one thing. Arming a
-      second note releases the first in the same step, and the released note's bar and menu say so.
-- [x] Text only. An image, a file list or an unknown format is declined from the offered formats
-      without a byte of it being transferred.
-- [x] The clipboard as it was *before* the switch is never captured: connecting the handler reads
-      nothing, so only a change after that moment is a capture.
-- [x] Captures are appended to the **end** of the note, as one transaction, with no focus taken, no
-      selection moved, no scroll and no window raised — the reader is in another application, which
-      is the whole point.
-- [x] One capture is one `Ctrl+Z`.
-- [x] Three delimiters — Linha, Linha em branco (default) and Separador — applied between the
-      existing content and the capture, exactly one each time, and never in front of the first
-      capture into an empty note. Changing the preference never rewrites what is already there.
-- [x] **Loop protection from the toolkit, not from a guess.** A copy or cut inside Note-it makes the
-      application the clipboard's owner, and GDK says so; that change is refused before any read
-      starts. Comparing text was rejected deliberately: two deliberate copies of the same words are
-      two captures.
-- [x] A generation on every armed run, checked again when each asynchronous read returns, so a read
-      still in the air when the mode is switched off, the target changes, the note closes or the
-      application hides delivers nothing.
-- [x] One read at a time, so A, B, C arrive as A, B, C.
-- [x] Disarmed **before** the flush on close, hide, quit and trash, so no stale callback can reach a
-      document that is about to be written out and destroyed.
-- [x] A capture is a real edit: the Markdown changes, `updated_at` moves, the ordinary autosave
-      writes it, and search finds it. Switching the mode on or off and changing the delimiter change
-      none of those.
-- [x] Nothing about the mode is content. No marker in the Markdown, nothing in the title, the
-      snippet, the trash label or the search index.
-- [x] No clipboard content in any log, at any level.
-- [x] Note-it never takes ownership of the clipboard: after a capture, the copied text still pastes
-      normally into any other application.
+- [x] Um modo de captura explícito, desativado por padrão, ativado em *☰ › Captura* com uma linha dizendo
+exatamente o que fará.
+- [x] **Desativado significa desativado, como uma propriedade e não como uma promessa.** Enquanto o AutoPaste estiver desativado, não há
+manipulador conectado à área de transferência, então nada é observado, lido, hash, armazenado ou
+enviado. Medido em uma sessão real Niri: três cópias com o modo desativado produziram zero área de transferência
+eventos de qualquer tipo.
+- [x] Orientado por evento através do próprio sinal `changed` de GDK. Sem votação, sem intervalo, não
+`navigator.clipboard` e nenhuma nova dependência: o kit de ferramentas já em processo responde a isso.
+- [x] **O modo é apenas de sessão e nunca é anotado.** Nem no Markdown, nem no
+`state.json`, não em `config.toml`. Uma reinicialização, uma falha ou uma atualização o deixa desativado e o
+leitor decide novamente.
+- [x] Um alvo para todo o aplicativo, porque a área de transferência do sistema é uma coisa. Armando um
+a segunda nota libera a primeira na mesma etapa, e a barra e o menu da nota liberada indicam isso.
+- [x] Somente texto. Uma imagem, uma lista de arquivos ou um formato desconhecido foi recusado dos formatos oferecidos
+sem que um byte dele seja transferido.
+- [x] A área de transferência como era *antes* do switch nunca é capturada: conectar o manipulador lê
+nada, então apenas uma mudança após esse momento é uma captura.
+- [x] As capturas são anexadas ao **final** da nota, como uma transação, sem foco, sem
+seleção movida, sem rolagem e sem janela levantada — o leitor está em outro aplicativo, que
+é o ponto principal.
+- [x] Uma captura é uma `Ctrl+Z`.
+- [x] Três delimitadores — Linha, Linha em branco (padrão) e Separador — aplicados entre os
+conteúdo existente e a captura, exatamente uma de cada vez, e nunca na frente da primeira
+capturar em uma nota vazia. Alterar a preferência nunca reescreve o que já existe.
+- [x] **Proteção de loop do kit de ferramentas, não de suposições.** Uma cópia ou corte dentro de Note-it torna o
+usando o proprietário da área de transferência e GDK diz isso; essa mudança é recusada antes de qualquer leitura
+começa. A comparação de texto foi deliberadamente rejeitada: duas cópias deliberadas das mesmas palavras são
+duas capturas.
+- [x] Uma geração em cada execução armada, verificada novamente quando cada leitura assíncrona retorna, portanto, uma leitura
+ainda no ar quando o modo é desligado, o alvo muda, a nota fecha ou o
+o aplicativo oculta não oferece nada.
+- [x] Uma leitura de cada vez, então A, B, C chegam como A, B, C.
+- [x] Desarmado **antes** do flush ao fechar, ocultar, sair e descartar, para que nenhum callback obsoleto possa atingir um
+documento que está prestes a ser escrito e destruído.
+- [x] Uma captura é uma edição real: o Markdown muda, o `updated_at` se move, o salvamento automático comum
+escreve e a pesquisa o encontra. Ativar ou desativar o modo e alterar a alteração do delimitador
+nada disso.
+- [x] Nada sobre o modo é conteúdo. Nenhum marcador no Markdown, nada no título, o
+snippet, o rótulo da lixeira ou o índice de pesquisa.
+- [x] Nenhum conteúdo da área de transferência em nenhum log, em qualquer nível.
+- [x] Note-it nunca se apropria da área de transferência: após uma captura, o texto copiado ainda é colado
+normalmente em qualquer outro aplicativo.
 
-### Phase 3.12: Images & Rich Layout (Complete)
+### Fase 3.12: Imagens e layout rico (concluída)
 
-Reordered deliberately: what a note was missing was a picture in it, not a way out of it. Capture &
-Export moves back, and Flashcards — which needs images to be worth building — moves next.
+Reordenado deliberadamente: o que faltava na nota era uma imagem nela, não uma saída dela. Captura e exportação recuam e Flashcards - que precisa de imagens para valer a pena construir - avançam em seguida.
 
-- [x] Local images in a note: pasted, dropped, or chosen from *☰ › Mídia › Inserir imagem…*.
-- [x] **Never base64 in the Markdown.** The bytes go into `assets/<note-uuid>/<asset-uuid>.<ext>`
-      beside `notes/` and `trash/`, and the note refers to them by a path relative to `notes/`.
-- [x] That relative path is why a note reaches the trash and comes back without a byte being
-      rewritten: `notes/` and `trash/` are siblings, so `../assets/…` resolves the same from either.
-      No absolute path from the reader's machine is ever written into a note.
-- [x] The page never spells a filesystem path. It loads `note-it-asset:/<note>/<asset>.<ext>`, which
-      the host serves after parsing both halves as `Uuid`s — so a `..`, an absolute path or an
-      encoded separator does not resolve to a file, it does not parse. See ADR-032.
-- [x] PNG, JPEG, WebP and GIF, decided by the bytes and never by the filename. **SVG is refused**:
-      it is a document that can carry script, and a note is not a place that needs one.
-- [x] Plain `![](…)` while there is nothing else to say, and a canonical `<img>` carrying exactly
-      `src`, `alt`, `data-note-it-width` and `data-note-it-align` once a width or an alignment is
-      chosen. The sanitizer rewrites the tag to that form or drops it entirely.
-- [x] Resize by dragging a handle, proportions kept because only the width is ever stored. One drag
-      is one entry in the history, not five hundred.
-- [x] Left, centre and right, with the text wrapping around a picture aligned left or right.
-- [x] Every change to a picture is an ordinary edit through the ordinary autosave: the Markdown
-      changes, `updated_at` moves, search finds the words around it. Selecting one, opening its
-      controls, cancelling the chooser or choosing the alignment it already has change nothing.
-- [x] A picture is not text. Nothing about how one is stored reaches the collapsed title, a search
-      snippet, the trash label or `visibleText` — searching an asset's identifier, a width or an
-      alignment finds nothing, and a note holding one picture and no words is still unnamed.
-- [x] Nothing is fetched. A remote image round-trips as the text it is and is drawn with no source
-      at all, so displaying a note reaches the network for nothing.
-- [x] No dependency was added.
+- [x] Imagens locais em uma nota: coladas, descartadas ou escolhidas em *☰ › Mídia › Inserir imagem…*.
+- [x] **Nunca base64 no Markdown.** Os bytes vão para `assets/<note-uuid>/<asset-uuid>.<ext>`
+ao lado de `notes/` e `trash/`, e a nota refere-se a eles por um caminho relativo a `notes/`.
+- [x] Esse caminho relativo é o motivo pelo qual uma nota chega à lixeira e volta sem que um byte seja
+reescrito: `notes/` e `trash/` são irmãos, então `../assets/…` resolve o mesmo de qualquer um deles.
+Nenhum caminho absoluto da máquina do leitor é escrito em uma nota.
+- [x] A página nunca indica um caminho do sistema de arquivos. Ele carrega `note-it-asset:/<note>/<asset>.<ext>`, que
+o host serve depois de analisar ambas as metades como `Uuid`s - então um `..`, um caminho absoluto ou um
+o separador codificado não resolve um arquivo, ele não analisa. Consulte ADR-032.
+- [x] PNG, JPEG, WebP e GIF, decididos pelos bytes e nunca pelo nome do arquivo. **SVG foi recusado**:
+é um documento que pode conter escrita, e uma nota não é um lugar que precise dela.
+- [x] Simples `![](…)` enquanto não há mais nada a dizer, e um canônico `<img>` carregando exatamente
+`src`, `alt`, `data-note-it-width` e `data-note-it-align` quando uma largura ou alinhamento for
+escolhido. O sanitizador reescreve a tag nesse formato ou a descarta completamente.
+- [x] Redimensione arrastando uma alça, as proporções são mantidas porque apenas a largura é armazenada. Uma tragada
+é uma entrada na história, não quinhentas.
+- [x] Esquerda, centro e direita, com o texto contornando uma imagem alinhada à esquerda ou à direita.
+- [x] Cada alteração em uma imagem é uma edição comum por meio do salvamento automático comum: o Markdown
+muda, `updated_at` se move, a pesquisa encontra as palavras ao seu redor. Selecionando um, abrindo seu
+controles, cancelar o seletor ou escolher o alinhamento que ele já possui não altera nada.
+- [x] Uma imagem não é texto. Nada sobre como um é armazenado chega ao título recolhido, uma pesquisa
+snippet, o rótulo da lixeira ou `visibleText` — pesquisando o identificador de um recurso, uma largura ou um
+o alinhamento não encontra nada, e uma nota contendo uma imagem e nenhuma palavra ainda não tem nome.
+- [x] Nada é buscado. Uma imagem remota percorre o texto que é e é desenhada sem fonte
+de jeito nenhum, então a exibição de uma nota chega à rede de graça.
+- [x] Nenhuma dependência foi adicionada.
 
-**Deliberately not in this phase:** cropping, rotation, filters, captions, galleries, lightboxes,
-images by URL, and **automatic collection of orphaned assets** — removing a picture takes it out of
-the note and leaves the file, because deleting bytes on a guess is worse than keeping them.
+**Deliberadamente não nesta fase:** corte, rotação, filtros, legendas, galerias, lightboxes, imagens por URL e **coleta automática de ativos órfãos** — remover uma imagem tira-a da nota e sai do arquivo, porque excluir bytes em uma estimativa é pior do que mantê-los.
 
-#### 3.12R: the backup learns about images
+#### 3.12R: o backup aprende sobre imagens
 
-Shipped in 3.12 and caught by the audit that followed: the pictures went into `assets/`, and the
-snapshot still copied only `notes/`, `trash/`, `config.toml` and `state.json`. A backup taken in
-between restores a note's Markdown and not the file its `![](../assets/…)` points at, which is not
-what a backup promises.
+Enviado em 3.12 e detectado pela auditoria que se seguiu: as imagens foram para `assets/` e o instantâneo ainda copiou apenas `notes/`, `trash/`, `config.toml` e `state.json`. Um backup feito entre restaura o Markdown de uma nota e não o arquivo para o qual seu `![](../assets/…)` aponta, o que não é o que um backup promete.
 
-- [x] `assets/` is part of a snapshot, in the same shape and byte for byte, for automatic and
-      manual backups alike — one routine serves both.
-- [x] Copied strictly and fail-closed: two known levels, never a general recursive descent, never a
-      symbolic link followed, and anything that is not `<note-uuid>/<asset-uuid>.<ext>` stops the
-      snapshot rather than being silently omitted from one reported as complete. Scratch left by an
-      interrupted import is skipped, as it is for the notes.
-- [x] An image no note points at any more is copied too. A backup is not garbage collection.
-- [x] A failure copying an image fails the whole snapshot before the commit point: nothing is
-      renamed into place, and retention does not run — an old backup is never deleted to make room
-      for one that did not happen.
-- [x] Manifest version 2 records the image count. Version 1 snapshots stay listable and readable.
-- [x] Proved by restoring into a second, empty store with the original deleted: both notes come
-      back, both images render through `note-it-asset:`, and every file is byte-identical.
+- [x] `assets/` faz parte de um instantâneo, na mesma forma e byte por byte, para uso automático e
+backups manuais – uma rotina serve ambos.
+- [x] Copiado estritamente e fechado com falha: dois níveis conhecidos, nunca uma descida recursiva geral, nunca um
+link simbólico seguido, e qualquer coisa que não seja `<note-uuid>/<asset-uuid>.<ext>` interrompe o
+instantâneo em vez de ser omitido silenciosamente de um relatado como completo. Arranhão deixado por um
+a importação interrompida é ignorada, como acontece com as notas.
+- [x] Uma imagem para a qual nenhuma nota aponta mais também é copiada. Um backup não é uma coleta de lixo.
+- [x] Uma falha na cópia de uma imagem falha em todo o snapshot antes do ponto de confirmação: nada é
+renomeado e a retenção não é executada — um backup antigo nunca é excluído para liberar espaço
+por um que não aconteceu.
+- [x] A versão 2 do manifesto registra a contagem de imagens. Os snapshots da versão 1 permanecem listáveis ​​e legíveis.
+- [x] Comprovado pela restauração em um segundo armazenamento vazio com o original excluído: ambas as notas vêm
+de volta, ambas as imagens são renderizadas por meio de `note-it-asset:` e cada arquivo é idêntico em bytes.
 
-#### 3.12R.1: the clipper
+#### 3.12R.1: o clipe
 
-A refinement of the same phase, not a phase of its own: the way in was three clicks deep for the
-thing people do most.
+Um refinamento da mesma fase, não uma fase própria: a entrada teve três cliques de profundidade para aquilo que as pessoas mais fazem.
 
-- [x] A paperclip in the header, between **Buscar** and the timer, opening the file chooser on the
-      first click — no panel in between.
-- [x] One function, two triggers. The button and *☰ › Mídia › Inserir imagem…* call the same handler
-      and send the same `insert_image_requested`; no second chooser, importer, asset path or
-      serializer exists to drift from the first.
-- [x] The menu entry stays, and so do paste and drop.
-- [x] Hidden on a collapsed note like the six quick actions, and hidden on an expanded note narrower
-      than 300 px: the bar's budget at `MIN_NOTE_WIDTH` has to give somewhere, and the paperclip is
-      the only control on it whose job the menu still does in full.
-- [x] The drawing is inline SVG from the icon collection, written into the page at build time — the
-      pipeline that survives the page's `default-src 'self'`.
-- [x] No new keyboard shortcut, no new bridge message, and nothing touched in `assets`, `backup`,
-      `storage`, `search`, `timer` or `autopaste`.
+- [x] Um clipe de papel no cabeçalho, entre **Buscar** e o cronômetro, abrindo o seletor de arquivos no
+primeiro clique – nenhum painel intermediário.
+- [x] Uma função, dois gatilhos. O botão e *☰ › Mídia › Inserir imagem…* chamam o mesmo manipulador
+e envie o mesmo `insert_image_requested`; nenhum segundo seletor, importador, caminho de ativos ou
+serializer existe para se afastar do primeiro.
+- [x] A entrada do menu permanece, assim como colar e soltar.
+- [x] Oculto em uma nota recolhida, como as seis ações rápidas, e oculto em uma nota expandida mais estreita
+mais de 300 px: o orçamento do bar em `MIN_NOTE_WIDTH` tem que ceder para algum lugar, e o clipe de papel é
+o único controle cujo trabalho o menu ainda executa por completo.
+- [x] O desenho é SVG embutido na coleção de ícones, escrito na página no momento da construção - o
+pipeline que sobrevive ao `default-src 'self'` da página.
+- [x] Nenhum novo atalho de teclado, nenhuma nova mensagem de ponte e nada alterado em `assets`, `backup`,
+`storage`, `search`, `timer` ou `autopaste`.
 
-### Phase 3.13: Flashcards Core (Complete)
+### Fase 3.13: Flashcards Core (Concluído)
 
-- [x] `Pergunta :: Resposta` produces one source card and one review item; `Termo ::: Definição`
-      produces one source and two adjacent directions, in document order and without deduplication.
-- [x] Inline syntax requires whitespace, matches `:::` as a whole before `::`, and declines code,
-      URLs, times, namespaces, technical attributes, `::::` and ambiguous multiple delimiters.
-- [x] A top-level marker paragraph takes exactly the structural block before and after it. Headings,
-      hard breaks, bullet and numbered lists, tasks, quotes, callouts, images and image-plus-text are
-      preserved as the side the note already holds.
-- [x] Extraction reads the ProseMirror tree. Markdown remains the source of truth; there is no
-      flashcard file, database, persistent identifier, metadata or backend protocol.
-- [x] Managed pictures keep the Phase 3.12 node and `note-it-asset:` route. Study creates no copy,
-      thumbnail or second asset and draws no resize or alignment controls.
-- [x] A read-only ProseMirror decoration keeps the delimiter visible and marks recognised cards
-      without a transaction, save, timestamp change or undo entry. Source/review counts update with
-      the live document.
-- [x] *☰ › Estudo* gives a zero-card explanation and opens an internal Study panel only when there
-      is something to study — no permanent toolbar button and no second GTK window.
-- [x] Study has progress, front, reveal, answer, previous, next, shuffle and close. The ends do not
-      wrap; navigation and shuffle hide the answer, and shuffle uses an injectable Fisher-Yates RNG
-      over review items.
-- [x] The sitting is an ephemeral snapshot. Editing and AutoPaste continue underneath, while the
-      current list stays fixed until Study is closed and reopened.
-- [x] Keyboard and focus stay scoped to the panel: `Escape`, `Space`/`Enter`, arrows, named buttons,
-      no double action on a focused button, and focus returned to the invoker on close.
-- [x] The panel excludes menu, search, find, trash and timer popovers, closes on collapse, fits the
-      220–900 px note range and scrolls a long card internally. Closing the timer popover does not
-      stop its countdown.
-- [x] Study holds no editor and renders safe ProseMirror fragments with the note's `DOMSerializer`.
-      Open, reveal, move, shuffle and close leave Markdown and `updated_at` unchanged.
+- [x] `Pergunta :: Resposta` produz um cartão de origem e um item de revisão; `Termo ::: Definição`
+produz uma origem e duas direções adjacentes, na ordem do documento e sem desduplicação.
+- [x] A sintaxe embutida requer espaços em branco, corresponde a `:::` como um todo antes de `::` e recusa o código,
+URLs, horários, namespaces, atributos técnicos, `::::` e múltiplos delimitadores ambíguos.
+- [x] Um parágrafo marcador de nível superior ocupa exatamente o bloco estrutural antes e depois dele. Títulos,
+quebras duras, listas com marcadores e numeradas, tarefas, citações, textos explicativos, imagens e imagem mais texto são
+preservado como o lado que a nota já contém.
+- [x] A extração lê a árvore ProseMirror. Markdown continua sendo a fonte da verdade; não há
+arquivo flashcard, banco de dados, identificador persistente, metadados ou protocolo de back-end.
+- [x] As imagens gerenciadas mantêm o nó da Fase 3.12 e a rota `note-it-asset:`. O estudo não cria nenhuma cópia,
+miniatura ou segundo ativo e não desenha controles de redimensionamento ou alinhamento.
+- [x] Uma decoração ProseMirror somente leitura mantém o delimitador visível e marca os cartões reconhecidos
+sem uma transação, salvamento, alteração de carimbo de data/hora ou desfazer entrada. Contagens de fontes/revisões atualizadas com
+o documento ativo.
+- [x] *☰ › Estudo* dá explicação zero cartão e abre painel interno de Estudo somente quando há
+é algo para estudar - nenhum botão permanente da barra de ferramentas e nenhuma segunda janela GTK.
+- [x] O estudo tem progresso, frente, revelação, resposta, anterior, próximo, embaralhamento e fechamento. Os fins não
+enrolar; navegação e shuffle ocultam a resposta, e shuffle usa um Fisher-Yates RNG injetável
+sobre itens de revisão.
+- [x] A sessão é um instantâneo efêmero. A edição e o AutoPaste continuam abaixo, enquanto o
+a lista atual permanece fixa até que o estudo seja fechado e reaberto.
+- [x] O teclado e o foco permanecem no painel: `Escape`, `Space`/`Enter`, setas, botões nomeados,
+nenhuma ação dupla em um botão em foco e o foco retornado ao invocador ao fechar.
+- [x] O painel exclui popovers de menu, pesquisa, localização, lixeira e temporizador, fecha ao ser recolhido, ajusta-se ao
+Faixa de notas de 220 a 900 px e rola um cartão longo internamente. Fechar o popover do temporizador não
+pare sua contagem regressiva.
+- [x] O estudo não possui editor e renderiza fragmentos ProseMirror seguros com o `DOMSerializer` da nota.
+Abrir, revelar, mover, embaralhar e fechar deixam Markdown e `updated_at` inalterados.
 
-### Phase 3.14: Study System & Spaced Repetition (Complete)
+### Fase 3.14: Sistema de estudo e repetição espaçada (concluída)
 
-- [x] Versioned, atomic `$XDG_DATA_HOME/note-it/study.json`, separate from notes and `state.json`,
-      with corrupt/newer data preserved and Study failing closed.
-- [x] SHA-256 review identity from note UUID, semantic sides, direction and duplicate ordinal;
-      moving or presentation-only formatting/resize/alignment does not reset a card.
-- [x] Deterministic Ladder-v1 with Difficult/Medium/Easy, exact integer intervals, host-owned clock,
-      commit-before-advance, independent reversible directions and one rating per item per sitting.
-- [x] On-demand catalog of every live note, including closed notes and excluding trash, parsed in
-      the WebView by the same Tiptap schema and extractor as the visible editor.
-- [x] Internal Study Hub with Review Now, All, Current Note, source labels, compact list, due/new
-      status, compact useful counts, 365-day fixed-scale heatmap and current/longest streak.
-- [x] Existing FlashcardPanel evolved for ratings, interval previews, persisted ACK/error handling,
-      source note and completion summary; safe rich content and managed images remain one renderer.
-- [x] Toolbar deck, recoverable-trash shortcut beside X and Zoom −/+ through existing actions, with
-      measured responsive fallback and collapsed-note protection.
-- [x] Backup manifest v3 carries optional `study.json`; v1/v2 remain readable and an incomplete
-      study copy cannot be committed as a complete snapshot.
+- [x] Versionado, atômico `$XDG_DATA_HOME/note-it/study.json`, separado das notas e `state.json`,
+com dados corrompidos/mais recentes preservados e estudo com falha no encerramento.
+- [x] SHA-256 revisa a identidade da nota UUID, lados semânticos, direção e ordinal duplicado;
+mover ou formatar/redimensionar/alinhar somente apresentação não redefine um cartão.
+- [x] Ladder-v1 determinístico com Difícil/Médio/Fácil, intervalos inteiros exatos, relógio de propriedade do host,
+commit-before-advance, instruções reversíveis independentes e uma classificação por item por sessão.
+- [x] Catálogo sob demanda de todas as notas ao vivo, incluindo notas fechadas e excluindo lixo, analisadas em
+o WebView pelo mesmo esquema e extrator Tiptap do editor visível.
+- [x] Centro de estudo interno com revisão agora, tudo, nota atual, rótulos de fonte, lista compacta, vencimento/novo
+status, contagens úteis compactas, mapa de calor em escala fixa de 365 dias e sequência atual/mais longa.
+- [x] O FlashcardPanel existente evoluiu para classificações, visualizações de intervalo, tratamento persistente de ACK/erro,
+nota de origem e resumo de conclusão; conteúdo rico e seguro e imagens gerenciadas permanecem um renderizador.
+- [x] Painel da barra de ferramentas, atalho para lixo recuperável ao lado de X e Zoom -/+ por meio de ações existentes, com
+medidas de fallback responsivo e proteção contra notas recolhidas.
+- [x] O manifesto de backup v3 carrega `study.json` opcional; v1/v2 permanecem legíveis e incompletos
+a cópia do estudo não pode ser confirmada como um instantâneo completo.
 
-Capture & Export, OCR and PDF are postponed. They are not part of Phase 3.14.
+Captura e Exportação, OCR e PDF são adiados. Eles não fazem parte da Fase 3.14.
 
-### Phase 3.14R.1: Interface Polish & Visual Accessibility (Complete)
+### Fase 3.14R.1: Atualização da interface e acessibilidade visual (completa)
 
-- [x] Study Hub distinguishes source cards from review directions, including the explicit 2-card /
-      3-review reversible corpus.
-- [x] Header actions grouped by purpose with restrained separators, stable IDs/handlers and a
-      centred wide/compact search pill that opens the existing SearchPalette.
-- [x] Shared short motion tokens for buttons and internal panels, safe content-only collapse motion,
-      immediate hidden-state semantics and full `prefers-reduced-motion` fallback.
-- [x] Per-note zoom extended to 300% through the same frontend/host/state path.
-- [x] Global 90–160% Interface scale in `config.toml`, broadcast to all notes and reflected in real
-      chrome and collapsed geometry without affecting document zoom, text sizing or Markdown.
-- [x] Central shortcut metadata keeps tooltips, menu hints and `aria-keyshortcuts` aligned without
-      inventing shortcuts for actions that have none.
-- [x] Responsive budget verified from 220–900 px at 100/120/140/160%, preserving Menu, active
-      Timer/AutoPaste and Close before optional shortcuts.
+- [x] O Study Hub distingue os cartões de origem das instruções de revisão, incluindo o explícito 2 cartões /
+Corpus reversível de 3 revisões.
+- [x] Ações de cabeçalho agrupadas por finalidade com separadores restritos, IDs/manipuladores estáveis ​​e um
+pílula de pesquisa ampla/compacta centralizada que abre o SearchPalette existente.
+- [x] Tokens de movimento curto compartilhados para botões e painéis internos, movimento seguro de recolhimento somente de conteúdo,
+semântica imediata de estado oculto e fallback `prefers-reduced-motion` completo.
+- [x] Zoom por nota estendido para 300% através do mesmo caminho frontend/host/estado.
+- [x] Escala global de interface de 90–160% em `config.toml`, transmitida para todas as notas e refletida em real
+chrome e geometria recolhida sem afetar o zoom do documento, o tamanho do texto ou Markdown.
+- [x] Os metadados de atalho central mantêm dicas de ferramentas, dicas de menu e `aria-keyshortcuts` alinhados sem
+inventando atalhos para ações que não possuem nenhum.
+- [x] Orçamento responsivo verificado de 220 a 900 px em 100/120/140/160%, preservando Menu, ativo
+Timer/AutoPaste e Close antes dos atalhos opcionais.
 
-## Phase 4: Programmable Note-it
+## Fase 4: Note-it programável
 
-Architectural evolution from an application into a local programmable platform. GUI, CLI and
-future machine interfaces share one domain and persistence authority.
+Evolução arquitetônica de um aplicativo para uma plataforma local programável. GUI, CLI e futuras interfaces de máquina compartilham um domínio e autoridade de persistência.
 
-- [x] **Phase 4.0A — Core Boundary.** Dedicated headless `noteit-core` crate; the GUI consumes its
-      shared note/search/trash/Study/storage capabilities, with a Cargo dependency gate preventing
-      GTK, GDK, WebKitGTK, layer-shell, Wayland and Niri from entering Core.
-- [x] **Phase 4.0B — Metadata Foundation: Tags + Properties.** Structured user metadata in each
-      note's Markdown front matter, validated and persisted by Core; derived live-note catalogs,
-      transactional writes over the current WebView document, responsive pills and one compact
-      metadata panel. No sidecar, index, database or CLI command.
-- [x] **Phase 4.0D — Read API.** Headless read-only CLI interface backed by `noteit-core` authorities;
-      subcommands `listar`/`list`, `ler`/`read`, `buscar`/`search`, `tags`, `propriedades`/`properties`,
-      `tarefas`/`tasks`, `lixeira`/`trash`; metadata filtering (`--tag`, `--propriedade`/`--property`,
-      `--limite`/`--limit`), task parsing with state filter (`--estado`/`--state`), safe note selector
-      resolution, terminal security sanitization, and strictly zero store mutations.
-- [x] **Phase 4.0D.1 — Read API Contract & Terminal Hardening.** Standardized local machine timezone
-      presentation (`dd/MM/yyyy HH:mm`) matching GUI contracts, universal untrusted input terminal sanitization,
-      decoupled typed Core warnings (`ReadBatch<T>`, `ReadWarning`) with zero print statements in Core, and
-      faithful TypeScript task metadata comment parsing.
-- [x] **Phase 4.0D.2 — Read Pipeline Purity & Warning Completeness.** Unified search loading and warning
-      pipeline across filtered and unfiltered searches over the full eligible note universe, eradicated
-      direct stderr output in Core storage read paths, separated domain query from presentation sanitization,
-      and strictly enforced task comment token validation.
-- [x] **Phase 4.0E — Write API + GUI/CLI concurrency.** Exactly one Note-it writer per store, enforced
-      by an advisory `flock` lease in a per-store runtime directory: the desktop instance takes it at
-      startup and holds it for the whole session, the CLI takes it for one command when it is free,
-      and sends the change over a private local Unix socket when it is not — never writing around
-      another writer. Typed Core write operations (`WriteOperation`, `NoteMutation`, `WriteOutcome`,
-      `WriteError`) shared by both paths; commands `criar`/`create`, `adicionar`/`append`,
+- [x] **Fase 4.0A — Limite do Core.** Crate headless dedicada `noteit-core`; a GUI consome seus
+      recursos compartilhados de notas, pesquisa, lixeira, estudo e armazenamento, com uma barreira
+      de dependências do Cargo que impede GTK, GDK, WebKitGTK, layer-shell, Wayland e Niri de
+      entrarem no Core.
+- [x] **Fase 4.0B — Fundação de metadados: tags + propriedades.** Metadados estruturados do usuário
+      no front matter Markdown de cada nota, validados e persistidos pelo Core; catálogos derivados
+      das notas ativas, gravações transacionais sobre o documento atual do WebView, pílulas
+      responsivas e um painel compacto de metadados. Sem sidecar, índice, banco de dados ou comando CLI.
+- [x] **Fase 4.0D — API de leitura.** Interface CLI headless e somente leitura apoiada pelas
+      autoridades de `noteit-core`; subcomandos `listar`/`list`, `ler`/`read`, `buscar`/`search`,
+      `tags`, `propriedades`/`properties`, `tarefas`/`tasks`, `lixeira`/`trash`; filtragem de
+      metadados (`--tag`, `--propriedade`/`--property`, `--limite`/`--limit`), análise de tarefas
+      com filtro de estado (`--estado`/`--state`), resolução segura de seletores de nota,
+      sanitização para segurança do terminal e rigorosamente nenhuma mutação do store.
+- [x] **Fase 4.0D.1 — Contrato da API de leitura e proteção do terminal.** Apresentação padronizada
+      no fuso horário local da máquina (`dd/MM/yyyy HH:mm`), correspondente aos contratos da GUI;
+      sanitização universal de entradas não confiáveis para terminal; avisos tipados e desacoplados
+      do Core (`ReadBatch<T>`, `ReadWarning`), sem instruções de impressão no Core; e análise fiel,
+      em TypeScript, dos comentários de metadados das tarefas.
+- [x] **Fase 4.0D.2 — Pureza do pipeline de leitura e integridade dos avisos.** Pipeline unificado de
+      carregamento e avisos de pesquisa para buscas filtradas e não filtradas em todo o universo de
+      notas elegíveis; eliminação da saída direta para stderr nos caminhos de leitura do store no
+      Core; separação entre consulta de domínio e sanitização de apresentação; e validação rigorosa
+      dos tokens de comentários de tarefas.
+- [x] **Fase 4.0E — API de gravação + concorrência entre GUI e CLI.** Exatamente um gravador do
+      Note-it por store, garantido por um lease `flock` consultivo em um diretório de runtime por
+      store: a instância de desktop o adquire na inicialização e o mantém durante toda a sessão; a
+      CLI o adquire por um comando quando está livre e, quando não está, envia a alteração por um
+      soquete Unix local privado, sem jamais gravar contornando outro gravador. Operações tipadas de
+      gravação do Core (`WriteOperation`, `NoteMutation`, `WriteOutcome`, `WriteError`) são
+      compartilhadas pelos dois caminhos; comandos `criar`/`create`, `adicionar`/`append`,
       `editar`/`edit`, `tags adicionar|remover`, `propriedades definir|remover`,
-      `tarefas concluir|reabrir`, `lixeira restaurar`, with `--stdin` and `--vazio`. A note open on
-      screen is changed behind an external-write barrier that freezes the editor *before* reading it,
-      so unsaved text is folded into the same commit rather than overwritten; a runtime generation per
-      window makes every message still in flight from the previous run refusable. Optimistic
-      `TaskRef` snapshot tokens with no sidecar and no persistent task identity. Read API stays
-      read-only; note writes never touch `config.toml` or `state.json`.
-- [x] **Phase 4.0E.1 — Fail-Closed Writer Authority & Confirmed UI Adoption.** Made 4.0E's central
-      invariant structural rather than aspirational: the desktop instance holds `WriteAuthority` by
-      value and refuses to start without a lease *and* a control socket, so a running, editable
-      Note-it that does not own its store is unrepresentable. Adoption of a committed document is
-      confirmed by the page (`ExternalWriteApplied`, validated on note, request and generation) rather
-      than inferred from a script having evaluated, with a bounded wait that downgrades to
-      `ui_sync_warning` and never to failure. Removed the client-side timeout that could release the
-      editor while a commit was still in flight; a slow write now says it is slow and stays held.
-- [x] **Phase 4.0E.2 — Failed UI Adoption Stays Blocked.** Closed the last post-commit gap: a page
-      that could not adopt an already-committed document is no longer released. It keeps the old
-      generation *and* stays frozen, keeps its queued document actions unrun, sends only the negative
-      acknowledgement, and tells the reader the window is out of step. The write stays committed and
-      still reports `ui_sync_warning`. Reopening the note restores it from the committed file exactly,
-      verified end to end in the isolated environment.
-- [x] **Phase 4.0E.2R — Terminal Unsynchronised State.** Made the terminal state terminal in fact: the
-      barrier holds one explicit phase, every transition is guarded by it, and no timer, late
-      callback, repeated apply, abort or generation update can return a page that failed to adopt a
-      committed document to an editable or seemingly synchronised state. Also closed a transaction
-      lock left off when adopting threw part-way.
-- [x] **Phase 4.0F — Machine Interface / JSON.** The first stable public contract for machine
-      consumers: a global `--json` that emits exactly one versioned JSON document per execution, on
-      standard output for a success and standard error for a failure, with the other channel empty
-      and no ANSI anywhere. Rendered from the same typed outcome the Portuguese sentences are
-      rendered from — `noteit-cli` gained `outcome.rs` (what happened) and `machine.rs` (the public
-      schema), and `run_with_args` now returns a `CliResponse` carrying both channels as data, so a
-      warning can no longer escape through an `eprint!` in the middle of a command. Canonical command
-      names independent of spelling, full UUIDs, RFC 3339 UTC timestamps, real JSON types, raw
-      Markdown unmangled by the terminal sanitizer, and stable error codes. The two post-commit
-      states that would otherwise be flattened into "it failed" are first class: a committed write
-      whose window did not confirm is `status: warning` with `commit_state: committed` and exit `0`,
-      and an unknown result is `status: indeterminate` with `commit_state: unknown` — never
-      `not_committed`, so no agent can retry it into a duplicated append. Machine mode survives a
-      parse error. The private control protocol is not exported. Human output, exit codes and the
-      write rules are unchanged; the help gained one line documenting the option. Contract in
-      `docs/machine-interface.md`, reasoning in ADR-041.
-- [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
-- [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.
-- [ ] **Phase 4.0R — Security & Regression Audit.** Reserved.
-- [ ] **Phase 4.1 — MCP.** Reserved.
-- [ ] **Phase 4.2 — AI / Second Brain.** Reserved.
+      `tarefas concluir|reabrir`, `lixeira restaurar`, com `--stdin` e `--vazio`. Uma nota aberta na
+      tela é alterada atrás de uma barreira de gravação externa que congela o editor *antes* de
+      lê-lo, incorporando o texto não salvo ao mesmo commit em vez de sobrescrevê-lo; uma geração de
+      runtime por janela permite recusar todas as mensagens ainda em trânsito da execução anterior.
+      Tokens de snapshot `TaskRef` otimistas, sem sidecar e sem identidade persistida de tarefa. A
+      API de leitura permanece somente leitura; as gravações de notas nunca tocam em `config.toml`
+      ou `state.json`.
+- [x] **Fase 4.0E.1 — Autoridade de gravação com falha fechada e adoção confirmada pela UI.** A
+      invariante central da 4.0E tornou-se estrutural, não aspiracional: a instância de desktop mantém
+      `WriteAuthority` por valor e se recusa a iniciar sem um lease *e* um soquete de controle, de
+      modo que um Note-it em execução e editável que não seja proprietário de seu store não pode ser
+      representado. A adoção de um documento commitado é confirmada pela página
+      (`ExternalWriteApplied`, validado por nota, solicitação e geração), em vez de inferida da
+      avaliação de um script, com uma espera limitada que rebaixa o resultado para
+      `ui_sync_warning`, nunca para falha. O tempo limite do lado do cliente que poderia liberar o
+      editor enquanto um commit ainda estava em trânsito foi removido; uma gravação lenta agora é
+      informada como lenta e permanece retida.
+- [x] **Fase 4.0E.2 — A falha na adoção pela UI permanece bloqueada.** Fechada a última lacuna
+      pós-commit: uma página que não conseguiu adotar um documento já commitado não é mais liberada.
+      Ela mantém a geração anterior *e* permanece congelada, conserva na fila as ações do documento
+      sem executá-las, envia apenas a confirmação negativa e informa ao leitor que a janela está fora
+      de sincronismo. A gravação permanece commitada e ainda relata `ui_sync_warning`. Reabrir a nota
+      a restaura exatamente a partir do arquivo commitado, como verificado de ponta a ponta no
+      ambiente isolado.
+- [x] **Fase 4.0E.2R — Estado terminal não sincronizado.** O estado terminal tornou-se terminal de
+      fato: a barreira mantém uma fase explícita, cada transição é protegida por ela e nenhum
+      temporizador, callback tardio, aplicação repetida, anulação ou atualização de geração pode
+      devolver a uma página que não adotou um documento commitado um estado editável ou aparentemente
+      sincronizado. Também foi corrigido um bloqueio de transação que permanecia desativado quando a
+      adoção lançava uma exceção durante a execução.
+- [x] **Fase 4.0F — Interface de máquina / JSON.** Primeiro contrato público estável para consumidores
+      de máquina: uma opção global `--json` que emite exatamente um documento JSON versionado por
+      execução, na saída padrão em caso de sucesso e no erro padrão em caso de falha, mantendo o outro
+      canal vazio e sem ANSI. A saída é renderizada a partir do mesmo resultado tipado que origina as
+      frases em português: `noteit-cli` ganhou `outcome.rs` (o que aconteceu) e `machine.rs` (o esquema
+      público), e `run_with_args` agora retorna um `CliResponse` que carrega os dois canais como dados,
+      impedindo que um aviso escape por `eprint!` no meio de um comando. Nomes canônicos de comandos
+      independentes da grafia, UUIDs completos, carimbos de data e hora RFC 3339 UTC, tipos JSON reais,
+      Markdown bruto não alterado pelo sanitizador do terminal e códigos de erro estáveis. Os dois
+      estados pós-commit que de outra forma seriam reduzidos a “falhou” são de primeira classe: uma
+      gravação commitada cuja janela não confirmou é `status: warning`, com
+      `commit_state: committed` e saída `0`; um resultado desconhecido é `status: indeterminate`, com
+      `commit_state: unknown`, nunca `not_committed`, para que nenhum agente repita a operação e
+      duplique um acréscimo. O modo máquina sobrevive a erros de análise. O protocolo de controle
+      privado não é exportado. A saída humana, os códigos de saída e as regras de gravação permanecem
+      inalterados; a ajuda ganhou uma linha que documenta a opção. Contrato em
+      `docs/machine-interface.md`; justificativa no ADR-041.
+- [ ] **Fase 4.0G — CLI interativa / TUI.** Reservada.
+- [ ] **Fase 4.0H — Ferramentas de desenvolvedor e automação.** Reservado.
+- [ ] **Fase 4.0R — Auditoria de Segurança e Regressão.** Reservado.
+- [ ] **Fase 4.1 — MCP.** Reservado.
+- [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.
 
-Capture & Export, OCR and PDF remain postponed and are not pulled into Phase 4.0A or 4.0B.
+Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 
-**Recency and the CLI.** Since Phase 3.8R, "most recent" is the note's own `updated_at` — the last
-change to its text — with the file's `mtime` as the fallback for a note that has none. It is what
-decides which note a summon brings back when every note is closed, and what search and the quick
-switcher order by. If a future phase needs "the note I last had open" as distinct from "the note I
-last wrote in", that belongs in `state.json` as explicit state, not in the filesystem's timestamps.
+**Recência e o CLI.** Desde a Fase 3.8R, "mais recente" é o próprio `updated_at` da nota — a última alteração em seu texto — com o `mtime` do arquivo como substituto para uma nota que não possui nenhum. É o que decide qual nota uma convocação traz de volta quando cada nota é fechada, e por qual ordem de pesquisa e troca rápida. Se uma fase futura precisar de "a nota que abri pela última vez" como distinta de "a nota que escrevi pela última vez", ela pertence a `state.json` como estado explícito, não aos carimbos de data e hora do sistema de arquivos.
 
-## Phase 5: Packaging & Distribution (Planned)
+## Fase 5: Empacotamento e distribuição (planejada)
 
-Moved out of Phase 4 rather than dropped: it follows the core and CLI work above.
+Saiu da Fase 4 em vez de ser abandonada: vem depois do trabalho de Core e CLI acima.
 
-- [ ] Arch Linux PKGBUILD for AUR.
-- [ ] Release automation and binary artifacts.
-- [ ] v0.1.0 release.
+- [ ] PKGBUILD do Arch Linux para o AUR.
+- [ ] Automação de releases e artefatos binários.
+- [ ] Versão v0.1.0.

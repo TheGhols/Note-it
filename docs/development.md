@@ -1,20 +1,19 @@
-# Development Guide
+# Guia de desenvolvimento
 
-## Build Prerequisites
+## Pré-requisitos de compilação
 
-Ensure all required system packages are installed on your Linux distribution:
+Certifique-se de que todos os pacotes de sistema necessários estejam instalados em sua distribuição Linux:
 
 ```bash
 # Arch Linux
 sudo pacman -S --needed gtk4 gtk4-layer-shell webkitgtk-6.0 rust nodejs pnpm pkgconf base-devel dbus
 ```
 
-`dbus` provides `dbus-daemon` and `dbus-send`, which the isolated test harness needs to give a test
-run a session bus of its own. See **Running Against a Throwaway Store** below.
+`dbus` fornece `dbus-daemon` e `dbus-send`, usados pelo harness de testes isolados para dar à execução um barramento de sessão próprio. Consulte **Executando com um store descartável** abaixo.
 
-## Building the Project
+## Compilando o projeto
 
-1. **Build the Frontend Assets:**
+1. **Crie os ativos de front-end:**
    ```bash
    cd ui
    pnpm install
@@ -22,15 +21,15 @@ run a session bus of its own. See **Running Against a Throwaway Store** below.
    cd ..
    ```
 
-2. **Build Rust Binaries:**
+2. **Criar binários Rust:**
    ```bash
    cargo build --workspace
-   # Or individually:
-   cargo build -p note-it      # Desktop GUI adapter
-   cargo build -p noteit-cli   # Headless CLI adapter (binary: noteit)
+   # Ou individualmente:
+   cargo build -p note-it      # Adaptador da GUI desktop
+   cargo build -p noteit-cli   # Adaptador da CLI headless (binário: noteit)
    ```
 
-3. **Run Tests:**
+3. **Executar testes:**
    ```bash
    cargo test --workspace
    env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
@@ -40,7 +39,7 @@ run a session bus of its own. See **Running Against a Throwaway Store** below.
    cd ui && pnpm test
    ```
 
-4. **Code Quality Checks:**
+4. **Verificações de qualidade de código:**
    ```bash
    cargo fmt --all -- --check
    cargo check --workspace
@@ -48,130 +47,83 @@ run a session bus of its own. See **Running Against a Throwaway Store** below.
    cd ui && pnpm lint
    ```
 
-The dedicated `noteit-core` crate is the domain and persistence boundary. The `noteit-cli` crate is the
-headless CLI adapter. Both must remain usable without GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri
-or a graphical session. `scripts/check-core-boundary` and `scripts/check-cli-boundary` check their
-Cargo dependency trees for forbidden desktop libraries; compilation independently prevents Core and
-CLI source from importing libraries not declared by their manifests.
+O crate dedicado `noteit-core` define o limite do domínio e da persistência. O crate `noteit-cli` é o adaptador da CLI headless. Ambos devem continuar utilizáveis sem GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri ou uma sessão gráfica. `scripts/check-core-boundary` e `scripts/check-cli-boundary` verificam suas árvores de dependências do Cargo em busca de bibliotecas de desktop proibidas; de forma independente, a compilação impede que o código-fonte do Core e da CLI importe bibliotecas não declaradas em seus manifestos.
 
-## Running Against a Throwaway Store
+## Executando com um store descartável
 
-Any experimental or integration run must go through the isolation helper rather than a hand-written
-set of environment variables:
+Qualquer execução experimental ou de integração deve passar pelo auxiliar de isolamento, em vez de um conjunto escrito à mão de variáveis ​​de ambiente:
 
 ```bash
-scripts/note-it-isolated                          # throwaway tree, removed on exit
-scripts/note-it-isolated --keep                   # keep the tree for inspection
-scripts/note-it-isolated -- new                   # pass arguments through to note-it
+scripts/note-it-isolated                          # árvore descartável, removida ao sair
+scripts/note-it-isolated --keep                   # mantém a árvore para inspeção
+scripts/note-it-isolated -- new                   # repassa argumentos ao note-it
 
-# A session that outlives one command, which is what a single-instance test needs:
+# Sessão que sobrevive a um comando, como exige um teste de instância única:
 scripts/note-it-isolated --root /tmp/t -- --background &
-scripts/note-it-isolated --root /tmp/t -- new     # reaches that same instance
-scripts/note-it-isolated --root /tmp/t --verify   # assert it is on the private bus
-scripts/note-it-isolated --root /tmp/t --stop     # quit it and stop the bus
+scripts/note-it-isolated --root /tmp/t -- new     # alcança a mesma instância
+scripts/note-it-isolated --root /tmp/t --verify   # confirma o uso do barramento privado
+scripts/note-it-isolated --root /tmp/t --stop     # encerra a instância e o barramento
 ```
 
-### Isolating XDG is not enough
+### Isolar XDG não é suficiente
 
-Note-it is a single-instance `GApplication`, and single-instance is a well-known name on the
-**session bus**. The second process to start finds the name already owned, hands its command line
-to the owner over D-Bus, and exits — and the owner then does the work, in whatever store *it* was
-started with.
+Note-it é uma `GApplication` de instância única, e essa exclusividade é definida por um nome bem conhecido no **barramento de sessão**. O segundo processo iniciado encontra o nome já ocupado, entrega sua linha de comando ao proprietário por D-Bus e sai; o proprietário então executa o trabalho no store com o qual *ele* foi iniciado.
 
-So overriding the four XDG variables configures only the process the helper launches. **If a
-Note-it daemon is already running on the real session bus, that process never opens a store at
-all**: it forwards the command and quits, and the real daemon writes to the real store. The XDG
-isolation is real and completely beside the point.
+Portanto, substituir as quatro variáveis ​​XDG configura apenas o processo que o auxiliar inicia. **Se um daemon Note-it já estiver rodando no barramento de sessão real, esse processo nunca abre um armazenamento**: ele encaminha o comando e sai, e o daemon real grava no armazenamento real. O isolamento XDG é real e completamente irrelevante.
 
-That is not hypothetical. During Phase 3.7 physical testing a daemon was already running, every
-isolated command was forwarded to it, and a test note was created in the user's own notes
-directory. Phase 3.7R is the fix.
+Isso não é hipotético. Durante os testes físicos da Fase 3.7, um daemon já estava em execução, todos os comandos isolados foram encaminhados para ele e uma nota de teste foi criada no diretório de notas do próprio usuário. A Fase 3.7R é a solução.
 
-The helper therefore isolates **both**:
+O auxiliar, portanto, isola **ambos**:
 
-- **XDG** — all four of `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME`,
-  set together. Overriding only some leaves the rest resolving to the real store.
-- **D-Bus** — a private `dbus-daemon` of its own, with `DBUS_SESSION_BUS_ADDRESS` pointing at it and
-  `DBUS_STARTER_ADDRESS`/`DBUS_STARTER_BUS_TYPE` cleared so GIO cannot fall back to the real
-  session. On that bus the well-known name is unowned, so the isolated process becomes the primary
-  instance and does its own work in its own store.
+- **XDG** — todos os quatro `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` e `XDG_CACHE_HOME`, definidos juntos. Substituir apenas alguns deixa o resto resolvido para o armazenamento real.
+- **D-Bus** — um `dbus-daemon` privado próprio, com `DBUS_SESSION_BUS_ADDRESS` apontando para ele e `DBUS_STARTER_ADDRESS`/`DBUS_STARTER_BUS_TYPE` limpo para que GIO não possa retornar à sessão real. Nesse barramento, o nome conhecido não tem dono, então o processo isolado se torna a instância primária e faz seu próprio trabalho em seu próprio armazenamento.
 
-The real daemon never has to be stopped, and never notices.
+O verdadeiro daemon nunca precisa ser interrompido e nunca percebe.
 
-`XDG_RUNTIME_DIR` is deliberately **not** overridden: `WAYLAND_DISPLAY` resolves inside it, so
-replacing it would break the display connection. Setting `DBUS_SESSION_BUS_ADDRESS` is what decides
-the bus, and it always wins over the runtime directory's socket.
+`XDG_RUNTIME_DIR` é deliberadamente **não** substituído: `WAYLAND_DISPLAY` é resolvido dentro dele, portanto, substituí-lo interromperia a conexão do monitor. A configuração `DBUS_SESSION_BUS_ADDRESS` é o que decide o barramento e sempre vence o soquete do diretório de tempo de execução.
 
-The writer lease and the control socket live in that same runtime directory, and they are kept apart
-the other way: each store gets its own coordination directory, named after a digest of its notes
-path. So an isolated instance and the real one never contend for a lease, and neither can block the
-other. What is left afterwards is a directory belonging to a store the test invented, and both
-harnesses remove exactly that one on the way out — found by the marker file Note-it writes inside it
-naming the store it serves, so the real store's directory can never be touched. After any isolated
-run, `find "$XDG_RUNTIME_DIR/note-it" -mindepth 1` should list nothing but the real store's own.
+O lease de escrita e o soquete de controle residem no mesmo diretório de runtime, mas são separados por store: cada store recebe seu próprio diretório de coordenação, nomeado com um resumo do caminho de suas notas. Assim, uma instância isolada e a real nunca disputam o mesmo lease nem bloqueiam uma à outra. Ao final resta apenas o diretório do store criado pelo teste, e os dois harnesses removem exatamente esse diretório na saída. Eles o identificam pelo arquivo marcador que o Note-it grava dentro dele com o nome do store atendido, de modo que o diretório do store real nunca possa ser tocado. Após qualquer execução isolada, `find "$XDG_RUNTIME_DIR/note-it" -mindepth 1` não deve listar nada além do próprio store real.
 
-### Fail-closed
+### Falha fechada
 
-Every check runs *before* Note-it is started, and there is no path that falls back to "well, at
-least XDG is isolated":
+Cada verificação é executada *antes* de Note-it ser iniciado e não há caminho que retorne a "bem, pelo menos XDG está isolado":
 
-| exit | meaning |
+| saída | significado |
 | --- | --- |
-| 90 | a configured directory is, or sits inside, a real XDG base directory or the home directory |
-| 91 | no `note-it` binary; run `cargo build` |
-| 92 | the private bus could not be started, could not be reached, or turned out to be the real one |
-| 93 | the launched process does not carry the isolated environment |
+| 90 | um diretório configurado é, ou fica dentro, de um diretório base XDG real ou do diretório inicial |
+| 91 | nenhum binário `note-it`; execute `cargo build` |
+| 92 | o barramento particular não pôde ser iniciado, não pôde ser alcançado ou acabou sendo o verdadeiro |
+| 93 | o processo lançado não carrega o ambiente isolado |
 
-Exit 93 is read back from the kernel: the process is started, `/proc/<pid>/environ` is checked for
-the four XDG variables and the private bus address, and the process is killed if any of them is not
-the isolated one.
+A saída 93 é lida do kernel: o processo é iniciado, `/proc/<pid>/environ` é verificado quanto às quatro variáveis ​​XDG e ao endereço do barramento privado, e o processo é encerrado se algum deles não for o isolado.
 
-### Persistent sessions
+### Sessões persistentes
 
-With `--root DIR` the private bus is recorded under `DIR/session` and **reused** by every later
-invocation naming the same `DIR`, so a daemon started by one command and a `new` sent by the next
-land on the same instance. End it with `--stop`, which quits the isolated instance on its own bus
-and stops that bus; a caller-supplied `--root` is never deleted. Without `--root`, everything is
-torn down when the command returns.
+Com `--root DIR` o barramento privado é registrado em `DIR/session` e **reutilizado** por cada invocação posterior com o mesmo nome `DIR`, portanto, um daemon iniciado por um comando e um `new` enviado pelo próximo pousam na mesma instância. Termine com `--stop`, que encerra a instância isolada em seu próprio barramento e interrompe esse barramento; um `--root` fornecido pelo chamador nunca é excluído. Sem `--root`, tudo é destruído quando o comando retorna.
 
-### The regression test
+### O teste de regressão
 
-`scripts/test-isolation` reproduces the Phase 3.7 incident and asserts it cannot happen: it stands
-up a session of its own — bus, store and, where there is a display, a genuine `note-it --background`
-daemon owning the real well-known name — fingerprints that store to the nanosecond, runs the harness
-against it, and checks that the note landed only in the throwaway store and that nothing in the
-ambient one moved. It runs as part of `cargo test` via `tests/isolation.rs`, and needs `dbus-daemon`
-and `dbus-send`. The daemon half is skipped, out loud, where there is no display.
+`scripts/test-isolation` reproduz o incidente da Fase 3.7 e comprova que ele não pode ocorrer: inicia uma sessão própria — barramento, store e, quando há um display, um daemon `note-it --background` real que possui o nome conhecido —, registra fingerprints do store até o nanossegundo, executa o harness e verifica se a nota foi criada apenas no store descartável e se nada mudou no store do ambiente. Ele faz parte de `cargo test` por meio de `tests/isolation.rs` e requer `dbus-daemon` e `dbus-send`. A metade que usa o daemon é ignorada, com aviso explícito, quando não há display.
 
-Running it locally will briefly open a real note window: that is the point of the fidelity half, and
-it is pointed at a throwaway store the whole time.
+Executá-lo localmente abrirá brevemente uma janela de notas real: esse é o ponto da metade da fidelidade, e ela está apontada para um store descartável o tempo todo.
 
-### Measuring search rather than guessing at it
+### Medir a pesquisa em vez de adivinhá-la
 
-The claim that Note-it needs no search index is a test, not a memory:
+A afirmação de que Note-it não precisa de índice de pesquisa é um teste, não uma memória:
 
 ```bash
 cargo test --release searching_a_thousand_notes -- --nocapture
 ```
 
-It builds a thousand notes in a temporary directory, runs four queries — one matching a few notes,
-one matching all of them, one matching none, one with accents — end to end through listing,
-reading, folding, matching and snippets, prints each timing and asserts the notes' modification
-times did not move. On the development machine the whole scan is around 26–40 ms per query in
-release and under 200 ms in debug.
+Ele cria mil notas em um diretório temporário, executa quatro consultas - uma que corresponde a algumas notas, uma que corresponde a todas elas, uma que não corresponde a nenhuma, uma com acentos - de ponta a ponta por meio de listagem, leitura, dobra, correspondência e trechos, imprime cada tempo e afirma que os tempos de modificação das notas não mudaram. Na máquina de desenvolvimento, toda a varredura leva cerca de 26 a 40 ms por consulta no lançamento e menos de 200 ms na depuração.
 
-Phase 3.8R roughly doubled that from the 18–20 ms it was, and the cause is not the removed scan
-ceiling: it is ordering by each note's own `updated_at`, which means opening every note's header
-and parsing it. About half the added time is the reads and half is the YAML. It buys "most recent"
-meaning the same thing everywhere — a repainted note is not a written-in note — and 40 ms is still
-well inside the 120 ms the palette waits before asking at all.
+A Fase 3.8R quase dobrou dos 18–20 ms que era, e a causa não é o limite de varredura removido: ela está ordenando pelo próprio `updated_at` de cada nota, o que significa abrir o cabeçalho de cada nota e analisá-lo. Cerca de metade do tempo adicionado são as leituras e a outra metade é o YAML. Ele compra "mais recente", significando a mesma coisa em todos os lugares - uma nota repintada não é uma nota escrita - e 40 ms ainda está bem dentro dos 120 ms que a paleta espera antes de perguntar.
 
-That is the number ADR-027 rests on. If it stops being comfortable, the evidence for adding an
-index will be in the test output, which is where it should be — not in a hunch.
+Esse é o número em que o ADR-027 se baseia. Se deixar de ser confortável, a evidência para adicionar um índice estará na saída do teste, que é onde deveria estar - e não em um palpite.
 
-### Inspecting a backup
+### Inspecionando um backup
 
-A snapshot is a directory of ordinary files, which is the whole reason it is one:
+Um snapshot é um diretório de arquivos comuns, e é por isso que é um:
 
 ```bash
 ls ~/.local/share/note-it/backups/
@@ -179,25 +131,17 @@ cat ~/.local/share/note-it/backups/*/manifest.json
 diff -r ~/.local/share/note-it/backups/<data>/notes ~/.local/share/note-it/notes
 ```
 
-The recovery procedure — including recovering a single note rather than the whole store — is in
-[docs/storage.md](storage.md#recovering-from-a-snapshot). It is `cp`, with the application closed.
-There is no one-click restore in the application, and
-`a_snapshot_round_trips_into_a_fresh_isolated_store` is what proves the procedure works: it copies a
-snapshot into an empty XDG tree exactly that way and opens the result.
+O procedimento de recuperação — incluindo a recuperação de uma única nota em vez de todo o store — está em [docs/storage.md](storage.md#recuperando-se-de-um-instantâneo). É `cp`, com o aplicativo fechado. Não há restauração com um clique no aplicativo e `a_snapshot_round_trips_into_a_fresh_isolated_store` é o que prova que o procedimento funciona: ele copia um instantâneo em uma árvore XDG vazia exatamente dessa maneira e abre o resultado.
 
-To exercise the twenty-four hour rule against a running daemon without waiting a day, age the newest
-snapshot — the store's own record of when it was last backed up is that snapshot's manifest — and
-restart:
+Para exercer a regra das vinte e quatro horas contra um daemon em execução sem esperar um dia, envelheça o instantâneo mais recente — o próprio registro do armazenamento de quando foi feito o último backup é o manifesto desse instantâneo — e reinicie:
 
 ```bash
 scripts/note-it-isolated --root /tmp/t --stop
-# rename the snapshot directory and set created_at in its manifest.json to > 24 h ago
+# renomeie o diretório do instantâneo e defina created_at no manifest.json como > 24 h atrás
 scripts/note-it-isolated --root /tmp/t -- --background &
-scripts/note-it-isolated --root /tmp/t -- new     # the next change takes a fresh snapshot
+scripts/note-it-isolated --root /tmp/t -- new     # a próxima alteração cria outro instantâneo
 ```
 
-### GTK's compose table
+### Tabela de composição do GTK
 
-A cold `XDG_CACHE_HOME` makes GTK rebuild its compose table, which produces the one-off
-`Can't handle >16bit keyvals` warning burst described in ADR-006. It is expected on the first run
-against a fresh tree and disappears on the next one.
+Um `XDG_CACHE_HOME` frio faz o GTK reconstruir sua tabela de composição, o que produz a explosão de aviso `Can't handle >16bit keyvals` única descrita em ADR-006. É esperado na primeira corrida contra uma árvore nova e desaparece na próxima.

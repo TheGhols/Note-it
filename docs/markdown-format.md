@@ -1,8 +1,8 @@
-# Markdown Format Specification
+# Especificação do formato Markdown
 
-Each Note-it post-it is stored as a valid, human-readable Markdown (`.md`) file named using a UUID (e.g. `550e8400-e29b-41d4-a716-446655440000.md`).
+Cada post-it Note-it é armazenado como um arquivo Markdown (`.md`) válido e legível por humanos, nomeado usando um UUID (por exemplo, `550e8400-e29b-41d4-a716-446655440000.md`).
 
-## File Structure
+## Estrutura de arquivo
 
 ```md
 ---
@@ -29,57 +29,33 @@ properties:
 - [x] Create documentation
 
 Remember to check <u>underlined points</u> and <span data-note-it-color="#D32F2F" style="color:#D32F2F">urgent tasks</span>.
+```
 
-## Semantic Metadata
+## Metadados semânticos
 
-`note_it` is reserved for application metadata. `tags` and `properties` are user-authored semantic
-metadata and remain outside the Markdown body. Both are optional: a legacy or new note that has
-none omits both keys, reads as `tags = []` and `properties = {}`, and is never mass-migrated.
+`note_it` está reservado para metadados de aplicativos. `tags` e `properties` são metadados semânticos de autoria do usuário e permanecem fora do corpo Markdown. Ambas são opcionais: uma nota herdada ou nova que não possui nenhuma omite ambas as chaves, é lida como `tags = []` e `properties = {}` e nunca é migrada em massa.
 
-Tags are YAML strings. Note-it trims the value, accepts and removes one convenience `#`, rejects
-empty/control/multiline or overlong values, and keeps at most 32 tags of at most 64 Unicode
-characters each. Identity uses the same lowercase + Latin-diacritic folding as body search, so
-`Medicina`, `medicina` and `MEDICINA` are one tag, as are `Urgência` and `urgencia`. The first human
-spelling supplied is retained for display.
+Tags são strings YAML. Note-it corta o valor, aceita e remove uma conveniência `#`, rejeita valores vazios/controle/multilinhas ou muito longos e mantém no máximo 32 tags com no máximo 64 caracteres Unicode cada. A identidade usa a mesma dobragem em letras minúsculas + diacríticos latinos da pesquisa corporal, então `Medicina`, `medicina` e `MEDICINA` são uma tag, assim como `Urgência` e `urgencia`. A primeira grafia humana fornecida é mantida para exibição.
 
-Properties are a YAML mapping of textual key to textual value. Up to 32 entries are accepted; a
-trimmed key has 1–64 Unicode characters and a single-line value has at most 512. Keys use the same
-case/accent-insensitive identity, so `Status` and `status` cannot coexist, and serialization orders
-them deterministically. V1 deliberately has no nested objects, relations, formulas or computed
-values.
+As propriedades são um mapeamento YAML da chave textual para o valor textual. São aceitas até 32 inscrições; uma chave aparada tem de 1 a 64 caracteres Unicode e um valor de linha única tem no máximo 512. As chaves usam a mesma identidade que não diferencia maiúsculas de minúsculas/acentos, portanto, `Status` e `status` não podem coexistir e a serialização os ordena deterministicamente. V1 deliberadamente não possui objetos, relações, fórmulas ou valores computados aninhados.
 
-Changing semantic metadata does not change `created_at` or `updated_at`; the latter continues to
-mean the latest textual body edit. If text is pending when metadata is confirmed, both are written
-in one atomic candidate and `updated_at` moves because the text changed, not because metadata did.
+A alteração dos metadados semânticos não altera `created_at` ou `updated_at`; este último continua significando a última edição do corpo textual. Se o texto estiver pendente quando os metadados forem confirmados, ambos serão escritos em um candidato atômico e `updated_at` se moverá porque o texto mudou, não porque os metadados mudaram.
 
-Unknown top-level YAML values are preserved semantically on reserialization. YAML comments,
-anchors and exact formatting are not part of serde's value model and can be normalized by a real
-save. Merely opening and closing an untouched note writes nothing, so its bytes remain identical.
+Valores YAML de nível superior desconhecidos são preservados semanticamente na resserialização. Comentários YAML, âncoras e formatação exata não fazem parte do modelo de valor do serde e podem ser normalizados por um salvamento real. Apenas abrir e fechar uma nota intocada não escreve nada, portanto seus bytes permanecem idênticos.
 
-## Trailing Blank Lines Are Not Content
+## As linhas em branco finais não são conteúdo
 
-A stored note ends with a single newline, the way every other tool writes a
-file. That terminator is not part of the note, and neither is any blank line
-before it: Markdown gives trailing blank lines no meaning, and Note-it's own
-editor terminates a document ending in a block — a list, a callout, a code
-block — with one, while a document ending in a paragraph gets none.
+Uma nota armazenada termina com uma única nova linha, da mesma forma que qualquer outra ferramenta grava um arquivo. Esse terminador não faz parte da nota, nem qualquer linha em branco antes dela: Markdown não dá sentido às linhas em branco finais, e o próprio editor de Note-it termina um documento que termina em um bloco - uma lista, um texto explicativo, um bloco de código - com um, enquanto um documento que termina em um parágrafo não recebe nenhum.
 
-So the same note has several equally valid spellings. Note-it compares and
-stores one canonical form, with trailing newlines removed, and writes the
-terminator back on save. This is what makes opening a note a read: a `.md`
-written by another editor, or any note ending in a list, is not rewritten and
-does not have its `updated_at` moved by being opened.
+Portanto, a mesma nota possui várias grafias igualmente válidas. Note-it compara e armazena um formato canônico, com as novas linhas finais removidas, e grava o terminador novamente ao salvar. É isso que torna a abertura de uma nota uma leitura: um `.md` escrito por outro editor, ou qualquer nota que termine em uma lista, não é reescrita e não tem seu `updated_at` movido ao ser aberto.
 
-Trailing **spaces** are left alone — two of them are Markdown's hard line break
-and are content.
+Os **espaços** finais são deixados em paz — dois deles são a quebra de linha rígida de Markdown e são conteúdo.
 
-## Block Syntax
+## Sintaxe de bloco
 
-Everything Note-it writes is ordinary Markdown. Nothing below is a private
-extension of the file format: another editor opens a note and sees code fences,
-blockquotes and HTML comments, and GitHub renders a callout as an alert.
+Tudo o que Note-it escreve é ​​normal Markdown. Nada abaixo é uma extensão privada do formato de arquivo: outro editor abre uma nota e vê limites de código, citações em bloco e comentários HTML, e GitHub renderiza uma chamada como um alerta.
 
-### Fenced Code Blocks
+### Blocos de código cercados
 
 ````md
 ```python
@@ -88,31 +64,21 @@ def soma(a, b):
 ```
 ````
 
-The language identifier is carried through in both directions **exactly as
-written**. It is never rewritten, normalised or dropped:
+O identificador de idioma é executado em ambas as direções **exatamente como está escrito**. Nunca é reescrito, normalizado ou descartado:
 
-- a fence with no language stays without one, and is not given a default;
-- a language with no grammar available — `brainfuck`, a typo, something newer
-  than this version — keeps its spelling and simply goes unhighlighted;
-- an alias stays an alias. A note saying ` ```js ` is still ` ```js ` after a
-  save, even though it is highlighted as JavaScript.
+- uma cerca sem idioma permanece sem idioma e não recebe inadimplência;
+- uma linguagem sem gramática disponível — `brainfuck`, um erro de digitação, algo mais recente que esta versão — mantém a ortografia e simplesmente não é destacada;
+- um alias permanece um alias. Uma nota dizendo ` ```js ` is still ` ```js ` após salvar, embora esteja destacada como JavaScript.
 
-The content is literal. Nothing inside is interpreted: no inline formatting, no
-typographic substitution, and no HTML — `<script>` inside a block is the five
-characters `<`, `s`, `c`… and reaches the document as text.
+O conteúdo é literal. Nada dentro é interpretado: nenhuma formatação embutida, nenhuma substituição tipográfica e nenhum HTML — `<script>` dentro de um bloco contém os cinco caracteres `<`, `s`, `c`… e chega ao documento como texto.
 
-The closing fence is always longer than the longest run of backticks inside the
-block, so a note containing a Markdown example is written back whole.
+A cerca de fechamento é sempre maior que a sequência mais longa de crases dentro do bloco, portanto, uma nota contendo um exemplo Markdown é escrita inteira.
 
-Highlighting is **presentation only**. It is drawn as editor decorations over
-the same characters; the stored file is a plain fence with no markup in it.
-Sixteen grammars are loaded — `plaintext`, `bash`, `javascript`, `typescript`,
-`json`, `html`/`xml`, `css`, `markdown`, `python`, `rust`, `c`, `cpp`, `java`,
-`sql`, `yaml` and `toml` — with the aliases each of them already answers to.
+O destaque é **apenas apresentação**. É desenhado como cenário do editor sobre os mesmos personagens; o arquivo armazenado é uma cerca simples, sem marcação. Dezesseis gramáticas são carregadas - `plaintext`, `bash`, `javascript`, `typescript`, `json`, `html`/`xml`, `css`, `markdown`, `python`, `rust`, `c`, `cpp`, `java`, `sql`, `yaml` e `toml` - com os aliases aos quais cada uma delas já responde.
 
-### Callouts
+### Alertas (callouts)
 
-The syntax is GitHub's alerts, which Obsidian reads as callouts:
+A sintaxe são os alertas de GitHub, que a Obsidian lê como textos explicativos:
 
 ```md
 > [!NOTE]
@@ -121,39 +87,32 @@ The syntax is GitHub's alerts, which Obsidian reads as callouts:
 > - e uma lista, se quiser
 ```
 
-`NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION` are recognised, in any case;
-the canonical uppercase form is what gets written back. A callout is a
-blockquote carrying a kind, so it holds whatever a blockquote holds —
-paragraphs, lists, nested blocks.
+`NOTE`, `TIP`, `IMPORTANT`, `WARNING` e `CAUTION` são reconhecidos, em qualquer caso; a forma canônica maiúscula é o que é escrito de volta. Uma frase de destaque é uma citação em bloco que carrega um tipo, portanto, contém tudo o que uma citação em bloco contém - parágrafos, listas, blocos aninhados.
 
-The marker must sit alone on the first line. Anything else is not a callout and
-is **left as the blockquote it already is**, with its text intact:
+O marcador deve ficar sozinho na primeira linha. Qualquer outra coisa não é uma chamada e é **deixada como a citação que já é**, com seu texto intacto:
 
-| Written | Read as |
+| Escrito | Leia como |
 | --- | --- |
-| `> [!NOTE]` + body | a NOTE callout |
-| `> [!FOO]` + body | a blockquote whose first line is `[!FOO]` |
-| `> [!NOTE] com texto` | a blockquote, marker and all |
-| `> [!NOTE` | a blockquote, marker and all |
+| `> [!NOTE]` + corpo | uma chamada de NOTA |
+| `> [!FOO]` + corpo | uma citação cuja primeira linha é `[!FOO]` |
+| `> [!NOTE] com texto` | uma citação, marcador e tudo |
+| `> [!NOTE` | uma citação, marcador e tudo |
 
-Degrading never costs content. A literal `[` is escaped as `\[` on the way back
-out, which is how Markdown writes one, and the result is stable from then on.
+Degradar nunca custa conteúdo. Um literal `[` é escapado como `\[` no caminho de volta, que é como Markdown escreve um, e o resultado é estável a partir de então.
 
-### Blockquotes
+### Citações em bloco
 
-An ordinary blockquote stays an ordinary blockquote:
+Uma citação comum permanece uma citação comum:
 
 ```md
 > uma citação
 ```
 
-It is never promoted to a callout on its own, and it is written back without
-decoration of any kind — no attributes, no classes, no HTML.
+Ele nunca é promovido a um texto explicativo por si só e é escrito de volta sem qualquer tipo de decoração - sem atributos, sem classes, sem HTML.
 
-### Calculations
+### Cálculos
 
-A line beginning with `=` is a calculation and a line of the form `nome := …` is
-a declaration. Both are **ordinary Markdown text**, and that is the whole point:
+Uma linha que começa com `=` é um cálculo e uma linha no formato `nome := …` é uma declaração. Ambos são **texto Markdown comum**, e esse é o ponto principal:
 
 ```md
 preco := 120
@@ -161,54 +120,33 @@ quantidade := 3
 = preco * quantidade
 ```
 
-Another editor opens this and sees three lines of prose, because that is what
-they are. Note-it draws `360` beside the third one as an editor decoration —
-the same mechanism syntax highlighting uses — and **writes nothing**. No result,
-no marker, no attribute reaches the file, so a note is never rewritten by being
-recalculated and its modification date never moves for one.
+Outro editor abre isto e vê três linhas de prosa, porque é isso que são. Note-it desenha `360` ao lado do terceiro como uma decoração do editor - o mesmo mecanismo usado pelo realce de sintaxe - e **não escreve nada**. Nenhum resultado, nenhum marcador, nenhum atributo chega ao arquivo, portanto uma nota nunca é reescrita ao ser recalculada e sua data de modificação nunca muda para uma.
 
-The full grammar is in `docs/features.md`. What matters to the file format:
+A gramática completa está em `docs/features.md`. O que importa para o formato do arquivo:
 
-- calculation is read from **plain paragraphs only**. A heading, a list, a task,
-  a quote, a callout, a code block, a comment and an inline code span are all
-  left as the text they are;
-- `*` in a calculation is escaped as `\*` on the way out, which is how Markdown
-  writes a literal asterisk in prose, and reads back as `*`. This is the
-  serializer's existing rule for any prose, not something calculations
-  introduced;
-- results are recomputed on load. A note whose expressions have not changed is
-  byte-identical after being opened, recalculated and closed.
+- o cálculo é lido **apenas parágrafos simples**. Um título, uma lista, uma tarefa, uma cotação, um texto explicativo, um bloco de código, um comentário e um intervalo de código embutido são todos deixados como o texto que são;
+- `*` em um cálculo é escapado como `\*` na saída, que é como Markdown escreve um asterisco literal em prosa e lê de volta como `*`. Esta é a regra existente do serializador para qualquer prosa, não algo introduzido por cálculos;
+- os resultados são recalculados na carga. Uma nota cujas expressões não foram alteradas é idêntica em bytes após ser aberta, recalculada e fechada.
 
-A conversion is the same thing with a unit on each side:
+Uma conversão é a mesma coisa com uma unidade de cada lado:
 
 ```md
 distancia := 10
 = distancia km em m
 ```
 
-`em` is the conversion keyword. The file holds those two lines and nothing else;
-`10000 m` is drawn beside the second one and never written. The units are
-ordinary words in ordinary prose, so another editor shows the note exactly as it
-is stored, and a `.md` written elsewhere converts the moment Note-it opens it.
+`em` é a palavra-chave de conversão. O arquivo contém essas duas linhas e nada mais; `10000 m` é desenhado ao lado do segundo e nunca escrito. As unidades são palavras comuns em prosa comum, então outro editor mostra a nota exatamente como ela está armazenada, e um `.md` escrito em outro lugar converte no momento em que Note-it a abre.
 
-### Comments
+### Comentários
 
 ```md
 <!-- lembrete que não aparece na nota -->
 ```
 
-A comment is stored in the file and shown in the editor as a small labelled
-block, so it can be read, edited and removed — but it is not part of what the
-note says, and it never renders as content.
+Um comentário é armazenado no arquivo e mostrado no editor como um pequeno bloco rotulado, para que possa ser lido, editado e removido — mas não faz parte do que a nota diz e nunca é renderizado como conteúdo.
 
-It is data, never markup: what it holds is text, and a `<script>` inside one is
-five characters. A `-->` typed into a comment is written as `--&gt;`, because
-the literal sequence would close the comment early and spill the rest of the
-note out; it reads back as what was typed.
+São dados, nunca marcação: o que ele contém é texto, e um `<script>` dentro de um tem cinco caracteres. Um `-->` digitado em um comentário é escrito como `--&gt;`, porque a sequência literal fecharia o comentário mais cedo e espalharia o resto da nota; ele lê de volta como o que foi digitado.
 
-An unterminated `<!--` is not a comment at all. It is escaped to `&lt;!--` so
-that everything after it survives, rather than being swallowed to the end of the
-file.
+Um `<!--` não terminado não é um comentário. Ele escapa para `&lt;!--` para que tudo depois sobreviva, em vez de ser engolido até o final do arquivo.
 
-Note-it's own task metadata (`<!-- note-it:completed_at=… -->`) stays what it
-always was: an inline comment absorbed by the task on its line.
+Os próprios metadados de tarefa de Note-it (`<!-- note-it:completed_at=… -->`) permanecem o que sempre foram: um comentário embutido absorvido pela tarefa em sua linha.
