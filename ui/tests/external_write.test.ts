@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EXTERNAL_WRITE_SLOW_NOTICE_MS,
   ExternalWriteBarrier,
@@ -92,6 +92,8 @@ function harness(options: { text?: string } = {}) {
       return true;
     },
     fireSlowNotice: () => timerCallback?.(),
+    /** The callback exactly as the timer captured it, kept past cancellation. */
+    capturedSlowNotice: () => timerCallback,
     hasTimer: () => timerCallback !== null,
     timerWasCleared: () => timerCleared,
     breakAdoption: () => {
@@ -599,6 +601,9 @@ describe('the editor the barrier actually freezes', () => {
         }),
     });
 
+    // Held in an object so TypeScript does not narrow it away: it is assigned
+    // from inside a callback the compiler cannot see run.
+    const slow: { notice: (() => void) | null } = { notice: null };
     const barrier = new ExternalWriteBarrier({
       freeze: () => editor.setEditable(false),
       thaw: () => editor.setEditable(true),
@@ -607,15 +612,26 @@ describe('the editor the barrier actually freezes', () => {
         throw new Error('adoption failed');
       },
       send: (message) => sent.push(message),
+      setTimer: (callback) => {
+        slow.notice = callback;
+        return 1;
+      },
+      clearTimer: () => {},
     });
 
     barrier.begin(NOTE, REQUEST, 0);
+    const staleNotice = slow.notice;
     expect(barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(false);
 
-    // Every way the page can change a document.
+    // 4.0E.2R §23: the slow notice that was already on its way runs, and the
+    // page is still shut. Then every way the page can change a document.
+    staleNotice?.();
+    expect(barrier.syncState).toBe('unsynchronised');
+
     const view = editor.getView();
     view.dispatch(view.state.tr.insertText('E', view.state.doc.content.size - 1));
     editor.insertImage('assets/x.png');
+    editor.increaseTextSize();
 
     expect(editor.isEditable()).toBe(false);
     expect(editor.getMarkdown()).toContain('ABCD');
@@ -629,6 +645,30 @@ describe('the editor the barrier actually freezes', () => {
     expect(sent.filter((m) => m.type === 'external_write_apply_failed')).toHaveLength(1);
   });
 
+  it('keeps the document locked when adopting one throws part-way', () => {
+    // 4.0E.2R, found while auditing rather than from a failing test. Adopting
+    // briefly lifts the lock — it is the one change the lock exists to let
+    // through — and the restore used to sit after the call. An adoption that
+    // threw therefore left the lock off, which is precisely the moment the page
+    // is out of step and every command it can run must be refused.
+    const { editor } = mount('ABCD');
+    editor.setEditable(false);
+
+    const view = editor.getView();
+    const seam = view as unknown as { dispatch: (tr: unknown) => void };
+    const original = seam.dispatch;
+    seam.dispatch = () => {
+      throw new Error('adoption blew up half way through');
+    };
+    expect(() => editor.setMarkdown('ABCD\nXYZ')).toThrow();
+    seam.dispatch = original;
+
+    // Still shut, to everything.
+    editor.insertImage('assets/x.png');
+    expect(editor.getMarkdown()).not.toContain('assets/x.png');
+    expect(editor.isEditable()).toBe(false);
+  });
+
   it('adopts a committed document without autosaving it straight back', () => {
     // Programmatic adoption must not look like an edit. If it did, the page
     // would answer the commit by sending the content it had just replaced.
@@ -637,5 +677,433 @@ describe('the editor the barrier actually freezes', () => {
     expect(updates).toEqual([]);
     expect(editor.hasPendingSave()).toBe(false);
     expect(editor.getMarkdown()).toContain('XYZ');
+  });
+});
+
+// The state machine, sealed — 4.0E.2R.
+//
+// `unsynchronised` is terminal for a page. These are not extra assertions about
+// the happy path; they are the list of ways a page might be talked back into
+// looking synchronised, each one tried on purpose.
+describe('the barrier state machine', () => {
+  const OTHER = '77777777-6666-4555-8444-333333333333';
+
+  /** Everything worth asserting about a page, in one place. */
+  function snapshotOf(h: ReturnType<typeof harness>) {
+    return {
+      state: h.barrier.syncState,
+      active: h.barrier.active,
+      editable: h.isEditable(),
+      generation: h.barrier.currentGeneration(),
+      queued: h.barrier.queuedCount,
+      text: h.currentText(),
+    };
+  }
+
+  function held(text = 'ABCD') {
+    const h = harness({ text });
+    h.barrier.begin(NOTE, REQUEST, 0);
+    return h;
+  }
+
+  // ---- the reported bug ------------------------------------------------
+
+  it('a slow notice that was already on its way cannot undo unsynchronised', () => {
+    // THE gate of this subphase. The failure path deliberately keeps the
+    // request active, so the old guard — "is this still the active request?" —
+    // still passed and the slow notice overwrote the terminal state. The page
+    // stayed safe and started telling the reader a write was merely slow, when
+    // in fact there was no write in flight at all and reopening was the only
+    // way forward.
+    const h = held();
+    const alreadyQueued = h.capturedSlowNotice();
+    expect(alreadyQueued).toBeTruthy();
+
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+    expect(h.barrier.syncState).toBe('unsynchronised');
+
+    // Fired by hand, exactly as an event loop would run a callback that was
+    // already scheduled when the timer was cancelled.
+    alreadyQueued!();
+
+    expect(h.barrier.syncState).toBe('unsynchronised');
+    expect(h.indicated).toEqual(['syncing', 'unsynchronised']);
+    expect(h.indicated).not.toContain('slow');
+    expect(snapshotOf(h)).toEqual({
+      state: 'unsynchronised',
+      active: true,
+      editable: false,
+      generation: 0,
+      queued: 0,
+      text: 'ABCD',
+    });
+  });
+
+  it('cancels the pending slow notice when adoption fails', () => {
+    // Necessary and not sufficient: the guard above is what makes it safe.
+    // This is what keeps the common case from queueing a callback at all.
+    const h = held();
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+    expect(h.timerWasCleared()).toBe(true);
+  });
+
+  it('survives the stale notice being fired again and again', () => {
+    const h = held();
+    const alreadyQueued = h.capturedSlowNotice()!;
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) alreadyQueued();
+
+    expect(h.barrier.syncState).toBe('unsynchronised');
+    expect(h.indicated.filter((state) => state === 'unsynchronised')).toHaveLength(1);
+    expect(h.isEditable()).toBe(false);
+  });
+
+  // ---- the other ordering ----------------------------------------------
+
+  it('goes from slow to unsynchronised, and stays there', () => {
+    // The failure must not depend on arriving before the first slow notice.
+    const h = held();
+    h.fireSlowNotice();
+    expect(h.barrier.syncState).toBe('slow');
+
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    expect(h.barrier.syncState).toBe('unsynchronised');
+    expect(h.indicated).toEqual(['syncing', 'slow', 'unsynchronised']);
+    expect(h.isEditable()).toBe(false);
+  });
+
+  // ---- the symmetric bug, on the paths that do release -----------------
+
+  it('a stale notice cannot make a finished write look slow', () => {
+    const h = held();
+    const alreadyQueued = h.capturedSlowNotice()!;
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+    expect(h.barrier.syncState).toBe('idle');
+
+    alreadyQueued();
+
+    expect(h.barrier.syncState).toBe('idle');
+    expect(h.indicated).toEqual(['syncing', 'idle']);
+    expect(h.isEditable()).toBe(true);
+  });
+
+  it('a stale notice cannot make an abandoned write look slow', () => {
+    const h = held();
+    const alreadyQueued = h.capturedSlowNotice()!;
+    h.barrier.abort(REQUEST);
+    expect(h.barrier.syncState).toBe('idle');
+
+    alreadyQueued();
+
+    expect(h.barrier.syncState).toBe('idle');
+    expect(h.indicated).toEqual(['syncing', 'idle']);
+    expect(h.isEditable()).toBe(true);
+  });
+
+  it('still says a genuinely slow write is slow', () => {
+    // The guard must not buy safety by never firing. A write that really is
+    // still waiting has to reach `slow`.
+    const h = held();
+    h.fireSlowNotice();
+
+    expect(h.barrier.syncState).toBe('slow');
+    expect(h.indicated).toEqual(['syncing', 'slow']);
+    expect(h.barrier.active).toBe(true);
+    expect(h.isEditable()).toBe(false);
+    expect(h.barrier.currentGeneration()).toBe(0);
+
+    // And a slow write still finishes normally.
+    expect(h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(true);
+    expect(snapshotOf(h)).toEqual({
+      state: 'idle',
+      active: false,
+      editable: true,
+      generation: 1,
+      queued: 0,
+      text: 'ABCD\nXYZ',
+    });
+  });
+
+  // ---- nothing else reopens a terminal page ----------------------------
+
+  it('refuses every message that could reopen an unsynchronised page', () => {
+    const h = held();
+    h.barrier.defer(() => h.type(' + captura'));
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+    const sealed = snapshotOf(h);
+    const sentAfterFailure = h.sent.length;
+
+    h.mendAdoption();
+    // A repeat of the same request.
+    expect(h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(false);
+    // A different request entirely.
+    expect(h.barrier.apply(NOTE, OTHER, 2, committed('outro'))).toBe(false);
+    // An abort.
+    expect(h.barrier.abort(REQUEST)).toBe(false);
+    expect(h.barrier.abort(OTHER)).toBe(false);
+    // A fresh write.
+    h.barrier.begin(NOTE, OTHER, 0);
+    // A load telling it about a new generation.
+    h.barrier.setGeneration(9);
+    // And the stale notice, once more for good measure.
+    h.capturedSlowNotice()!();
+
+    expect(snapshotOf(h)).toEqual(sealed);
+    expect(h.barrier.syncState).toBe('unsynchronised');
+    expect(h.sent).toHaveLength(sentAfterFailure);
+    expect(h.sent.some((m) => m.type === 'external_write_applied')).toBe(false);
+  });
+
+  it('holds its queued actions for as long as it is out of step', () => {
+    const h = held();
+    const ran: string[] = [];
+    h.barrier.defer(() => ran.push('capture'));
+    h.barrier.defer(() => ran.push('image'));
+    h.barrier.defer(() => ran.push('metadata'));
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    h.capturedSlowNotice()!();
+    h.barrier.abort(REQUEST);
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    expect(ran).toEqual([]);
+    expect(h.barrier.queuedCount).toBe(3);
+    // And a new one still queues rather than running against stale text.
+    expect(h.barrier.defer(() => ran.push('later'))).toBe(true);
+    expect(ran).toEqual([]);
+    expect(h.barrier.queuedCount).toBe(4);
+  });
+
+  // ---- the matrix, run as a table --------------------------------------
+
+  it('follows the state table exactly', () => {
+    type Row = {
+      from: SyncState;
+      event: string;
+      to: SyncState;
+      editable: boolean;
+      generation: number;
+    };
+
+    const rows: Row[] = [
+      { from: 'idle', event: 'begin', to: 'syncing', editable: false, generation: 0 },
+      { from: 'syncing', event: 'slow notice', to: 'slow', editable: false, generation: 0 },
+      { from: 'syncing', event: 'abort', to: 'idle', editable: true, generation: 0 },
+      { from: 'slow', event: 'abort', to: 'idle', editable: true, generation: 0 },
+      { from: 'syncing', event: 'apply ok', to: 'idle', editable: true, generation: 1 },
+      { from: 'slow', event: 'apply ok', to: 'idle', editable: true, generation: 1 },
+      {
+        from: 'syncing',
+        event: 'apply failed',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'slow',
+        event: 'apply failed',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'unsynchronised',
+        event: 'stale slow notice',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'unsynchronised',
+        event: 'apply again',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'unsynchronised',
+        event: 'abort',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'unsynchronised',
+        event: 'wrong apply',
+        to: 'unsynchronised',
+        editable: false,
+        generation: 0,
+      },
+      {
+        from: 'idle',
+        event: 'stale slow notice after success',
+        to: 'idle',
+        editable: true,
+        generation: 1,
+      },
+      {
+        from: 'idle',
+        event: 'stale slow notice after abort',
+        to: 'idle',
+        editable: true,
+        generation: 0,
+      },
+    ];
+
+    for (const row of rows) {
+      const h = harness({ text: 'ABCD' });
+      let stale: (() => void) | null = null;
+
+      // Drive the page to the starting state.
+      if (row.from !== 'idle' || row.event.includes('after')) {
+        h.barrier.begin(NOTE, REQUEST, 0);
+        stale = h.capturedSlowNotice();
+      }
+      if (row.from === 'slow') h.fireSlowNotice();
+      if (row.from === 'unsynchronised') {
+        h.breakAdoption();
+        h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+        h.mendAdoption();
+      }
+      if (row.event === 'stale slow notice after success') {
+        h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+      }
+      if (row.event === 'stale slow notice after abort') {
+        h.barrier.abort(REQUEST);
+      }
+
+      // Apply the event.
+      switch (row.event) {
+        case 'begin':
+          h.barrier.begin(NOTE, REQUEST, 0);
+          break;
+        case 'slow notice':
+          h.fireSlowNotice();
+          break;
+        case 'abort':
+          h.barrier.abort(REQUEST);
+          break;
+        case 'apply ok':
+          h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+          break;
+        case 'apply failed':
+          h.breakAdoption();
+          h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+          break;
+        case 'apply again':
+          h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+          break;
+        case 'wrong apply':
+          h.barrier.apply(NOTE, OTHER, 2, committed('outro'));
+          break;
+        case 'stale slow notice':
+        case 'stale slow notice after success':
+        case 'stale slow notice after abort':
+          stale!();
+          break;
+        default:
+          throw new Error(`unhandled event ${row.event}`);
+      }
+
+      const where = `${row.from} --${row.event}-->`;
+      expect(h.barrier.syncState, where).toBe(row.to);
+      expect(h.isEditable(), where).toBe(row.editable);
+      expect(h.barrier.currentGeneration(), where).toBe(row.generation);
+    }
+  });
+});
+
+// The same guarantee, through the timers the page actually uses.
+describe('the real timer wiring', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Wired exactly as `main.ts` wires it: the window's own timers. */
+  function pageBarrier(onAdopt: () => void) {
+    const indicated: SyncState[] = [];
+    const sent: WebviewToHostMessage[] = [];
+    let editable = true;
+    const barrier = new ExternalWriteBarrier({
+      freeze: () => {
+        editable = false;
+      },
+      thaw: () => {
+        editable = true;
+      },
+      snapshot: () => 'ABCD',
+      adopt: onAdopt,
+      send: (message) => sent.push(message),
+      indicate: (state) => indicated.push(state),
+      setTimer: (callback, ms) => window.setTimeout(callback, ms),
+      clearTimer: (handle) => window.clearTimeout(handle),
+    });
+    return { barrier, indicated, sent, isEditable: () => editable };
+  }
+
+  it('never announces a slow write after a failed adoption, however long it waits', () => {
+    // 4.0E.2R §34. Deterministic: no sleeping, no dependence on how fast this
+    // machine happens to be. The clock is advanced far past the slow notice.
+    vi.useFakeTimers();
+    const page = pageBarrier(() => {
+      throw new Error('adoption failed');
+    });
+
+    page.barrier.begin(NOTE, REQUEST, 0);
+    vi.advanceTimersByTime(100);
+    expect(page.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(false);
+    expect(page.barrier.syncState).toBe('unsynchronised');
+
+    vi.advanceTimersByTime(10_000);
+
+    expect(page.barrier.syncState).toBe('unsynchronised');
+    expect(page.indicated).toEqual(['syncing', 'unsynchronised']);
+    expect(page.isEditable()).toBe(false);
+    expect(page.sent.some((m) => m.type === 'external_write_applied')).toBe(false);
+  });
+
+  it('still announces a slow write that really is slow', () => {
+    vi.useFakeTimers();
+    const page = pageBarrier(() => {});
+
+    page.barrier.begin(NOTE, REQUEST, 0);
+    vi.advanceTimersByTime(EXTERNAL_WRITE_SLOW_NOTICE_MS + 1);
+
+    expect(page.barrier.syncState).toBe('slow');
+    expect(page.indicated).toEqual(['syncing', 'slow']);
+    expect(page.isEditable()).toBe(false);
+  });
+
+  it('lets a finished write pass the slow threshold in peace', () => {
+    vi.useFakeTimers();
+    const page = pageBarrier(() => {});
+
+    page.barrier.begin(NOTE, REQUEST, 0);
+    page.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+    vi.advanceTimersByTime(10_000);
+
+    expect(page.barrier.syncState).toBe('idle');
+    expect(page.indicated).toEqual(['syncing', 'idle']);
+    expect(page.isEditable()).toBe(true);
+  });
+
+  it('lets an abandoned write pass the slow threshold in peace', () => {
+    vi.useFakeTimers();
+    const page = pageBarrier(() => {});
+
+    page.barrier.begin(NOTE, REQUEST, 0);
+    page.barrier.abort(REQUEST);
+    vi.advanceTimersByTime(10_000);
+
+    expect(page.barrier.syncState).toBe('idle');
+    expect(page.indicated).toEqual(['syncing', 'idle']);
   });
 });

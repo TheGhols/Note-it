@@ -604,6 +604,11 @@ future machine interfaces share one domain and persistence authority.
       acknowledgement, and tells the reader the window is out of step. The write stays committed and
       still reports `ui_sync_warning`. Reopening the note restores it from the committed file exactly,
       verified end to end in the isolated environment.
+- [x] **Phase 4.0E.2R — Terminal Unsynchronised State.** Made the terminal state terminal in fact: the
+      barrier holds one explicit phase, every transition is guarded by it, and no timer, late
+      callback, repeated apply, abort or generation update can return a page that failed to adopt a
+      committed document to an editable or seemingly synchronised state. Also closed a transaction
+      lock left off when adopting threw part-way.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
 - [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.

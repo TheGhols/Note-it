@@ -177,6 +177,21 @@ The third row is the one worth stating plainly. The write is on disk and is repo
 a `ui_sync_warning`; the window is not released, because a released window would be editing against a
 generation the host has already moved past and every save it made would be refused — work typed and
 silently lost. The note says so, and reopening it is the recovery. See ADR-040.
+
+The page holds one phase, and it is the only thing that decides what may happen next:
+
+```text
+  idle ──begin──▶ syncing ──slow notice──▶ slow
+                     │                      │
+                     ├──abort───────────────┤──▶ idle           (nothing written)
+                     ├──apply, adopted──────┤──▶ idle, gen N+1  (written and shown)
+                     └──apply, not adopted──┴──▶ unsynchronised
+```
+
+`unsynchronised` has no outgoing edge. Every transition asks the phase first, so a callback that was
+already queued when the phase changed — a slow notice whose timer had just been cancelled, most
+obviously — finds a phase it may not act on and does nothing. That is what makes the state terminal
+rather than merely usually terminal; cancelling the timer as well only keeps the common case tidy.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
 - `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.

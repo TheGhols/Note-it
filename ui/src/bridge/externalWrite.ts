@@ -59,6 +59,30 @@ import type { MetadataView, WebviewToHostMessage } from './types.ts';
  *   page says it is out of step. A blocked note that says why is recoverable
  *   by reopening it; an editor that quietly discards work is not.
  *
+ * ## The states, and which way they go
+ *
+ * ```text
+ *   idle ──begin──▶ syncing ──slow notice──▶ slow
+ *                      │                      │
+ *                      ├──abort───────────────┤──▶ idle          (nothing written)
+ *                      ├──apply, adopted──────┤──▶ idle, gen N+1 (written, shown)
+ *                      └──apply, not adopted──┴──▶ unsynchronised
+ * ```
+ *
+ * `unsynchronised` is **terminal for this page**. It has no outgoing edge: no
+ * timer, no late callback, no repeated apply, no abort and no message for
+ * another request can turn it back into `idle`, `syncing` or `slow`, and none
+ * of them can thaw the editor, drain the queue or move the generation. The only
+ * way out is the page being replaced — the window closing and the note being
+ * loaded again from the store, which builds a new barrier that starts at
+ * `idle`.
+ *
+ * That is enforced by the phase itself rather than by the order things happen
+ * in. Every transition asks what state the page is in, so a callback that was
+ * already queued when the state changed finds a state it is not allowed to act
+ * on and does nothing. Cancelling the timer as well is belt and braces: it
+ * makes the common case tidy, and the guard is what makes the race impossible.
+ *
  * The host is not a separate program that can vanish and leave this running.
  * The WebView belongs to the very process that owns the barrier: if the host
  * dies, this page dies with it, so there is no orphan to rescue. What a long
@@ -121,14 +145,15 @@ export class ExternalWriteBarrier {
   /** Which run of the document the page is on. Quoted on everything it sends. */
   private generation = 0;
   /**
-   * The request whose committed document this page failed to adopt.
+   * Which phase this page is in, and the only thing that decides what may
+   * happen next.
    *
-   * Set only past the commit point, and never cleared: there is nothing this
-   * page can do to get back in step, because the text it is holding is not the
-   * text on disk and it has no way to ask for the real one. The note stays held
-   * until it is reopened.
+   * Kept as one value rather than inferred from the request and the timer,
+   * because every guard in this class needs to ask the same question and two
+   * ways of answering it would eventually disagree. `unsynchronised` is
+   * terminal: nothing sets it back.
    */
-  private adoptionFailedFor: string | null = null;
+  private state: SyncState = 'idle';
 
   constructor(hooks: ExternalWriteHooks) {
     this.hooks = hooks;
@@ -139,12 +164,26 @@ export class ExternalWriteBarrier {
     return this.requestId !== null;
   }
 
+  /** The phase this page is in. The source of truth for what may happen next. */
+  public get syncState(): SyncState {
+    return this.state;
+  }
+
   public currentGeneration(): number {
     return this.generation;
   }
 
-  /** Adopts the generation a freshly loaded note arrived with. */
+  /**
+   * Adopts the generation a freshly loaded note arrived with.
+   *
+   * Deliberately cannot revive a page that failed to adopt a committed
+   * document. A page that really was reloaded from the store gets a whole new
+   * barrier, starting at `idle`; anything calling this on a page that is out of
+   * step is not that, and treating it as a way back in would be the escape
+   * hatch this class exists not to have.
+   */
   public setGeneration(generation: number): void {
+    if (this.state === 'unsynchronised') return;
     this.generation = Number.isFinite(generation) ? generation : 0;
   }
 
@@ -157,10 +196,14 @@ export class ExternalWriteBarrier {
    * stops.
    */
   public begin(noteId: string, requestId: string, generation: number): void {
-    if (this.requestId !== null) return;
+    // Only an idle page can start a write. That covers a second request while
+    // one is in flight, and it covers a page that is out of step — which cannot
+    // produce a snapshot anyone should commit.
+    if (this.state !== 'idle') return;
     if (generation !== this.generation) return;
 
     this.requestId = requestId;
+    this.state = 'syncing';
     // Freeze first. Everything below reads a document nothing can change any
     // more, which is the only reason the text it reads is worth committing.
     this.hooks.freeze();
@@ -178,7 +221,15 @@ export class ExternalWriteBarrier {
     if (setTimer) {
       this.timer = setTimer(() => {
         this.timer = null;
-        if (this.requestId === requestId) this.hooks.indicate?.('slow');
+        // Both halves matter. The request must still be this one, and the page
+        // must still be *waiting* — a write that has since finished, been
+        // abandoned, or failed to be adopted is not a slow write, and saying so
+        // would replace a true statement with a false one. Cancelling the timer
+        // elsewhere is not enough on its own: a callback can already be queued
+        // when that happens, and this is what makes it harmless when it runs.
+        if (this.requestId !== requestId || this.state !== 'syncing') return;
+        this.state = 'slow';
+        this.hooks.indicate?.('slow');
       }, EXTERNAL_WRITE_SLOW_NOTICE_MS);
     }
   }
@@ -226,7 +277,10 @@ export class ExternalWriteBarrier {
       // the document is not released, the queue is not drained, and no positive
       // acknowledgement goes out. See the note at the top of this file for why
       // releasing here would be worse than staying blocked.
-      this.adoptionFailedFor = requestId;
+      // The slow notice is cancelled here rather than through `release`, which
+      // would also thaw and drain — the two things that must not happen.
+      this.cancelSlowNotice();
+      this.state = 'unsynchronised';
       this.hooks.indicate?.('unsynchronised');
       this.hooks.send({
         type: 'external_write_apply_failed',
@@ -252,7 +306,7 @@ export class ExternalWriteBarrier {
    * here can: reopening the note is what puts the page back on the file.
    */
   public get adoptionFailed(): boolean {
-    return this.adoptionFailedFor !== null;
+    return this.state === 'unsynchronised';
   }
 
   /**
@@ -290,13 +344,25 @@ export class ExternalWriteBarrier {
     return this.queued.length;
   }
 
+  /**
+   * Stops the slow notice from being announced, and nothing else.
+   *
+   * Exists because `release` is not a way to cancel a timer: it also clears the
+   * request, thaws the editor and drains the queue. Reaching for it to tidy up
+   * one timer is how a failed adoption ended up releasing a page it must not
+   * release.
+   */
+  private cancelSlowNotice(): void {
+    if (this.timer === null) return;
+    this.hooks.clearTimer?.(this.timer);
+    this.timer = null;
+  }
+
   private release(requestId: string): void {
     if (this.requestId !== requestId) return;
     this.requestId = null;
-    if (this.timer !== null) {
-      this.hooks.clearTimer?.(this.timer);
-      this.timer = null;
-    }
+    this.cancelSlowNotice();
+    this.state = 'idle';
     this.hooks.indicate?.('idle');
     this.hooks.thaw();
 

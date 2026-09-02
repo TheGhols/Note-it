@@ -114,13 +114,22 @@ export class NoteEditor {
     // Adopting a document is the one change allowed to land while the document
     // is locked, because it *is* what the lock was taken for: the host has
     // committed, and this is the committed text arriving.
+    //
+    // Restored in a `finally`, and that is not decoration. The one time this
+    // throws is the one time it matters most: an adoption that fails part-way
+    // is exactly how a note ends up out of step, and leaving the lock off then
+    // would reopen the document to every command the page can run — against
+    // text the store has already moved past.
     const wasLocked = this.documentLocked;
     this.documentLocked = false;
-    this.editor.commands.setContent(sanitizeMarkdown(content), {
-      contentType: 'markdown',
-      emitUpdate: false,
-    });
-    this.documentLocked = wasLocked;
+    try {
+      this.editor.commands.setContent(sanitizeMarkdown(content), {
+        contentType: 'markdown',
+        emitUpdate: false,
+      });
+    } finally {
+      this.documentLocked = wasLocked;
+    }
     // Loading a note is not an edit — it must not save, and it does not — but
     // it is a new document, and whatever is showing something about the
     // document has to be told so.

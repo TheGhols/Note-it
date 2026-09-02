@@ -1651,3 +1651,26 @@ a `ui_sync_warning`.
 **Not done here, on purpose.** No automatic reload, no reconciliation, no merge, no background retry,
 no content hash in the acknowledgement. A safe per-note reload is the obvious next step and is
 recorded as a recommendation, not smuggled into a correctness fix.
+
+**Amendment (4.0E.2R): terminal had to be made true, not just stated.** Two ways out of the terminal
+state survived the original fix, both found by audit rather than by a failing test.
+
+The first: the slow-notice timer was left armed, and its only guard asked whether the request was
+still the active one — which, after a failed adoption, it deliberately is. So four seconds later the
+page replaced "this window could not keep up, reopen the note" with "synchronisation is taking a
+while", which was not merely cosmetic: it described a write still in progress when there was none,
+and pointed away from the only recovery there is. The timer is now cancelled on that path, through a
+helper that does *only* that — reaching for `release` to cancel a timer is what caused the original
+4.0E.2 bug, because it also thaws and drains.
+
+Cancelling is not the guarantee, though. A callback can already be queued when its timer is
+cancelled, so the phase itself is now the gate: the page holds one `SyncState`, every transition asks
+what state it is in, and a late callback finds a state it may not act on. `unsynchronised` has no
+outgoing edge at all — not from a timer, a repeated apply, an abort, a message for another request,
+or a `LoadNote` generation. The same guard fixes the symmetric case nobody had reported: a stale
+notice arriving after a *successful* write, which would have made a finished write look slow.
+
+The second: adopting a document briefly lifts the editor's transaction lock — it is the one change
+the lock exists to let through — and the restore sat after the call rather than in a `finally`. An
+adoption that threw part-way therefore left the lock off, which is exactly the moment every command
+the page can run must be refused. It is now restored in a `finally`.
