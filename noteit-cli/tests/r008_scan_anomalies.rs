@@ -23,6 +23,14 @@ fn noteit_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_noteit"))
 }
 
+fn is_running_as_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false)
+}
+
 fn run_cli(args: &[&str], root: &Path) -> (i32, String, String) {
     let mut cmd = Command::new(noteit_bin());
     cmd.args(args);
@@ -104,6 +112,13 @@ fn r008_1_symlink_in_notes_produces_typed_warning_and_valid_data_loads() {
 
 #[test]
 fn r008_2_unreadable_file_produces_typed_warning() {
+    if is_running_as_root() {
+        eprintln!(
+            "Skipping unreadable file permission test when running as root (CAP_DAC_OVERRIDE)"
+        );
+        return;
+    }
+
     let tmp = tempdir().expect("tempdir");
     let (core, notes_dir) = setup_store(tmp.path());
 

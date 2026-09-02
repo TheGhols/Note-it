@@ -20,6 +20,14 @@ fn permissions_of(path: &Path) -> u32 {
     fs::metadata(path).expect("metadata").permissions().mode() & 0o777
 }
 
+fn is_running_as_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false)
+}
+
 #[test]
 fn r006_config_1_missing_returns_default_and_saves() {
     let tmp = tempdir().expect("tempdir");
@@ -179,6 +187,13 @@ fn r006_config_6_preservation_before_replacement_proves_bytes_quarantined() {
 
 #[test]
 fn r006_config_7_preservation_failure_fail_safe_original_not_overwritten() {
+    if is_running_as_root() {
+        eprintln!(
+            "Skipping read-only directory permission test when running as root (CAP_DAC_OVERRIDE)"
+        );
+        return;
+    }
+
     let tmp = tempdir().expect("tempdir");
     let config_dir = tmp.path().join("readonly_config_dir");
     fs::create_dir(&config_dir).expect("create dir");
@@ -344,6 +359,13 @@ fn r006_state_6_preservation_before_replacement_proves_bytes_quarantined() {
 
 #[test]
 fn r006_state_7_preservation_failure_fail_safe_original_not_overwritten() {
+    if is_running_as_root() {
+        eprintln!(
+            "Skipping read-only directory permission test when running as root (CAP_DAC_OVERRIDE)"
+        );
+        return;
+    }
+
     let tmp = tempdir().expect("tempdir");
     let state_dir = tmp.path().join("readonly_state_dir");
     fs::create_dir(&state_dir).expect("create dir");
