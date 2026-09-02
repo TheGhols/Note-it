@@ -66,14 +66,46 @@ fn r003_directories_and_files_are_private_under_permissive_umask() {
     // 1. Directory creation under umask 0000
     core.storage().ensure_directories().expect("ensure dirs");
 
-    assert_eq!(mode_of(&core.paths().data_dir), PRIVATE_DIR_MODE, "data_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().notes_dir), PRIVATE_DIR_MODE, "notes_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().trash_dir), PRIVATE_DIR_MODE, "trash_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().backups_dir), PRIVATE_DIR_MODE, "backups_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().assets_dir), PRIVATE_DIR_MODE, "assets_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().config_dir), PRIVATE_DIR_MODE, "config_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().state_dir), PRIVATE_DIR_MODE, "state_dir must be 0700");
-    assert_eq!(mode_of(&core.paths().runtime_dir), PRIVATE_DIR_MODE, "runtime_dir must be 0700");
+    assert_eq!(
+        mode_of(&core.paths().data_dir),
+        PRIVATE_DIR_MODE,
+        "data_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().notes_dir),
+        PRIVATE_DIR_MODE,
+        "notes_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().trash_dir),
+        PRIVATE_DIR_MODE,
+        "trash_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().backups_dir),
+        PRIVATE_DIR_MODE,
+        "backups_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().assets_dir),
+        PRIVATE_DIR_MODE,
+        "assets_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().config_dir),
+        PRIVATE_DIR_MODE,
+        "config_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().state_dir),
+        PRIVATE_DIR_MODE,
+        "state_dir must be 0700"
+    );
+    assert_eq!(
+        mode_of(&core.paths().runtime_dir),
+        PRIVATE_DIR_MODE,
+        "runtime_dir must be 0700"
+    );
 
     // Assert zero group/other permissions on directories
     for dir in [
@@ -86,7 +118,13 @@ fn r003_directories_and_files_are_private_under_permissive_umask() {
         &core.paths().state_dir,
         &core.paths().runtime_dir,
     ] {
-        assert_eq!(mode_of(dir) & 0o077, 0, "Dir {} has leaked permissions: {:o}", dir.display(), mode_of(dir));
+        assert_eq!(
+            mode_of(dir) & 0o077,
+            0,
+            "Dir {} has leaked permissions: {:o}",
+            dir.display(),
+            mode_of(dir)
+        );
     }
 
     // 2. Note file creation under umask 0000
@@ -95,36 +133,72 @@ fn r003_directories_and_files_are_private_under_permissive_umask() {
     core.storage().save_note_atomic(&doc).expect("save note");
 
     let note_path = core.storage().note_path(&doc.metadata.id);
-    assert_eq!(mode_of(&note_path), PRIVATE_FILE_MODE, "Note file must be 0600");
-    assert_eq!(mode_of(&note_path) & 0o077, 0, "Note file must not have group/other permissions");
+    assert_eq!(
+        mode_of(&note_path),
+        PRIVATE_FILE_MODE,
+        "Note file must be 0600"
+    );
+    assert_eq!(
+        mode_of(&note_path) & 0o077,
+        0,
+        "Note file must not have group/other permissions"
+    );
 
     // 3. Config file creation under umask 0000
     let config_path = core.storage().config_file_path();
     let config = AppConfig::default();
     config.save_to_file(&config_path).expect("save config");
 
-    assert_eq!(mode_of(&config_path), PRIVATE_FILE_MODE, "Config file must be 0600");
-    assert_eq!(mode_of(&config_path) & 0o077, 0, "Config file must not have group/other permissions");
+    assert_eq!(
+        mode_of(&config_path),
+        PRIVATE_FILE_MODE,
+        "Config file must be 0600"
+    );
+    assert_eq!(
+        mode_of(&config_path) & 0o077,
+        0,
+        "Config file must not have group/other permissions"
+    );
 
     // 4. State file creation under umask 0000
     let state_path = core.storage().state_file_path();
     let state = AppState::default();
     state.save_to_file(&state_path).expect("save state");
 
-    assert_eq!(mode_of(&state_path), PRIVATE_FILE_MODE, "State file must be 0600");
-    assert_eq!(mode_of(&state_path) & 0o077, 0, "State file must not have group/other permissions");
+    assert_eq!(
+        mode_of(&state_path),
+        PRIVATE_FILE_MODE,
+        "State file must be 0600"
+    );
+    assert_eq!(
+        mode_of(&state_path) & 0o077,
+        0,
+        "State file must not have group/other permissions"
+    );
 
     // 5. Backup snapshot creation under umask 0000
     let snapshot_dir = core.storage().create_backup_now().expect("create snapshot");
-    assert_eq!(mode_of(&snapshot_dir), PRIVATE_DIR_MODE, "Snapshot dir must be 0700");
+    assert_eq!(
+        mode_of(&snapshot_dir),
+        PRIVATE_DIR_MODE,
+        "Snapshot dir must be 0700"
+    );
     assert_eq!(mode_of(&snapshot_dir) & 0o077, 0);
 
     let manifest_path = snapshot_dir.join("manifest.json");
-    assert_eq!(mode_of(&manifest_path), PRIVATE_FILE_MODE, "Manifest must be 0600");
+    assert_eq!(
+        mode_of(&manifest_path),
+        PRIVATE_FILE_MODE,
+        "Manifest must be 0600"
+    );
     assert_eq!(mode_of(&manifest_path) & 0o077, 0);
 
     let backed_note = snapshot_dir.join(format!("notes/{}.md", doc.metadata.id));
-    assert_eq!(mode_of(&backed_note), PRIVATE_FILE_MODE, "Backed note must be 0600");
+    assert_eq!(
+        mode_of(&backed_note),
+        PRIVATE_FILE_MODE,
+        "Backed note must be 0600"
+    );
 }
 
 #[test]
@@ -146,5 +220,9 @@ fn r003_atomic_temp_file_is_created_private_immediately() {
         "Temporary atomic file must be 0600 IMMEDIATELY upon creation, found {:o}",
         mode
     );
-    assert_eq!(mode & 0o077, 0, "Temp file must never be world or group readable");
+    assert_eq!(
+        mode & 0o077,
+        0,
+        "Temp file must never be world or group readable"
+    );
 }

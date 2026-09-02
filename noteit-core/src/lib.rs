@@ -352,6 +352,11 @@ impl NoteItCore {
         self.storage.metadata_catalog()
     }
 
+    /// Derives tag and property-key suggestions from live notes alongside any non-fatal scan warnings.
+    pub fn metadata_catalog_with_warnings(&self) -> (MetadataCatalog, Vec<ReadWarning>) {
+        self.storage.metadata_catalog_with_warnings()
+    }
+
     /// Loads the persisted study schedule without a WebView or editor.
     pub fn study_state(&self) -> Result<StudyState, String> {
         self.storage.load_study()

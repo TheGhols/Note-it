@@ -19,8 +19,8 @@
 
 use noteit_core::write::{WriteError, WriteOutcome};
 use noteit_core::{
-    MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadBatch, SearchResult,
-    StorePaths, TaskEntry, TaskStateFilter, TrashEntry,
+    MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadBatch, ReadWarning,
+    SearchResult, StorePaths, TaskEntry, TaskStateFilter, TrashEntry,
 };
 
 /// Everything one execution of the CLI has to say, as data.
@@ -184,8 +184,14 @@ pub enum Outcome {
         query: String,
         batch: ReadBatch<SearchResult>,
     },
-    Tags(MetadataCatalog),
-    Properties(MetadataCatalog),
+    Tags {
+        catalog: MetadataCatalog,
+        warnings: Vec<ReadWarning>,
+    },
+    Properties {
+        catalog: MetadataCatalog,
+        warnings: Vec<ReadWarning>,
+    },
     Tasks {
         state: TaskStateFilter,
         batch: ReadBatch<TaskEntry>,

@@ -94,27 +94,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# The real home directory, captured before any overriding.
-readonly REAL_HOME="${HOME:-$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)}"
-
-# The real base directories, resolved with the same XDG rules the application
-# uses, so nothing personal is hard-coded here.
-real_dir() {
-  local var="$1" fallback="$2"
-  local value="${!var:-}"
-  printf '%s' "${value:-$REAL_HOME/$fallback}"
-}
-
-REAL_BASES=(
-  "$REAL_HOME/.config"
-  "$REAL_HOME/.local/share"
-  "$REAL_HOME/.local/state"
-  "$REAL_HOME/.cache"
-  "$(real_dir XDG_CONFIG_HOME .config)"
-  "$(real_dir XDG_DATA_HOME .local/share)"
-  "$(real_dir XDG_STATE_HOME .local/state)"
-  "$(real_dir XDG_CACHE_HOME .cache)"
-)
+# The real home directory of the host user, queried directly from the OS user database.
+readonly SYSTEM_USER_HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+# Ambient HOME passed in the environment (may be simulated in isolation test suites).
+readonly AMBIENT_HOME="${HOME:-$SYSTEM_USER_HOME}"
 
 set_private_mode() {
   if command -v chmod >/dev/null 2>&1; then
@@ -127,16 +110,27 @@ if [[ -n "$ROOT" ]]; then
   if [[ "$ROOT" =~ (^|/)\.\.(/|$) ]]; then
     die "--root must not contain path traversal components (..)"
   fi
-  # A caller-supplied root is checked before anything is created under it.
-  ROOT_CHECK="$(readlink -f "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
-  for base in "${REAL_BASES[@]}"; do
-    base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
-    if [[ "$ROOT_CHECK" == "$base_resolved" || "$ROOT_CHECK" == "$base_resolved"/* ]]; then
-      die "--root $ROOT is inside the real XDG tree ($base_resolved)"
-    fi
-  done
-  if [[ "$ROOT_CHECK" == "$(readlink -f "$REAL_HOME")" || "$ROOT_CHECK" == "$(readlink -f "$REAL_HOME")"/* ]]; then
-    die "--root must not be or sit inside the real home directory"
+  ROOT_RESOLVED="$(readlink -f "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
+
+  # Distinguish genuine ambient home from a subshell that inherited the isolated session's HOME
+  AMBIENT_HOME_RESOLVED="$(readlink -f "$AMBIENT_HOME" 2>/dev/null || printf '%s' "$AMBIENT_HOME")"
+  if [[ -n "$AMBIENT_HOME_RESOLVED" && ( "$AMBIENT_HOME_RESOLVED" == "$ROOT_RESOLVED" || "$AMBIENT_HOME_RESOLVED" == "$ROOT_RESOLVED"/* ) ]]; then
+    EFFECTIVE_REAL_HOME="${SYSTEM_USER_HOME:-/tmp}"
+  else
+    EFFECTIVE_REAL_HOME="$AMBIENT_HOME"
+  fi
+
+  EFFECTIVE_REAL_HOME_RESOLVED="$(readlink -f "$EFFECTIVE_REAL_HOME" 2>/dev/null || printf '%s' "$EFFECTIVE_REAL_HOME")"
+  SYSTEM_USER_HOME_RESOLVED="$(readlink -f "$SYSTEM_USER_HOME" 2>/dev/null || printf '%s' "$SYSTEM_USER_HOME")"
+
+  if [[ "$ROOT_RESOLVED" == "$EFFECTIVE_REAL_HOME_RESOLVED" || "$ROOT_RESOLVED" == "$EFFECTIVE_REAL_HOME_RESOLVED"/* ]]; then
+    die "--root must not be or sit inside the real home directory ($EFFECTIVE_REAL_HOME_RESOLVED)"
+  fi
+  if [[ -n "$SYSTEM_USER_HOME_RESOLVED" && ( "$ROOT_RESOLVED" == "$SYSTEM_USER_HOME_RESOLVED" || "$ROOT_RESOLVED" == "$SYSTEM_USER_HOME_RESOLVED"/* ) ]]; then
+    die "--root must not be or sit inside the real home directory ($SYSTEM_USER_HOME_RESOLVED)"
+  fi
+  if [[ "$ROOT_RESOLVED" == "/" || "$ROOT_RESOLVED" == "/etc"* || "$ROOT_RESOLVED" == "/usr"* || "$ROOT_RESOLVED" == "/var"* ]]; then
+    die "--root must not be a system directory ($ROOT_RESOLVED)"
   fi
   mkdir -p "$ROOT"
   set_private_mode "$ROOT"
@@ -145,11 +139,53 @@ else
     die "--stop and --verify need the --root of the session they act on"
   fi
   ROOT="$(mktemp -d "${TMPDIR:-/tmp}/note-it-test-XXXXXX")"
+  ROOT_RESOLVED="$(readlink -f "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
+  EFFECTIVE_REAL_HOME="$AMBIENT_HOME"
+  EFFECTIVE_REAL_HOME_RESOLVED="$(readlink -f "$EFFECTIVE_REAL_HOME" 2>/dev/null || printf '%s' "$EFFECTIVE_REAL_HOME")"
+  SYSTEM_USER_HOME_RESOLVED="$(readlink -f "$SYSTEM_USER_HOME" 2>/dev/null || printf '%s' "$SYSTEM_USER_HOME")"
   set_private_mode "$ROOT"
   # Only an invocation that made its own throwaway root owns the bus it starts;
   # a named root keeps its session alive for the commands that follow.
   OWNS_BUS=1
 fi
+
+# The real base directories of the host system.
+# Crucial: if the caller's environment inherited XDG variables pointing inside ROOT_RESOLVED
+# (for example, a subshell running note-it-isolated --root ROOT --stop from inside an isolated session),
+# those paths belong to the isolated session and are NOT host real bases.
+REAL_BASES=(
+  "$EFFECTIVE_REAL_HOME/.config"
+  "$EFFECTIVE_REAL_HOME/.local/share"
+  "$EFFECTIVE_REAL_HOME/.local/state"
+  "$EFFECTIVE_REAL_HOME/.cache"
+)
+if [[ -n "$SYSTEM_USER_HOME" && "$SYSTEM_USER_HOME" != "$EFFECTIVE_REAL_HOME" ]]; then
+  REAL_BASES+=(
+    "$SYSTEM_USER_HOME/.config"
+    "$SYSTEM_USER_HOME/.local/share"
+    "$SYSTEM_USER_HOME/.local/state"
+    "$SYSTEM_USER_HOME/.cache"
+  )
+fi
+
+for xdg_var in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME; do
+  val="${!xdg_var:-}"
+  if [[ -n "$val" ]]; then
+    resolved_val="$(readlink -f "$val" 2>/dev/null || printf '%s' "$val")"
+    if [[ -n "$ROOT_RESOLVED" && ( "$resolved_val" == "$ROOT_RESOLVED" || "$resolved_val" == "$ROOT_RESOLVED"/* ) ]]; then
+      continue
+    fi
+    REAL_BASES+=("$resolved_val")
+  fi
+done
+
+# Ensure ROOT_RESOLVED is not inside any real XDG base of the host
+for base in "${REAL_BASES[@]}"; do
+  base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
+  if [[ "$ROOT_RESOLVED" == "$base_resolved" || "$ROOT_RESOLVED" == "$base_resolved"/* ]]; then
+    die "--root $ROOT is inside the real XDG tree ($base_resolved)"
+  fi
+done
 
 SESSION_DIR="$ROOT/session"
 ISOLATED_HOME="$ROOT/home"
@@ -169,7 +205,7 @@ unset NOTEIT_DATA_DIR NOTEIT_NOTES_DIR NOTEIT_CONFIG_DIR NOTEIT_STATE_DIR NOTEIT
 # inside, any real XDG base directory.
 abort_if_real() {
   local name="$1" candidate="$2" resolved
-  resolved="$(readlink -f "$candidate")"
+  resolved="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
   for base in "${REAL_BASES[@]}"; do
     local base_resolved
     base_resolved="$(readlink -f "$base" 2>/dev/null || printf '%s' "$base")"
@@ -177,7 +213,10 @@ abort_if_real() {
       die "$name resolves into the real XDG tree ($resolved)"
     fi
   done
-  if [[ "$resolved" == "$(readlink -f "$REAL_HOME")" || "$resolved" == "$(readlink -f "$REAL_HOME")"/* ]]; then
+  if [[ "$resolved" == "$EFFECTIVE_REAL_HOME_RESOLVED" || "$resolved" == "$EFFECTIVE_REAL_HOME_RESOLVED"/* ]]; then
+    die "$name resolves to or inside the real home directory ($resolved)"
+  fi
+  if [[ -n "$SYSTEM_USER_HOME_RESOLVED" && ( "$resolved" == "$SYSTEM_USER_HOME_RESOLVED" || "$resolved" == "$SYSTEM_USER_HOME_RESOLVED"/* ) ]]; then
     die "$name resolves to or inside the real home directory ($resolved)"
   fi
 }

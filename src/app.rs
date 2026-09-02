@@ -18,8 +18,10 @@ use noteit_core::autopaste::{
 };
 use noteit_core::diagnostics::{self, LayerToggleTrace};
 use noteit_core::model::NoteDocument;
-use noteit_core::settings::{clamp_ui_scale_percent, theme_name, AppConfig};
-use noteit_core::state::{next_collapse_all, AppState, LayerMode, NoteWindowState};
+use noteit_core::settings::{clamp_ui_scale_percent, theme_name, AppConfig, ConfigLoadOutcome};
+use noteit_core::state::{
+    next_collapse_all, AppState, LayerMode, NoteWindowState, StateLoadOutcome,
+};
 use noteit_core::study::Rating;
 use noteit_core::timer::TimerFinishKind;
 use noteit_core::NoteItCore;
@@ -328,8 +330,57 @@ impl NoteItApp {
 
         let storage = core.storage();
         register_asset_scheme(storage.assets_dir().to_path_buf());
-        let config = AppConfig::load_from_file(&storage.config_file_path());
-        let state = AppState::load_from_file(&storage.state_file_path());
+        let config_outcome = AppConfig::load_detailed(&storage.config_file_path());
+        let config = match &config_outcome {
+            ConfigLoadOutcome::Valid(c) | ConfigLoadOutcome::Missing(c) => c.clone(),
+            ConfigLoadOutcome::CorruptedRecovered {
+                value,
+                quarantine_path,
+                error,
+            } => {
+                eprintln!(
+                    "Aviso: arquivo de configuração corrompido ({error}). Original preservado em {}",
+                    quarantine_path.display()
+                );
+                value.clone()
+            }
+            ConfigLoadOutcome::CorruptedPreservationFailed { error } => {
+                eprintln!(
+                    "Erro crítico: arquivo de configuração corrompido, mas a preservação em quarentena falhou: {error}"
+                );
+                config_outcome.value()
+            }
+            ConfigLoadOutcome::ReadFailed(error) => {
+                eprintln!("Erro: falha ao ler arquivo de configuração: {error}");
+                config_outcome.value()
+            }
+        };
+
+        let state_outcome = AppState::load_detailed(&storage.state_file_path());
+        let state = match &state_outcome {
+            StateLoadOutcome::Valid(s) | StateLoadOutcome::Missing(s) => s.clone(),
+            StateLoadOutcome::CorruptedRecovered {
+                value,
+                quarantine_path,
+                error,
+            } => {
+                eprintln!(
+                    "Aviso: arquivo de estado corrompido ({error}). Original preservado em {}",
+                    quarantine_path.display()
+                );
+                value.clone()
+            }
+            StateLoadOutcome::CorruptedPreservationFailed { error } => {
+                eprintln!(
+                    "Erro crítico: arquivo de estado corrompido, mas a preservação em quarentena falhou: {error}"
+                );
+                state_outcome.value()
+            }
+            StateLoadOutcome::ReadFailed(error) => {
+                eprintln!("Erro: falha ao ler arquivo de estado: {error}");
+                state_outcome.value()
+            }
+        };
         let ui_dist_path = find_ui_dist_path();
 
         let context = Rc::new(RefCell::new(AppContext {

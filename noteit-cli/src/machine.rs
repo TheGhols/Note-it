@@ -544,6 +544,8 @@ fn warnings_of(outcome: &Outcome) -> Vec<MachineWarning> {
         Outcome::Notes(batch) => batch.warnings.iter().map(read_warning).collect(),
         Outcome::Search { batch, .. } => batch.warnings.iter().map(read_warning).collect(),
         Outcome::Tasks { batch, .. } => batch.warnings.iter().map(read_warning).collect(),
+        Outcome::Tags { warnings, .. } => warnings.iter().map(read_warning).collect(),
+        Outcome::Properties { warnings, .. } => warnings.iter().map(read_warning).collect(),
         Outcome::Write(outcome) => match &outcome.ui_sync_warning {
             Some(detail) => vec![MachineWarning {
                 code: UI_SYNC_WARNING_LIST_CODE,
@@ -602,8 +604,8 @@ fn data_of(outcome: &Outcome) -> MachineData {
                 results,
             })
         }
-        Outcome::Tags(catalog) => MachineData::Tags(tags_data(catalog)),
-        Outcome::Properties(catalog) => MachineData::Properties(properties_data(catalog)),
+        Outcome::Tags { catalog, .. } => MachineData::Tags(tags_data(catalog)),
+        Outcome::Properties { catalog, .. } => MachineData::Properties(properties_data(catalog)),
         Outcome::Tasks { state, batch } => {
             let tasks: Vec<TaskData> = batch.items.iter().map(task_data).collect();
             MachineData::Tasks(TasksData {

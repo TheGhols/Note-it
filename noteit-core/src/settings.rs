@@ -154,10 +154,15 @@ impl ConfigLoadOutcome {
 }
 
 impl AppConfig {
+    /// Backwards-compatible convenience wrapper that delegates to [`Self::load_detailed`].
+    /// Automatically performs quarantine preservation on corrupted files before returning the value.
     pub fn load_from_file(path: &Path) -> Self {
         Self::load_detailed(path).value()
     }
 
+    /// The primary, safe configuration loader. Distinguishes between missing files,
+    /// valid configurations, corrupted files preserved via quarantine, preservation failures,
+    /// and I/O read errors.
     pub fn load_detailed(path: &Path) -> ConfigLoadOutcome {
         if !path.exists() {
             let config = Self::default();
@@ -178,7 +183,10 @@ impl AppConfig {
         let content_str = match std::str::from_utf8(&raw_bytes) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Configuration at {} is not valid UTF-8: {e}", path.display());
+                eprintln!(
+                    "Configuration at {} is not valid UTF-8: {e}",
+                    path.display()
+                );
                 return Self::handle_corruption(path, &raw_bytes, &e.to_string());
             }
         };
@@ -186,7 +194,10 @@ impl AppConfig {
         match toml::from_str::<AppConfig>(content_str) {
             Ok(config) => ConfigLoadOutcome::Valid(config),
             Err(parse_err) => {
-                eprintln!("Configuration at {} is malformed: {parse_err}", path.display());
+                eprintln!(
+                    "Configuration at {} is malformed: {parse_err}",
+                    path.display()
+                );
                 Self::handle_corruption(path, &raw_bytes, &parse_err.to_string())
             }
         }

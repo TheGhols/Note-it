@@ -225,6 +225,9 @@ impl StorePaths {
     }
 }
 
+/// Result of scanning note files alongside non-fatal warnings.
+pub type NoteFilesBatch = (Vec<(Uuid, SystemTime)>, Vec<ReadWarning>);
+
 #[derive(Debug, Clone)]
 pub struct StorageManager {
     paths: StorePaths,
@@ -556,9 +559,8 @@ impl StorageManager {
 
     /// Every `.md` in the store whose name is a note identifier, with the
     /// file's own modification time, alongside any non-fatal scan warnings.
-    pub fn note_files_with_warnings(
-        &self,
-    ) -> Result<(Vec<(Uuid, SystemTime)>, Vec<ReadWarning>), String> {
+    #[allow(clippy::type_complexity)]
+    pub fn note_files_with_warnings(&self) -> Result<NoteFilesBatch, String> {
         if !self.paths.notes_dir.is_dir() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -591,7 +593,10 @@ impl StorageManager {
                     warnings.push(ReadWarning {
                         note_id: None,
                         kind: ReadWarningKind::IoError,
-                        message: format!("Failed to determine file type for {}: {e}", path.display()),
+                        message: format!(
+                            "Failed to determine file type for {}: {e}",
+                            path.display()
+                        ),
                     });
                     continue;
                 }
@@ -653,31 +658,71 @@ impl StorageManager {
             .collect();
 
         newest_first(&mut notes);
-        Ok((notes.into_iter().map(|note| note.id).collect(), scan_warnings))
+        Ok((
+            notes.into_iter().map(|note| note.id).collect(),
+            scan_warnings,
+        ))
     }
 
     /// Note identifiers ordered by the last change to their **text**, most
     /// recent first.
     pub fn list_notes_by_recency(&self) -> Result<Vec<Uuid>, String> {
-        self.list_notes_by_recency_with_warnings().map(|(ids, _)| ids)
+        self.list_notes_by_recency_with_warnings()
+            .map(|(ids, _)| ids)
     }
 
-    /// Derives autocomplete catalogs from live note front matter.
+    /// Derives autocomplete catalogs from live note front matter, collecting non-fatal scan warnings.
     ///
     /// There is no sidecar or index to invalidate. Trash is excluded because
     /// only `notes_dir` is traversed; restoring a file makes it appear again.
-    pub fn metadata_catalog(&self) -> MetadataCatalog {
+    pub fn metadata_catalog_with_warnings(&self) -> (MetadataCatalog, Vec<ReadWarning>) {
         let mut tags: BTreeMap<String, (String, usize)> = BTreeMap::new();
         let mut keys: BTreeMap<String, (String, usize)> = BTreeMap::new();
-        let ids = self.list_notes_by_recency().unwrap_or_default();
+        let (ids, scan_warnings) = self
+            .list_notes_by_recency_with_warnings()
+            .unwrap_or_default();
+        let mut warnings = scan_warnings;
 
         for id in ids {
-            let Some(front_matter) = read_front_matter(&self.note_path(&id)) else {
-                continue;
+            let note_path = self.note_path(&id);
+            let front_matter = match read_front_matter(&note_path) {
+                Some(fm) => fm,
+                None => match fs::read_to_string(&note_path) {
+                    Ok(content) => {
+                        if content.starts_with("---") {
+                            warnings.push(ReadWarning {
+                                    note_id: Some(id),
+                                    kind: ReadWarningKind::CorruptedFrontMatter,
+                                    message: format!(
+                                        "Nota {id}: delimitador de front matter não fechado ou corrompido."
+                                    ),
+                                });
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        warnings.push(ReadWarning {
+                            note_id: Some(id),
+                            kind: ReadWarningKind::UnreadableNote,
+                            message: format!("Falha ao ler nota {id}: {e}"),
+                        });
+                        continue;
+                    }
+                },
             };
-            let Ok(wrapper) = serde_yaml::from_str::<NoteFrontMatterWrapper>(&front_matter) else {
-                continue;
+
+            let wrapper = match serde_yaml::from_str::<NoteFrontMatterWrapper>(&front_matter) {
+                Ok(w) => w,
+                Err(e) => {
+                    warnings.push(ReadWarning {
+                        note_id: Some(id),
+                        kind: ReadWarningKind::CorruptedFrontMatter,
+                        message: format!("Nota {id}: front matter YAML corrompido: {e}"),
+                    });
+                    continue;
+                }
             };
+
             for tag in wrapper.tags.as_slice() {
                 let identity = semantic_identity(tag);
                 tags.entry(identity)
@@ -714,10 +759,18 @@ impl StorageManager {
                 .then_with(|| semantic_identity(&left.key).cmp(&semantic_identity(&right.key)))
         });
 
-        MetadataCatalog {
-            tags,
-            property_keys,
-        }
+        (
+            MetadataCatalog {
+                tags,
+                property_keys,
+            },
+            warnings,
+        )
+    }
+
+    /// Derives autocomplete catalogs from live note front matter.
+    pub fn metadata_catalog(&self) -> MetadataCatalog {
+        self.metadata_catalog_with_warnings().0
     }
 
     /// **Every** note's own text, newest first, ready to be searched.

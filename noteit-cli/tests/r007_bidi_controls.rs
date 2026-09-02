@@ -49,7 +49,10 @@ fn r007_2_all_bidi_controls_neutralized() {
     for (c, code) in controls {
         let input = format!("prefix{c}suffix");
         let sanitized = sanitize_for_terminal(&input);
-        assert!(!sanitized.contains(c), "Control U+{code} must be stripped/escaped");
+        assert!(
+            !sanitized.contains(c),
+            "Control U+{code} must be stripped/escaped"
+        );
         assert!(
             sanitized.contains(&format!("[U+{code}]")),
             "Expected [U+{code}] in '{sanitized}'"

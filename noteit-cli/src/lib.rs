@@ -233,14 +233,16 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
 
         CliCommand::Tags { command: None } => {
             let core = NoteItCore::open_read_only();
-            Executed::ok(Command::Tags, Outcome::Tags(core.metadata_catalog()))
+            let (catalog, warnings) = core.metadata_catalog_with_warnings();
+            Executed::ok(Command::Tags, Outcome::Tags { catalog, warnings })
         }
 
         CliCommand::Propriedades { command: None } => {
             let core = NoteItCore::open_read_only();
+            let (catalog, warnings) = core.metadata_catalog_with_warnings();
             Executed::ok(
                 Command::Properties,
-                Outcome::Properties(core.metadata_catalog()),
+                Outcome::Properties { catalog, warnings },
             )
         }
 

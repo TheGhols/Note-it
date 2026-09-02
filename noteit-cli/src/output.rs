@@ -1004,8 +1004,8 @@ fn render_outcome(ctx: &OutputContext, outcome: &Outcome) -> String {
         Outcome::Notes(batch) => render_notes_list(ctx, &batch.items),
         Outcome::Note(document) => render_note_read(ctx, document),
         Outcome::Search { query, batch } => render_search_results(ctx, query, &batch.items),
-        Outcome::Tags(catalog) => render_tags(ctx, catalog),
-        Outcome::Properties(catalog) => render_properties(ctx, catalog),
+        Outcome::Tags { catalog, .. } => render_tags(ctx, catalog),
+        Outcome::Properties { catalog, .. } => render_properties(ctx, catalog),
         Outcome::Tasks { state, batch } => render_tasks(ctx, &batch.items, *state),
         Outcome::Trash(entries) => render_trash(ctx, entries),
         Outcome::Write(outcome) => render_write_outcome(ctx, outcome),
@@ -1018,6 +1018,8 @@ fn render_outcome_warnings(ctx: &OutputContext, outcome: &Outcome) -> String {
         Outcome::Notes(batch) => &batch.warnings,
         Outcome::Search { batch, .. } => &batch.warnings,
         Outcome::Tasks { batch, .. } => &batch.warnings,
+        Outcome::Tags { warnings, .. } => warnings,
+        Outcome::Properties { warnings, .. } => warnings,
         _ => &[],
     };
     for warning in read_warnings {

@@ -208,10 +208,15 @@ impl StateLoadOutcome {
 }
 
 impl AppState {
+    /// Backwards-compatible convenience wrapper that delegates to [`Self::load_detailed`].
+    /// Automatically performs quarantine preservation on corrupted files before returning the value.
     pub fn load_from_file(path: &Path) -> Self {
         Self::load_detailed(path).value()
     }
 
+    /// The primary, safe state loader. Distinguishes between missing files,
+    /// valid state files, corrupted files preserved via quarantine, preservation failures,
+    /// and I/O read errors.
     pub fn load_detailed(path: &Path) -> StateLoadOutcome {
         if !path.exists() {
             return StateLoadOutcome::Missing(Self::default());

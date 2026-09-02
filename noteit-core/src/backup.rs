@@ -367,10 +367,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
-                eprintln!(
-                    "Skipping unreadable entry in {}: {error}",
-                    path.display()
-                );
+                eprintln!("Skipping unreadable entry in {}: {error}", path.display());
                 continue;
             }
         };

@@ -35,12 +35,20 @@ pub fn quarantine_corrupted_file(path: &Path, raw_bytes: &[u8]) -> Result<PathBu
         counter += 1;
     }
 
-    crate::permissions::write_private_file(&candidate, raw_bytes)
-        .map_err(|e| format!("Failed to write quarantine file at {}: {e}", candidate.display()))?;
+    crate::permissions::write_private_file(&candidate, raw_bytes).map_err(|e| {
+        format!(
+            "Failed to write quarantine file at {}: {e}",
+            candidate.display()
+        )
+    })?;
 
     // Verify written bytes match original bytes byte-for-byte
-    let written = fs::read(&candidate)
-        .map_err(|e| format!("Failed to re-read quarantine file at {}: {e}", candidate.display()))?;
+    let written = fs::read(&candidate).map_err(|e| {
+        format!(
+            "Failed to re-read quarantine file at {}: {e}",
+            candidate.display()
+        )
+    })?;
     if written != raw_bytes {
         let _ = fs::remove_file(&candidate);
         return Err(format!(

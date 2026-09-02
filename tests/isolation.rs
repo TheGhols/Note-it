@@ -91,3 +91,69 @@ fn r009_harness_rejects_root_inside_real_home() {
     );
 }
 
+#[test]
+fn r009_harness_allows_stop_and_verify_from_inherited_isolated_xdg_environment() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let harness = repo_root.join("scripts/note-it-isolated");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let root_str = root.to_str().unwrap();
+
+    // Create the isolated directory structure
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(root.join("cache")).unwrap();
+    std::fs::create_dir_all(root.join("session")).unwrap();
+
+    // Reproduce exact scenario: caller is a subshell already running inside an isolated session,
+    // inheriting the isolated session's XDG variables and isolated HOME.
+    let mut cmd = Command::new("bash");
+    cmd.arg(&harness)
+        .arg("--root")
+        .arg(root_str)
+        .arg("--stop")
+        .env("HOME", root.join("home"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .current_dir(&repo_root);
+
+    let output = cmd
+        .output()
+        .expect("execute harness stop in inherited environment");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "--stop from inherited XDG environment must succeed with 0, not abort with 90!\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // Assert that even in this subshell, attempting to target the host's real home remains rejected
+    let real_home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let mut hostile_cmd = Command::new("bash");
+    hostile_cmd
+        .arg(&harness)
+        .arg("--root")
+        .arg(&real_home)
+        .arg("--")
+        .arg("help")
+        .env("HOME", root.join("home"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .current_dir(&repo_root);
+
+    let hostile_output = hostile_cmd.output().expect("execute hostile root test");
+    assert_eq!(
+        hostile_output.status.code(),
+        Some(90),
+        "Targeting host real home must remain strictly rejected even from inherited subshell"
+    );
+}
