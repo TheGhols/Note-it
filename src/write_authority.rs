@@ -474,17 +474,35 @@ async fn mutate_open_note(
     *window.document.borrow_mut() = candidate.clone();
     let synced = confirm_ui_sync(window, request_id, &candidate).await;
     controller.finish_external_write();
+    // The reason, never the note. These are fixed sentences chosen by the host,
+    // so nothing a person wrote can reach a log through here.
     diagnostics::log(format_args!(
-        "event=external-write-committed note={note_id} generation={} ui_synced={}",
+        "event=external-write-committed note={note_id} generation={} ui_synced={} reason={}",
         window.external_generation(),
-        synced.is_ok()
+        synced.is_ok(),
+        synced.as_ref().err().map_or("-", String::as_str)
     ));
 
-    let outcome = WriteOutcome::new(note_id, kind, mutation_changed);
-    Ok(match synced {
+    Ok(committed_outcome(
+        WriteOutcome::new(note_id, kind, mutation_changed),
+        synced,
+    ))
+}
+
+/// The answer for a write that has already reached the disk.
+///
+/// It returns a `WriteOutcome` and not a `Result`, and that is the whole point:
+/// past the commit point there is no failure left to report. Whether the window
+/// took the change on, refused it, or never said, the file is the new one — so
+/// the only thing left to decide is whether the answer carries a warning.
+///
+/// Turning any of this into an error would be a lie with consequences: a caller
+/// told an append failed repeats it, and the paragraph lands twice.
+fn committed_outcome(outcome: WriteOutcome, synced: Result<(), String>) -> WriteOutcome {
+    match synced {
         Ok(()) => outcome,
         Err(detail) => outcome.with_ui_sync_warning(detail),
-    })
+    }
 }
 
 /// Hands the committed note to the page and waits to hear that it arrived.
@@ -506,4 +524,50 @@ async fn confirm_ui_sync(
     receiver.await.unwrap_or_else(|_| {
         Err("a janela desapareceu antes de confirmar a atualização".to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::committed_outcome;
+    use noteit_core::write::{WriteOutcome, WriteOutcomeKind};
+    use uuid::Uuid;
+
+    fn appended() -> WriteOutcome {
+        WriteOutcome::new(Uuid::new_v4(), WriteOutcomeKind::ContentAppended, true)
+    }
+
+    #[test]
+    fn a_window_that_confirmed_produces_no_warning() {
+        let outcome = committed_outcome(appended(), Ok(()));
+        assert!(outcome.ui_sync_warning.is_none());
+        assert!(outcome.changed);
+    }
+
+    #[test]
+    fn every_way_the_window_can_fail_is_still_a_committed_write() {
+        // 4.0E.2 §32. Refused, timed out, undeliverable: the file changed in all
+        // three, so all three answer with a warning on a successful write. The
+        // signature says so — there is no error to return here — and these
+        // cover the reasons that actually reach it.
+        for reason in [
+            "a nota aberta não conseguiu adotar o documento gravado",
+            "a nota aberta não confirmou a atualização a tempo",
+            "a mensagem não pôde ser entregue à página",
+        ] {
+            let outcome = committed_outcome(appended(), Err(reason.to_string()));
+            assert_eq!(outcome.ui_sync_warning.as_deref(), Some(reason));
+            assert!(
+                outcome.changed,
+                "a committed write stopped reporting that it changed something"
+            );
+        }
+    }
+
+    #[test]
+    fn a_no_op_that_could_not_be_shown_is_still_a_no_op() {
+        let unchanged = WriteOutcome::new(Uuid::new_v4(), WriteOutcomeKind::TagAdded, false);
+        let outcome = committed_outcome(unchanged, Err("sem confirmação".to_string()));
+        assert!(!outcome.changed);
+        assert!(outcome.ui_sync_warning.is_some());
+    }
 }

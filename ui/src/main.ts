@@ -645,7 +645,18 @@ function initUI(): void {
       syncFlashcardCounts();
     },
     send: (message) => bridge.sendMessage(message),
-    indicate: (active, slow) => syncIndicator?.setActive(active, slow),
+    indicate: (state) => {
+      syncIndicator?.setState(state);
+      // A note that could not take on a committed document stays held, and the
+      // reader is told plainly rather than left with an editor that has quietly
+      // stopped responding. The change itself is already safe on disk.
+      if (state === 'unsynchronised') {
+        noteStatus?.show(
+          'A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota.',
+          false,
+        );
+      }
+    },
     setTimer: (callback, ms) => window.setTimeout(callback, ms),
     clearTimer: (handle) => window.clearTimeout(handle),
   });

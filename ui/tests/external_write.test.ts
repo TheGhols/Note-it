@@ -4,6 +4,7 @@ import {
   ExternalWriteBarrier,
   type ExternalDocument,
   type ExternalWriteHooks,
+  type SyncState,
 } from '../src/bridge/externalWrite.ts';
 import { NoteEditor } from '../src/editor/editor.ts';
 import type { WebviewToHostMessage } from '../src/bridge/types.ts';
@@ -35,7 +36,7 @@ function harness(options: { text?: string } = {}) {
   const order: string[] = [];
   const sent: WebviewToHostMessage[] = [];
   const adopted: ExternalDocument[] = [];
-  const indicated: Array<{ active: boolean; slow: boolean }> = [];
+  const indicated: SyncState[] = [];
   let editable = true;
   let text = options.text ?? 'ABC';
   let timerCallback: (() => void) | null = null;
@@ -65,7 +66,7 @@ function harness(options: { text?: string } = {}) {
       order.push(`send:${message.type}`);
       sent.push(message);
     },
-    indicate: (active, slow = false) => indicated.push({ active, slow }),
+    indicate: (state) => indicated.push(state),
     setTimer: (callback) => {
       timerCallback = callback;
       return 1;
@@ -95,6 +96,9 @@ function harness(options: { text?: string } = {}) {
     timerWasCleared: () => timerCleared,
     breakAdoption: () => {
       adoptThrows = true;
+    },
+    mendAdoption: () => {
+      adoptThrows = false;
     },
   };
 }
@@ -151,10 +155,7 @@ describe('the external write barrier', () => {
     expect(h.type('E')).toBe(false);
     expect(h.adopted).toHaveLength(0);
     // Only the words change.
-    expect(h.indicated).toEqual([
-      { active: true, slow: false },
-      { active: true, slow: true },
-    ]);
+    expect(h.indicated).toEqual(['syncing', 'slow']);
   });
 
   it('says a slow write is slow rather than pretending it finished', () => {
@@ -311,12 +312,9 @@ describe('the external write barrier', () => {
   it('shows the syncing state only for as long as the write lasts', () => {
     const h = harness();
     h.barrier.begin(NOTE, REQUEST, 0);
-    expect(h.indicated).toEqual([{ active: true, slow: false }]);
+    expect(h.indicated).toEqual(['syncing']);
     h.barrier.apply(NOTE, REQUEST, 1, committed('novo'));
-    expect(h.indicated).toEqual([
-      { active: true, slow: false },
-      { active: false, slow: false },
-    ]);
+    expect(h.indicated).toEqual(['syncing', 'idle']);
   });
 
   it('notices a slow write well before a person would give up on it', () => {
@@ -348,6 +346,28 @@ describe('the external write barrier', () => {
     expect(h.isEditable()).toBe(true);
   });
 
+  it('leaves the active write alone when a stale apply arrives', () => {
+    // 4.0E.2 §9. A message for another request must not unblock the one that
+    // is genuinely in flight — that would release the document mid-commit.
+    const h = harness({ text: 'ABCD' });
+    h.barrier.begin(NOTE, REQUEST, 0);
+    h.barrier.defer(() => h.type(' + captura'));
+    const other = '99999999-8888-4777-8666-555555555555';
+
+    expect(h.barrier.apply(NOTE, other, 9, committed('de outro pedido'))).toBe(false);
+
+    expect(h.barrier.active).toBe(true);
+    expect(h.isEditable()).toBe(false);
+    expect(h.barrier.queuedCount).toBe(1);
+    expect(h.barrier.currentGeneration()).toBe(0);
+    expect(h.adopted).toHaveLength(0);
+
+    // And the real one still completes normally afterwards.
+    expect(h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(true);
+    expect(h.isEditable()).toBe(true);
+    expect(h.currentText()).toBe('ABCD\nXYZ + captura');
+  });
+
   it('answers a request it is not waiting on with a refusal, not silence', () => {
     // 4.0E.1 §14. The host learns at once rather than waiting out its timeout,
     // and it never mistakes "no answer yet" for "adopted".
@@ -377,10 +397,9 @@ describe('the external write barrier', () => {
     expect(h.sent.some((m) => m.type === 'external_write_applied')).toBe(false);
   });
 
-  it('keeps the old generation when adoption failed, so nothing stale can be written', () => {
-    // The page is showing text the file no longer has. It must not be able to
-    // save that over the change that was just committed — so it stays on the
-    // superseded generation, which the host refuses.
+  it('keeps the old generation when adoption failed', () => {
+    // The page is showing text the file no longer has. Moving the generation
+    // on would mean the host accepting that text back.
     const h = harness({ text: 'ABCD' });
     h.barrier.begin(NOTE, REQUEST, 0);
     h.breakAdoption();
@@ -389,18 +408,82 @@ describe('the external write barrier', () => {
     expect(h.barrier.currentGeneration()).toBe(0);
   });
 
-  it('releases the editor even when adoption failed', () => {
-    // The file is already correct. Leaving the note frozen would make it
-    // unusable and unclosable for the sake of a write that already succeeded.
+  // 4.0E.2 — the whole point of the subphase.
+  it('does not release the editor when adoption failed', () => {
+    // Releasing here would hand back an editor that looks entirely normal and
+    // whose every save the host refuses on the stale generation: the reader
+    // would type for as long as they liked and lose all of it, silently. A
+    // held note that says why is recoverable by reopening it. This is not a
+    // convenience trade-off — it is the difference between an inconsistency
+    // the reader can see and one that eats their work.
     const h = harness({ text: 'ABCD' });
     h.barrier.begin(NOTE, REQUEST, 0);
     h.breakAdoption();
-    h.barrier.defer(() => h.type(' + captura'));
     h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
 
-    expect(h.barrier.active).toBe(false);
-    expect(h.isEditable()).toBe(true);
-    expect(h.barrier.queuedCount).toBe(0);
+    expect(h.barrier.active).toBe(true);
+    expect(h.barrier.adoptionFailed).toBe(true);
+    expect(h.isEditable()).toBe(false);
+    expect(h.type('E')).toBe(false);
+    expect(h.currentText()).toBe('ABCD');
+  });
+
+  it('does not drain the queue when adoption failed', () => {
+    // 4.0E.2 §13. The held actions are not lost and they are not run: applying
+    // a capture, an image or a metadata save to a document the store has
+    // already moved past would be a mutation nobody can see going wrong.
+    const h = harness({ text: 'ABCD' });
+    const ran: string[] = [];
+    h.barrier.begin(NOTE, REQUEST, 0);
+    h.barrier.defer(() => ran.push('capture'));
+    h.barrier.defer(() => ran.push('image'));
+    h.barrier.defer(() => ran.push('metadata'));
+    h.breakAdoption();
+
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    expect(ran).toEqual([]);
+    expect(h.barrier.queuedCount).toBe(3);
+  });
+
+  it('says the note is out of step, and keeps saying it', () => {
+    const h = harness({ text: 'ABCD' });
+    h.barrier.begin(NOTE, REQUEST, 0);
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    expect(h.indicated).toEqual(['syncing', 'unsynchronised']);
+    // Never returns to idle on its own: only reopening the note clears it.
+    expect(h.indicated).not.toContain('idle');
+  });
+
+  it('cannot be released afterwards by an abort', () => {
+    // The host does not abort past the commit point; this does not rely on
+    // that. Releasing after a failed adoption would thaw onto text the file no
+    // longer has, whoever asked for it.
+    const h = harness({ text: 'ABCD' });
+    h.barrier.begin(NOTE, REQUEST, 0);
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    expect(h.barrier.abort(REQUEST)).toBe(false);
+    expect(h.isEditable()).toBe(false);
+    expect(h.barrier.queuedCount).toBe(0 + 0);
+    expect(h.barrier.adoptionFailed).toBe(true);
+  });
+
+  it('cannot be released afterwards by a second apply that succeeds', () => {
+    const h = harness({ text: 'ABCD' });
+    h.barrier.begin(NOTE, REQUEST, 0);
+    h.breakAdoption();
+    h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'));
+
+    h.mendAdoption();
+    // The request is still the active one, but the page has already told the
+    // host it could not follow. It stays where it is.
+    expect(h.barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(false);
+    expect(h.isEditable()).toBe(false);
+    expect(h.barrier.currentGeneration()).toBe(0);
   });
 
   it('does not acknowledge twice for one write', () => {
@@ -495,6 +578,55 @@ describe('the editor the barrier actually freezes', () => {
     editor.setEditable(false);
     expect(editor.hasPendingSave()).toBe(false);
     expect(editor.getMarkdown()).toContain('ABCD');
+  });
+
+  it('stays shut when adoption failed, through every path a document changes', () => {
+    // 4.0E.2 §14. Not a flag on a mock: the real editor, wired to the real
+    // barrier, with the real ProseMirror gate underneath. A note that could not
+    // take on the committed document must refuse typing, commands and direct
+    // transactions alike — and must send nothing, because everything it could
+    // send would quote a generation the host has already moved past.
+    const element = document.createElement('div');
+    document.body.append(element);
+    const sent: WebviewToHostMessage[] = [];
+    const editor = new NoteEditor({
+      element,
+      initialContent: 'ABCD',
+      onUpdate: (markdown) =>
+        sent.push({
+          type: 'content_changed',
+          payload: { id: NOTE, content: markdown, generation: 0 },
+        }),
+    });
+
+    const barrier = new ExternalWriteBarrier({
+      freeze: () => editor.setEditable(false),
+      thaw: () => editor.setEditable(true),
+      snapshot: () => editor.getMarkdown(),
+      adopt: () => {
+        throw new Error('adoption failed');
+      },
+      send: (message) => sent.push(message),
+    });
+
+    barrier.begin(NOTE, REQUEST, 0);
+    expect(barrier.apply(NOTE, REQUEST, 1, committed('ABCD\nXYZ'))).toBe(false);
+
+    // Every way the page can change a document.
+    const view = editor.getView();
+    view.dispatch(view.state.tr.insertText('E', view.state.doc.content.size - 1));
+    editor.insertImage('assets/x.png');
+
+    expect(editor.isEditable()).toBe(false);
+    expect(editor.getMarkdown()).toContain('ABCD');
+    expect(editor.getMarkdown()).not.toContain('ABCDE');
+    expect(editor.getMarkdown()).not.toContain('assets/x.png');
+    expect(editor.hasPendingSave()).toBe(false);
+
+    // Nothing reported a change, and nothing claimed the page was in step.
+    expect(sent.some((m) => m.type === 'content_changed')).toBe(false);
+    expect(sent.some((m) => m.type === 'external_write_applied')).toBe(false);
+    expect(sent.filter((m) => m.type === 'external_write_apply_failed')).toHaveLength(1);
   });
 
   it('adopts a committed document without autosaving it straight back', () => {

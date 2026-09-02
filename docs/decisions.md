@@ -1573,8 +1573,9 @@ page has handed over its snapshot, it never releases the document on a deadline 
 
 6. **A page that could not adopt keeps the old generation.** It is showing text the file no longer
    has, so it must not be able to save that over the change that was just committed. Staying on the
-   superseded generation is what makes the host refuse it. The editor is still released — the file is
-   already correct, and leaving the note frozen would make it unusable *and* unclosable.
+   superseded generation is what makes the host refuse it. *(Amended by ADR-040: such a page is also
+   never released. Keeping the old generation stops the stale text reaching the file, but on its own
+   it left the reader typing into an editor that silently discarded everything.)*
 
 7. **After the snapshot, there is no safe time to guess.** The old client-side timeout released the
    document fifteen seconds after `ExternalWriteReady`, at which point the host may be part-way
@@ -1597,3 +1598,56 @@ exclusion needs — but two different spellings of one store (`/srv/./notes`, a 
 two keys and therefore two simultaneous authorities over the same files. Fixing it means canonicalising
 a directory that may not exist yet, which is a larger change than it looks and is not worth improvising
 inside a correctness fix.
+
+## ADR-040: A Window That Could Not Take the Committed Document Stays Shut
+
+**Decision.** When a commit has happened and the page fails to adopt the committed document, the
+document is **not** released: the editor stays frozen, the queued document actions stay queued, the
+generation stays where it was, no positive acknowledgement is sent, and the note says it is out of
+step until it is reopened. The write itself remains committed and is still reported as committed with
+a `ui_sync_warning`.
+
+**Rationale.**
+
+1. **ADR-039 got this one wrong, for a plausible reason.** It released the editor after a failed
+   adoption, arguing that the file was already correct and that a frozen note would be unusable and
+   unclosable. Both halves of that are true and the conclusion still does not follow. The released
+   editor is on a generation the host has already moved past, so every autosave it sends is correctly
+   refused — the reader types into something that looks completely normal and loses all of it, with
+   nothing on screen to say so. Keeping the old generation protected the *file*; it did nothing for
+   the person.
+
+2. **A visible inconsistency beats an invisible one.** A note that is held and says
+   "A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota." is an
+   inconsistency someone can see and act on. An editor that accepts every keystroke and stores none is
+   one they find out about later, if ever. Between a note that will not take input and a note that
+   eats it, only one of them is recoverable.
+
+3. **The queue follows the same rule.** A held capture, image or metadata save is not discarded — and
+   not run either. Running it would apply a mutation to a document the store has already moved past,
+   which is the same failure wearing different clothes. It stays held; reopening the note is what ends
+   the situation.
+
+4. **`release` was doing more than its name suggested.** It clears the active request, cancels the
+   indicator, thaws, *and* drains the queue. That combination is only safe when the page has a
+   document worth editing on. Calling it unconditionally read like bookkeeping and was in fact the
+   decision. It is now called on exactly two paths: an abort before the commit, and an adoption that
+   succeeded.
+
+5. **Nothing later can unlock it.** A repeated `ApplyExternalDocument`, an abort, or a message for a
+   different request all leave a failed page exactly where it is. There is no sequence of messages
+   that talks the page back into editing text the store no longer has.
+
+6. **A blocked note blocks further external writes, and that is correct.** The page cannot produce a
+   trustworthy snapshot, so the barrier never answers, the host times out before committing anything,
+   and `noteit` is told the store is busy and nothing was changed. A refusal is the right answer;
+   writing against a snapshot nobody can vouch for is not.
+
+7. **Reopening is the recovery, and it is enough.** The file holds the committed content, so
+   restarting the application — or a future, deliberate reload of a single note — brings the window
+   back onto it exactly, with no duplication and nothing lost. That is verified end to end in the
+   isolated environment rather than assumed.
+
+**Not done here, on purpose.** No automatic reload, no reconciliation, no merge, no background retry,
+no content hash in the acknowledgement. A safe per-note reload is the obvious next step and is
+recorded as a recommendation, not smuggled into a correctness fix.

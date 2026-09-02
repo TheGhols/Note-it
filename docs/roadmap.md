@@ -598,6 +598,12 @@ future machine interfaces share one domain and persistence authority.
       than inferred from a script having evaluated, with a bounded wait that downgrades to
       `ui_sync_warning` and never to failure. Removed the client-side timeout that could release the
       editor while a commit was still in flight; a slow write now says it is slow and stays held.
+- [x] **Phase 4.0E.2 — Failed UI Adoption Stays Blocked.** Closed the last post-commit gap: a page
+      that could not adopt an already-committed document is no longer released. It keeps the old
+      generation *and* stays frozen, keeps its queued document actions unrun, sends only the negative
+      acknowledgement, and tells the reader the window is out of step. The write stays committed and
+      still reports `ui_sync_warning`. Reopening the note restores it from the committed file exactly,
+      verified end to end in the isolated environment.
 - [ ] **Phase 4.0F — Machine Interface / JSON.** Reserved.
 - [ ] **Phase 4.0G — Interactive CLI / TUI.** Reserved.
 - [ ] **Phase 4.0H — Developer & Automation Tools.** Reserved.

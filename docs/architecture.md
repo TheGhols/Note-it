@@ -161,6 +161,22 @@ desktop startup
   flight nothing changes the document — not typing, not a command, not a plugin. The document is
   released by the host and only by the host: the page has no timeout that could hand it back while a
   commit is still in flight.
+
+### When the page may edit again
+
+Once the snapshot has gone out, exactly two answers release the document — and there is a third that
+does not:
+
+| host says | file | page | outcome |
+| --- | --- | --- | --- |
+| `AbortExternalWrite` | unchanged | still matches the file | thaw, drain the queue, same generation |
+| `ApplyExternalDocument`, adopted | changed | now the committed text | thaw, drain, new generation, `ExternalWriteApplied` |
+| `ApplyExternalDocument`, **not** adopted | changed | stale | **stays held**: no thaw, no drain, old generation, `ExternalWriteApplyFailed` |
+
+The third row is the one worth stating plainly. The write is on disk and is reported as committed with
+a `ui_sync_warning`; the window is not released, because a released window would be editing against a
+generation the host has already moved past and every save it made would be refused — work typed and
+silently lost. The note says so, and reopening it is the recovery. See ADR-040.
 - `ui/src/editor/`: Tiptap editor configuration, extensions, keybindings, and toolbar.
 - `ui/src/markdown/`: Markdown parser, serializer, and round-trip converters.
 - `ui/src/flashcards/`: the single ProseMirror flashcard definition and ephemeral review session.

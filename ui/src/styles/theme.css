@@ -2203,9 +2203,18 @@ body[data-collapsed="true"] .resize-handle {
  * document is still held, because only the host knows when it is safe to edit
  * again. Announcing "still working" is honest — handing the note back while the
  * write is in flight would not be. */
-.note-syncing[data-slow="true"] {
+.note-syncing[data-state="slow"] {
   animation: none;
   opacity: 0.85;
+}
+
+/* The file moved and this window could not follow it. Unlike the two states
+ * above, this one does not end on its own: the note is held until it is
+ * reopened, so it is shown at once and stays shown. */
+.note-syncing[data-state="unsynchronised"] {
+  animation: none;
+  opacity: 1;
+  color: var(--note-status-error-fg, currentColor);
 }
 
 @keyframes note-syncing-appear {

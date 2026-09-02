@@ -1,3 +1,5 @@
+import type { SyncState } from '../bridge/externalWrite.ts';
+
 export interface NoteStatusOptions {
   mount: HTMLElement;
   document?: Document;
@@ -92,20 +94,23 @@ export class NoteStatus {
  */
 export class SyncIndicator {
   private readonly root: HTMLElement;
-  private readonly label: string;
-  private readonly slowLabel: string;
+  private readonly labels: Record<Exclude<SyncState, 'idle'>, string>;
 
   public constructor(
     mount: HTMLElement,
-    label = 'Sincronizando…',
-    slowLabel = 'Sincronização demorando…',
+    labels: Partial<Record<Exclude<SyncState, 'idle'>, string>> = {},
   ) {
     const doc = mount.ownerDocument;
-    this.label = label;
-    this.slowLabel = slowLabel;
+    this.labels = {
+      syncing: labels.syncing ?? 'Sincronizando…',
+      slow: labels.slow ?? 'Sincronização demorando…',
+      unsynchronised:
+        labels.unsynchronised ??
+        'A nota não pôde ser atualizada. A alteração foi gravada; reabra a nota para continuar.',
+    };
     this.root = doc.createElement('div');
     this.root.className = 'note-syncing';
-    this.root.textContent = label;
+    this.root.textContent = this.labels.syncing;
     this.root.hidden = true;
     // Announced politely when it does appear, without taking the keyboard.
     this.root.setAttribute('role', 'status');
@@ -122,16 +127,22 @@ export class SyncIndicator {
   }
 
   /**
-   * Shows or hides the state, and says whether it is taking longer than usual.
+   * Says what the page is doing about an external write.
    *
-   * `slow` changes the words and nothing else. A write that is slow is still a
-   * write in progress: the editor stays held until the host says otherwise, and
-   * saying so is more use to the reader than pretending it finished.
+   * `unsynchronised` is the one state that does not clear on its own: the file
+   * changed, this page could not follow it, and the note is held until it is
+   * reopened. Saying so is the whole point — the alternative is a note that
+   * simply stops responding with no explanation.
    */
-  public setActive(active: boolean, slow = false): void {
-    this.root.textContent = slow ? this.slowLabel : this.label;
-    this.root.dataset.slow = String(slow);
-    this.root.hidden = !active;
+  public setState(state: SyncState): void {
+    if (state === 'idle') {
+      this.root.hidden = true;
+      this.root.dataset.state = 'idle';
+      return;
+    }
+    this.root.textContent = this.labels[state];
+    this.root.dataset.state = state;
+    this.root.hidden = false;
   }
 
   public destroy(): void {

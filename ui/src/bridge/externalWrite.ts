@@ -43,6 +43,22 @@ import type { MetadataView, WebviewToHostMessage } from './types.ts';
  * in the middle of replacing. A slow commit is a slow commit — it is allowed to
  * be slow — and the honest response is to say so, not to start editing again.
  *
+ * And "the host said something" is not the same as "it is safe to edit". There
+ * are three answers, and only two of them release the document:
+ *
+ * - `AbortExternalWrite` — nothing was written. The document the page is
+ *   holding is still the document on disk, so editing resumes on it.
+ * - `ApplyExternalDocument`, adopted — the page now holds the committed
+ *   document and the generation that goes with it. Editing resumes on that.
+ * - `ApplyExternalDocument`, *not* adopted — the file changed and this page
+ *   failed to follow. It is showing text the store no longer has, on a
+ *   generation the host has already moved past. Releasing here would hand back
+ *   an editor that looks completely normal and whose every save the host
+ *   refuses: the reader would type for as long as they liked and lose all of
+ *   it, silently. So the document stays held, the queue stays held, and the
+ *   page says it is out of step. A blocked note that says why is recoverable
+ *   by reopening it; an editor that quietly discards work is not.
+ *
  * The host is not a separate program that can vanish and leave this running.
  * The WebView belongs to the very process that owns the barrier: if the host
  * dies, this page dies with it, so there is no orphan to rescue. What a long
@@ -67,17 +83,27 @@ export interface ExternalWriteHooks {
   /** Sends one message back to the host. */
   send(message: WebviewToHostMessage): void;
   /**
-   * Shows or hides a discreet "syncing" state. Never a modal.
+   * Reports what the page is doing about an external write. Never a modal.
    *
-   * `slow` says the write is taking longer than usual, which changes the words
-   * and nothing else. Being told a save is slow is useful; being handed back a
-   * document the host is still replacing is not.
+   * Says what is true and nothing more. `slow` changes the words; being told a
+   * save is slow is useful, being handed back a document the host is still
+   * replacing is not. `unsynchronised` is the one state that does not end on
+   * its own, and it is the one the reader most needs spelled out.
    */
-  indicate?(active: boolean, slow?: boolean): void;
+  indicate?(state: SyncState): void;
   /** Schedules the slow-write notice. Injected so tests do not wait for it. */
   setTimer?(callback: () => void, ms: number): number;
   clearTimer?(handle: number): void;
 }
+
+/**
+ * What the page is doing about an external write.
+ *
+ * `unsynchronised` means the file changed and this page could not follow it.
+ * The document stays held in that state — it is not a transient one, and only
+ * reopening the note clears it.
+ */
+export type SyncState = 'idle' | 'syncing' | 'slow' | 'unsynchronised';
 
 /** The committed note, exactly as the host holds it. Never YAML, never a path. */
 export interface ExternalDocument {
@@ -94,6 +120,15 @@ export class ExternalWriteBarrier {
   private timer: number | null = null;
   /** Which run of the document the page is on. Quoted on everything it sends. */
   private generation = 0;
+  /**
+   * The request whose committed document this page failed to adopt.
+   *
+   * Set only past the commit point, and never cleared: there is nothing this
+   * page can do to get back in step, because the text it is holding is not the
+   * text on disk and it has no way to ask for the real one. The note stays held
+   * until it is reopened.
+   */
+  private adoptionFailedFor: string | null = null;
 
   constructor(hooks: ExternalWriteHooks) {
     this.hooks = hooks;
@@ -129,7 +164,7 @@ export class ExternalWriteBarrier {
     // Freeze first. Everything below reads a document nothing can change any
     // more, which is the only reason the text it reads is worth committing.
     this.hooks.freeze();
-    this.hooks.indicate?.(true);
+    this.hooks.indicate?.('syncing');
 
     const content = this.hooks.snapshot();
     this.hooks.send({
@@ -143,7 +178,7 @@ export class ExternalWriteBarrier {
     if (setTimer) {
       this.timer = setTimer(() => {
         this.timer = null;
-        if (this.requestId === requestId) this.hooks.indicate?.(true, true);
+        if (this.requestId === requestId) this.hooks.indicate?.('slow');
       }, EXTERNAL_WRITE_SLOW_NOTICE_MS);
     }
   }
@@ -168,6 +203,13 @@ export class ExternalWriteBarrier {
     generation: number,
     document: ExternalDocument,
   ): boolean {
+    if (this.adoptionFailed) {
+      // Already answered, and already out of step. Nothing that arrives now can
+      // put this page back on the file — it would have to be handed a document
+      // it has no way to verify — so a repeat is refused rather than used as a
+      // way back in. Silently: the host has had its answer for this request.
+      return false;
+    }
     if (this.requestId !== requestId) {
       this.hooks.send({
         type: 'external_write_apply_failed',
@@ -176,37 +218,52 @@ export class ExternalWriteBarrier {
       return false;
     }
 
-    let adopted = false;
     try {
       this.hooks.adopt(document);
-      // Moved only once the document really is the committed one. A page that
-      // could not adopt keeps the old generation, so the host refuses whatever
-      // it sends next — which is what stops a stale body being written over a
-      // commit that already happened.
-      this.generation = generation;
-      adopted = true;
     } catch {
-      adopted = false;
+      // The write is on disk and this page did not follow it. Everything below
+      // is deliberately what does *not* happen: the generation does not move,
+      // the document is not released, the queue is not drained, and no positive
+      // acknowledgement goes out. See the note at the top of this file for why
+      // releasing here would be worse than staying blocked.
+      this.adoptionFailedFor = requestId;
+      this.hooks.indicate?.('unsynchronised');
+      this.hooks.send({
+        type: 'external_write_apply_failed',
+        payload: { id: noteId, requestId },
+      });
+      return false;
     }
 
-    // Released either way. Leaving the editor frozen on a failed adoption would
-    // make the note unusable *and* unclosable, and the file is already correct.
+    // Moved only once the document really is the committed one.
+    this.generation = generation;
     this.release(requestId);
-
-    this.hooks.send(
-      adopted
-        ? {
-            type: 'external_write_applied',
-            payload: { id: noteId, requestId, generation },
-          }
-        : { type: 'external_write_apply_failed', payload: { id: noteId, requestId } },
-    );
-    return adopted;
+    this.hooks.send({
+      type: 'external_write_applied',
+      payload: { id: noteId, requestId, generation },
+    });
+    return true;
   }
 
-  /** Nothing was written. The document is released exactly as it was. */
+  /**
+   * Whether this page failed to take on a document that was already committed.
+   *
+   * The note is held and stays held. Nothing here clears it, because nothing
+   * here can: reopening the note is what puts the page back on the file.
+   */
+  public get adoptionFailed(): boolean {
+    return this.adoptionFailedFor !== null;
+  }
+
+  /**
+   * Nothing was written. The document is released exactly as it was.
+   *
+   * Refused once an adoption has failed. The host does not abort past the
+   * commit point, but this does not depend on that: releasing after a failed
+   * adoption would thaw onto text the file no longer has, whoever asked.
+   */
   public abort(requestId: string): boolean {
-    if (this.requestId !== requestId) return false;
+    if (this.requestId !== requestId || this.adoptionFailed) return false;
     this.release(requestId);
     return true;
   }
@@ -240,7 +297,7 @@ export class ExternalWriteBarrier {
       this.hooks.clearTimer?.(this.timer);
       this.timer = null;
     }
-    this.hooks.indicate?.(false, false);
+    this.hooks.indicate?.('idle');
     this.hooks.thaw();
 
     // Drained after thawing, so each one is an ordinary edit of the document

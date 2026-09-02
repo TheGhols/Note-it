@@ -1261,6 +1261,12 @@ countdown writes nothing at all, once a second or otherwise.
   that it adopted it. Until it does, the command reports the change as written *and* warns that the
   window may still be showing the older text — so nobody repeats a change that already happened. A
   write that is taking a while says so and keeps the note held; it is never handed back mid-commit.
+- **A Window That Falls Behind Stops Rather Than Pretending:** in the rare case where a change is
+  written to disk but the open note cannot take it on, the note is held and says so
+  ("A alteração foi gravada, mas esta janela não conseguiu acompanhá-la. Reabra a nota."). It does not
+  go back to accepting typing it would be unable to save — an editor that quietly discards work is
+  worse than one that visibly stops. The change is safe on disk; reopening the note brings the window
+  back onto it exactly, with nothing lost and nothing duplicated.
 - **Nothing Unsaved Is Ever Lost:** changing a note that is open on screen freezes its editor *before*
   reading it, folds the text you have typed but not yet saved into the same commit, and hands the
   committed note back to the window. An edit that had not reached disk yet is never overwritten, and
