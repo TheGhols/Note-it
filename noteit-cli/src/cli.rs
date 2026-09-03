@@ -178,6 +178,12 @@ pub enum CliCommand {
         /// Ler o Markdown a acrescentar da entrada padrão
         #[arg(long = "stdin")]
         stdin: bool,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 
     /// Substituir todo o corpo Markdown de uma nota
@@ -198,6 +204,12 @@ pub enum CliCommand {
         /// Esvaziar o corpo da nota, declarando a intenção explicitamente
         #[arg(long = "vazio", alias = "empty")]
         vazio: bool,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 }
 
@@ -210,6 +222,12 @@ pub enum TagsCommand {
         id: String,
         /// A tag a adicionar
         tag: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 
     /// Remover uma tag de uma nota
@@ -219,6 +237,12 @@ pub enum TagsCommand {
         id: String,
         /// A tag a remover
         tag: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 }
 
@@ -231,6 +255,12 @@ pub enum PropertiesCommand {
         id: String,
         /// A propriedade no formato chave=valor
         atribuicao: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 
     /// Remover uma propriedade de uma nota
@@ -240,6 +270,12 @@ pub enum PropertiesCommand {
         id: String,
         /// A chave da propriedade a remover
         chave: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 }
 
@@ -252,6 +288,12 @@ pub enum TasksCommand {
         id: String,
         /// A referência de 8 caracteres mostrada por `noteit tarefas`
         referencia: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 
     /// Reabrir uma tarefa concluída
@@ -261,6 +303,12 @@ pub enum TasksCommand {
         id: String,
         /// A referência de 8 caracteres mostrada por `noteit tarefas`
         referencia: String,
+        /// Só gravar se a nota ainda estiver nesta revisão
+        ///
+        /// A revisão vem do campo `revision` de `noteit ler --json`. Sem ela a
+        /// gravação é incondicional, como sempre foi.
+        #[arg(long = "if-revision", value_name = "REVISAO")]
+        if_revision: Option<String>,
     },
 }
 

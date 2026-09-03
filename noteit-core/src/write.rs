@@ -38,6 +38,7 @@
 use crate::filter::NoteSelectorError;
 use crate::metadata::{semantic_identity, NoteMetadata, NoteProperty, NoteTags};
 use crate::model::NoteDocument;
+use crate::revision::NoteRevision;
 use crate::task::{self, TaskRef, TaskRefError};
 use crate::trash::RestoreError;
 use crate::NoteItCore;
@@ -89,6 +90,20 @@ pub enum WriteError {
     Persistence { detail: String },
     /// The store itself could not be read.
     StoreUnavailable { detail: String },
+    /// The note moved on since the caller read it.
+    ///
+    /// Its own variant rather than a `Validation` or a `Persistence`, because
+    /// it is the one refusal a caller can act on without a person: the note is
+    /// fine, the store is fine, and the only thing wrong is that the base this
+    /// write was built from is no longer the note. The current revision travels
+    /// with it so the caller can re-read, reconcile and decide — deliberately
+    /// *not* so it can retry with the new token, which would be the silent
+    /// overwrite this whole mechanism exists to stop.
+    RevisionConflict {
+        note_id: Uuid,
+        expected_revision: NoteRevision,
+        current_revision: NoteRevision,
+    },
 }
 
 impl fmt::Display for WriteError {
@@ -116,6 +131,10 @@ impl fmt::Display for WriteError {
             Self::Persistence { detail } | Self::StoreUnavailable { detail } => {
                 formatter.write_str(detail)
             }
+            Self::RevisionConflict { note_id, .. } => write!(
+                formatter,
+                "a nota {note_id} mudou desde a leitura e nada foi gravado"
+            ),
         }
     }
 }
@@ -188,6 +207,17 @@ pub struct WriteOutcome {
     /// operation and append the same text twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_sync_warning: Option<String>,
+    /// The note's revision now that this operation is over.
+    ///
+    /// For a write that changed something it is the revision of the document
+    /// that was persisted; for one that changed nothing it is the revision the
+    /// note already had. Either way it lets a caller chain another conditional
+    /// write without reading the note again.
+    ///
+    /// `None` only where the operation does not describe one note's new
+    /// version — a restore from the trash, which is a move rather than an edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<NoteRevision>,
 }
 
 impl WriteOutcome {
@@ -197,7 +227,14 @@ impl WriteOutcome {
             kind,
             changed,
             ui_sync_warning: None,
+            revision: None,
         }
+    }
+
+    /// The same outcome, carrying the note's revision after the operation.
+    pub fn with_revision(mut self, revision: NoteRevision) -> Self {
+        self.revision = Some(revision);
+        self
     }
 
     pub fn with_ui_sync_warning(mut self, warning: impl Into<String>) -> Self {
@@ -293,6 +330,18 @@ pub enum WriteOperation {
     MutateNote {
         selector: String,
         mutation: NoteMutation,
+        /// The revision the caller built this mutation from, when it has one.
+        ///
+        /// `None` is an unconditional write and stays exactly what it always
+        /// was: last writer wins, which is what a person typing `noteit editar`
+        /// is asking for. A programmatic client that read the note first must
+        /// send the revision it read, or it is racing every other writer.
+        ///
+        /// `default` on purpose: an authority built before this field existed
+        /// still decodes a request that carries it, and one that does not
+        /// carry it still decodes here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_revision: Option<NoteRevision>,
     },
     RestoreFromTrash {
         selector: String,
@@ -560,6 +609,12 @@ pub struct LiveMutation {
     pub mutation_changed: bool,
     /// Whether the editor was holding text the file did not have.
     pub adopted_unsaved_text: bool,
+    /// The revision of the base this mutation was checked and applied against.
+    ///
+    /// The note as the window really holds it, unsaved text included — which is
+    /// the version a caller's precondition was compared with, and the version
+    /// to report back when nothing ends up being written.
+    pub base_revision: NoteRevision,
 }
 
 /// Applies a mutation on top of text an editor is holding but has not saved.
@@ -585,6 +640,7 @@ pub fn apply_over_live_body(
     committed: &NoteDocument,
     live_body: &str,
     mutation: &NoteMutation,
+    expected_revision: &Option<NoteRevision>,
 ) -> Result<LiveMutation, WriteError> {
     let mut base = committed.clone();
     let live = NoteDocument::canonical_content(live_body);
@@ -593,6 +649,14 @@ pub fn apply_over_live_body(
         base.content = live.to_string();
         base.touch_content_modified();
     }
+
+    // Checked here, on the folded base, and before a single mutation is
+    // applied. This is the case the file on disk cannot answer: a client read
+    // the note, somebody typed a paragraph into the open window that has not
+    // been autosaved yet, and the client's write is built on a note that no
+    // longer describes what the person is looking at. Comparing against the
+    // file would say "unchanged" and let that paragraph be overwritten.
+    let base_revision = ensure_revision_matches(&base.metadata.id, &base, expected_revision)?;
 
     let mutated = apply(&base, mutation)?;
     let mutation_changed = mutated.is_some();
@@ -606,7 +670,45 @@ pub fn apply_over_live_body(
         candidate,
         mutation_changed,
         adopted_unsaved_text,
+        base_revision,
     })
+}
+
+/// The revision of a document, as a write error rather than a string.
+///
+/// A document that cannot be serialised cannot be hashed and could not have
+/// been written either, so this is a persistence failure and never a revision
+/// that happens to be missing.
+pub fn revision_of(document: &NoteDocument) -> Result<NoteRevision, WriteError> {
+    NoteRevision::for_document(document).map_err(|detail| WriteError::Persistence { detail })
+}
+
+/// Checks a caller's precondition against the base a mutation will be applied
+/// to, and answers that base's revision.
+///
+/// Both adapters call this, with their own base: the direct path passes the
+/// document it loaded from disk, and the desktop passes the document it is
+/// really going to mutate — the committed note with the editor's unsaved text
+/// already folded in. Comparing against anything else would check a version
+/// nobody is about to overwrite.
+///
+/// No precondition is not a failure: an unconditional write is a supported
+/// request and this returns the current revision so the caller still learns
+/// where the note ended up.
+pub fn ensure_revision_matches(
+    note_id: &Uuid,
+    base: &NoteDocument,
+    expected: &Option<NoteRevision>,
+) -> Result<NoteRevision, WriteError> {
+    let current = revision_of(base)?;
+    match expected {
+        Some(expected) if *expected != current => Err(WriteError::RevisionConflict {
+            note_id: *note_id,
+            expected_revision: expected.clone(),
+            current_revision: current,
+        }),
+        _ => Ok(current),
+    }
 }
 
 /// Runs one whole operation against a store this process is entitled to write.
@@ -617,17 +719,29 @@ pub fn apply_over_live_body(
 pub fn execute(core: &NoteItCore, operation: &WriteOperation) -> Result<WriteOutcome, WriteError> {
     match operation {
         WriteOperation::CreateNote { draft } => create_note(core, draft),
-        WriteOperation::MutateNote { selector, mutation } => {
+        WriteOperation::MutateNote {
+            selector,
+            mutation,
+            expected_revision,
+        } => {
             let note_id = core.resolve_note_id(selector)?;
             let document = core
                 .read_note(&note_id)
                 .map_err(|detail| WriteError::StoreUnavailable { detail })?;
+            // Against this document and no other. The base the precondition is
+            // checked on has to be the base the mutation is applied to, or the
+            // check is about a note nobody is writing.
+            let base_revision = ensure_revision_matches(&note_id, &document, expected_revision)?;
             let outcome_kind = mutation.outcome_kind();
             match apply(&document, mutation)? {
-                None => Ok(WriteOutcome::new(note_id, outcome_kind, false)),
+                None => Ok(
+                    WriteOutcome::new(note_id, outcome_kind, false).with_revision(base_revision)
+                ),
                 Some(candidate) => {
                     commit_addressed(core, &note_id, &candidate)?;
-                    Ok(WriteOutcome::new(note_id, outcome_kind, true))
+                    let committed_revision = revision_of(&candidate)?;
+                    Ok(WriteOutcome::new(note_id, outcome_kind, true)
+                        .with_revision(committed_revision))
                 }
             }
         }
@@ -658,11 +772,11 @@ pub fn create_note(core: &NoteItCore, draft: &NoteDraft) -> Result<WriteOutcome,
             detail: error.to_string(),
         })?;
     commit(core, &document)?;
-    Ok(WriteOutcome::new(
-        document.metadata.id,
-        WriteOutcomeKind::NoteCreated,
-        true,
-    ))
+    let revision = revision_of(&document)?;
+    Ok(
+        WriteOutcome::new(document.metadata.id, WriteOutcomeKind::NoteCreated, true)
+            .with_revision(revision),
+    )
 }
 
 /// Commits a document to disk, ensuring that the addressed note ID matches the document ID.
@@ -1023,6 +1137,7 @@ mod tests {
             &NoteMutation::Append {
                 payload: "XYZ".into(),
             },
+            &None,
         )
         .expect("append over live text");
 
@@ -1046,6 +1161,7 @@ mod tests {
             &NoteMutation::AddTag {
                 tag: "Medicina".into(),
             },
+            &None,
         )
         .expect("tag over live text");
 
@@ -1066,6 +1182,7 @@ mod tests {
             &NoteMutation::AddTag {
                 tag: "Medicina".into(),
             },
+            &None,
         )
         .expect("tag over live text");
 
@@ -1084,6 +1201,7 @@ mod tests {
             &NoteMutation::AddTag {
                 tag: "medicina".into(),
             },
+            &None,
         )
         .expect("repeat");
         assert!(repeat.candidate.is_none());
@@ -1099,6 +1217,7 @@ mod tests {
             &NoteMutation::RemoveTag {
                 tag: "inexistente".into(),
             },
+            &None,
         )
         .expect("no-op tag over live text");
 
@@ -1125,9 +1244,13 @@ mod tests {
         assert_eq!(live_refs[0].text, "Nova");
         let nova = live_refs[0].task_ref.as_str().to_string();
 
-        let result =
-            apply_over_live_body(&base, live, &NoteMutation::CompleteTask { task_ref: nova })
-                .expect("complete over live text");
+        let result = apply_over_live_body(
+            &base,
+            live,
+            &NoteMutation::CompleteTask { task_ref: nova },
+            &None,
+        )
+        .expect("complete over live text");
         let candidate = result.candidate.expect("candidate");
         assert!(
             candidate.content.starts_with("- [x] Nova"),
@@ -1148,6 +1271,7 @@ mod tests {
             &NoteMutation::CompleteTask {
                 task_ref: unchanged.clone(),
             },
+            &None,
         )
         .expect("an unrelated insertion does not invalidate a reference");
         assert!(still_valid
@@ -1166,6 +1290,7 @@ mod tests {
             &NoteMutation::CompleteTask {
                 task_ref: unchanged,
             },
+            &None,
         )
         .expect_err("a reference the live text made stale");
         assert!(
@@ -1182,6 +1307,7 @@ mod tests {
             &NoteMutation::ReplaceBody {
                 body: "igual".into(),
             },
+            &None,
         )
         .expect("no-op");
         assert!(result.candidate.is_none());

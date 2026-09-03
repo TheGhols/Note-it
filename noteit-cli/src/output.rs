@@ -866,6 +866,13 @@ pub fn render_write_error(ctx: &OutputContext, error: &WriteError) -> String {
             "seletor ambíguo `{}` corresponde a {matches} notas.",
             sanitize_for_terminal(selector)
         ),
+        WriteError::RevisionConflict {
+            current_revision, ..
+        } => format!(
+            "a nota mudou desde a leitura e nada foi gravado. \
+             A revisão atual é `{current_revision}`; leia a nota de novo, \
+             confira o que mudou e refaça a alteração sobre ela.",
+        ),
         WriteError::StaleTaskRef { task_ref } => format!(
             "a referência `{}` não corresponde mais a uma tarefa desta nota. \
              A nota mudou; liste as tarefas de novo. Nada foi alterado.",
@@ -1002,7 +1009,7 @@ fn render_outcome(ctx: &OutputContext, outcome: &Outcome) -> String {
         Outcome::Version => render_version(ctx),
         Outcome::Status(paths) => render_status(ctx, paths),
         Outcome::Notes(batch) => render_notes_list(ctx, &batch.items),
-        Outcome::Note(document) => render_note_read(ctx, document),
+        Outcome::Note { document, .. } => render_note_read(ctx, document),
         Outcome::Search { query, batch } => render_search_results(ctx, query, &batch.items),
         Outcome::Tags { catalog, .. } => render_tags(ctx, catalog),
         Outcome::Properties { catalog, .. } => render_properties(ctx, catalog),

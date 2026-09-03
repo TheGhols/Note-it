@@ -17,6 +17,7 @@
 //! list holds it, and it is the *human* renderer that neutralises terminal
 //! escapes on its way to a terminal. JSON is data and gets the real value.
 
+use noteit_core::revision::NoteRevision;
 use noteit_core::write::{WriteError, WriteOutcome};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadBatch, ReadWarning,
@@ -179,7 +180,16 @@ pub enum Outcome {
     Version,
     Status(Box<StorePaths>),
     Notes(ReadBatch<NoteSummary>),
-    Note(Box<NoteDocument>),
+    /// One note, and the exact version this answer describes.
+    ///
+    /// The revision travels with the document rather than being recomputed by
+    /// each adapter: a client that builds a conditional write from this reply
+    /// must send back the version the reply was made from, and two independent
+    /// computations of "which version was that" is exactly how they drift.
+    Note {
+        document: Box<NoteDocument>,
+        revision: NoteRevision,
+    },
     Search {
         query: String,
         batch: ReadBatch<SearchResult>,

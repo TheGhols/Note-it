@@ -38,6 +38,7 @@
 use crate::outcome::{CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError};
 use crate::output::OutputContext;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
+use noteit_core::revision::NoteRevision;
 use noteit_core::write::{WriteError, WriteOutcome, WriteOutcomeKind};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadWarning, ReadWarningKind,
@@ -108,6 +109,18 @@ struct MachineError {
     message: String,
     /// `null` for a command that could not have committed anything.
     commit_state: Option<CommitState>,
+    /// The precondition the caller sent, on a `revision_conflict` and nowhere
+    /// else. Present so a client never has to read the sentence to find out
+    /// what it asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_revision: Option<String>,
+    /// The revision the note actually has now, on a `revision_conflict`.
+    ///
+    /// Enough to re-read and reconcile, and deliberately not enough to retry:
+    /// the note's new content is not here, because a client that has not looked
+    /// at what changed has no business writing over it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -203,6 +216,11 @@ struct NoteData {
     properties: Vec<PropertyData>,
     created_at: Option<String>,
     updated_at: Option<String>,
+    /// The version this response describes.
+    ///
+    /// A client that builds a write from this body must send it back as
+    /// `expected_revision`, or it is writing over whatever happened in between.
+    revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -322,6 +340,11 @@ struct WriteData {
     changed: bool,
     commit_state: CommitState,
     ui_sync: UiSyncData,
+    /// The note's revision after this operation, so the next conditional write
+    /// needs no extra read. Absent for an operation that does not describe one
+    /// note's new version, such as a restore from the trash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -394,6 +417,7 @@ pub fn write_error_code(error: &WriteError) -> &'static str {
         WriteError::TrashTargetOccupied { .. } => "trash_target_occupied",
         WriteError::Persistence { .. } => "persistence",
         WriteError::StoreUnavailable { .. } => "store_unavailable",
+        WriteError::RevisionConflict { .. } => "revision_conflict",
     }
 }
 
@@ -525,17 +549,36 @@ fn machine_error(command: Option<Command>, error: &CommandError) -> MachineError
             code: "usage_error",
             message: usage.sentence(),
             commit_state: could_write.then_some(CommitState::NotCommitted),
+            expected_revision: None,
+            current_revision: None,
         },
         CommandError::Read(read) => MachineError {
             code: read_error_code(read),
             message: read_error_message(read),
             commit_state: could_write.then_some(CommitState::NotCommitted),
+            expected_revision: None,
+            current_revision: None,
         },
-        CommandError::Write(write) => MachineError {
-            code: write_error_code(write),
-            message: write.to_string(),
-            commit_state: Some(commit_state_for(write)),
-        },
+        CommandError::Write(write) => {
+            let (expected_revision, current_revision) = match write {
+                WriteError::RevisionConflict {
+                    expected_revision,
+                    current_revision,
+                    ..
+                } => (
+                    Some(expected_revision.to_string()),
+                    Some(current_revision.to_string()),
+                ),
+                _ => (None, None),
+            };
+            MachineError {
+                code: write_error_code(write),
+                message: write.to_string(),
+                commit_state: Some(commit_state_for(write)),
+                expected_revision,
+                current_revision,
+            }
+        }
     }
 }
 
@@ -593,8 +636,8 @@ fn data_of(outcome: &Outcome) -> MachineData {
                 notes,
             })
         }
-        Outcome::Note(document) => MachineData::Note(NoteEnvelopeData {
-            note: note_data(document),
+        Outcome::Note { document, revision } => MachineData::Note(NoteEnvelopeData {
+            note: note_data(document, revision),
         }),
         Outcome::Search { query, batch } => {
             let results: Vec<SearchResultData> = batch.items.iter().map(search_result).collect();
@@ -658,7 +701,7 @@ fn note_summary(summary: &NoteSummary) -> NoteSummaryData {
     }
 }
 
-fn note_data(document: &NoteDocument) -> NoteData {
+fn note_data(document: &NoteDocument, revision: &NoteRevision) -> NoteData {
     NoteData {
         note_id: uuid(&document.metadata.id),
         label: noteit_core::search::label_for(&document.content),
@@ -676,6 +719,7 @@ fn note_data(document: &NoteDocument) -> NoteData {
             .collect(),
         created_at: timestamp(document.metadata.created_at),
         updated_at: timestamp(document.metadata.updated_at),
+        revision: revision.to_string(),
     }
 }
 
@@ -753,6 +797,7 @@ fn write_data(outcome: &WriteOutcome) -> WriteData {
         } else {
             CommitState::NotNeeded
         },
+        revision: outcome.revision.as_ref().map(NoteRevision::to_string),
         ui_sync: match &outcome.ui_sync_warning {
             Some(detail) => UiSyncData::not_confirmed(detail),
             None => UiSyncData::in_step(),

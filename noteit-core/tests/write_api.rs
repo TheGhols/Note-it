@@ -48,6 +48,8 @@ fn mutate(core: &NoteItCore, id: Uuid, mutation: NoteMutation) -> Result<bool, W
         &WriteOperation::MutateNote {
             selector: id.to_string(),
             mutation,
+
+            expected_revision: None,
         },
     )
     .map(|outcome| outcome.changed)
@@ -914,6 +916,8 @@ fn a_mutation_selector_is_never_a_path() {
                 mutation: NoteMutation::Append {
                     payload: "x".into(),
                 },
+
+                expected_revision: None,
             },
         )
         .expect_err("a path must never resolve");
@@ -944,6 +948,8 @@ fn an_ambiguous_prefix_is_reported_rather_than_resolved() {
             mutation: NoteMutation::Append {
                 payload: "x".into(),
             },
+
+            expected_revision: None,
         },
     )
     .expect_err("an ambiguous prefix");
@@ -1010,6 +1016,8 @@ fn r002_case_2_multiple_appends_on_note_without_frontmatter_mutates_only_address
                 mutation: NoteMutation::Append {
                     payload: format!("Linha {i}"),
                 },
+
+                expected_revision: None,
             },
         )
         .expect("append");
@@ -1074,6 +1082,8 @@ fn r002_case_3_divergence_between_filename_and_frontmatter_fails_explicitly() {
             mutation: NoteMutation::Append {
                 payload: "tentativa de ataque".into(),
             },
+
+            expected_revision: None,
         },
     )
     .expect_err("mutation on note with divergent ID must fail");
@@ -1157,6 +1167,8 @@ fn r002_case_7_sequential_appends_on_note_without_frontmatter_preserves_single_f
                 mutation: NoteMutation::Append {
                     payload: format!("Parágrafo {i}"),
                 },
+
+                expected_revision: None,
             },
         )
         .expect("append");
@@ -1223,6 +1235,8 @@ fn r002_case_3_b_exists_cross_corruption_prevented() {
             mutation: NoteMutation::Append {
                 payload: "ATAQUE_APPEND_EM_A".into(),
             },
+
+            expected_revision: None,
         },
     )
     .expect_err("mutation on hostile note A must fail fail-closed");
@@ -1305,6 +1319,8 @@ fn r002_gap2_list_read_mutate_preserves_identity_standard_note() {
             mutation: NoteMutation::Append {
                 payload: append_payload.into(),
             },
+
+            expected_revision: None,
         },
     )
     .expect("mutation must succeed");
@@ -1370,6 +1386,8 @@ fn r002_gap2_list_read_mutate_preserves_identity_note_without_frontmatter() {
             mutation: NoteMutation::Append {
                 payload: append_payload.into(),
             },
+
+            expected_revision: None,
         },
     )
     .expect("mutation must succeed");

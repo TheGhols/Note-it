@@ -8,6 +8,7 @@ pub mod welcome;
 use clap::error::ErrorKind;
 use clap::Parser;
 use cli::{CliArgs, CliCommand, PropertiesCommand, TagsCommand, TasksCommand, TrashCommand};
+use noteit_core::revision::NoteRevision;
 use noteit_core::write::{NoteDraft, NoteMutation, WriteOperation};
 use noteit_core::{NoteFilter, NoteItCore, NoteProperty, StorePaths};
 use outcome::{
@@ -197,7 +198,22 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
                 }
             };
             match core.read_note(&resolved) {
-                Ok(document) => Executed::ok(Command::Read, Outcome::Note(Box::new(document))),
+                Ok(document) => match NoteRevision::for_document(&document) {
+                    Ok(revision) => Executed::ok(
+                        Command::Read,
+                        Outcome::Note {
+                            document: Box::new(document),
+                            revision,
+                        },
+                    ),
+                    // A note that cannot be serialised cannot be given a
+                    // version, and answering without one would invite a write
+                    // built on a base nobody can name.
+                    Err(detail) => Executed::failed(
+                        Some(Command::Read),
+                        CommandError::Read(ReadError::NoteRead { detail }),
+                    ),
+                },
                 Err(detail) => Executed::failed(
                     Some(Command::Read),
                     CommandError::Read(ReadError::NoteRead { detail }),
@@ -322,7 +338,12 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
             id,
             texto,
             stdin: from_stdin,
+            if_revision,
         } => {
+            let expected_revision = match precondition(Command::Append, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
             let payload = match read_payload(texto, from_stdin, stdin) {
                 Ok(Some(payload)) => payload,
                 Ok(None) => {
@@ -338,6 +359,7 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
                 WriteOperation::MutateNote {
                     selector: id,
                     mutation: NoteMutation::Append { payload },
+                    expected_revision,
                 },
             )
         }
@@ -347,7 +369,12 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
             texto,
             stdin: from_stdin,
             vazio,
+            if_revision,
         } => {
+            let expected_revision = match precondition(Command::Edit, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
             // Emptying a note is asked for by name and never by accident. An
             // empty pipe is a mistake far more often than it is an
             // instruction, and the note it would destroy is not recoverable
@@ -385,33 +412,67 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
                 WriteOperation::MutateNote {
                     selector: id,
                     mutation,
+                    expected_revision,
                 },
             )
         }
 
         CliCommand::Tags {
-            command: Some(TagsCommand::Adicionar { id, tag }),
-        } => perform(
-            Command::TagAdd,
-            WriteOperation::MutateNote {
-                selector: id,
-                mutation: NoteMutation::AddTag { tag },
-            },
-        ),
+            command:
+                Some(TagsCommand::Adicionar {
+                    id,
+                    tag,
+                    if_revision,
+                }),
+        } => {
+            let expected_revision = match precondition(Command::TagAdd, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
+            perform(
+                Command::TagAdd,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::AddTag { tag },
+                    expected_revision,
+                },
+            )
+        }
 
         CliCommand::Tags {
-            command: Some(TagsCommand::Remover { id, tag }),
-        } => perform(
-            Command::TagRemove,
-            WriteOperation::MutateNote {
-                selector: id,
-                mutation: NoteMutation::RemoveTag { tag },
-            },
-        ),
+            command:
+                Some(TagsCommand::Remover {
+                    id,
+                    tag,
+                    if_revision,
+                }),
+        } => {
+            let expected_revision = match precondition(Command::TagRemove, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
+            perform(
+                Command::TagRemove,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::RemoveTag { tag },
+                    expected_revision,
+                },
+            )
+        }
 
         CliCommand::Propriedades {
-            command: Some(PropertiesCommand::Definir { id, atribuicao }),
+            command:
+                Some(PropertiesCommand::Definir {
+                    id,
+                    atribuicao,
+                    if_revision,
+                }),
         } => {
+            let expected_revision = match precondition(Command::PropertySet, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
             let (key, value) = match NoteFilter::parse_property_arg(&atribuicao) {
                 Ok(pair) => pair,
                 Err(error) => return usage_failure(Command::PropertySet, error),
@@ -421,45 +482,82 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
                 WriteOperation::MutateNote {
                     selector: id,
                     mutation: NoteMutation::SetProperty { key, value },
+                    expected_revision,
                 },
             )
         }
 
         CliCommand::Propriedades {
-            command: Some(PropertiesCommand::Remover { id, chave }),
-        } => perform(
-            Command::PropertyRemove,
-            WriteOperation::MutateNote {
-                selector: id,
-                mutation: NoteMutation::RemoveProperty { key: chave },
-            },
-        ),
+            command:
+                Some(PropertiesCommand::Remover {
+                    id,
+                    chave,
+                    if_revision,
+                }),
+        } => {
+            let expected_revision = match precondition(Command::PropertyRemove, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
+            perform(
+                Command::PropertyRemove,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::RemoveProperty { key: chave },
+                    expected_revision,
+                },
+            )
+        }
 
         CliCommand::Tarefas {
-            command: Some(TasksCommand::Concluir { id, referencia }),
+            command:
+                Some(TasksCommand::Concluir {
+                    id,
+                    referencia,
+                    if_revision,
+                }),
             ..
-        } => perform(
-            Command::TaskComplete,
-            WriteOperation::MutateNote {
-                selector: id,
-                mutation: NoteMutation::CompleteTask {
-                    task_ref: referencia,
+        } => {
+            let expected_revision = match precondition(Command::TaskComplete, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
+            perform(
+                Command::TaskComplete,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::CompleteTask {
+                        task_ref: referencia,
+                    },
+                    expected_revision,
                 },
-            },
-        ),
+            )
+        }
 
         CliCommand::Tarefas {
-            command: Some(TasksCommand::Reabrir { id, referencia }),
+            command:
+                Some(TasksCommand::Reabrir {
+                    id,
+                    referencia,
+                    if_revision,
+                }),
             ..
-        } => perform(
-            Command::TaskReopen,
-            WriteOperation::MutateNote {
-                selector: id,
-                mutation: NoteMutation::ReopenTask {
-                    task_ref: referencia,
+        } => {
+            let expected_revision = match precondition(Command::TaskReopen, if_revision) {
+                Ok(expected) => expected,
+                Err(failure) => return failure,
+            };
+            perform(
+                Command::TaskReopen,
+                WriteOperation::MutateNote {
+                    selector: id,
+                    mutation: NoteMutation::ReopenTask {
+                        task_ref: referencia,
+                    },
+                    expected_revision,
                 },
-            },
-        ),
+            )
+        }
 
         CliCommand::Lixeira {
             command: Some(TrashCommand::Restaurar { id }),
@@ -482,6 +580,22 @@ pub fn read_process_stdin() -> Result<String, String> {
         .read_to_string(&mut buffer)
         .map_err(|error| format!("não foi possível ler a entrada padrão: {error}"))?;
     Ok(buffer)
+}
+
+/// Reads the `--if-revision` argument into a precondition.
+///
+/// A revision that is not one is a usage error and never `None`. That
+/// distinction is the whole safety of the flag: if a malformed token quietly
+/// became "no precondition", a client with a corrupted revision would be handed
+/// an unconditional write over a note it has not looked at.
+fn precondition(command: Command, raw: Option<String>) -> Result<Option<NoteRevision>, Executed> {
+    match raw {
+        None => Ok(None),
+        Some(raw) => match NoteRevision::parse(&raw) {
+            Ok(revision) => Ok(Some(revision)),
+            Err(error) => Err(usage_failure(command, error.to_string())),
+        },
+    }
 }
 
 /// A usage error, spelled the way every other one in this CLI is.

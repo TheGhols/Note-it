@@ -17,6 +17,7 @@ pub mod metadata;
 pub mod model;
 pub mod permissions;
 pub mod quarantine;
+pub mod revision;
 pub mod search;
 pub mod settings;
 pub mod state;
@@ -38,6 +39,7 @@ pub use metadata::{
     TagCatalogEntry,
 };
 pub use model::{NoteDocument, NoteFrontMatter, NoteSummary};
+pub use revision::{NoteRevision, RevisionFormatError};
 pub use search::SearchResult;
 pub use storage::{StorageManager, StorePaths};
 pub use study::StudyState;

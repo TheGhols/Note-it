@@ -224,7 +224,71 @@ mod tests {
             mutation: NoteMutation::Append {
                 payload: "acréscimo".to_string(),
             },
+
+            expected_revision: None,
         })
+    }
+
+    #[test]
+    fn a_precondition_survives_the_wire_and_a_bad_one_never_decodes_as_none() {
+        // The operation travels to whichever process holds the lease, so the
+        // precondition has to arrive intact. The second half is the one that
+        // matters for safety: a malformed token must fail to decode rather than
+        // arriving as "no precondition", which would be an unconditional write
+        // the caller never asked for.
+        let revision = crate::revision::NoteRevision::parse(&"a".repeat(64)).expect("revision");
+        let request = ControlRequest::new(WriteOperation::MutateNote {
+            selector: "8c4f1a2b".to_string(),
+            mutation: NoteMutation::Append {
+                payload: "acréscimo".to_string(),
+            },
+            expected_revision: Some(revision.clone()),
+        });
+
+        let mut buffer = Vec::new();
+        write_frame(&mut buffer, &request).expect("write");
+        let decoded: ControlRequest = read_frame(&mut buffer.as_slice()).expect("read");
+        assert_eq!(decoded, request);
+        match decoded.operation {
+            WriteOperation::MutateNote {
+                expected_revision, ..
+            } => assert_eq!(expected_revision, Some(revision)),
+            other => panic!("{other:?}"),
+        }
+
+        // A request written by an older client, with no such field at all.
+        // `skip_serializing_if` means an unconditional request does not carry
+        // the key, so this is literally the wire format of the version before
+        // this one — and it still decodes, as the unconditional write it is.
+        let unconditional = ControlRequest::new(WriteOperation::MutateNote {
+            selector: "8c4f1a2b".to_string(),
+            mutation: NoteMutation::Append {
+                payload: "x".to_string(),
+            },
+            expected_revision: None,
+        });
+        let encoded = serde_json::to_value(&unconditional).expect("encode");
+        assert!(
+            encoded.to_string().find("expected_revision").is_none(),
+            "an unconditional request must not put the key on the wire at all: {encoded}"
+        );
+        let decoded: ControlRequest = serde_json::from_value(encoded.clone())
+            .expect("a request with no precondition decodes");
+        match decoded.operation {
+            WriteOperation::MutateNote {
+                expected_revision, ..
+            } => assert_eq!(expected_revision, None),
+            other => panic!("{other:?}"),
+        }
+
+        // And a malformed one is refused outright rather than falling back.
+        let mut malformed = encoded;
+        malformed["operation"]["expected_revision"] =
+            serde_json::Value::String("not-a-revision".to_string());
+        assert!(
+            serde_json::from_value::<ControlRequest>(malformed).is_err(),
+            "a malformed precondition must not decode at all"
+        );
     }
 
     #[test]

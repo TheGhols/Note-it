@@ -45,6 +45,7 @@ use noteit_core::control::{
 use noteit_core::coordination::{narrow_socket_file, WriteCoordinationPaths, WriterLease};
 use noteit_core::diagnostics;
 use noteit_core::model::NoteDocument;
+use noteit_core::revision::NoteRevision;
 use noteit_core::storage::StorePaths;
 use noteit_core::write::{self, NoteMutation, WriteError, WriteOperation, WriteOutcome};
 use std::collections::VecDeque;
@@ -355,7 +356,11 @@ pub async fn apply_operation(
             let core = controller.context.borrow().core.clone();
             write::execute(&core, operation)
         }
-        WriteOperation::MutateNote { selector, mutation } => {
+        WriteOperation::MutateNote {
+            selector,
+            mutation,
+            expected_revision,
+        } => {
             let core = controller.context.borrow().core.clone();
             let note_id = core.resolve_note_id(selector)?;
             let window = controller.context.borrow().windows.get(&note_id).cloned();
@@ -369,9 +374,11 @@ pub async fn apply_operation(
                     // its own. The document in memory is the file, so it is
                     // mutated directly and the page will be handed the
                     // committed version when it asks for one.
-                    mutate_unloaded(controller, &window, mutation)
+                    mutate_unloaded(controller, &window, mutation, expected_revision)
                 }
-                Some(window) => mutate_open_note(controller, &window, mutation).await,
+                Some(window) => {
+                    mutate_open_note(controller, &window, mutation, expected_revision).await
+                }
             }
         }
     }
@@ -381,18 +388,25 @@ fn mutate_unloaded(
     controller: &NoteItAppClone,
     window: &NoteWindow,
     mutation: &NoteMutation,
+    expected_revision: &Option<NoteRevision>,
 ) -> Result<WriteOutcome, WriteError> {
     let base = window.document.borrow().clone();
     let note_id = base.metadata.id;
     let kind = mutation.outcome_kind();
 
+    // The document in memory *is* the file for a page that has not loaded, so
+    // this is the base the mutation will be applied to and the one the
+    // precondition is about.
+    let base_revision = write::ensure_revision_matches(&note_id, &base, expected_revision)?;
+
     let Some(candidate) = write::apply(&base, mutation)? else {
-        return Ok(WriteOutcome::new(note_id, kind, false));
+        return Ok(WriteOutcome::new(note_id, kind, false).with_revision(base_revision));
     };
     let core = controller.context.borrow().core.clone();
     write::commit_addressed(&core, &note_id, &candidate)?;
+    let committed_revision = write::revision_of(&candidate)?;
     window.adopt_committed_document(candidate);
-    Ok(WriteOutcome::new(note_id, kind, true))
+    Ok(WriteOutcome::new(note_id, kind, true).with_revision(committed_revision))
 }
 
 /// The whole pipeline for a note somebody has open.
@@ -411,6 +425,7 @@ async fn mutate_open_note(
     controller: &NoteItAppClone,
     window: &NoteWindow,
     mutation: &NoteMutation,
+    expected_revision: &Option<NoteRevision>,
 ) -> Result<WriteOutcome, WriteError> {
     let note_id = window.id;
     let kind = mutation.outcome_kind();
@@ -446,7 +461,11 @@ async fn mutate_open_note(
     // disappears. The rule lives in the Core so the direct path and this one
     // cannot drift, and so it can be proven without a compositor.
     let base = window.document.borrow().clone();
-    let live = match write::apply_over_live_body(&base, &markdown, mutation) {
+    // The precondition is checked inside, against that same folded base and
+    // before any mutation touches it — so a client whose revision predates the
+    // paragraph now sitting unsaved in the editor is refused rather than
+    // allowed to write over it.
+    let live = match write::apply_over_live_body(&base, &markdown, mutation, expected_revision) {
         Ok(live) => live,
         Err(error) => {
             window.abort_external_write(request_id);
@@ -455,11 +474,12 @@ async fn mutate_open_note(
         }
     };
     let mutation_changed = live.mutation_changed;
+    let base_revision = live.base_revision.clone();
 
     let Some(candidate) = live.candidate else {
         window.abort_external_write(request_id);
         controller.finish_external_write();
-        return Ok(WriteOutcome::new(note_id, kind, false));
+        return Ok(WriteOutcome::new(note_id, kind, false).with_revision(base_revision));
     };
 
     let core = controller.context.borrow().core.clone();
@@ -485,7 +505,8 @@ async fn mutate_open_note(
     ));
 
     Ok(committed_outcome(
-        WriteOutcome::new(note_id, kind, mutation_changed),
+        WriteOutcome::new(note_id, kind, mutation_changed)
+            .with_revision(write::revision_of(&candidate)?),
         synced,
     ))
 }
