@@ -1,5 +1,11 @@
 //! Deciding who writes, and then writing.
 //!
+//! Every adapter that is not itself the desktop instance reaches the store
+//! through here — the command line, and now the MCP server. It lives in the
+//! Core rather than in one of them precisely because there must not be two of
+//! it: a second copy of this decision is a second answer to "may I write?",
+//! and the whole point of the lease is that there is only one.
+//!
 //! There is exactly one rule and this module is all of it:
 //!
 //! ```text
@@ -33,13 +39,13 @@
 //! recoverable, where a duplicated note is a mess someone has to clean up by
 //! hand.
 
-use noteit_core::control::{
+use crate::control::{
     check_protocol_version, read_frame, write_frame, ControlRequest, ControlResponse, ControlResult,
 };
-use noteit_core::coordination::{CoordinationError, WriteCoordinationPaths, WriterLease};
-use noteit_core::storage::StorePaths;
-use noteit_core::write::{self, WriteError, WriteOperation, WriteOutcome};
-use noteit_core::NoteItCore;
+use crate::coordination::{CoordinationError, WriteCoordinationPaths, WriterLease};
+use crate::storage::StorePaths;
+use crate::write::{self, WriteError, WriteOperation, WriteOutcome};
+use crate::NoteItCore;
 use std::io;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
@@ -58,7 +64,7 @@ const BUSY_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 /// putting the committed note back on screen. Generous, because the
 /// alternative to waiting is an unknown outcome, and an unknown outcome is the
 /// expensive one.
-const AUTHORITY_TIMEOUT: Duration = noteit_core::coordination::PROTOCOL_CLI_AUTHORITY_TIMEOUT;
+const AUTHORITY_TIMEOUT: Duration = crate::coordination::PROTOCOL_CLI_AUTHORITY_TIMEOUT;
 
 /// A runtime directory that cannot be trusted is reported as an unreachable
 /// authority: from the caller's side both mean the same thing — the store was
@@ -155,7 +161,7 @@ fn write_directly(
     paths: &StorePaths,
     operation: &WriteOperation,
 ) -> Result<WriteOutcome, WriteError> {
-    let storage = noteit_core::StorageManager::from_paths(paths.clone())
+    let storage = crate::StorageManager::from_paths(paths.clone())
         .map_err(|detail| WriteError::StoreUnavailable { detail })?;
     let core = NoteItCore::from_storage(storage);
     write::execute(&core, operation)

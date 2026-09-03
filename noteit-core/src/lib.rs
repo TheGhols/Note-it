@@ -6,6 +6,7 @@
 //! recreating storage or domain rules.
 
 pub mod assets;
+pub mod authority;
 pub mod autopaste;
 pub mod backup;
 pub mod control;

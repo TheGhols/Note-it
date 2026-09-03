@@ -1,9 +1,16 @@
-pub mod authority;
 pub mod cli;
 pub mod machine;
 pub mod outcome;
 pub mod output;
 pub mod welcome;
+
+/// The one write authority, re-exported under the name this crate has always
+/// used for it.
+///
+/// The implementation moved into the Core when the MCP server became a second
+/// programmatic writer: two copies of "who may write now" would eventually be
+/// two answers, and the lease only works because there is one.
+pub use noteit_core::authority;
 
 use clap::error::ErrorKind;
 use clap::Parser;
