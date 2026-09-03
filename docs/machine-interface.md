@@ -375,13 +375,18 @@ respondem `committed` e nada falha. É exatamente essa perda que a `revision` fe
 
 ### O que é
 
-Um token **opaco**: 64 caracteres hexadecimais minúsculos, o SHA-256 da forma
-canônica exata em que a nota seria persistida. Cobre tudo que uma gravação
-posterior poderia sobrescrever — identificador, corpo, tags, propriedades, cor,
-papel, tamanho de fonte, carimbos de tempo e o front matter de terceiros que o
-Note-it preserva.
+Um token **opaco**: 64 caracteres hexadecimais minúsculos, o SHA-256 da
+**representação canônica** que `NoteDocument::serialize()` produz para a nota.
+Cobre tudo que uma gravação posterior poderia sobrescrever — identificador,
+corpo, tags, propriedades, cor, papel, tamanho de fonte, carimbos de tempo e o
+front matter de terceiros que o Note-it preserva.
 
-Não recalcule. Guarde o valor que recebeu e devolva-o.
+**Não recalcule.** Guarde o valor que recebeu e devolva-o. Para um arquivo que já
+está na forma canônica do Note-it a revisão coincide com o `sha256sum` do
+arquivo, mas isso é consequência e não definição: um arquivo escrito por outro
+editor pode ser semanticamente equivalente com bytes diferentes, e nesse caso os
+dois valores divergem. Um cliente que recalcule por conta própria acabará
+comparando a coisa errada.
 
 Deliberadamente **não** é `mtime` (resolução variável, alterável por qualquer um,
 duas gravações no mesmo tique) nem `updated_at` (informação de domínio: move com o
@@ -462,6 +467,22 @@ revisão obtida por leitura é, por definição, antiga em relação a ele, ent�
 gravação é recusada — que é o resultado correto: um agente não pode apagar o
 parágrafo que a pessoa acabou de digitar. Nenhuma leitura publica a revisão do
 estado vivo, e tentar de novo com a `current_revision` devolvida conflita de novo.
+
+### Versões incompatíveis recusam, em vez de degradar
+
+A garantia depende de o processo que grava entender a precondição. O protocolo
+privado entre os processos do Note-it é versionado justamente por isso, e um
+processo que fala uma versão recusa uma requisição de outra antes de olhar
+qualquer campo.
+
+Se um Note-it de desktop mais antigo estiver aberto e segurando o store, um
+`noteit` mais novo recebe um erro de incompatibilidade e **nada é gravado** —
+nem condicional, nem incondicional. A saída é reiniciar o Note-it aberto para
+que os dois lados falem a mesma versão. Não há modo degradado: uma gravação
+pedida como condicional nunca é executada sem a precondição.
+
+Esse número é interno e **não** é o `schema_version` deste documento, que
+descreve o `--json` publicado e não muda por causa disso.
 
 ### Escritores fora do Note-it
 

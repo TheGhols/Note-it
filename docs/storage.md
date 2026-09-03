@@ -49,12 +49,24 @@ respondem `committed`, e o que a primeira escreveu desaparece. A revisão sozinh
 não impediria dois processos de escrever o mesmo arquivo ao mesmo tempo. São
 necessários os dois.
 
-A revisão é o SHA-256 dos bytes canônicos exatos em que a nota seria persistida —
-a mesma serialização que o gravador atômico grava. Assim há **uma** definição do
-que constitui uma nota, e a revisão cobre por construção tudo que uma gravação
-posterior poderia sobrescrever: identificador, corpo, tags, propriedades,
-aparência, carimbos e o front matter de terceiros preservado. É publicada como 64
-caracteres hexadecimais minúsculos e é opaca para quem a consome.
+A revisão é o SHA-256 da **representação canônica** produzida por
+`NoteDocument::serialize()` — a mesma serialização que o gravador atômico grava.
+Assim há **uma** definição do que constitui uma nota, e a revisão cobre por
+construção tudo que uma gravação posterior poderia sobrescrever: identificador,
+corpo, tags, propriedades, aparência, carimbos e o front matter de terceiros
+preservado. É publicada como 64 caracteres hexadecimais minúsculos e é opaca para
+quem a consome.
+
+A distinção importa e não é pedantismo. Para um arquivo que **já está** na
+representação canônica do Note-it — qualquer nota que o próprio Note-it gravou —
+a revisão coincide byte a byte com o SHA-256 do arquivo, e conferir uma com
+`sha256sum` funciona. Mas isso é uma consequência, não a definição: um arquivo
+escrito por outro editor pode ser semanticamente equivalente e ter representação
+textual diferente — outra ordem de chaves no YAML, outro recuo, aspas onde o
+Note-it não põe, um terminador de linha diferente. Nesse caso a revisão é a do
+documento canônico, e não o digest daqueles bytes. Dizer "a revisão é o
+`sha256sum` do arquivo" como regra geral seria falso e levaria alguém a comparar
+a coisa errada.
 
 Não é `mtime` — resolução variável, alterável por qualquer processo e igual para
 duas gravações no mesmo tique. Não é `updated_at` — esse campo é informação de
@@ -72,6 +84,30 @@ Sem `expected_revision` a gravação é incondicional e continua *last writer wi
 que é o que uma pessoa pede ao digitar `noteit editar`. Uma recusa por revisão não
 altera byte algum, não gera backup, não move `updated_at` e não deixa temporário.
 O contrato completo para consumidores está em `docs/machine-interface.md` §10.
+
+### Versões que discordam não gravam uma para a outra
+
+A revisão só é uma garantia se o processo que executa a gravação entender a
+precondição. Por isso o protocolo privado de controle
+(`noteit-core::control::PROTOCOL_VERSION`) foi para **2** quando
+`expected_revision` passou a existir: um processo que fala 1 recusa uma
+requisição que declara 2, e vice-versa, antes de qualquer campo ser lido.
+
+Sem esse incremento havia uma degradação silenciosa: os dois lados ainda diriam
+"1", a verificação passaria, o lado antigo não teria o campo, `serde` descartaria
+a chave desconhecida sem dizer nada, e uma gravação pedida como **condicional**
+seria executada **incondicionalmente**.
+
+O efeito prático para quem usa: se um Note-it de desktop estiver aberto com uma
+versão anterior e um `noteit` mais novo tentar gravar, a operação é **recusada**
+com um erro de incompatibilidade de protocolo, e nada é gravado. A saída é
+**reiniciar o Note-it aberto** para que os dois lados falem a mesma versão — não
+existe modo degradado, e nenhum processo é encerrado automaticamente por conta
+disso.
+
+Este número não é o `schema_version` da interface de máquina. Aquele descreve o
+documento `--json` publicado; este descreve um socket privado entre dois
+processos do mesmo aplicativo. Movem-se por razões diferentes.
 
 ### Limite: escritores que não cooperam
 
