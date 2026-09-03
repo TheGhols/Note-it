@@ -949,3 +949,103 @@ na plataforma que o projeto tem. Num sistema sem `/proc` a suíte falha dizendo
 que não pôde olhar, em vez de passar por não ter olhado — uma verificação que
 passa em silêncio quando não conseguiu verificar é a mesma classe de erro que
 esta ADR fecha.
+
+## ADR-047: A fronteira de rede é a família do endereço, e a prova dinâmica diz o tamanho que tem
+
+**Contexto.** A ADR-046 fechou a lacuna de que `std::net` passava pelo boundary,
+e criou uma suíte que observa o processo em execução. Uma auditoria
+independente da 4.1R1 encontrou o resíduo: aquela suíte tirava uma fotografia
+dos descritores **antes** e **depois** de cada chamada MCP, e o comentário dizia
+que nenhum socket de Internet existia "em nenhum momento de uma gravação". Um
+socket aberto e fechado *dentro* do handler é invisível às duas fotografias.
+
+Reproduzido antes de escrever a correção: um `TcpListener` vinculado por 250 ms
+dentro de um handler de tool, e os três testes passaram.
+
+**Decisão.**
+
+1. **A observação dinâmica passa a ser contínua.** Uma thread monitora amostra
+   `/proc/<pid>/fd` durante toda a operação, e classifica cada socket que
+   encontra no instante em que o vê.
+2. **O que ela prova está escrito com precisão, separando o sólido do melhor
+   esforço**, e a garantia de família é transferida para as camadas estáticas.
+3. **O boundary passa a cobrir o `noteit-core`**, com uma regra que distingue
+   AF_INET/AF_INET6 (proibidos) de AF_UNIX (permitido), e que exige que o
+   mecanismo Unix continue existindo.
+4. **A sensibilidade do instrumento é provada por um controle positivo**, e não
+   afirmada.
+
+**Justificativa.**
+
+1. **Por que contínua em vez de duas fotografias.** Porque a diferença entre as
+   duas é exatamente o achado. Medido: 14 µs de intervalo médio amostrando só
+   os descritores, 76 µs na execução em que um socket aparece e precisa ser
+   classificado. Com o `TcpListener` de 250 ms reinjetado, a prova nova o
+   detecta e o identifica positivamente como Internet; a antiga passava.
+
+2. **Por que a documentação diz "amostragem" em vez de "sempre".** Duas coisas
+   foram *medidas* durante esta fase e mudaram o desenho:
+
+   - um socket criado com `socket(AF_INET, …)` e nunca vinculado **não** aparece
+     em `/proc/net/tcp`. A tabela do núcleo não é o conjunto de todos os sockets
+     de Internet; é o conjunto dos que têm endereço;
+   - um socket que fecha entre a leitura do descritor e a leitura da tabela já
+     saiu dela. O laço de retry do caminho fail-closed produz dezenas desses,
+     todos legítimos e todos AF_UNIX, e a primeira versão do classificador os
+     reprovou como "não classificados".
+
+   A primeira medição derruba a completude do detector; a segunda derruba a
+   ideia de classificar depois do fato. O classificador resultante **não tem
+   falsos positivos** e pode ter falsos negativos — o que é exatamente o
+   contrário do que se precisa de uma *garantia*, e exatamente o que se quer de
+   um *detector adicional*. Então ele é descrito como detector, e a garantia de
+   família fica com quem consegue sustentá-la: a regra estática.
+
+   Inventar uma prova mais forte aqui exigiria interceptação de syscalls,
+   `pidfd_getfd` com `getsockopt(SO_DOMAIN)`, eBPF ou ptrace — máquinas caras,
+   privilegiadas ou frágeis, todas desproporcionais, e todas produzindo mais
+   confiança do que evidência.
+
+3. **Por que a regra do Core é sobre família e não sobre a palavra "socket".** O
+   `noteit-mcp` é uma casca fina: quase tudo o que ele faz acontece dentro do
+   `noteit-core`. Uma regra que parasse no `noteit-mcp/src` deixaria "este
+   servidor não tem rede" apoiado em um crate de um caminho de dois.
+
+   Mas o Core **usa** socket de propósito. É assim que uma gravação chega à
+   instância que segura o store, é AF_UNIX, é local, e é a ADR-045 inteira. Um
+   grep que proibisse "socket" no Core exigiria apagar a arquitetura para passar
+   no teste — o pior tipo de gate, o que se satisfaz destruindo o que deveria
+   proteger.
+
+   Por isso a regra nomeia `std::net`, `TcpListener`, `TcpStream`, `UdpSocket`,
+   `ToSocketAddrs`, `SocketAddrV4/V6` e os tipos de endereço IP, e deixa
+   `std::os::unix::net` em paz. E vem acompanhada de uma **asserção positiva**
+   de que `noteit-core/src/authority.rs` ainda conecta por `UnixStream`: sem
+   ela, as duas regras de proibição seriam satisfeitas perfeitamente por um Core
+   que tivesse perdido o handover.
+
+4. **Por que um controle positivo.** Um observador que não vê nada é
+   indistinguível de um observador que não está olhando, e um teste que só
+   afirma ausências é um teste que passa quando quebra. A gravação pela
+   autoridade resolve isso de graça: o Core abre um socket, entrega a mudança e
+   o fecha dentro da mesma chamada — que é precisamente a forma que a prova
+   anterior não enxergava. Exigir que o monitor o veja transforma "não vimos
+   socket de Internet" de ausência de evidência em medição por um instrumento
+   demonstravelmente funcionando.
+
+   Pelo mesmo motivo o guard de densidade é sobre o **intervalo médio entre
+   amostras**, e não sobre a contagem: uma operação curta produz legitimamente
+   poucas amostras, e um limiar de contagem ou seria instável em máquinas
+   rápidas ou inútil em máquinas lentas. O limite de 1 ms deixa mais de dez
+   vezes de margem sobre o pior valor medido.
+
+**Consequências.** Nenhuma tool, nenhum schema, nenhuma dependência e nenhum
+comportamento mudaram; o `Cargo.lock` é byte-idêntico. O que mudou é que a
+frase escrita e o mecanismo que a sustenta passaram a ser a mesma coisa, e que
+a fronteira "sem rede" passou a cobrir os dois crates do caminho em vez de um.
+
+Fica registrado o resíduo honesto: a camada dinâmica é amostragem, e não prova
+a ausência de um socket aberto e fechado entre duas leituras consecutivas de um
+diretório. Quem fecha isso é a regra estática, que recusa as APIs nos dois
+crates — e é por isso que as duas camadas são descritas como complementares em
+vez de uma ser apresentada como fazendo o trabalho da outra.

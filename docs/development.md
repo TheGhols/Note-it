@@ -180,11 +180,19 @@ filho; nenhuma escrita em stdout, que pertence ao protocolo; e — a regra centr
 da fase — exatamente um lugar onde uma mutação de nota existente é construída,
 com uma `revision` obrigatória e nunca opcional.
 
-As três regras de rede são estáticas, e uma verificação estática descreve o
-programa que foi escrito e não o que roda. Por isso `mcp-tests` inclui
-`noteit-mcp/tests/mcp_no_network.rs`, que inicia o binário real, dá trabalho a
-ele e lê `/proc/<pid>/fd` para conferir que o processo não segura socket
-nenhum. Ver `docs/mcp.md`.
+O boundary também cobre o `noteit-core`, que é para onde o adaptador MCP
+delega quase tudo: nenhuma API de Internet ali, e o socket **Unix** da
+autoridade explicitamente permitido — com uma asserção de que ele continua
+existindo, para que a regra não possa ser satisfeita apagando o mecanismo que
+ela existe para permitir.
+
+As regras de rede são estáticas, e uma verificação estática descreve o programa
+que foi escrito e não o que roda. Por isso `mcp-tests` inclui
+`noteit-mcp/tests/mcp_no_network.rs`, que inicia o binário real e amostra
+`/proc/<pid>/fd` **durante toda a operação**, não só antes e depois. O que essa
+suíte prova e o que ela não prova está escrito nela e em `docs/mcp.md`: a
+presença de socket é sólida, a família é melhor esforço, e a garantia de família
+repousa nas regras estáticas.
 
 ## Executando com um store descartável
 

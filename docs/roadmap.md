@@ -704,8 +704,9 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       (`tokio` sem `net`, de modo que `tokio::net` não exista neste build), o código do crate
       (nenhum `std::net`, nenhum tipo de socket, Unix inclusive) e o **processo em execução**, que
       uma suíte nova inspeciona por `/proc/<pid>/fd`. As três primeiras descrevem o programa que foi
-      escrito; a quarta pergunta ao núcleo o que ele tem aberto, e a resposta é três descritores e
-      socket nenhum.
+      escrito; a quarta pergunta ao núcleo o que ele tem aberto. (A quarta camada observava apenas
+      as bordas da chamada; a 4.1R1.1, abaixo, tornou a observação contínua e estendeu a regra
+      estática ao `noteit-core`.)
 
       **A matriz de mutações tinha duas fontes de verdade (AUD-02).** O `match` exaustivo forçava
       uma decisão sobre cada variante nova, mas a lista iterada era escrita à mão: uma variante
@@ -734,6 +735,44 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       **Nada do comportamento mudou.** Nenhuma tool foi acrescentada, removida ou alterada, e o
       catálogo publicado é byte a byte idêntico ao da 4.1 — verificado comparando a saída do MCP
       Inspector oficial antes e depois. Justificativa no ADR-046.
+- [x] **Fase 4.1R1.1 — Fechamento da prova de ausência de rede.** Uma auditoria independente da
+      4.1R1 encontrou um resíduo de prova, e apenas de prova: a suíte dinâmica fotografava os
+      descritores **antes** e **depois** de cada chamada MCP, mas o comentário dizia que nenhum
+      socket de Internet existia "em nenhum momento de uma gravação". Um socket aberto e fechado
+      *dentro* do handler é invisível às duas fotografias. Reproduzido antes de qualquer correção —
+      um `TcpListener` vinculado por 250 ms dentro de um handler, e os três testes passaram.
+
+      **A observação passou a ser contínua.** Uma thread monitora amostra `/proc/<pid>/fd` durante
+      toda a operação, com intervalo médio medido de 14 µs a 76 µs, e classifica cada socket no
+      instante em que o vê. Com a mesma injeção reaplicada, a prova nova falha e identifica o
+      socket positivamente como Internet.
+
+      **E a frase passou a ter o tamanho do mecanismo.** Duas coisas foram medidas e mudaram o
+      desenho: um socket `AF_INET` nunca vinculado **não** aparece em `/proc/net/tcp`, e um socket
+      que fecha entre a leitura do descritor e a leitura da tabela já saiu dela — o laço de retry
+      do caminho fail-closed produz dezenas desses, todos Unix legítimos. O classificador portanto
+      não tem falsos positivos e pode ter falsos negativos, o que serve como detector adicional e
+      não como garantia. Está documentado exatamente assim, e a garantia de família passou para a
+      camada estática.
+
+      **A regra estática passou a cobrir o `noteit-core`**, que é para onde o adaptador MCP delega
+      quase tudo. A linha é a família do endereço e não a palavra "socket": AF_INET e AF_INET6
+      proibidos nos dois crates, AF_UNIX permitido no Core — porque é assim que uma gravação chega
+      à instância que segura o store —, acompanhado de uma asserção de que esse mecanismo continua
+      existindo, para que a regra não possa ser satisfeita apagando o que ela protege.
+
+      **O instrumento prova a própria sensibilidade.** A gravação pela autoridade serve de controle
+      positivo: o Core abre um socket, entrega a mudança e o fecha dentro da mesma chamada, que é
+      exatamente a forma que a prova anterior não enxergava. O monitor é obrigado a vê-lo; se não
+      vir, o teste falha e o resultado limpo ao lado dele não é aceito.
+
+      Sete provas negativas — `TcpListener`, `TcpStream`, `UdpSocket`, alias renomeado, as mesmas no
+      Core, `tokio/net` no nível de features, e o socket transitório — todas reprovadas; e o socket
+      Unix legítimo continua permitido. Nenhuma tool, nenhum schema, nenhuma dependência e nenhum
+      comportamento mudaram; o `Cargo.lock` é byte-idêntico. Justificativa na ADR-047.
+
+      **Gate técnico para início da Fase 4.2: LIBERADO.** Não resta blocker conhecido herdado da
+      série 4.1.
 - [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.

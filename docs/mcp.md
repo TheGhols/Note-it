@@ -388,26 +388,72 @@ escolhível por argumento.
 **Nenhum shell.** Nada aqui monta uma linha de comando, e nada aqui inicia um
 processo.
 
-**Sem rede, verificado em quatro camadas.** A frase "stdio only" só vale se algo
+**Sem rede, verificado em cinco camadas.** A frase "stdio only" só vale se algo
 a impuser, e nenhuma das camadas abaixo basta sozinha:
 
 | Camada | O que fecha | Onde |
 | --- | --- | --- |
 | Grafo de dependências | nenhum crate de HTTP, TLS, OAuth, SSE, WebSocket ou socket | `scripts/check-mcp-boundary` regra 2 |
 | Features resolvidas | `tokio` sem a feature `net`, então `tokio::net` **não existe** neste build | regra 2b |
-| Código do crate | nenhum `std::net`, nenhum tipo de socket, de nenhuma família | regra 5b |
-| Processo em execução | o servidor real não segura socket nenhum | `noteit-mcp/tests/mcp_no_network.rs` |
+| Código do `noteit-mcp` | nenhum `std::net`, nenhum tipo de socket, de nenhuma família | regra 5b |
+| Código do `noteit-core` | nenhuma API de Internet; o socket **Unix** da autoridade continua permitido, e é exigido que continue existindo | regra 5c |
+| Processo em execução | amostragem contínua do que o processo tem aberto, durante toda a operação | `noteit-mcp/tests/mcp_no_network.rs` |
 
-A terceira camada é a que faltava até a auditoria 4.1R1, e a lacuna era real:
-`std::net` está na biblioteca padrão, então um `TcpListener::bind` dentro de um
-handler de tool não aparece em árvore de dependências nenhuma. A quarta pergunta
-ao próprio sistema operacional, por `/proc/<pid>/fd`, o que o processo realmente
-tem aberto — porque uma verificação estática descreve o programa que foi
-escrito, e não o que roda.
+A terceira camada faltava até a auditoria 4.1R1: `std::net` está na biblioteca
+padrão, então um `TcpListener::bind` dentro de um handler não aparece em árvore
+de dependências nenhuma. A quarta faltava até a 4.1R1.1, e é a que faz a
+afirmação cobrir o caminho inteiro em vez de um crate dele — o adaptador MCP é
+uma casca fina sobre o `noteit-core`, e "o servidor MCP não tem rede" só é
+verdade se o Core que ele chama também não tiver.
 
-Unix sockets também são recusados no código deste crate. O socket de controle
-privado é real e necessário, e pertence ao `noteit-core`: este crate alcança a
-autoridade **chamando-a**, nunca abrindo um socket por conta própria.
+### A linha é a família do endereço, não a palavra "socket"
+
+O Note-it **usa** socket, de propósito: é assim que uma gravação chega à
+instância que segura o store. Ele é AF_UNIX, é local, e pertence ao
+`noteit-core`. Proibir "socket" apagaria a arquitetura em vez de protegê-la.
+
+```text
+AF_INET / AF_INET6   proibidos nos dois crates
+AF_UNIX              permitido, e apenas no noteit-core
+```
+
+O `noteit-mcp` não abre socket algum — alcança a autoridade **chamando** o
+Core. E a regra que permite AF_UNIX no Core vem acompanhada de uma asserção de
+que o mecanismo ainda está lá, para que ela nunca possa ser satisfeita
+apagando justamente aquilo que ela existe para permitir.
+
+### O que a camada dinâmica prova, e o que não prova
+
+Isto está escrito por extenso porque a auditoria 4.1R1.1 encontrou exatamente o
+contrário: uma frase mais forte do que o mecanismo.
+
+**Sólido.** Se o processo tem *um socket aberto* é lido direto do symlink em
+`/proc/<pid>/fd`, que não pode errar sobre o tipo do descritor. Nos caminhos em
+que o Core não precisa de socket — toda leitura, e uma gravação feita
+diretamente com o lease livre — a asserção é que **nenhum socket existe em
+nenhuma amostra**. A observação é contínua durante toda a operação, com
+intervalo médio medido de 14 µs a 76 µs.
+
+**Melhor esforço, e deliberadamente não é o que sustenta a garantia.** A
+*família* de um socket é consultada nas tabelas do núcleo. Dois limites foram
+medidos, não presumidos:
+
+- um socket criado com `socket(AF_INET, …)` e nunca vinculado **não** aparece
+  em `/proc/net/tcp`;
+- um socket que fecha entre a leitura do descritor e a leitura da tabela já
+  saiu dela. O laço de retry do caminho fail-closed produz exatamente isso,
+  dezenas de vezes, com sockets Unix legítimos.
+
+O classificador portanto **não tem falsos positivos** — se disser Internet, o
+inode estava numa tabela de Internet — mas pode não ver. Por isso a garantia de
+família repousa nas camadas estáticas, e não nesta.
+
+**Controle positivo.** Um observador que não vê nada é indistinguível de um
+observador que não está olhando. Então a gravação pela autoridade serve de
+controle: o Core abre um socket, entrega a mudança e o fecha dentro da mesma
+chamada MCP — exatamente a forma que a prova anterior não enxergava. O monitor
+é **obrigado** a vê-lo; se não vir, o teste falha e o resultado limpo ao lado
+dele não é aceito.
 
 **Conteúdo é conteúdo.** Aspas, barras invertidas, novas linhas, tabulações,
 Unicode, emoji, RTL legítimo, controles bidi, sequências ANSI, caracteres de
