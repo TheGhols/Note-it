@@ -784,17 +784,46 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         as subfases abaixo. Decidido: Context Engine somente leitura no `noteit-core`, cálculo sob
         demanda (sem índice e sem cache na 4.2), **uma** tool nova (`noteit_context`), sem Resources
         e sem Prompts, modo somente leitura delegado ao host via `readOnlyHint`, e um candidato de
-        contexto carregando `updated_at` e **nunca** uma `revision` — porque uma revisão num
-        candidato deixaria um agente gravar a partir de um trecho de 240 caracteres, e um carimbo de
-        tempo é recusado por `NoteRevision::parse`, o que torna a proteção mecânica. Medido:
-        busca custa 10 ms com 100 notas, 48 ms com 1 000 e 435 ms com 10 000. Auditado o modelo de
-        execução do MCP, com um finding registrado (ver 4.2B).
+        contexto que **nunca** carrega uma `revision` — porque uma revisão num candidato deixaria um
+        agente gravar a partir de um trecho de 240 caracteres, e um carimbo de tempo é recusado por
+        `NoteRevision::parse`, o que torna a proteção mecânica. Medido: busca custa 10 ms com 100
+        notas, 48 ms com 1 000 e 435 ms com 10 000. Auditado o modelo de execução do MCP, com um
+        finding registrado (ver 4.2B).
+    - [x] **4.2A.R1 — Correção do contrato de staleness.** Revisão corretiva documental, sem
+          funcionalidade. A 4.2A descrevia `updated_at` como a resposta a "quando a nota mudou?" e
+          como o detector de staleness que substituía a `revision` ausente no candidato;
+          `noteit-core/src/revision.rs` afirma o contrário desde a Fase 4.1, e os testes provam:
+          uma tag, uma propriedade, uma cor, um papel ou um tamanho de fonte movem a `revision` sem
+          mover `updated_at`. Corrigido: `updated_at` é sinal de recência textual, a `revision`
+          continua sendo a única precondição autoritativa e só nasce em `noteit_read`, e o candidato
+          continua sem `revision` — a decisão de segurança não foi revertida, só explicada
+          corretamente. Acrescentado à 4.2B o requisito de **coerência do candidato sob
+          concorrência**; determinismo redefinido sem prometer snapshot transacional; `readOnlyHint`
+          descrito como annotation e não como enforcement; findings do runtime e de `noteit_read`
+          sem teto reconfirmados abertos. Nenhum `.rs`, nenhum schema, nenhuma dependência.
+          Justificativa na ADR-048.1.
   - [ ] **4.2B — Context Engine v1 no Core.** Camada somente leitura, determinística, sobre as
         leituras que o Core já tem; sinais de texto, tag, propriedade, tarefa e recência, cada um
-        explicável. Requisito de entrada: corrigir o comentário falso sobre `spawn_blocking` em
-        `noteit-mcp/src/main.rs` e resolver o bloqueio do runtime — hoje um handler longo para o
-        servidor inteiro. Saída: API interna tipada, benchmarks de 100/1 000/10 000 notas e limites
-        honestos publicados.
+        explicável. Saída: API interna tipada, benchmarks de 100/1 000/10 000 notas e limites
+        honestos publicados. A ordem dos blocos é obrigatória, e os três primeiros são requisito de
+        entrada — nenhuma linha do Context Engine antes de 4.2B.3 passar:
+
+        ```text
+        4.2B.1  corrigir o comentário falso sobre offload em noteit-mcp/src/main.rs
+        4.2B.2  resolver a execução bloqueante — offload de operação longa
+        4.2B.3  teste concorrente: um handler longo não pode impedir um ping
+        4.2B.4  definir a API interna tipada do Context Engine
+        4.2B.5  implementar a recuperação somente leitura
+        4.2B.6  garantir o candidato internamente coerente
+        4.2B.7  ordenação determinística e proveniência
+        4.2B.8  benchmarks de 100 / 1 000 / 10 000 notas
+        4.2B.9  gates + store real inalterado + CI
+        ```
+
+        4.2B.6 vem da 4.2A.R1: os sinais saem de leituras diferentes do Core e o store pode mudar
+        entre elas, então um candidato não pode combinar silenciosamente texto, metadados e tarefas
+        de estados diferentes da mesma nota. Preferência por uma projeção coerente por nota; a
+        alternativa é declarar formalmente a ausência dela e exigir revalidação por `noteit_read`.
   - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
         `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
         rede, sem escrita.

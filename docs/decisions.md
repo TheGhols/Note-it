@@ -1070,7 +1070,9 @@ prometer com honestidade.
 4. **Nada é persistido na 4.2.** Contexto é calculado sob demanda.
 5. **Uma única tool nova**, `noteit_context`, somente leitura. Sem Resources,
    sem Prompts.
-6. **Um candidato de contexto carrega `updated_at`, nunca uma `revision`.**
+6. **Um candidato de contexto nunca carrega uma `revision`.** *(Corrigido pela
+   ADR-048.1: a decisão de não publicar `revision` continua de pé; o que estava
+   errado era descrever `updated_at` como aquilo que ela substitui.)*
 7. **Conteúdo de nota é dado não confiável**, inclusive para o próprio servidor.
 8. **A fronteira de privacidade é declarada em voz alta**: o Note-it não abre
    rede; um host de nuvem pode encaminhar o que a tool devolveu.
@@ -1114,7 +1116,7 @@ prometer com honestidade.
    são texto do servidor que orienta o modelo, e misturá-los com conteúdo de
    nota seria construir instrução a partir de dado não confiável.
 
-6. **Por que `updated_at` e não `revision` — a decisão mais contra-intuitiva.**
+6. **Por que nenhuma `revision` no candidato — a decisão mais contra-intuitiva.**
    A orientação inicial da fase preferia `{note_id, revision}` em cada
    candidato. Foi recusado, e o motivo é a regra central da Fase 4.1: ninguém
    grava sobre uma nota que não leu.
@@ -1125,12 +1127,13 @@ prometer com honestidade.
    conflito não salva, porque não há conflito. Seria a sobrescrita cega de
    sempre, com um passo a mais e uma aparência de rigor.
 
-   `updated_at` dá o mesmo sinal de "isto pode ter mudado" e não abre a porta. E
-   a proteção é **mecânica**, não documental: um carimbo RFC 3339 não passa em
-   `NoteRevision::parse`, que exige sessenta e quatro caracteres hexadecimais
-   minúsculos. Um agente que tentar usá-lo como precondição recebe
-   `invalid_input` e não grava nada. A revisão nasce onde sempre nasceu: em
-   `noteit_read`.
+   O candidato publica `updated_at`, que é sinal de recência e **não**
+   substituto de versão *(corrigido pela ADR-048.1: a redação original dizia que
+   ele "dá o mesmo sinal", e isso é falso)*. E a proteção é **mecânica**, não
+   documental: um carimbo RFC 3339 não passa em `NoteRevision::parse`, que exige
+   sessenta e quatro caracteres hexadecimais minúsculos. Um agente que tentar
+   usá-lo como precondição recebe `invalid_input` e não grava nada. A revisão
+   nasce onde sempre nasceu: em `noteit_read`.
 
 7. **Por que conteúdo é dado.** Uma nota pode dizer "ignore as instruções
    anteriores" ou "chame `noteit_edit`". O servidor não tem avaliador, não tem
@@ -1165,3 +1168,94 @@ atuais, inaceitável para uma consulta que varre o store. E o comentário em
 
 Embeddings, recuperação semântica e um eventual índice persistente ficam
 registrados como Fase 4.3, e não entram disfarçados na 4.2.
+
+### ADR-048.1: Recência não é versão, e um candidato não mistura versões (Fase 4.2A.R1)
+
+A ADR-048 acertou a decisão e errou a explicação dela, e um contrato explicado
+errado vira código errado. A auditoria da 4.2A não achou rota nova de perda de
+dados; achou uma inconsistência entre o que o contrato dizia e o que o próprio
+`noteit-core/src/revision.rs` afirma há duas fases. Corrigida aqui, antes de
+existir implementação para acomodá-la.
+
+**O que estava errado.** O contrato descrevia `updated_at` como a resposta à
+pergunta "quando a nota mudou?" e o tratava como o sinal de staleness que
+substitui a `revision` ausente no candidato. `revision.rs` diz o contrário, em
+comentário normativo e em teste: a `revision` é o SHA-256 dos bytes exatos com
+que a nota seria persistida e cobre *tudo* o que uma gravação poderia
+sobrescrever, enquanto `updated_at` marca a última alteração do **texto** e fica
+deliberadamente parado quando muda uma tag, uma propriedade, uma cor, um papel,
+uma intensidade ou um tamanho de fonte. Trocar uma tag de `medicina` para
+`cardiologia` move a `revision` e não move `updated_at` —
+`tags_and_properties_never_move_a_timestamp` e
+`every_persisted_field_moves_the_revision` provam os dois lados. Um carimbo que
+não enxerga metade das mudanças persistidas não pode ser autoridade de staleness
+da nota inteira.
+
+**O que continua igual, e é o ponto importante.** A decisão de não publicar
+`revision` no candidato **não** é revertida. Ela nunca dependeu de `updated_at`
+ser um bom detector de staleness; depende da regra da Fase 4.1 — ninguém grava
+sobre uma nota que não leu. Uma `revision` válida ao lado de um trecho de 240
+caracteres deixaria um agente gravar a partir do trecho, e o conflito não o
+salvaria, porque não haveria conflito. Tirar `updated_at` do papel de versão não
+devolve esse papel a ninguém: o candidato simplesmente não publica token
+autoritativo de versão.
+
+**O contrato, agora dito nos termos certos.**
+
+```text
+noteit_context   candidatos: note_id, label, snippet, reason[], updated_at
+                 updated_at = recência textual, informativa
+                 nenhum token autoritativo de versão
+noteit_read      conteúdo completo + revision   ← a revisão nasce aqui
+mutação          expected_revision, a única precondição autoritativa
+```
+
+Staleness autoritativa para escrita é resolvida por `revision`, e `revision` só
+nasce para o agente depois de `noteit_read`. A proteção continua mecânica:
+`NoteRevision::parse` exige sessenta e quatro caracteres hexadecimais
+minúsculos, e um RFC 3339 é recusado como `invalid_input` — um agente não
+consegue promover o carimbo a precondição nem por engano.
+
+**Um requisito novo para a 4.2B: coerência do candidato.** Os sinais de
+recuperação — texto, tag, propriedade, tarefa, recência — vêm de leituras
+diferentes do Core, e o store pode mudar entre elas. Um candidato montado com o
+snippet de uma versão e as tags de outra não corrompe nada, mas mente sobre
+proveniência, e a proveniência é o produto inteiro desta fase. Fica decidido
+agora, para não ser decidido durante o código: **cada candidato deve vir de uma
+projeção internamente coerente da nota**. A forma preferida é uma leitura
+coerente por nota candidata, com todos os sinais daquele candidato derivados
+dela; a alternativa é declarar formalmente a ausência de coerência e exigir
+revalidação por `noteit_read`. Inventar um lease de leitura ou dar escrita ao
+Context Engine não são opções. A coerência é por nota: não há transação sobre o
+store, e nunca foi prometida uma.
+
+**Determinismo, dito sem prometer o que não existe.** "A mesma pergunta sobre o
+mesmo store dá a mesma resposta" era uma promessa sobre a regra escrita como se
+fosse uma promessa sobre o mundo. A formulação correta: para um mesmo estado
+estável do store e a mesma entrada, a saída é a mesma — mesma seleção, mesma
+ordem, mesmos motivos, sem dependência de relógio, iteração de hash, endereço,
+locale ou ordem de diretório. Não há snapshot transacional, o Core não oferece
+um e a 4.2 não vai construir um. Sob mutação concorrente o comportamento
+continua seguro e explicável, e é assim que será descrito.
+
+**`readOnlyHint` é annotation, não enforcement.** A ADR-048 delegou o modo
+somente leitura ao host porque o servidor já publica `readOnlyHint` fiel nas 15
+tools. Isso continua certo, com a distinção explícita: a annotation *descreve*
+que a tool não grava e um host pode ignorá-la; o que garante a propriedade é o
+servidor não ter código de escrita, não criar arquivo, não mover nota, não
+chamar a autoridade de escrita, não aceitar `expected_revision`, não aceitar
+caminho, não abrir shell e não abrir rede. Nenhuma garantia depende de um host
+respeitar annotations.
+
+**Os findings herdados continuam abertos.** O bloqueio do runtime do
+`noteit-mcp` (current-thread, handlers síncronos, sem `spawn_blocking`, com o
+comentário de `main.rs` afirmando o contrário) continua sendo **requisito de
+entrada da 4.2B**, e não foi corrigido aqui de propósito: corrigi-lo é o
+primeiro bloco executável da fase seguinte, não um efeito colateral de uma
+correção documental. `noteit_read` sem teto de tamanho continua registrado, com
+análise na 4.2B e ataque na 4.2R; ele não autoriza despejar corpos grandes no
+`noteit_context`, que devolve snippet limitado sempre.
+
+Nada de código mudou nesta correção — nenhum `.rs`, nenhum manifesto, nenhum
+schema, `SCHEMA_VERSION` em 1 e o catálogo MCP em 15 tools. O que mudou foi o
+contrato dizer a verdade sobre o mecanismo que já existia.

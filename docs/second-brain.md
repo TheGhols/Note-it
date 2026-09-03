@@ -24,7 +24,7 @@ Cada palavra dessa frase é um requisito:
 | --- | --- |
 | **recuperação** | seleciona; não interpreta, não resume, não conclui |
 | **somente leitura** | não grava, não cria arquivo, não move nota |
-| **determinística** | a mesma pergunta sobre o mesmo store dá a mesma resposta |
+| **determinística** | a mesma pergunta, sobre um mesmo estado estável do store, dá a mesma resposta — §9 diz o que isso não promete |
 | **rastreável** | todo trecho devolvido diz de qual nota veio e por que foi escolhido |
 | **já está nas notas** | não inventa conhecimento novo nem guarda interpretação |
 
@@ -236,11 +236,19 @@ Nunca existirá uma tool que devolva muitos corpos completos de uma vez.
 Toda unidade de contexto deve conseguir responder quatro perguntas:
 
 ```text
-qual nota?          note_id
-qual trecho?        snippet, com o texto que casou
+qual nota?               note_id
+qual trecho?             snippet, com o texto que casou
 por que foi escolhida?   reason[]
-quando mudou?       updated_at
+quão recente é o texto?  updated_at
 ```
+
+A quarta pergunta é estreita de propósito, e ela **não** é "quando a nota
+mudou?". `updated_at` é o carimbo de domínio que o Note-it mantém desde a Fase
+3.4R: ele se move quando o **texto** da nota muda, e fica deliberadamente parado
+quando muda uma tag, uma propriedade, uma cor, um papel ou um tamanho de fonte.
+Há mudanças persistidas que ele não enxerga, então ele não pode responder pela
+versão da nota. Quem responde por ela é `revision` — e a §10 explica por que ela
+não acompanha o candidato.
 
 `reason` é uma **lista de motivos tipados**, não um número:
 
@@ -261,16 +269,72 @@ Uma relação **heurística nunca é apresentada como fato**. "Estas notas
 compartilham a tag `Medicina`" é um fato; "estas notas são sobre o mesmo
 assunto" não é, e o Note-it não dirá isso.
 
+### Determinismo, e a qualificação que ele exige
+
+"Determinística" é uma promessa sobre a **regra**, não sobre o mundo:
+
+> Para um mesmo estado estável do store e a mesma entrada, a saída é a mesma —
+> mesma seleção, mesma ordem, mesmos motivos. Nada na ordenação depende de
+> relógio, iteração de hash, endereço, locale ou ordem de diretório.
+
+O que ela **não** promete é um snapshot transacional. O Core não oferece um, a
+4.2 não vai construir um, e prometê-lo seria descrever um mecanismo que não
+existe. Se a pessoa editar uma nota na GUI durante a consulta, o resultado pode
+refletir o estado anterior ou o posterior, e notas diferentes podem vir de
+instantes diferentes. Isso continua sendo um resultado seguro e explicável: cada
+candidato diz de qual nota veio e por quê, nada é gravado, e nada ali autoriza
+uma gravação depois.
+
+O que não pode acontecer é um **único candidato** misturar versões da **mesma**
+nota. Esse é um requisito, não uma consequência, e está na §12.
+
 ---
 
-## 10. `revision` e o contexto — e por que ele NÃO acompanha um candidato
+## 10. Recência e versão — e por que uma `revision` não acompanha um candidato
 
-Contexto é uma fotografia. A nota pode mudar depois.
+Contexto é uma fotografia. A nota pode mudar depois. Daí saem duas perguntas
+diferentes, e o contrato só é seguro enquanto elas ficarem separadas:
+
+```text
+"quão recente é este texto?"        → updated_at   sinal, informativo
+"esta é ainda a versão que eu li?"  → revision     precondição, autoritativa
+```
+
+### As duas não são intercambiáveis
+
+`revision` é o SHA-256 dos bytes exatos com que a nota seria persistida
+(`noteit-core/src/revision.rs`). Ela cobre corpo, tags, propriedades, cor, papel,
+intensidade, tamanho de fonte, carimbos de tempo e o front matter desconhecido
+que o Note-it preserva — tudo o que uma gravação posterior poderia sobrescrever.
+
+`updated_at` cobre menos, e isso é intencional desde a Fase 3.4R: ele marca a
+última alteração do **texto**. Uma mudança que o Note-it persiste e que
+`updated_at` não registra é o caso comum, não a exceção:
+
+```text
+T0   corpo "HAS…"   tag: medicina      updated_at 10:00
+T1   corpo "HAS…"   tag: cardiologia   updated_at 10:00   ← não se moveu
+                                       revision  mudou
+```
+
+O mesmo vale para propriedades, cor, papel, intensidade e tamanho de fonte. Não
+é uma leitura otimista do código, é o que os testes afirmam:
+`tags_and_properties_never_move_a_timestamp` em `noteit-core/src/write.rs`,
+`semantic_metadata_never_moves_created_or_updated_at` em
+`noteit-core/src/model.rs`, e `every_persisted_field_moves_the_revision` em
+`noteit-core/src/revision.rs`, que prova o outro lado — cada um desses campos
+move a `revision`. Portanto:
+
+> **`updated_at` não é autoridade de staleness da nota inteira.** É sinal de
+> recência textual: serve para ordenar e para informar, e não prova que a nota
+> continua byte-equivalente ao que foi lido.
+
+### Por que o candidato mesmo assim não carrega `revision`
 
 A decisão desta fase é deliberada e diverge da sugestão inicial de carregar
 `revision` em cada candidato:
 
-> **Um candidato de contexto carrega `updated_at`, nunca uma `revision`.**
+> **Um candidato de contexto nunca carrega `revision`.**
 
 O motivo é a regra central da Fase 4.1: *ninguém grava sobre uma nota que não
 leu*. Se um candidato carregasse uma `revision` válida, um agente poderia:
@@ -287,20 +351,29 @@ Isso é exatamente a sobrescrita cega que a `revision` existe para impedir, com
 um passo a mais. Um conflito não salvaria: se a revisão ainda for a atual, a
 gravação passa.
 
-`updated_at` resolve o problema sem introduzi-lo, e a proteção é **mecânica**,
-não documental: `updated_at` é um carimbo RFC 3339, e
-`NoteRevision::parse` recusa qualquer coisa que não sejam sessenta e quatro
-caracteres hexadecimais minúsculos. Um agente que tentar usá-lo como
-precondição recebe `invalid_input` e não grava nada.
+Publicar `updated_at` no lugar **não é um detector de staleness mais fraco** —
+é outra coisa. Ele dá ao agente a recência de que precisa para decidir *o que
+ler*, sem lhe dar um token com que gravar. E o que fecha a porta é **mecânico**,
+não documental: `updated_at` é um carimbo RFC 3339, e `NoteRevision::parse`
+recusa qualquer coisa que não sejam sessenta e quatro caracteres hexadecimais
+minúsculos — comprimento errado, dois-pontos, `T`, `Z` e maiúsculas caem todos
+fora. Um agente que tentar usá-lo como precondição recebe `invalid_input` e não
+grava nada.
 
-O fluxo obrigatório continua sendo o da Fase 4.1, e o contexto entra antes dele:
+### Onde a staleness autoritativa é resolvida
 
 ```text
-noteit_context   → candidatos (sem revision)
-noteit_read      → conteúdo completo + revision  ← a revisão nasce aqui
+noteit_context   → candidatos: note_id, label, snippet, reason[], updated_at
+                   nenhum token autoritativo de versão
+noteit_read      → conteúdo completo + revision   ← a revisão nasce aqui
 decisão do agente
-mutação com expected_revision
+mutação com expected_revision   ← a única precondição autoritativa
 ```
+
+Um agente que precise saber se a nota ainda é a que ele leu não olha um carimbo:
+ele lê a nota e compara `revision`, ou grava com `expected_revision` e deixa o
+Core reprovar com `revision_conflict`. Não existe atalho, e o contexto não abre
+um.
 
 ---
 
@@ -331,6 +404,20 @@ omitted_count: <quantos candidatos ficaram de fora>
 
 O mesmo vale para um snippet cortado no meio de uma nota grande.
 
+### O que este orçamento **não** conserta: `noteit_read` não tem teto
+
+Finding aberto desde a 4.2A: `noteit_read` devolve o conteúdo integral da nota e
+não há teto de tamanho do lado MCP — o limite de 1 MB é do protocolo *privado*,
+não da resposta MCP. Uma nota muito grande produz uma resposta muito grande, que
+o host repassa ao modelo. É risco de custo e de contexto, não de integridade.
+
+Continua aberto e continua **fora** desta fase: mudar `noteit_read` seria mudança
+de contrato público. A análise pertence à 4.2B; o ataque, à 4.2R.
+
+E ele não autoriza o inverso. O orçamento acima não é compensação por
+`noteit_read` — é o contrato do contexto, e o `noteit_context` devolve snippet
+limitado **sempre**, qualquer que seja o tamanho da nota de origem.
+
 ---
 
 ## 12. Sinais de recuperação v1
@@ -356,6 +443,45 @@ grafo de similaridade
 
 Nada disto será chamado de "semântico" enquanto for casamento de texto e
 metadados. O produto diz o que faz.
+
+### Um candidato vem de uma projeção coerente da nota
+
+Os cinco sinais acima vêm de leituras diferentes do Core, e o store pode mudar
+entre elas. Sem uma regra, um candidato pode ser montado a partir de versões
+incompatíveis da **mesma** nota:
+
+```text
+T0  o Context Engine lê o texto da nota A
+T1  a GUI edita a nota A
+T2  o Context Engine lê os metadados da nota A
+T3  o candidato é montado
+    → snippet de uma versão, tags de outra, tarefas de um terceiro estado
+```
+
+Nada disso corrompe o store: cada leitura é de um arquivo íntegro, e nada aqui
+grava. O que se perde é a **proveniência**. O candidato afirma "esta nota, este
+trecho, por estes motivos" sobre uma nota que nunca existiu naquele estado, e a
+§9 inteira depende dessa afirmação ser verdadeira.
+
+Portanto, requisito da 4.2B:
+
+> **Cada candidato deve ser derivado de uma projeção internamente coerente da
+> nota.** O Context Engine não pode combinar silenciosamente texto, metadados,
+> tarefas ou outros sinais obtidos de estados diferentes da mesma nota.
+
+A forma de cumpri-lo é decisão da 4.2B, com o código na mão, entre duas — e o
+requisito não pode ficar sem decisão:
+
+| Opção | Como | Custo |
+| --- | --- | --- |
+| **A. projeção única por nota** *(preferida)* | uma leitura coerente por nota candidata, e todos os sinais daquele candidato derivados dela | uma leitura completa onde hoje um resumo bastaria |
+| B. incoerência declarada | documentar formalmente que não há projeção coerente, marcá-la na proveniência e exigir revalidação por `noteit_read` antes de qualquer uso consequente | o candidato passa a valer menos, e a resposta precisa dizer isso |
+
+O que **não** é opção: inventar um lease de leitura, ou dar ao Context Engine
+qualquer capacidade de escrita. Ele é somente leitura, e continua sendo.
+
+A coerência é **por nota**, e só. Não há transação sobre o store, e a §9 já diz
+que notas diferentes podem vir de instantes diferentes.
 
 ---
 
@@ -561,7 +687,8 @@ warnings[]     notas ilegíveis, como no resto da API de leitura
 ```
 
 Requisitos herdados, sem exceção: tipada, `outputSchema`, sem caminho, sem
-shell, sem rede, **sem escrita**, e com `readOnlyHint` verdadeiro.
+shell, sem rede, **sem escrita**, e com `readOnlyHint` verdadeiro — que
+*descreve* essa realidade sem a impor; ver §21.
 
 ### MCP Resources — **não**
 
@@ -594,6 +721,38 @@ Analisado, e a conclusão **não** é automática.
 **Decisão: C.** O servidor continua publicando `readOnlyHint` fiel, e a decisão
 de permitir escrita numa sessão é do host e da pessoa.
 
+### `readOnlyHint` é uma descrição, não uma barreira
+
+A escolha C só é honesta se ninguém confundir as duas coisas:
+
+```text
+readOnlyHint: true   metadata: "esta tool não grava"
+                     um host pode lê-la, ignorá-la ou não implementá-la
+
+enforcement          o comportamento real do servidor: os schemas, a autoridade
+                     de escrita, `expected_revision`, e a ausência de código de
+                     escrita na implementação
+```
+
+O que sustenta a propriedade de `noteit_context` não é a annotation. É que a
+tool:
+
+```text
+não tem código de escrita
+não cria arquivo
+não move nota
+não chama a autoridade de escrita
+não aceita expected_revision
+não aceita caminho
+não executa shell
+não abre rede
+```
+
+`readOnlyHint: true` apenas **descreve fielmente** isso, e é por isso que
+publicá-lo é correto. Mas nenhuma garantia deste documento pode depender de um
+host respeitar annotations — e nenhuma depende: um host que as ignore não ganha
+nada, porque não há nada a ganhar do outro lado.
+
 Registrado para revisão futura: se surgir um caso concreto de host compartilhado
 ou não confiável, B volta à mesa — com um finding que o justifique, não por
 precaução abstrata.
@@ -619,10 +778,13 @@ responder `ping`, sem processar cancelamento.
 Portanto é **requisito de entrada da Fase 4.2B**:
 
 ```text
-1. corrigir o comentário falso em noteit-mcp/src/main.rs
-2. decidir e implementar o offload (spawn_blocking ou equivalente)
-3. provar com um teste que um handler longo não impede um ping
+4.2B.1  corrigir o comentário falso em noteit-mcp/src/main.rs
+4.2B.2  decidir e implementar o offload (spawn_blocking ou equivalente)
+4.2B.3  provar com um teste que um handler longo não impede um ping
 ```
+
+Nenhuma linha do Context Engine antes de 4.2B.3 passar. A ordem completa dos
+nove blocos da 4.2B está em `docs/roadmap.md`.
 
 ---
 
