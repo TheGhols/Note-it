@@ -264,6 +264,39 @@ impl McpClient {
         }));
     }
 
+    /// The operating system's identifier for the server process.
+    ///
+    /// Used by `mcp_no_network.rs`, which asks the kernel what this process
+    /// actually holds open rather than taking the source code's word for it.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Everything `/proc/<pid>/fd` says this process has open, as
+    /// `(descriptor number, what it points at)`.
+    ///
+    /// A descriptor whose target cannot be read is reported as `<unreadable>`
+    /// rather than skipped: a file descriptor nobody could classify is exactly
+    /// the one a check like this must not quietly ignore.
+    pub fn open_descriptors(&self) -> Vec<(u32, String)> {
+        let directory = format!("/proc/{}/fd", self.pid());
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            panic!("{directory} could not be read; this suite needs procfs");
+        };
+        let mut descriptors: Vec<(u32, String)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let number: u32 = entry.file_name().to_string_lossy().parse().ok()?;
+                let target = std::fs::read_link(entry.path())
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| "<unreadable>".to_string());
+                Some((number, target))
+            })
+            .collect();
+        descriptors.sort();
+        descriptors
+    }
+
     /// `tools/list`, as a host sees it.
     pub fn list_tools(&mut self) -> Vec<Value> {
         let result = self.request("tools/list", json!({})).expect("tools/list");

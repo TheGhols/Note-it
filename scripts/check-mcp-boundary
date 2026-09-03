@@ -2,6 +2,17 @@
 # Fails if the headless MCP server ever gains a desktop, network or shell
 # dependency — or a way to reach the store that is not the Core's.
 #
+# "No network" is checked three ways, because no one of them is enough:
+#
+#   the dependency graph   no HTTP, TLS, OAuth, SSE, WebSocket or socket crate
+#   the resolved features  Tokio without `net`, so `tokio::net` does not exist
+#   the crate's own code   no `std::net`, no socket type, no socket of any family
+#
+# The third is the one that was missing until the 4.1R1 audit: `std::net` is in
+# the standard library, so a `TcpListener::bind` in a tool handler appears in no
+# dependency tree at all. `noteit-mcp/tests/mcp_no_network.rs` then checks the
+# same property from the outside, on the running process.
+#
 # `noteit-mcp` is spawned by a host, speaks one protocol on standard input and
 # standard output, and writes through the one write authority. Every check
 # below is one of those sentences, made mechanical.
@@ -52,8 +63,23 @@ fi
 #    a feature that was left out — it is a thing this must never grow. An HTTP
 #    stack arriving here is how a "just for the inspector" server becomes a
 #    listening socket nobody meant to open.
-if grep -Eq '^(reqwest|hyper|axum|tower-http|actix-web|warp|rustls|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite)( |$)' <<<"$tree"; then
-  fail "noteit-mcp pulled in an HTTP, TLS, OAuth, SSE or WebSocket stack; this server speaks stdio only."
+if grep -Eq '^(reqwest|hyper|hyper-util|axum|tower-http|actix-web|warp|rustls|rustls-pki-types|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite|socket2|mio|quinn|h2|h3|httparse|http|http-body|http-body-util|trust-dns-resolver|hickory-resolver)( |$)' <<<"$tree"; then
+  fail "noteit-mcp pulled in an HTTP, TLS, OAuth, SSE, WebSocket or socket stack; this server speaks stdio only."
+fi
+
+# 2b. The asynchronous route to a socket, closed at the feature level.
+#
+#     `tokio::net` exists only when Tokio is built with its `net` feature. That
+#     feature is not asked for here, and it must not arrive through unification
+#     with some other crate's dependency either — feature unification is
+#     graph-wide, so a feature this manifest never names can still be switched
+#     on for the build. Asserting the resolved set is what makes
+#     `tokio::net::TcpListener` a *compile error* rather than a thing the rule
+#     below has to catch by name.
+tokio_features="$(cargo tree -p noteit-mcp --edges normal --prefix none -f '{p}\t{f}' \
+  | awk -F'\t' '$1 ~ /^tokio v/ { print $2 }' | tr ',' '\n' | sort -u)"
+if grep -qx 'net' <<<"$tokio_features"; then
+  fail "tokio resolved with its \`net\` feature in noteit-mcp's graph; tokio::net must not exist in this build."
 fi
 
 # 3. No second store and no watcher. `serde_yaml` is in the graph through
@@ -82,6 +108,24 @@ offending 'serde_yaml' \
   && fail "noteit-mcp/src parses YAML directly; a note file is noteit-core's to read."
 offending 'std::process::(Command|Child)|Command::new|std::fs::|OpenOptions::new' \
   && fail "noteit-mcp/src opens files, walks directories or starts processes directly."
+
+# 5b. And no socket of its own, of any family.
+#
+#     The rules above are about the dependency graph, and a dependency graph
+#     cannot answer this one: `std::net` is in the standard library and is
+#     always available, so nothing in a `cargo tree` will ever mention it. A
+#     `TcpListener::bind` added to a tool handler would have passed every check
+#     this gate had before this line existed.
+#
+#     Unix sockets are refused here too. The private control socket is real and
+#     necessary, and it belongs to `noteit-core`: this crate reaches the
+#     authority by calling it, never by opening a socket itself. A second place
+#     that speaks to the store over a socket is a second implementation of the
+#     handover.
+offending '\b(std::net|tokio::net|os::unix::net|socket2|mio::net)\b' \
+  && fail "noteit-mcp/src reaches for a network or socket API; this server speaks stdio and calls noteit-core, and nothing else."
+offending '\b(TcpListener|TcpStream|UdpSocket|UnixListener|UnixDatagram|UnixStream|ToSocketAddrs|SocketAddr|SocketAddrV4|SocketAddrV6)\b' \
+  && fail "noteit-mcp/src names a socket type; this server speaks stdio and calls noteit-core, and nothing else."
 
 # 6. It never runs the CLI and reads its answer. The chain has to stay typed.
 offending 'noteit_cli|--json' \
@@ -122,4 +166,4 @@ declared="$(grep -c '^mutation_input! {' "$sources/contract.rs" || true)"
 offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
   && fail "an optional precondition type appeared at the MCP boundary."
 
-printf '%s\n' "MCP boundary OK: noteit-mcp is headless, stdio-only, writes through noteit-core, and every mutation of an existing note requires a revision."
+printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket of any family, writes through noteit-core, and every mutation of an existing note requires a revision."
