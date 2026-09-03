@@ -595,3 +595,84 @@ fn r008_10_global_scan_failure_is_deterministic_without_dac() {
         );
     }
 }
+
+/// A note whose file name and front matter disagree about its identity is
+/// refused by every reader that resolves it — `ler`, `listar`, `buscar` and
+/// `tarefas` all report it as unreadable. The metadata catalogue read the same
+/// front matter without ever asking that question, so it counted the tags and
+/// property keys of a note nothing else in the system will admit exists, and
+/// said `status: ok` with no warning while doing it. A caller was then told,
+/// as unqualified success, that a tag belongs to a note it can never open.
+#[test]
+fn r008_11_identity_conflicted_note_is_not_counted_by_the_catalogue() {
+    let tmp = tempdir().expect("tempdir");
+    let (core, notes_dir) = setup_store(tmp.path());
+
+    let mut healthy = NoteDocument::new_empty();
+    healthy.content = "HEALTHY".into();
+    healthy.user_metadata = NoteMetadata::try_new(
+        vec!["healthytag".into()],
+        vec![noteit_core::metadata::NoteProperty {
+            key: "healthykey".into(),
+            value: "v".into(),
+        }],
+    )
+    .expect("metadata");
+    core.storage().save_note_atomic(&healthy).expect("save");
+
+    // A second, well-formed note whose front matter is then made to declare a
+    // different identifier than the one naming its file.
+    let mut conflicted = NoteDocument::new_empty();
+    conflicted.content = "PHANTOM".into();
+    conflicted.user_metadata = NoteMetadata::try_new(
+        vec!["phantomtag".into()],
+        vec![noteit_core::metadata::NoteProperty {
+            key: "phantomkey".into(),
+            value: "v".into(),
+        }],
+    )
+    .expect("metadata");
+    core.storage().save_note_atomic(&conflicted).expect("save");
+
+    let conflicted_id = conflicted.metadata.id;
+    let path = notes_dir.join(format!("{conflicted_id}.md"));
+    let tampered = fs::read_to_string(&path)
+        .expect("read")
+        .replace(&conflicted_id.to_string(), &Uuid::new_v4().to_string());
+    fs::write(&path, tampered).expect("tamper");
+
+    // The reader that resolves the note refuses it.
+    assert!(
+        core.read_note(&conflicted_id).is_err(),
+        "the identity conflict must make the note unreadable"
+    );
+
+    let (catalog, warnings) = core
+        .metadata_catalog_with_warnings()
+        .expect("metadata catalog with warnings");
+
+    let tags: Vec<&str> = catalog.tags.iter().map(|t| t.tag.as_str()).collect();
+    let keys: Vec<&str> = catalog
+        .property_keys
+        .iter()
+        .map(|k| k.key.as_str())
+        .collect();
+    assert!(
+        tags.contains(&"healthytag") && keys.contains(&"healthykey"),
+        "the healthy note must still be catalogued, got tags {tags:?} keys {keys:?}"
+    );
+    assert!(
+        !tags.contains(&"phantomtag"),
+        "a note no reader will open must not contribute a tag to the catalogue, got {tags:?}"
+    );
+    assert!(
+        !keys.contains(&"phantomkey"),
+        "a note no reader will open must not contribute a property key, got {keys:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.note_id == Some(conflicted_id) && w.kind == ReadWarningKind::UnreadableNote),
+        "the skipped note must be reported rather than silently dropped, got {warnings:?}"
+    );
+}

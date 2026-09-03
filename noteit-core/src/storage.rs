@@ -761,6 +761,24 @@ impl StorageManager {
                 }
             };
 
+            // The file name is the note's identity, and every reader that
+            // resolves a note enforces that — see `NoteDocument::parse_with_id`.
+            // Reading the front matter directly skips that question, so it is
+            // asked here too: without it the catalogue counts the tags of a
+            // note `ler`, `listar` and `buscar` all refuse to open, and reports
+            // it as success with nothing said.
+            if wrapper.note_it.id != id {
+                warnings.push(ReadWarning {
+                    note_id: Some(id),
+                    kind: ReadWarningKind::UnreadableNote,
+                    message: format!(
+                        "conflito de identidade da nota: o arquivo `{id}.md` possui front matter com id `{}`",
+                        wrapper.note_it.id
+                    ),
+                });
+                continue;
+            }
+
             for tag in wrapper.tags.as_slice() {
                 let identity = semantic_identity(tag);
                 tags.entry(identity)
