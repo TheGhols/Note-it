@@ -52,9 +52,16 @@ use uuid::Uuid;
 
 /// The version of this private protocol.
 ///
-/// Both ends state it and both ends check it. A mismatch is refused before any
-/// field is looked at, let alone acted on: two versions that disagree about
-/// what `append` means must never meet halfway.
+/// Both ends state it and both ends check it. A mismatch is refused **before
+/// the operation is handed on to be executed**, so nothing it asked for can
+/// reach the store: two versions that disagree about what `append` means must
+/// never meet halfway.
+///
+/// The check is deliberately *not* described as happening before any field is
+/// read, because it is not: a frame is deserialized first — that is how the
+/// version becomes readable at all — and only then compared. What the guarantee
+/// covers is what the frame is allowed to *do*, and the answer for a version
+/// this build does not speak is nothing.
 ///
 /// ## When this has to move
 ///

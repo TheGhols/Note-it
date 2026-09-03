@@ -163,7 +163,8 @@ Os carimbos de data e hora são sempre RFC 3339 em UTC (`2026-09-02T00:35:58Z`) 
 
 // leitura
 { "note": { "note_id": "…", "label": "…", "content": "…Markdown bruto…", "tags": [],
-            "properties": [], "created_at": "…Z", "updated_at": "…Z" } }
+            "properties": [], "created_at": "…Z", "updated_at": "…Z",
+            "revision": "a91c…" } }
 
 // pesquisa
 { "query": "biopsia",
@@ -192,6 +193,8 @@ Os carimbos de data e hora são sempre RFC 3339 em UTC (`2026-09-02T00:35:58Z`) 
 `state` é `pending`, `completed` ou `all`. Um resultado vazio é `[]` com `"count": 0` e `"status": "ok"` — nunca uma frase.
 
 `content` é o Markdown da nota exatamente como o Core o contém. O sanitizador de terminal que protege o terminal de uma pessoa **não** é aplicado a ele: o escape JSON é o que torna um caractere de controle seguro em um documento que ninguém está renderizando como texto, e mutilar o corpo entregaria um texto de script que a nota não contém. Aspas, barras invertidas, novas linhas, tabulações, emoji e sequências de escape passam de ida e volta inalterados por qualquer analisador JSON.
+
+`data.note.revision` é normativo e está sempre presente em uma leitura bem-sucedida: é a versão que aquela resposta descreve, e é o valor que uma gravação condicional devolve em `--if-revision`. Ver §10. A listagem deliberadamente **não** o publica — um resumo não é uma base sobre a qual gravar.
 
 `task_ref` é produzido por Core e pode ser usado diretamente em `tasks complete` e `tasks reopen`. `note_id` de `trash` pode ser usado diretamente em `trash restore`. Nenhum texto precisa ser analisado para alternar entre listagem e atuação.
 
@@ -472,8 +475,14 @@ estado vivo, e tentar de novo com a `current_revision` devolvida conflita de nov
 
 A garantia depende de o processo que grava entender a precondição. O protocolo
 privado entre os processos do Note-it é versionado justamente por isso, e um
-processo que fala uma versão recusa uma requisição de outra antes de olhar
-qualquer campo.
+processo que fala uma versão recusa uma requisição de outra **antes que a
+operação seja encaminhada para execução**, portanto antes que ela possa alterar
+o store.
+
+A recusa não acontece antes de olhar qualquer campo, e dizer isso seria falso: o
+frame é desserializado primeiro — é assim que a versão se torna legível. O que a
+garantia cobre é o que aquele frame pode *fazer*, e para uma versão que este
+build não fala a resposta é nada.
 
 Se um Note-it de desktop mais antigo estiver aberto e segurando o store, um
 `noteit` mais novo recebe um erro de incompatibilidade e **nada é gravado** —

@@ -120,8 +120,9 @@ fn authority_speaking(
         read_frame(&mut &frame[..]).map_err(|error| WriteError::InvalidInput {
             detail: error.to_string(),
         })?;
-    // The gate, exactly where the real authority puts it: before the operation
-    // is looked at, let alone acted on.
+    // The gate, exactly where the real authority puts it: after the frame is
+    // deserialized — which is how the version is readable at all — and before
+    // the operation is handed on to be executed.
     if version == PROTOCOL_VERSION {
         check_protocol_version(request.protocol_version)?;
     } else {
