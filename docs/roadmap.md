@@ -679,15 +679,61 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       `noteit --json` não mudou: são contratos independentes.
 
       Provado com processos reais, soquetes reais, stdio real e stores descartáveis: catálogo e
-      schemas, pureza das leituras, toda variante de `NoteMutation` por exaustão compilada, corrida
+      schemas, pureza das leituras, toda variante de `NoteMutation` (a exaustão passou a ser
+      realmente estrutural na 4.1R1, abaixo), corrida
       entre dois clientes, texto não salvo na janela sobrevivendo a um agente obsoleto, protocolo
       privado incompatível recusado sem fallback, aliases do store compartilhando um lease,
       identidade da nota, conteúdo hostil e stdout limpo. Um gate novo, `mcp-boundary`, verifica o
       limite headless — sem GTK, sem pilha HTTP/TLS/OAuth/SSE, sem banco, sem abertura de arquivo ou
       processo filho no `noteit-mcp/src`, sem escrita em stdout e com exatamente um lugar capaz de
-      construir uma mutação condicional. O MCP Inspector oficial confirmou o catálogo e o fluxo
+      construir uma mutação condicional; a 4.1R1 acrescentou a ele as regras que faltavam sobre
+      APIs de rede diretas. O MCP Inspector oficial confirmou o catálogo e o fluxo
       completo contra o binário de release. Contrato do agente em `docs/mcp.md`, justificativa no
       ADR-045.
+- [x] **Fase 4.1R1 — Hardening da auditoria MCP.** Uma auditoria independente aceitou o
+      comportamento do `noteit-mcp` e encontrou outra coisa: três lugares onde a documentação
+      prometia uma garantia mecânica que o mecanismo não entregava. Nenhum era um bug — o servidor
+      fazia a coisa certa — mas cada um era uma proteção que não protegia, e essas são piores que
+      nenhuma, porque a próxima pessoa a mexer no código acredita nelas. As três foram reproduzidas
+      antes de qualquer correção e fechadas.
+
+      **`std::net` passava (AUD-01).** O boundary recusava crates de rede pelo nome. Um
+      `std::net::TcpListener::bind("127.0.0.1:9999")` dentro de um handler compilou e o gate
+      respondeu `MCP boundary OK`: a biblioteca padrão não aparece em `cargo tree`. "Sem rede"
+      passou a ser verificado em quatro camadas — o grafo de dependências, as *features resolvidas*
+      (`tokio` sem `net`, de modo que `tokio::net` não exista neste build), o código do crate
+      (nenhum `std::net`, nenhum tipo de socket, Unix inclusive) e o **processo em execução**, que
+      uma suíte nova inspeciona por `/proc/<pid>/fd`. As três primeiras descrevem o programa que foi
+      escrito; a quarta pergunta ao núcleo o que ele tem aberto, e a resposta é três descritores e
+      socket nenhum.
+
+      **A matriz de mutações tinha duas fontes de verdade (AUD-02).** O `match` exaustivo forçava
+      uma decisão sobre cada variante nova, mas a lista iterada era escrita à mão: uma variante
+      remendada no `match` para compilar e esquecida na lista teria sido decidida e nunca
+      exercitada. A matriz passou a ser declarada uma vez, por uma macro que gera a lista e o
+      `match` das mesmas linhas — a linha que resolve o erro de compilação é agora a mesma que
+      produz o valor testado. Provado injetando uma variante no Core: erro de compilação nomeando-a;
+      acrescentada uma linha, os testes passaram a exercitá-la sozinhos.
+
+      **`outcome_is_known` não era exaustiva (AUD-03).** Escrita com `matches!` e nunca chamada, ela
+      prometia que um `WriteOutcomeKind` novo faria alguém olhar para a fronteira. `matches!`
+      responde `false` para o padrão que não lista, então a variante nova compilava e ninguém olhava
+      para nada. Saiu do crate e virou um `match` exaustivo em teste, que prende a decisão real —
+      a saída MCP deliberadamente não publica `kind`, porque o agente sabe qual tool chamou.
+      Demonstrado lado a lado: com uma variante injetada, o guard novo não compila e o antigo
+      compilava e passava.
+
+      Também nesta subfase: a contagem de testes MCP foi recalculada do próprio runner (60 de
+      integração + 4 unitários = 64; o relatório da 4.1 dizia "55" por ter subtraído os unitários do
+      total de integração em vez de somá-los); `cargo audit` foi executado de forma isolada, com
+      `CARGO_HOME` e `--root` descartáveis, sem instalar nada no sistema — 183 dependências, 1239
+      advisories, **zero vulnerabilidades e zero avisos**; e uma afirmação exagerada em
+      `contract.rs` foi corrigida, pois aquele arquivo não importa nada do Core e o erro de
+      compilação de uma renomeação aparece em `domain.rs`.
+
+      **Nada do comportamento mudou.** Nenhuma tool foi acrescentada, removida ou alterada, e o
+      catálogo publicado é byte a byte idêntico ao da 4.1 — verificado comparando a saída do MCP
+      Inspector oficial antes e depois. Justificativa no ADR-046.
 - [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.

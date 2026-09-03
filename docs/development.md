@@ -172,11 +172,19 @@ O crate dedicado `noteit-core` define o limite do domínio e da persistência. `
 
 `scripts/check-mcp-boundary` verifica mais do que a árvore de dependências,
 porque o servidor MCP tem mais coisas a não fazer: nenhuma pilha HTTP, TLS,
-OAuth, SSE ou WebSocket; nenhum banco de dados nem watcher; nenhuma abertura
-direta de arquivo, travessia de diretório ou processo filho no `noteit-mcp/src`;
-nenhuma escrita em stdout, que pertence ao protocolo; e — a regra central da
-fase — exatamente um lugar onde uma mutação de nota existente é construída, com
-uma `revision` obrigatória e nunca opcional. Ver `docs/mcp.md`.
+OAuth, SSE, WebSocket ou de socket; `tokio` resolvido **sem** a feature `net`,
+de modo que `tokio::net` não exista neste build; nenhum `std::net` e nenhum tipo
+de socket, de nenhuma família, no `noteit-mcp/src`; nenhum banco de dados nem
+watcher; nenhuma abertura direta de arquivo, travessia de diretório ou processo
+filho; nenhuma escrita em stdout, que pertence ao protocolo; e — a regra central
+da fase — exatamente um lugar onde uma mutação de nota existente é construída,
+com uma `revision` obrigatória e nunca opcional.
+
+As três regras de rede são estáticas, e uma verificação estática descreve o
+programa que foi escrito e não o que roda. Por isso `mcp-tests` inclui
+`noteit-mcp/tests/mcp_no_network.rs`, que inicia o binário real, dá trabalho a
+ele e lê `/proc/<pid>/fd` para conferir que o processo não segura socket
+nenhum. Ver `docs/mcp.md`.
 
 ## Executando com um store descartável
 

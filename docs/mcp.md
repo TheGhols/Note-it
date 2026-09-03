@@ -209,6 +209,15 @@ por que recusou?        code
 `commit_state` está presente em toda resposta de gravação, inclusive nas
 recusas, porque é o campo que responde “posso repetir?”.
 
+A resposta **não** traz um campo `kind`. A interface de máquina do
+`noteit --json` traz, porque um documento por execução precisa dizer qual
+comando o produziu; aqui o agente sabe qual tool chamou, e um
+`content_appended` ao lado de uma resposta de `noteit_append` não lhe diz nada
+de novo. É uma decisão, e está presa por um `match` exaustivo sobre
+`WriteOutcomeKind` em `noteit-mcp/tests/mcp_contract_decisions.rs`: um resultado
+novo no Core não compila até alguém decidir se ele continua implícito na tool
+chamada ou se passou a ser algo que o agente precisa saber.
+
 ### Leituras
 
 ```jsonc
@@ -379,6 +388,27 @@ escolhível por argumento.
 **Nenhum shell.** Nada aqui monta uma linha de comando, e nada aqui inicia um
 processo.
 
+**Sem rede, verificado em quatro camadas.** A frase "stdio only" só vale se algo
+a impuser, e nenhuma das camadas abaixo basta sozinha:
+
+| Camada | O que fecha | Onde |
+| --- | --- | --- |
+| Grafo de dependências | nenhum crate de HTTP, TLS, OAuth, SSE, WebSocket ou socket | `scripts/check-mcp-boundary` regra 2 |
+| Features resolvidas | `tokio` sem a feature `net`, então `tokio::net` **não existe** neste build | regra 2b |
+| Código do crate | nenhum `std::net`, nenhum tipo de socket, de nenhuma família | regra 5b |
+| Processo em execução | o servidor real não segura socket nenhum | `noteit-mcp/tests/mcp_no_network.rs` |
+
+A terceira camada é a que faltava até a auditoria 4.1R1, e a lacuna era real:
+`std::net` está na biblioteca padrão, então um `TcpListener::bind` dentro de um
+handler de tool não aparece em árvore de dependências nenhuma. A quarta pergunta
+ao próprio sistema operacional, por `/proc/<pid>/fd`, o que o processo realmente
+tem aberto — porque uma verificação estática descreve o programa que foi
+escrito, e não o que roda.
+
+Unix sockets também são recusados no código deste crate. O socket de controle
+privado é real e necessário, e pertence ao `noteit-core`: este crate alcança a
+autoridade **chamando-a**, nunca abrindo um socket por conta própria.
+
 **Conteúdo é conteúdo.** Aspas, barras invertidas, novas linhas, tabulações,
 Unicode, emoji, RTL legítimo, controles bidi, sequências ANSI, caracteres de
 controle, Markdown hostil, strings que parecem caminhos e strings que parecem
@@ -425,6 +455,8 @@ o servidor MCP **não** mudou `schema_version`.
 | Autoridade, lixeira, aliases de store, protocolo privado | `noteit-mcp/tests/mcp_authority.rs` |
 | Identidade da nota e conteúdo hostil | `noteit-mcp/tests/mcp_identity_and_content.rs` |
 | O protocolo MCP em si | `noteit-mcp/tests/mcp_protocol.rs` |
+| Nenhum socket aberto pelo processo real | `noteit-mcp/tests/mcp_no_network.rs` |
+| Decisões do contrato, presas por `match` exaustivo | `noteit-mcp/tests/mcp_contract_decisions.rs` |
 | Limite headless, sem rede, sem shell | `scripts/check-mcp-boundary` |
 
 Todas usam o binário real, processos reais, soquetes reais e stores descartáveis

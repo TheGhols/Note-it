@@ -2,8 +2,15 @@
 //!
 //! Every type here is part of a published contract, and nothing in it is
 //! derived from a Core type's own `Serialize`. A field is named here on
-//! purpose, so a rename inside `noteit-core` is a compile error in this file
-//! rather than a silently changed schema for somebody's agent.
+//! purpose, so a rename inside `noteit-core` cannot silently change the schema
+//! somebody's agent is generating types from.
+//!
+//! Where that rename *does* surface is [`crate::domain`], which is the file
+//! that imports the Core's types and translates them into these — this module
+//! imports nothing from `noteit-core` at all, and a claim that a Core rename
+//! breaks compilation *here* would be wrong. It breaks compilation one file
+//! over, which is the point: the translation is a place, and it is a place
+//! somebody has to edit.
 //!
 //! ## The one rule this module exists to enforce
 //!

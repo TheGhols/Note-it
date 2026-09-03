@@ -824,3 +824,128 @@ listado nos mesmos lugares que os outros dois — `scripts/check`, o workflow,
 divergir. `docs/mcp.md` documenta o contrato do agente. `SCHEMA_VERSION` do
 `noteit --json` **não** mudou: são contratos independentes, e o MCP ter passado a
 existir não é um fato sobre o documento que o `--json` publica.
+
+## ADR-046: Um gate só vale o que ele reprova, e três alegações da Fase 4.1 não eram reprováveis
+
+**Contexto.** A auditoria independente da Fase 4.1 aceitou o comportamento do
+`noteit-mcp` e encontrou outra coisa: três lugares onde a documentação e os
+comentários prometiam uma garantia mecânica que o mecanismo não entregava. Não
+eram bugs — o servidor fazia a coisa certa — mas eram *proteções que não
+protegiam*, e uma proteção que não protege é pior que nenhuma, porque a próxima
+pessoa a mexer no código vai acreditar nela.
+
+As três foram reproduzidas antes de qualquer correção:
+
+1. **`std::net` passava.** O boundary recusava crates de rede pelo nome —
+   `reqwest`, `hyper`, `axum`, TLS, OAuth, WebSocket. Um
+   `std::net::TcpListener::bind("127.0.0.1:9999")` dentro de um handler de tool
+   compilou e o gate respondeu `MCP boundary OK`. A biblioteca padrão não
+   aparece em `cargo tree`, e a afirmação "o gate impede que o `noteit-mcp`
+   ganhe rede" era, literalmente, sobre dependências e não sobre rede.
+
+2. **A matriz de mutações tinha duas fontes de verdade.** O `match` exaustivo de
+   `tool_for` de fato não compilava sem uma decisão sobre cada variante nova,
+   mas a lista iterada, `every_mutation()`, era escrita à mão. Uma variante
+   acrescentada ao Core, remendada no `match` para compilar e esquecida na
+   lista, teria sido *decidida e nunca exercitada* — e a asserção que guardava a
+   lista continuaria lendo nove.
+
+3. **`outcome_is_known` não era exaustivo.** Escrita com `matches!` e marcada
+   `#[allow(dead_code)]`, ela prometia que "adicionar um outcome kind ao Core
+   faz alguém olhar para esta fronteira". `matches!` é uma expressão que
+   responde `false` para o padrão que não lista: a variante nova compilava, a
+   função — que ninguém chamava — respondia `false`, e ninguém olhava para nada.
+
+**Decisão.**
+
+1. **"Sem rede" passa a ser verificado em quatro camadas**, porque nenhuma
+   basta sozinha: o grafo de dependências (nenhum crate de rede ou de socket);
+   as *features resolvidas* (`tokio` sem `net`, de modo que `tokio::net` não
+   exista neste build); o código do crate (nenhum `std::net`, nenhum tipo de
+   socket, de nenhuma família, Unix inclusive); e o **processo em execução**,
+   por `/proc/<pid>/fd`.
+2. **A matriz de `NoteMutation` passa a ser declarada uma vez**, por uma macro
+   declarativa que gera a lista iterada e o `match` a partir das mesmas linhas.
+3. **`outcome_is_known` sai do crate** e é substituída por um `match` exaustivo
+   sem braço curinga em `noteit-mcp/tests/mcp_contract_decisions.rs`.
+
+**Justificativa.**
+
+1. **Por que quatro camadas e não uma regra melhor.** Não existe uma. Cada
+   camada fecha exatamente o que as outras não alcançam. O grafo não vê a
+   `std`. As features fecham a rota assíncrona de vez — `tokio::net` deixa de
+   *existir*, então usá-la é erro de compilação e não algo que uma regra
+   precisa reconhecer pelo nome —, mas unificação de features é do grafo
+   inteiro e uma dependência qualquer pode ligá-la sem este manifesto pedir,
+   por isso ela é *asserida* e não presumida. A regra textual pega `std::net`,
+   e é textual porque não há alternativa: Rust estável não tem lint
+   personalizado, e um `#![forbid]` não alcança um caminho da biblioteca
+   padrão.
+
+   A quarta camada existe porque as três primeiras compartilham um ponto cego:
+   **descrevem o programa que foi escrito, não o que roda.** Perguntar ao
+   núcleo o que o processo tem aberto é a única das quatro que não pode ser
+   enganada por uma grafia. Um servidor que fala em entrada e saída padrão e
+   chama o `noteit-core` tem três descritores e nenhum socket; foi isso que se
+   mediu, e é isso que o teste exige.
+
+   Unix sockets são recusados no código deste crate junto com os de rede, e
+   isso não é excesso de zelo: o socket de controle privado existe, é
+   necessário, e é do `noteit-core`. Um segundo lugar que fala com o store por
+   socket seria uma segunda implementação do handover — a mesma razão pela qual
+   a autoridade mudou de crate no ADR-045.
+
+2. **Por que uma macro, tendo dito que macros complexas devem ser evitadas.**
+   Porque o problema era literalmente ter escrito a mesma informação duas
+   vezes, e a única correção que fecha isso é derivá-la de uma declaração só. A
+   macro tem uma regra e produz três itens; não há recursão, não há
+   `tt`-munching e não há geração condicional. O que ela compra é preciso: uma
+   variante nova continua sendo erro de compilação no `match`, e agora *a linha
+   que resolve o erro de compilação é a mesma linha que produz o valor
+   iterado*. Não há mais um jeito de satisfazer o compilador e ainda assim
+   pular a variante.
+
+   Cada linha também confere, em tempo de execução, que o valor que carrega é
+   mesmo da variante que nomeia. Um copiar-e-colar que testasse uma variante
+   duas vezes e outra nenhuma satisfaria tanto o `match` quanto a contagem, e
+   passaria despercebido — que é exatamente a classe de erro que esta ADR
+   existe para fechar, aplicada a si mesma.
+
+   A asserção de contagem foi mantida, com a descrição corrigida: ela **não** é
+   a prova de exaustividade, é a verificação do sentido contrário — que nenhuma
+   variante ganhou duas linhas, e que o número ainda é o nove que a
+   documentação descreve.
+
+3. **Por que a guarda de `WriteOutcomeKind` virou um teste.** Um `match`
+   exaustivo é a construção certa: ele não compila com uma variante faltando,
+   diga-se isso de um `matches!` ou não. O que mudou junto foi o lugar. A
+   função vivia no crate sem ninguém chamá-la, existindo só para ser compilada
+   — e código que existe só para ser compilado é código que a próxima pessoa
+   apaga por parecer morto. Num teste ela é compilada por `cargo test`, que é
+   estágio do `scripts/check` e step do CI, então o erro de compilação chega no
+   mesmo instante em que chegaria; e ganha um nome que diz o que está sendo
+   protegido: a decisão de **não** publicar `kind` na saída MCP, porque o
+   agente sabe qual tool chamou.
+
+   Essa decisão também passou a ser verificada no fio, e não só no tipo: o
+   teste lê uma resposta real e o `outputSchema` publicado, e exige que `kind`
+   não esteja em nenhum dos dois. Uma decisão presa que o código tivesse
+   deixado de honrar em silêncio seria pior que nenhuma.
+
+**Consequências.** O `noteit-mcp` não mudou de comportamento: nenhuma tool foi
+acrescentada, removida ou alterada, nenhum schema publicado mudou, e a garantia
+central de `expected_revision` está exatamente onde estava. O que mudou é o que
+o repositório consegue *reprovar*. Ficam duas suítes novas —
+`mcp_no_network.rs` e `mcp_contract_decisions.rs` —, três regras novas no
+boundary, e uma correção de redação em `contract.rs`, que dizia que uma
+renomeação no Core seria erro de compilação "neste arquivo" quando aquele
+arquivo não importa nada do Core; o erro aparece em `domain.rs`, que é onde a
+tradução mora.
+
+`mcp_no_network.rs` depende de `/proc` e portanto de Linux. Isso é aceitável e
+está declarado: o Note-it é uma aplicação Wayland com dependência de
+layer-shell, o CI roda em Arch Linux, e procfs é como esta pergunta se responde
+na plataforma que o projeto tem. Num sistema sem `/proc` a suíte falha dizendo
+que não pôde olhar, em vez de passar por não ter olhado — uma verificação que
+passa em silêncio quando não conseguiu verificar é a mesma classe de erro que
+esta ADR fecha.
