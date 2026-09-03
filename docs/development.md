@@ -30,7 +30,7 @@ step a step:
 
 | Job | Comandos |
 | --- | --- |
-| Rust Checks & Tests | `scripts/doctor rust`, depois `scripts/check` com `rust-format`, `rust-check`, `rust-clippy`, `core-boundary`, `cli-boundary`, `core-tests`, `cli-tests`, `workspace-tests` |
+| Rust Checks & Tests | `scripts/doctor rust`, depois `scripts/check` com `rust-format`, `rust-check`, `rust-clippy`, `core-boundary`, `cli-boundary`, `mcp-boundary`, `core-tests`, `cli-tests`, `mcp-tests`, `workspace-tests` |
 | Frontend Checks & Tests | `scripts/doctor frontend`, depois `scripts/check` com `frontend-install`, `frontend-lint`, `frontend-test`, `frontend-build` |
 
 `scripts/build.sh` **não** faz parte do CI: o build release é entrypoint local. O
@@ -95,19 +95,22 @@ Estágios, e o comando exato que cada um executa:
 | `rust-clippy` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | `core-boundary` | `scripts/check-core-boundary` |
 | `cli-boundary` | `scripts/check-cli-boundary` |
+| `mcp-boundary` | `scripts/check-mcp-boundary` |
 | `core-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core` |
 | `cli-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli` |
+| `mcp-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-mcp` |
 | `workspace-tests` | `cargo test --workspace` |
 | `frontend-install` | `pnpm install --frozen-lockfile`, em `ui/` |
 | `frontend-lint` | `pnpm run lint`, em `ui/` |
 | `frontend-test` | `pnpm run test`, em `ui/` |
 | `frontend-build` | `pnpm run build`, em `ui/` |
 
-`core-tests` e `cli-tests` não são redundantes com `workspace-tests`, embora
-repitam testes: eles provam uma propriedade diferente — que o Core e a CLI ainda
-funcionam **sem display, sem compositor e sem barramento de sessão**. Rodá-los
-dentro da sessão ambiente não provaria nada, por isso as variáveis são
-removidas.
+`core-tests`, `cli-tests` e `mcp-tests` não são redundantes com
+`workspace-tests`, embora repitam testes: eles provam uma propriedade diferente
+— que o Core, a CLI e o servidor MCP ainda funcionam **sem display, sem
+compositor e sem barramento de sessão**. Rodá-los dentro da sessão ambiente não
+provaria nada, por isso as variáveis são removidas. Para o MCP isso não é um
+detalhe: é exatamente o ambiente em que um host o inicia.
 
 O frontend usa pnpm e só pnpm. Não há fallback para npm, yarn ou bun: um
 gerenciador diferente resolve uma árvore diferente, e um build que trocou de
@@ -158,9 +161,22 @@ Quando quiser menos que o build completo:
 cargo build --workspace
 cargo build -p note-it      # Adaptador da GUI desktop
 cargo build -p noteit-cli   # Adaptador da CLI headless (binário: noteit)
+cargo build -p noteit-mcp   # Adaptador MCP local por stdio (binário: noteit-mcp)
 ```
 
-O crate dedicado `noteit-core` define o limite do domínio e da persistência. O crate `noteit-cli` é o adaptador da CLI headless. Ambos devem continuar utilizáveis sem GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri ou uma sessão gráfica. `scripts/check-core-boundary` e `scripts/check-cli-boundary` verificam suas árvores de dependências do Cargo em busca de bibliotecas de desktop proibidas; de forma independente, a compilação impede que o código-fonte do Core e da CLI importe bibliotecas não declaradas em seus manifestos.
+`scripts/build.sh` só diz `pronto` depois de conferir que os três binários
+existem e são executáveis: `target/release/note-it`, `target/release/noteit` e
+`target/release/noteit-mcp`.
+
+O crate dedicado `noteit-core` define o limite do domínio e da persistência. `noteit-cli` é o adaptador da CLI headless e `noteit-mcp` é o adaptador MCP local. Os três devem continuar utilizáveis sem GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri ou uma sessão gráfica. `scripts/check-core-boundary`, `scripts/check-cli-boundary` e `scripts/check-mcp-boundary` verificam suas árvores de dependências do Cargo em busca de bibliotecas de desktop proibidas; de forma independente, a compilação impede que o código-fonte importe bibliotecas não declaradas em seus manifestos.
+
+`scripts/check-mcp-boundary` verifica mais do que a árvore de dependências,
+porque o servidor MCP tem mais coisas a não fazer: nenhuma pilha HTTP, TLS,
+OAuth, SSE ou WebSocket; nenhum banco de dados nem watcher; nenhuma abertura
+direta de arquivo, travessia de diretório ou processo filho no `noteit-mcp/src`;
+nenhuma escrita em stdout, que pertence ao protocolo; e — a regra central da
+fase — exatamente um lugar onde uma mutação de nota existente é construída, com
+uma `revision` obrigatória e nunca opcional. Ver `docs/mcp.md`.
 
 ## Executando com um store descartável
 

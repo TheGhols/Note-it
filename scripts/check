@@ -33,8 +33,10 @@ readonly RUST_STAGES=(
   rust-clippy
   core-boundary
   cli-boundary
+  mcp-boundary
   core-tests
   cli-tests
+  mcp-tests
   workspace-tests
 )
 
@@ -60,8 +62,10 @@ Estágios Rust:
   rust-clippy      cargo clippy --workspace --all-targets --all-features -- -D warnings
   core-boundary    scripts/check-core-boundary
   cli-boundary     scripts/check-cli-boundary
+  mcp-boundary     scripts/check-mcp-boundary
   core-tests       cargo test -p noteit-core, sem display
   cli-tests        cargo test -p noteit-cli, sem display e sem barramento
+  mcp-tests        cargo test -p noteit-mcp, sem display e sem barramento
   workspace-tests  cargo test --workspace (inclui o harness de isolamento)
 
 Estágios do frontend, todos executados em ui/:
@@ -87,16 +91,23 @@ stage_rust_check() { cargo check --workspace; }
 stage_rust_clippy() { cargo clippy --workspace --all-targets --all-features -- -D warnings; }
 stage_core_boundary() { "$REPO_ROOT/scripts/check-core-boundary"; }
 stage_cli_boundary() { "$REPO_ROOT/scripts/check-cli-boundary"; }
+stage_mcp_boundary() { "$REPO_ROOT/scripts/check-mcp-boundary"; }
 
-# The two headless suites are not made redundant by `workspace-tests`. They
-# prove a different property: that the Core and the CLI still work with no
-# display, no compositor and no session bus at all. Running them under the
-# ambient session would prove nothing, so the variables are stripped.
+# The three headless suites are not made redundant by `workspace-tests`. They
+# prove a different property: that the Core, the CLI and the MCP server still
+# work with no display, no compositor and no session bus at all. Running them
+# under the ambient session would prove nothing, so the variables are stripped.
 stage_core_tests() {
   env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core
 }
 stage_cli_tests() {
   env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
+}
+# The MCP server is spawned by a host and speaks on a pipe. It has to work in a
+# session with no display, no compositor and no bus at all, because that is
+# where a host will start it.
+stage_mcp_tests() {
+  env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-mcp
 }
 stage_workspace_tests() { cargo test --workspace; }
 

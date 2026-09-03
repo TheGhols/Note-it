@@ -28,8 +28,8 @@ scripts/build.sh      # build release do projeto inteiro
    [docs/development.md](docs/development.md) para a linha de comando da sua
    distribuição.
 2. **`scripts/check all`** roda todos os gates: formato, `cargo check`, Clippy,
-   os dois boundary scripts, as suítes headless do Core e da CLI, os testes do
-   workspace e os quatro gates do frontend. Ele para no primeiro que falhar e
+   os três boundary scripts, as suítes headless do Core, da CLI e do servidor
+   MCP, os testes do workspace e os quatro gates do frontend. Ele para no primeiro que falhar e
    devolve o código daquele gate. Para rodar um só, use o nome do estágio —
    `scripts/check rust-clippy`, `scripts/check frontend-test`;
    `scripts/check --help` lista todos. Sem argumento, equivale a

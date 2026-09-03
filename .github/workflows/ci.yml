@@ -44,11 +44,17 @@ jobs:
       - name: CLI Dependency Boundary
         run: scripts/check cli-boundary
 
+      - name: MCP Dependency Boundary
+        run: scripts/check mcp-boundary
+
       - name: Headless Core Tests
         run: scripts/check core-tests
 
       - name: Headless CLI Tests
         run: scripts/check cli-tests
+
+      - name: Headless MCP Tests
+        run: scripts/check mcp-tests
 
       - name: Run Rust Unit Tests
         run: scripts/check workspace-tests

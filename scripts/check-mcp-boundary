@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Fails if the headless MCP server ever gains a desktop, network or shell
+# dependency — or a way to reach the store that is not the Core's.
+#
+# `noteit-mcp` is spawned by a host, speaks one protocol on standard input and
+# standard output, and writes through the one write authority. Every check
+# below is one of those sentences, made mechanical.
+#
+# The dependency tree is read with `--edges normal`, which is the graph the
+# shipped binary is built from. Development dependencies are deliberately out
+# of scope: the test harness is a client and the server is not, and a suite
+# that drives a real process is allowed things the process itself is not.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+fail() {
+  printf 'MCP boundary violation: %s\n' "$*" >&2
+  exit 1
+}
+
+tree="$(cargo tree -p noteit-mcp --edges normal --prefix none)"
+
+# The crate's own code, with its comments taken off.
+#
+# Every source rule below is about what the program *does*, and the
+# documentation in this crate necessarily talks about the very things the rules
+# forbid — it explains why `println!` is not allowed, and that sentence must not
+# be the thing that fails the gate.
+sources="noteit-mcp/src"
+code() {
+  # shellcheck disable=SC2016
+  find "$sources" -name '*.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||'
+}
+
+offending() {
+  local pattern="$1" found
+  found="$(code | grep -E "$pattern" || true)"
+  [ -n "$found" ] && printf '%s\n' "$found" >&2 && return 0
+  return 1
+}
+
+# 1. Headless. No compositor, no toolkit, no WebView.
+if grep -Eq '^(gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-))( |$)' <<<"$tree"; then
+  fail "noteit-mcp depends on GTK, GDK, WebKitGTK, layer-shell, Wayland or Niri."
+fi
+
+# 2. Local. The store is a local resource and reaching it over a network is not
+#    a feature that was left out — it is a thing this must never grow. An HTTP
+#    stack arriving here is how a "just for the inspector" server becomes a
+#    listening socket nobody meant to open.
+if grep -Eq '^(reqwest|hyper|axum|tower-http|actix-web|warp|rustls|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite)( |$)' <<<"$tree"; then
+  fail "noteit-mcp pulled in an HTTP, TLS, OAuth, SSE or WebSocket stack; this server speaks stdio only."
+fi
+
+# 3. No second store and no watcher. `serde_yaml` is in the graph through
+#    `noteit-core`, which is the one crate entitled to decide what a note file
+#    is; what must never appear is a *second* opinion about storage here.
+if grep -Eq '^(rusqlite|sqlx|sled|redb|notify|inotify|opentelemetry|tracing-subscriber)( |$)' <<<"$tree"; then
+  fail "noteit-mcp pulled in a database, a filesystem watcher or a telemetry exporter."
+fi
+
+# 4. The rmcp features actually asked for, stated in one place and checked
+#    here, because a convenient `default-features` would quietly bring back
+#    everything above.
+manifest="noteit-mcp/Cargo.toml"
+grep -q 'default-features = false' "$manifest" \
+  || fail "noteit-mcp does not disable rmcp's default features."
+for forbidden in 'transport-streamable-http' 'server-side-http' 'client-side-sse' '"auth"' '"client"' 'reqwest'; do
+  if grep -q -- "$forbidden" "$manifest"; then
+    fail "noteit-mcp's manifest enables \`$forbidden\`."
+  fi
+done
+
+# 5. No filesystem of its own, and no shell. The code may not open a note,
+#    walk a directory or start a process: every one of those is a way around
+#    the writer lease, the note's identity and the precondition on a write.
+offending 'serde_yaml' \
+  && fail "noteit-mcp/src parses YAML directly; a note file is noteit-core's to read."
+offending 'std::process::(Command|Child)|Command::new|std::fs::|OpenOptions::new' \
+  && fail "noteit-mcp/src opens files, walks directories or starts processes directly."
+
+# 6. It never runs the CLI and reads its answer. The chain has to stay typed.
+offending 'noteit_cli|--json' \
+  && fail "noteit-mcp/src reaches for the command line instead of the domain."
+
+# 7. Standard output belongs to the protocol. A single print corrupts the
+#    JSON-RPC stream, so the code may not contain one at all — `mcp_surface`
+#    proves the running process is clean, and this proves nobody added one.
+offending '(^|[^a-z_])(println!|print!|dbg!)' \
+  && fail "noteit-mcp/src writes to standard output; stdout belongs to the MCP protocol."
+
+# 8. Every mutation of an existing note takes its precondition. There is one
+#    place in this crate that builds a conditional write, and it is the type
+#    that cannot exist without a revision. A second construction site is how a
+#    tool would come to write unconditionally.
+built="$(code | grep -cE 'WriteOperation::MutateNote' || true)"
+if [ "$built" != "1" ]; then
+  code | grep -E 'WriteOperation::MutateNote' >&2 || true
+  fail "MutateNote is built in $built places; every mutation must go through ExistingNoteMutation."
+fi
+
+# 9. And it is required *in the type*, not merely checked somewhere.
+#
+#    Three things are asserted, because each one alone can be got around:
+#    the one struct that reaches the store holds a parsed revision and not an
+#    option; every tool input that names an existing note is declared by the
+#    one macro that hardcodes the field; and no input anywhere deserializes an
+#    optional revision. The output side is deliberately out of scope — a
+#    `revision_conflict` answers with `Option<String>` fields because a refusal
+#    that is not a conflict has nothing to put in them.
+grep -q 'expected_revision: NoteRevision,' "$sources/domain.rs" \
+  || fail "ExistingNoteMutation no longer holds a parsed, non-optional revision."
+grep -q 'pub expected_revision: RevisionArgument,' "$sources/contract.rs" \
+  || fail "the mutation input macro no longer requires expected_revision."
+declared="$(grep -c '^mutation_input! {' "$sources/contract.rs" || true)"
+[ "$declared" = "8" ] \
+  || fail "there are $declared mutation inputs and the catalogue documents 8; a new one must go through mutation_input!."
+offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
+  && fail "an optional precondition type appeared at the MCP boundary."
+
+printf '%s\n' "MCP boundary OK: noteit-mcp is headless, stdio-only, writes through noteit-core, and every mutation of an existing note requires a revision."
