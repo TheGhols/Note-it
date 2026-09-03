@@ -122,6 +122,19 @@ Um aviso nunca significa que os dados foram perdidos do resultado: as notas que 
 
 `commit_state` é `null` para um comando que não poderia ter confirmado nada (qualquer leitura e um erro de análise que não nomeou nenhum comando).
 
+Em um `revision_conflict`, e somente nele, o erro carrega mais dois campos, para que
+nenhum consumidor precise ler prosa para descobrir a versão atual:
+
+```json
+{
+  "code": "revision_conflict",
+  "message": "…",
+  "commit_state": "not_committed",
+  "expected_revision": "6d2f…",
+  "current_revision": "a91c…"
+}
+```
+
 ---
 
 ## 4. Dados por comando
@@ -199,6 +212,7 @@ Cada comando de gravação responde com a mesma forma:
       "kind": "content_appended",
       "changed": true,
       "commit_state": "committed",
+      "revision": "a91c…",
       "ui_sync": { "status": "ok", "code": null, "message": null }
     }
   },
@@ -236,6 +250,7 @@ Em caso de sucesso, `commit_state` segue `changed`: `true` → `committed`, `fal
 | `warning`       | `committed`     | gravada, com algo adicional a relatar | **não**                       |
 | `ok`            | `not_needed`    | o estado solicitado já existia     | desnecessário                   |
 | `error`         | `not_committed` | nada foi escrito                 | só depois de consertar a causa     |
+| `error`         | `not_committed` | `revision_conflict`: a base mudou   | **nunca sem reler** — ver §10   |
 | `indeterminate` | `unknown`       | pode ou não ter sido escrito | **nunca** — uma pessoa deve olhar  |
 
 `not_committed` não significa "tentar novamente agora". Significa que nada foi escrito; se a repetição ajuda depende de `error.code` — um `not_found` não se tornará um `found` na segunda tentativa.
@@ -313,6 +328,7 @@ Tokens estáveis. O `message` ao lado deles é uma prosa de diagnóstico legíve
 | `validation`            | 2     | `not_committed`         | uma regra de domínio recusou o valor                      |
 | `not_found`             | 1     | `not_committed`         | nenhuma nota ou entrada de lixo responde a esse seletor      |
 | `ambiguous_selector`    | 1     | `not_committed`         | mais de uma nota responde a esse seletor          |
+| `revision_conflict`     | 1     | `not_committed`         | a nota mudou desde a leitura — ver §10                |
 | `stale_task_ref`        | 1     | `not_committed`         | a nota mudou; essa referência já não nomeia a tarefa  |
 | `ambiguous_task_ref`    | 1     | `not_committed`         | a referência corresponde a mais de uma tarefa             |
 | `writer_busy`           | 1     | `not_committed`         | outro gravador Note-it mantém o store               |
@@ -345,7 +361,120 @@ Um consumidor que solicitou JSON nunca recebe um parágrafo em português.
 
 ---
 
-## 10. O que deliberadamente não está aqui
+## 10. `revision` — escrita condicional e concorrência otimista
+
+O lease de escrita responde *quem pode gravar agora*. Ele serializa os gravadores e
+não deixa dois se intercalarem. A pergunta que ele não faz é a outra:
+
+> **a nota ainda é a versão que eu li?**
+
+Um cliente programático lê num instante, decide, e grava depois. Entre os dois, uma
+pessoa pode ter digitado na janela aberta e outro comando pode ter gravado. Sem uma
+precondição, essa gravação apaga o que aconteceu no meio — as duas operações
+respondem `committed` e nada falha. É exatamente essa perda que a `revision` fecha.
+
+### O que é
+
+Um token **opaco**: 64 caracteres hexadecimais minúsculos, o SHA-256 da forma
+canônica exata em que a nota seria persistida. Cobre tudo que uma gravação
+posterior poderia sobrescrever — identificador, corpo, tags, propriedades, cor,
+papel, tamanho de fonte, carimbos de tempo e o front matter de terceiros que o
+Note-it preserva.
+
+Não recalcule. Guarde o valor que recebeu e devolva-o.
+
+Deliberadamente **não** é `mtime` (resolução variável, alterável por qualquer um,
+duas gravações no mesmo tique) nem `updated_at` (informação de domínio: move com o
+texto e fica parado numa mudança de tag, então uma escrita obsoleta passaria).
+
+### Como obtê-la
+
+`noteit ler <id> --json` publica `data.note.revision`. Toda gravação bem-sucedida
+também devolve `data.write.revision`: a revisão do que ficou no disco quando
+`changed` é `true`, e a que a nota já tinha quando é `false`. Encadear operações
+não exige uma leitura extra.
+
+### Como usar
+
+```bash
+REV=$(noteit ler "$ID" --json | jq -r .data.note.revision)
+# … o cliente decide o que gravar …
+noteit editar "$ID" "$NOVO_CORPO" --if-revision "$REV" --json
+```
+
+No protocolo o campo se chama `expected_revision`; na linha de comando,
+`--if-revision`. Aceitam-no todas as mutações de nota existente: `adicionar`,
+`editar`, `tags adicionar/remover`, `propriedades definir/remover` e
+`tarefas concluir/reabrir`. `criar` não tem base anterior; `lixeira restaurar` é um
+movimento e não uma edição, e por isso também não a aceita.
+
+Uma revisão malformada é `usage_error` e **nunca** é tratada como "sem precondição".
+
+### A regra para agentes
+
+> **Toda gravação construída a partir de uma leitura anterior deve enviar a
+> `revision` daquela leitura.**
+
+Sem `--if-revision` a gravação é incondicional e continua sendo *last writer wins* —
+que é o que uma pessoa digitando `noteit editar` está pedindo, e por isso continua
+sendo o padrão.
+
+### Conflito
+
+```json
+{
+  "status": "error",
+  "command": "edit",
+  "data": null,
+  "error": {
+    "code": "revision_conflict",
+    "commit_state": "not_committed",
+    "expected_revision": "6d2f…",
+    "current_revision": "a91c…"
+  }
+}
+```
+
+Um conflito significa, sem exceção: **nenhum byte da nota mudou**, nenhum backup foi
+criado, nenhum `updated_at` se moveu, nenhum temporário sobreviveu.
+
+### Nova tentativa
+
+Um conflito **não** pode ser reexecutado automaticamente. Nem com a
+`current_revision` que ele devolveu: esse valor existe para o cliente saber que a
+nota se moveu, não para reenviar a mesma escrita por cima do que ele ainda não
+olhou. Repetir com ela seria a sobrescrita silenciosa que a precondição existe para
+impedir.
+
+O caminho é sempre o mesmo:
+
+```text
+conflito → reler → reconciliar conscientemente → gravar de novo
+```
+
+Não há merge automático. Um conflito continua um conflito até alguém decidir.
+
+### Nota aberta com texto ainda não salvo
+
+Quando a nota está aberta e o editor tem texto que o autosave ainda não gravou, a
+precondição é comparada contra **esse** estado vivo, não contra o arquivo. Qualquer
+revisão obtida por leitura é, por definição, antiga em relação a ele, então a
+gravação é recusada — que é o resultado correto: um agente não pode apagar o
+parágrafo que a pessoa acabou de digitar. Nenhuma leitura publica a revisão do
+estado vivo, e tentar de novo com a `current_revision` devolvida conflita de novo.
+
+### Escritores fora do Note-it
+
+A garantia é sobre **escritores cooperativos** — tudo que passa pelo lease do
+Note-it. Um editor externo que grava direto no `.md` não coopera com nada, e um
+sistema de arquivos comum não oferece compare-and-swap de conteúdo. Uma gravação
+condicional pelo CLI ainda o protege, porque relê o arquivo antes de mutar e recusa
+um cliente obsoleto; a janela aberta do Note-it, porém, ainda pode sobrescrever uma
+edição externa no seu próximo autosave. Ver `docs/storage.md`.
+
+---
+
+## 11. O que deliberadamente não está aqui
 
 - **O protocolo de controle privado.** Os identificadores de solicitação, a versão do protocolo, o caminho do soquete, o bloqueio do gravador, a geração da janela e o caminho de gravação executado são uma conversa entre dois processos Note-it. Eles não fazem parte desta API e nunca são serializados nela, embora ambos usem JSON.
 - **Caminhos do sistema de arquivos**, exceto em `status`, onde são o ponto do comando.
@@ -354,7 +483,7 @@ Um consumidor que solicitou JSON nunca recebe um parágrafo em português.
 
 ---
 
-## 11. Responder às perguntas importantes, sem ler uma palavra
+## 12. Responder às perguntas importantes, sem ler uma palavra
 
 | pergunta                             | campo                                             |
 | ------------------------------------ | ------------------------------------------------- |

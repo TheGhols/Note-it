@@ -33,6 +33,60 @@ Nada aqui pertence ao store. Ele descreve esta inicialização, não tem sentido
 
 A instância de desktop adquire o lease antes de poder salvar qualquer coisa e o mantém até o processo terminar. `noteit` o adquire durante um comando quando está livre; quando o lease está retido, envia a alteração ao proprietário por `control.sock`; quando está retido e o proprietário está inacessível, não altera nada e informa o problema. Consulte o ADR-038.
 
+## Revisão da nota — precondição de escrita
+
+O lease acima e a revisão descrita aqui são **mecanismos ortogonais** e nenhum
+substitui o outro:
+
+| mecanismo | pergunta que responde | escopo |
+| --- | --- | --- |
+| writer lease (`flock`) | *quem pode gravar agora?* | serializa gravadores; nenhum se intercala |
+| revisão da nota | *o documento ainda é aquele que eu li?* | detecta uma base obsoleta |
+
+O lease sozinho serializa duas gravações e mesmo assim perde a primeira, quando a
+segunda foi construída sobre uma leitura antiga: ambas tomam o lease, ambas
+respondem `committed`, e o que a primeira escreveu desaparece. A revisão sozinha
+não impediria dois processos de escrever o mesmo arquivo ao mesmo tempo. São
+necessários os dois.
+
+A revisão é o SHA-256 dos bytes canônicos exatos em que a nota seria persistida —
+a mesma serialização que o gravador atômico grava. Assim há **uma** definição do
+que constitui uma nota, e a revisão cobre por construção tudo que uma gravação
+posterior poderia sobrescrever: identificador, corpo, tags, propriedades,
+aparência, carimbos e o front matter de terceiros preservado. É publicada como 64
+caracteres hexadecimais minúsculos e é opaca para quem a consome.
+
+Não é `mtime` — resolução variável, alterável por qualquer processo e igual para
+duas gravações no mesmo tique. Não é `updated_at` — esse campo é informação de
+domínio, move com o texto e fica parado numa mudança de tag, então uma gravação
+obsoleta passaria por cima de uma etiqueta recém-adicionada.
+
+Uma mutação pode carregar `expected_revision`. A comparação acontece contra a
+**base exata sobre a qual a mutação será aplicada**, e não contra o arquivo: no
+caminho direto é o documento lido do disco; na autoridade do desktop é o documento
+que a janela mantém com o texto ainda não salvo do editor já incorporado. Comparar
+com o arquivo diria "não mudou" e deixaria um agente apagar o parágrafo que a
+pessoa acabou de digitar.
+
+Sem `expected_revision` a gravação é incondicional e continua *last writer wins*,
+que é o que uma pessoa pede ao digitar `noteit editar`. Uma recusa por revisão não
+altera byte algum, não gera backup, não move `updated_at` e não deixa temporário.
+O contrato completo para consumidores está em `docs/machine-interface.md` §10.
+
+### Limite: escritores que não cooperam
+
+A garantia vale para escritores que passam pelo lease do Note-it. Um editor externo
+que grava direto no `.md` não coopera com nada, e um sistema de arquivos comum não
+oferece compare-and-swap de conteúdo — não existe garantia atômica a prometer
+contra um processo arbitrário. Uma gravação condicional pelo CLI ainda protege,
+porque relê o arquivo antes de mutar e recusa um cliente obsoleto. Uma janela
+aberta do Note-it, porém, mantém o documento em memória desde que a nota foi
+carregada e ainda pode sobrescrever uma edição externa no autosave seguinte. A
+primitiva detecta essa divergência; recusar o salvamento com base nela exige antes
+decidir o que a janela oferece à pessoa nesse momento, porque um salvamento
+recusado também impede o fechamento — e isso é desenho de interface, não uma
+verificação a mais.
+
 ## Campos de aparência de nota
 
 | Campo | Significado | Padrão quando ausente |
