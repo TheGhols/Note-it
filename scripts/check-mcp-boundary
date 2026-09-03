@@ -2,16 +2,31 @@
 # Fails if the headless MCP server ever gains a desktop, network or shell
 # dependency — or a way to reach the store that is not the Core's.
 #
-# "No network" is checked three ways, because no one of them is enough:
+# "No network" is checked four ways, because no one of them is enough:
 #
 #   the dependency graph   no HTTP, TLS, OAuth, SSE, WebSocket or socket crate
 #   the resolved features  Tokio without `net`, so `tokio::net` does not exist
-#   the crate's own code   no `std::net`, no socket type, no socket of any family
+#   this crate's own code  no `std::net`, no socket type, no socket at all
+#   the Core it calls      no *internet* API, while keeping its Unix socket
 #
-# The third is the one that was missing until the 4.1R1 audit: `std::net` is in
-# the standard library, so a `TcpListener::bind` in a tool handler appears in no
-# dependency tree at all. `noteit-mcp/tests/mcp_no_network.rs` then checks the
-# same property from the outside, on the running process.
+# The third was missing until the 4.1R1 audit: `std::net` is in the standard
+# library, so a `TcpListener::bind` in a tool handler appears in no dependency
+# tree at all. The fourth was missing until 4.1R1.1, and it is the one that
+# makes the claim cover the whole path rather than one crate of it — the MCP
+# adapter is a thin shell over `noteit-core`, so "the MCP server has no network"
+# is only true if the Core it calls into has none either.
+#
+# That fourth rule has to draw a line the others do not. The Core deliberately
+# speaks over a **Unix** socket: that is how a write reaches the instance
+# holding the store, and forbidding it would delete the architecture rather
+# than protect it. So the rule refuses AF_INET and AF_INET6 by name and leaves
+# AF_UNIX alone — and then asserts the Unix mechanism is still there, so the
+# rule can never be satisfied by removing the thing it was meant to permit.
+#
+# `noteit-mcp/tests/mcp_no_network.rs` checks the running process from outside.
+# What it can and cannot prove is written down there; the short version is that
+# socket *presence* is sound and socket *family* is best-effort, which is
+# exactly why the static rules above carry the family guarantee.
 #
 # `noteit-mcp` is spawned by a host, speaks one protocol on standard input and
 # standard output, and writes through the one write authority. Every check
@@ -127,6 +142,42 @@ offending '\b(std::net|tokio::net|os::unix::net|socket2|mio::net)\b' \
 offending '\b(TcpListener|TcpStream|UdpSocket|UnixListener|UnixDatagram|UnixStream|ToSocketAddrs|SocketAddr|SocketAddrV4|SocketAddrV6)\b' \
   && fail "noteit-mcp/src names a socket type; this server speaks stdio and calls noteit-core, and nothing else."
 
+# 5c. And neither does the Core it calls into — but only as far as the
+#     internet goes.
+#
+#     The MCP adapter is a thin shell: nearly everything it does happens inside
+#     `noteit-core`. A rule that stopped at `noteit-mcp/src` would leave "this
+#     server has no network" resting on one crate of a two-crate path.
+#
+#     The line is drawn at the address family, not at the word "socket". The
+#     Core's authority connects to the instance holding the store over a Unix
+#     domain socket; that is the design (see ADR-045), and a grep that forbade
+#     sockets outright here would demand deleting it.
+core_sources="noteit-core/src"
+core_code() {
+  find "$core_sources" -name '*.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||'
+}
+core_offending() {
+  local pattern="$1" found
+  found="$(core_code | grep -E "$pattern" || true)"
+  [ -n "$found" ] && printf '%s\n' "$found" >&2 && return 0
+  return 1
+}
+
+core_offending '\b(std::net|tokio::net|socket2|mio::net)\b' \
+  && fail "noteit-core/src reaches for an internet networking API; the MCP server calls into this crate, and its Unix authority socket is the only socket on that path."
+core_offending '\b(TcpListener|TcpStream|UdpSocket|ToSocketAddrs|SocketAddrV4|SocketAddrV6|IpAddr|Ipv4Addr|Ipv6Addr)\b' \
+  && fail "noteit-core/src names an internet socket or address type; AF_UNIX is permitted here and AF_INET/AF_INET6 are not."
+
+#     And the permitted mechanism must still exist. Without this, the two rules
+#     above would be satisfied perfectly by a Core that had lost the authority
+#     handover altogether — passing a network check by deleting the feature it
+#     was written to protect.
+grep -q 'std::os::unix::net::UnixStream' "$core_sources/authority.rs" \
+  || fail "noteit-core/src/authority.rs no longer connects over a Unix socket; the rules above permit AF_UNIX precisely because this is how a write reaches the instance holding the store."
+
 # 6. It never runs the CLI and reads its answer. The chain has to stay typed.
 offending 'noteit_cli|--json' \
   && fail "noteit-mcp/src reaches for the command line instead of the domain."
@@ -166,4 +217,4 @@ declared="$(grep -c '^mutation_input! {' "$sources/contract.rs" || true)"
 offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
   && fail "an optional precondition type appeared at the MCP boundary."
 
-printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket of any family, writes through noteit-core, and every mutation of an existing note requires a revision."
+printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket at all, reaches the Core over its Unix authority socket and nothing else, and every mutation of an existing note requires a revision."
