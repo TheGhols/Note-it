@@ -5,10 +5,24 @@
 //! variant added to `NoteMutation` in the Core with a tool to match, and
 //! nobody remembering to give it the precondition.
 //!
-//! The mechanism is a single exhaustive `match` on the Core's own enum, with
-//! no wildcard arm. Adding a variant makes this file stop compiling, and the
-//! compiler names it. That is the point: a guarantee that depends on somebody
-//! remembering is not a guarantee.
+//! ## Why the matrix is declared, and not written twice
+//!
+//! The first version of this file had two artefacts: an exhaustive `match`
+//! from variant to tool, and a hand-written list of sample values to iterate.
+//! The `match` did force a decision about every new variant — it does not
+//! compile without one — but the *list* did not follow. A variant added to the
+//! Core, given an arm in the `match` to make it compile, and forgotten in the
+//! list would have been decided and never exercised, and the count assertion
+//! guarding the list would have gone on reading nine.
+//!
+//! So there is one declaration now. [`mutation_matrix!`] takes one row per
+//! variant and generates both the sample value and the `match` arm from it.
+//! The `match` still has no wildcard, so a new variant fails to compile and the
+//! compiler names it; and because the row that satisfies the compiler is the
+//! same row that produces the value, there is no way to satisfy it and still
+//! skip the variant. Each row also checks at run time that its sample really is
+//! the variant the row names, so a copy-paste that tests one variant twice and
+//! another never is caught rather than hidden.
 
 mod support;
 
@@ -16,79 +30,109 @@ use noteit_core::write::NoteMutation;
 use serde_json::json;
 use support::{read_revision, McpClient, Sandbox};
 
-/// Which MCP tool asks for this mutation, and the arguments that reach it.
+/// The matrix itself: one row per `NoteMutation` variant.
 ///
-/// Exhaustive, deliberately without a `_` arm. A new [`NoteMutation`] variant
-/// is a compile error here.
-fn tool_for(
-    mutation: &NoteMutation,
-    note_id: &str,
-    task_ref: &str,
-) -> (&'static str, serde_json::Value) {
-    match mutation {
-        NoteMutation::Append { .. } => (
-            "noteit_append",
-            json!({ "note_id": note_id, "text": "ACRESCENTADO" }),
-        ),
-        NoteMutation::ReplaceBody { .. } => (
-            "noteit_edit",
-            json!({ "note_id": note_id, "body": "SUBSTITUÍDO" }),
-        ),
-        NoteMutation::ClearBody => ("noteit_edit", json!({ "note_id": note_id, "clear": true })),
-        NoteMutation::AddTag { .. } => (
-            "noteit_tag_add",
-            json!({ "note_id": note_id, "tag": "Nova" }),
-        ),
-        NoteMutation::RemoveTag { .. } => (
-            "noteit_tag_remove",
-            json!({ "note_id": note_id, "tag": "Medicina" }),
-        ),
-        NoteMutation::SetProperty { .. } => (
-            "noteit_property_set",
-            json!({ "note_id": note_id, "key": "fonte", "value": "outra" }),
-        ),
-        NoteMutation::RemoveProperty { .. } => (
-            "noteit_property_remove",
-            json!({ "note_id": note_id, "key": "fonte" }),
-        ),
-        NoteMutation::CompleteTask { .. } => (
-            "noteit_task_complete",
-            json!({ "note_id": note_id, "task_ref": task_ref }),
-        ),
-        NoteMutation::ReopenTask { .. } => (
-            "noteit_task_reopen",
-            json!({ "note_id": note_id, "task_ref": task_ref }),
-        ),
-    }
+/// A row is `Variant: <sample value> => "<tool>", <arguments>`, where the
+/// arguments are a closure of `(note_id, task_ref)` so that a row can name the
+/// note it acts on. From the rows the macro builds:
+///
+/// - [`every_mutation`], the values the tests below iterate;
+/// - [`tool_for`], an exhaustive `match` with **no** wildcard arm.
+///
+/// Both come from the same rows, so they cannot drift apart. See the module
+/// documentation for why that matters.
+macro_rules! mutation_matrix {
+    ($( $variant:ident : $sample:expr => $tool:literal , $arguments:expr );+ $(;)?) => {
+        /// One value of every variant, in the order the rows declare them.
+        ///
+        /// Complete because [`tool_for`] is: a variant with no row does not
+        /// compile there, and a row that compiles produces a value here.
+        fn every_mutation() -> Vec<NoteMutation> {
+            vec![
+                $({
+                    let sample = $sample;
+                    // A row whose value is not the variant it names would test
+                    // one variant twice and another never — silently, since
+                    // both the count and the `match` would still be satisfied.
+                    assert!(
+                        matches!(sample, NoteMutation::$variant { .. }),
+                        concat!(
+                            "the matrix row for ",
+                            stringify!($variant),
+                            " carries a value of a different variant",
+                        )
+                    );
+                    sample
+                }),+
+            ]
+        }
+
+        /// Which MCP tool asks for this mutation, and the arguments it takes.
+        ///
+        /// Exhaustive, deliberately without a `_` arm. A new [`NoteMutation`]
+        /// variant is a compile error here, and the compiler names it.
+        fn tool_for(
+            mutation: &NoteMutation,
+            note_id: &str,
+            task_ref: &str,
+        ) -> (&'static str, serde_json::Value) {
+            match mutation {
+                $( NoteMutation::$variant { .. } => ($tool, ($arguments)(note_id, task_ref)) ),+
+            }
+        }
+
+        /// The variants the matrix names, for the tests that report on it.
+        fn matrix_variants() -> Vec<&'static str> {
+            vec![ $( stringify!($variant) ),+ ]
+        }
+    };
 }
 
-/// One value of every variant.
-///
-/// Also exhaustive by construction: `tool_for` is called for each of these and
-/// its `match` has no wildcard, so a variant that is missing from this list
-/// still cannot be missing from the decision — and the count assertion below
-/// catches a variant added to the enum and to `tool_for` but not to here.
-fn every_mutation() -> Vec<NoteMutation> {
-    vec![
-        NoteMutation::Append {
-            payload: "x".into(),
-        },
-        NoteMutation::ReplaceBody { body: "x".into() },
-        NoteMutation::ClearBody,
-        NoteMutation::AddTag { tag: "x".into() },
-        NoteMutation::RemoveTag { tag: "x".into() },
-        NoteMutation::SetProperty {
-            key: "k".into(),
-            value: "v".into(),
-        },
-        NoteMutation::RemoveProperty { key: "k".into() },
-        NoteMutation::CompleteTask {
-            task_ref: "abcd1234".into(),
-        },
-        NoteMutation::ReopenTask {
-            task_ref: "abcd1234".into(),
-        },
-    ]
+mutation_matrix! {
+    Append:
+        NoteMutation::Append { payload: "x".into() }
+        => "noteit_append",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "text": "ACRESCENTADO" });
+
+    ReplaceBody:
+        NoteMutation::ReplaceBody { body: "x".into() }
+        => "noteit_edit",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "body": "SUBSTITUÍDO" });
+
+    ClearBody:
+        NoteMutation::ClearBody
+        => "noteit_edit",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "clear": true });
+
+    AddTag:
+        NoteMutation::AddTag { tag: "x".into() }
+        => "noteit_tag_add",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "tag": "Nova" });
+
+    RemoveTag:
+        NoteMutation::RemoveTag { tag: "x".into() }
+        => "noteit_tag_remove",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "tag": "Medicina" });
+
+    SetProperty:
+        NoteMutation::SetProperty { key: "k".into(), value: "v".into() }
+        => "noteit_property_set",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "key": "fonte", "value": "outra" });
+
+    RemoveProperty:
+        NoteMutation::RemoveProperty { key: "k".into() }
+        => "noteit_property_remove",
+           |note_id: &str, _task_ref: &str| json!({ "note_id": note_id, "key": "fonte" });
+
+    CompleteTask:
+        NoteMutation::CompleteTask { task_ref: "abcd1234".into() }
+        => "noteit_task_complete",
+           |note_id: &str, task_ref: &str| json!({ "note_id": note_id, "task_ref": task_ref });
+
+    ReopenTask:
+        NoteMutation::ReopenTask { task_ref: "abcd1234".into() }
+        => "noteit_task_reopen",
+           |note_id: &str, task_ref: &str| json!({ "note_id": note_id, "task_ref": task_ref });
 }
 
 fn seeded_note(client: &mut McpClient) -> (String, String) {
@@ -110,14 +154,35 @@ fn seeded_note(client: &mut McpClient) -> (String, String) {
     (note_id, task_ref)
 }
 
-/// Nine variants today. The number is asserted so that adding one without
-/// deciding anything about it fails here as well as at the `match`.
+/// The matrix names nine variants, each exactly once.
+///
+/// This is **not** the exhaustiveness proof — that is the `match` inside
+/// `mutation_matrix!`, which does not compile if a variant has no row. What is
+/// checked here is the other direction, which a compiler cannot check: that no
+/// variant was given two rows, and that the number still matches the nine the
+/// documentation and `docs/mcp.md` describe. A tenth appearing here is a
+/// prompt to update those, not a failure of the guarantee.
 #[test]
-fn the_matrix_covers_every_mutation_the_core_has() {
+fn the_matrix_names_every_variant_exactly_once() {
+    let named = matrix_variants();
+    let mut unique = named.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        named.len(),
+        unique.len(),
+        "a variant has more than one row in the matrix: {named:?}"
+    );
     assert_eq!(
         every_mutation().len(),
+        named.len(),
+        "the generated list and the generated match disagree about the row count"
+    );
+    assert_eq!(
+        named.len(),
         9,
-        "a mutation was added or removed; the matrix below has to be looked at"
+        "the matrix now names {} variants; the documentation says nine and has to be updated: {named:?}",
+        named.len()
     );
 }
 
