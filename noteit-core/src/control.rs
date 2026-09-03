@@ -55,7 +55,33 @@ use uuid::Uuid;
 /// Both ends state it and both ends check it. A mismatch is refused before any
 /// field is looked at, let alone acted on: two versions that disagree about
 /// what `append` means must never meet halfway.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// ## When this has to move
+///
+/// **Whenever a change could make one end act on a request differently from
+/// what the other end meant** — a new field, a removed one, or a changed
+/// meaning. Adding a field is not automatically safe, and version 2 exists
+/// because of exactly that mistake:
+///
+/// `expected_revision` was added to [`WriteOperation::MutateNote`] without
+/// moving this number. Both ends still said "1", so the check passed; the
+/// older authority had no such field, and `serde` dropped the unknown key
+/// without a word. A client that asked for a *conditional* write would have
+/// had it performed **unconditionally** — the one outcome the precondition
+/// exists to prevent, reached through the version check that was supposed to
+/// stop it.
+///
+/// Version 2 is what closes that. An authority speaking 1 refuses a request
+/// stating 2, and an authority speaking 2 refuses a request stating 1, so two
+/// builds that disagree about what a precondition means cannot write for each
+/// other at all. The person is told to restart the running Note-it rather than
+/// being given a quietly weaker guarantee.
+///
+/// This number is **not** the machine interface's `schema_version`. That one
+/// describes the public `--json` document and is unchanged; this one describes
+/// a private socket between two processes of the same application. They move
+/// for different reasons and must not be tied together.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The largest frame either end will accept, in bytes.
 ///

@@ -958,3 +958,194 @@ fn r016_h_a_write_that_the_window_already_persisted_makes_an_older_client_stale(
     assert_eq!(fs::read(note_path(&tmp, &id)).expect("bytes"), bytes_before);
     assert!(body_of(&tmp, &id).contains("USER-TYPED"));
 }
+
+// --------------------------------------------------------------------- R016-K'
+
+#[test]
+fn r016_k_reopening_a_task_honours_the_precondition_like_every_other_mutation() {
+    // `ReopenTask` was the one mutation the R4 matrix exercised only through
+    // its sibling. Stated on its own here, because "consistency of the
+    // protocol" is worth more than an argument that it must behave the same.
+    let (tmp, core) = store();
+    let id = create(&core, "- [ ] Comprar pão");
+
+    // Complete it first, so there is something to reopen.
+    let tasks = core
+        .list_tasks(TaskStateFilter::Pending, &Default::default(), None)
+        .expect("tasks");
+    let pending_ref = tasks.items[0].task_ref.as_str().to_string();
+    mutate(
+        &core,
+        &id,
+        NoteMutation::CompleteTask {
+            task_ref: pending_ref,
+        },
+        None,
+    )
+    .expect("complete");
+    assert!(task::parse_tasks(id, "", &body_of(&tmp, &id))[0].checked);
+
+    // The reference for the completed task, and the revision that describes it.
+    let tasks = core
+        .list_tasks(TaskStateFilter::Completed, &Default::default(), None)
+        .expect("tasks");
+    let completed_ref = tasks.items[0].task_ref.as_str().to_string();
+    let stale = revision_now(&core, &id);
+
+    // Somebody else moves the note on, without touching the task itself, so the
+    // task reference stays valid and the revision is the only thing that is not.
+    mutate(
+        &core,
+        &id,
+        NoteMutation::AddTag {
+            tag: "compras".to_string(),
+        },
+        None,
+    )
+    .expect("move the note on");
+    let bytes_before = fs::read(note_path(&tmp, &id)).expect("bytes");
+
+    // Stale revision: refused, and the file does not move.
+    let error = mutate(
+        &core,
+        &id,
+        NoteMutation::ReopenTask {
+            task_ref: completed_ref.clone(),
+        },
+        Some(stale),
+    )
+    .expect_err("a reopen built on a base that moved on must be refused");
+    assert!(
+        matches!(error, WriteError::RevisionConflict { .. }),
+        "got {error:?}"
+    );
+    assert_eq!(
+        fs::read(note_path(&tmp, &id)).expect("bytes"),
+        bytes_before,
+        "a refused reopen must not change a single byte"
+    );
+    assert!(
+        task::parse_tasks(id, "", &body_of(&tmp, &id))[0].checked,
+        "the task is still completed: nothing was applied"
+    );
+
+    // Current revision: accepted, and the task really reopens.
+    let fresh = revision_now(&core, &id);
+    let outcome = mutate(
+        &core,
+        &id,
+        NoteMutation::ReopenTask {
+            task_ref: completed_ref,
+        },
+        Some(fresh),
+    )
+    .expect("a reopen on the current base is accepted");
+    assert_eq!(outcome.kind, WriteOutcomeKind::TaskReopened);
+    assert!(
+        outcome.revision.is_some(),
+        "a committed reopen reports its revision"
+    );
+    assert!(!task::parse_tasks(id, "", &body_of(&tmp, &id))[0].checked);
+}
+
+#[test]
+fn r016_every_mutation_variant_passes_the_same_guard() {
+    // Exhaustive over `NoteMutation`: if a variant is ever added, this stops
+    // compiling until somebody decides whether it takes a precondition.
+    // Every variant listed here is proven against a stale base below.
+    fn variants() -> Vec<NoteMutation> {
+        let sample = NoteMutation::Append {
+            payload: "x".to_string(),
+        };
+        match &sample {
+            // The match exists to make the compiler enumerate the type; the
+            // list returned is what the test actually exercises.
+            NoteMutation::Append { .. }
+            | NoteMutation::ReplaceBody { .. }
+            | NoteMutation::ClearBody
+            | NoteMutation::AddTag { .. }
+            | NoteMutation::RemoveTag { .. }
+            | NoteMutation::SetProperty { .. }
+            | NoteMutation::RemoveProperty { .. }
+            | NoteMutation::CompleteTask { .. }
+            | NoteMutation::ReopenTask { .. } => {}
+        }
+        vec![
+            NoteMutation::Append {
+                payload: "x".to_string(),
+            },
+            NoteMutation::ReplaceBody {
+                body: "x".to_string(),
+            },
+            NoteMutation::ClearBody,
+            NoteMutation::AddTag {
+                tag: "nova".to_string(),
+            },
+            NoteMutation::RemoveTag {
+                tag: "existente".to_string(),
+            },
+            NoteMutation::SetProperty {
+                key: "k".to_string(),
+                value: "v".to_string(),
+            },
+            NoteMutation::RemoveProperty {
+                key: "presente".to_string(),
+            },
+            NoteMutation::CompleteTask {
+                task_ref: "deadbeef".to_string(),
+            },
+            NoteMutation::ReopenTask {
+                task_ref: "deadbeef".to_string(),
+            },
+        ]
+    }
+
+    for mutation in variants() {
+        let (tmp, core) = store();
+        let id = create(&core, "- [ ] tarefa");
+        mutate(
+            &core,
+            &id,
+            NoteMutation::AddTag {
+                tag: "existente".to_string(),
+            },
+            None,
+        )
+        .expect("seed tag");
+        mutate(
+            &core,
+            &id,
+            NoteMutation::SetProperty {
+                key: "presente".to_string(),
+                value: "s".to_string(),
+            },
+            None,
+        )
+        .expect("seed property");
+
+        let stale = revision_now(&core, &id);
+        mutate(
+            &core,
+            &id,
+            NoteMutation::Append {
+                payload: "MOVED-ON".to_string(),
+            },
+            None,
+        )
+        .expect("move on");
+        let before = fs::read(note_path(&tmp, &id)).expect("bytes");
+
+        // Whatever else may be wrong with the request, the revision is checked
+        // first and the file is untouched.
+        let error = mutate(&core, &id, mutation.clone(), Some(stale)).unwrap_err();
+        assert!(
+            matches!(error, WriteError::RevisionConflict { .. }),
+            "{mutation:?} must refuse a stale base before anything else, got {error:?}"
+        );
+        assert_eq!(
+            fs::read(note_path(&tmp, &id)).expect("bytes"),
+            before,
+            "{mutation:?} changed the file while refusing"
+        );
+    }
+}
