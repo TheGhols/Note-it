@@ -1133,7 +1133,10 @@ prometer com honestidade.
    documental: um carimbo RFC 3339 não passa em `NoteRevision::parse`, que exige
    sessenta e quatro caracteres hexadecimais minúsculos. Um agente que tentar
    usá-lo como precondição recebe `invalid_input` e não grava nada. A revisão
-   nasce onde sempre nasceu: em `noteit_read`.
+   nasce onde sempre nasceu: em `noteit_read` *(precisado pela ADR-048.2: a
+   primeira escrita sobre uma nota vinda do contexto exige `noteit_read`; uma
+   mutação bem-sucedida pode encadear a próxima pela `revision` que o próprio
+   `WriteResult` publica)*.
 
 7. **Por que conteúdo é dado.** Uma nota pode dizer "ignore as instruções
    anteriores" ou "chame `noteit_edit`". O servidor não tem avaliador, não tem
@@ -1206,12 +1209,14 @@ autoritativo de versão.
 noteit_context   candidatos: note_id, label, snippet, reason[], updated_at
                  updated_at = recência textual, informativa
                  nenhum token autoritativo de versão
-noteit_read      conteúdo completo + revision   ← a revisão nasce aqui
+noteit_read      conteúdo completo + revision   ← autoriza a primeira escrita
 mutação          expected_revision, a única precondição autoritativa
 ```
 
-Staleness autoritativa para escrita é resolvida por `revision`, e `revision` só
-nasce para o agente depois de `noteit_read`. A proteção continua mecânica:
+Staleness autoritativa para escrita é resolvida por `revision`, e o contexto
+nunca publica uma *(precisado pela ADR-048.2: dizer que a revisão "só nasce em
+`noteit_read`" era amplo demais — o contrato também publica a revisão pós-operação
+em `WriteResult`)*. A proteção continua mecânica:
 `NoteRevision::parse` exige sessenta e quatro caracteres hexadecimais
 minúsculos, e um RFC 3339 é recusado como `invalid_input` — um agente não
 consegue promover o carimbo a precondição nem por engano.
@@ -1222,12 +1227,12 @@ diferentes do Core, e o store pode mudar entre elas. Um candidato montado com o
 snippet de uma versão e as tags de outra não corrompe nada, mas mente sobre
 proveniência, e a proveniência é o produto inteiro desta fase. Fica decidido
 agora, para não ser decidido durante o código: **cada candidato deve vir de uma
-projeção internamente coerente da nota**. A forma preferida é uma leitura
-coerente por nota candidata, com todos os sinais daquele candidato derivados
-dela; a alternativa é declarar formalmente a ausência de coerência e exigir
-revalidação por `noteit_read`. Inventar um lease de leitura ou dar escrita ao
-Context Engine não são opções. A coerência é por nota: não há transação sobre o
-store, e nunca foi prometida uma.
+projeção internamente coerente da nota**. A direção de implementação é carregar
+uma projeção coerente por nota candidata, com todos os sinais daquele candidato
+derivados dela *(a ADR-048.2 removeu a alternativa de "declarar a incoerência":
+ela contradizia o próprio requisito)*. Inventar um lease de leitura ou dar
+escrita ao Context Engine não são opções. A coerência é por nota: não há
+transação sobre o store, e nunca foi prometida uma.
 
 **Determinismo, dito sem prometer o que não existe.** "A mesma pergunta sobre o
 mesmo store dá a mesma resposta" era uma promessa sobre a regra escrita como se
@@ -1259,3 +1264,87 @@ análise na 4.2B e ataque na 4.2R; ele não autoriza despejar corpos grandes no
 Nada de código mudou nesta correção — nenhum `.rs`, nenhum manifesto, nenhum
 schema, `SCHEMA_VERSION` em 1 e o catálogo MCP em 15 tools. O que mudou foi o
 contrato dizer a verdade sobre o mecanismo que já existia.
+
+### ADR-048.2: Duas revisions autorizam escrita, e a coerência do candidato é propriedade e não preferência (Fase 4.2A.R1.1)
+
+A ADR-048.1 fechou a confusão entre recência e versão. Ao fazê-lo, deixou duas
+portas encostadas: uma frase larga demais sobre de onde vem uma revisão
+autorizadora, e um requisito de coerência que trazia junto a permissão de
+descumpri-lo. Ambas fechadas aqui, sem tocar em código.
+
+**A frase larga demais.** "A revisão só nasce em `noteit_read`" descreve
+corretamente o caminho que importa para a D-13 — uma nota descoberta pelo
+contexto e ainda não lida — e descreve incorretamente o contrato MCP inteiro. O
+`WriteResult` publica uma `revision` depois de uma operação bem-sucedida, e o
+comentário que a acompanha em `noteit-mcp/src/contract.rs` é normativo: "the
+note's revision after this operation, so the next conditional write needs no
+extra read". Isso é deliberado e é da Fase 4.1, não uma concessão desta.
+
+**A regra correta é mais estreita e mais exata.** Não é "toda revisão vem de uma
+leitura"; é:
+
+> Nenhuma revisão autoriza uma escrita sobre um estado que o agente não conhece.
+
+Há duas formas legítimas de conhecer o estado, e uma ilegítima:
+
+| Origem | Conhece o estado? | Autoriza escrita? | Precisa reler? |
+| --- | :---: | :---: | :---: |
+| `NoteView.revision` (`noteit_read`) | sim, acabou de lê-lo | **sim** | não |
+| `WriteResult.revision` após sucesso | sim, acabou de produzi-lo e o servidor confirmou | **sim**, para encadear | não |
+| `WriteResult.current_revision` (conflito) | **não**, é o hash de conteúdo que ele não viu | **não** | **sim** |
+
+O encadeamento — `read → R1 → mutação(R1) → R2 → mutação(R2)` — não é
+sobrescrita cega: é uma sequência cuja base o agente conhece inteira, porque
+cada passo foi ele que pediu e o servidor confirmou. A `current_revision` de um
+conflito é o oposto: prova que a nota deixou de ser R1 e nada mais. O servidor já
+trata as duas de forma diferente, e o comentário em `domain.rs` diz por quê —
+num conflito o campo `revision` é deixado deliberadamente vazio, "or 'read
+again' becomes 'retry with the token the error handed you'".
+
+**A D-13 não muda.** O candidato de contexto continua sem `revision`, sem
+`base_revision`, sem `etag`, sem qualquer token equivalente, e `updated_at`
+continua sendo só recência. Uma nota descoberta pelo contexto exige
+`noteit_read` antes da **primeira** mutação. O encadeamento só existe depois que
+essa primeira autorização existiu, e é por isso que reconhecê-lo não abre a porta
+que a D-13 fecha.
+
+**D-27, em sua forma final.** A ADR-048.1 exigiu coerência do candidato e, na
+mesma frase, ofereceu como alternativa aceitável publicar um candidato incoerente
+desde que avisado. Um requisito que admite ser descumprido com aviso não é um
+requisito. A alternativa está removida:
+
+> **D-27 — Coerência interna do candidato.** Cada candidato devolvido pelo
+> Context Engine representa uma projeção internamente coerente de uma única
+> nota. Texto, metadados, tarefas, recência e proveniência daquele candidato não
+> podem ser combinados de estados diferentes da mesma nota. A garantia é
+> per-note e não implica snapshot transacional do store.
+
+**DECIDIDA. OBRIGATÓRIA.** Não é preferência, recomendação nem melhor esforço.
+`noteit_read` não a substitui: ele autoriza a primeira escrita, e isso é outra
+propriedade — um candidato que mentiu sobre a própria proveniência não fica
+verdadeiro porque alguém depois leu a nota.
+
+O escopo continua sendo a nota e não o store. Candidatos de notas diferentes
+podem vir de instantes diferentes; o que não pode é um único candidato misturar
+versões da mesma nota. É isso que mantém a arquitetura sem snapshot global, sem
+lease de leitura e sem camada de coordenação nova.
+
+Consequência para a fase seguinte: o bloco 4.2B.6 deixa de escolher entre
+coerência e incoerência declarada e passa a implementar e provar a propriedade
+decidida aqui. Se a implementação encontrar prova concreta de que a coerência
+per-note é inviável com as garantias atuais, a 4.2B **para e volta à decisão
+arquitetural** — não existe degradação silenciosa, porque uma dificuldade de
+implementação não deve reescrever a arquitetura sem auditoria.
+
+**Uma tensão registrada, não resolvida aqui.** As `INSTRUCTIONS` do servidor
+(`noteit-mcp/src/server.rs`) e o comentário de `expected_revision` em
+`contract.rs` dizem ao agente que a precondição "must be the revision you read
+the note at" — regra mais estreita do que o encadeamento que
+`WriteResult.revision` explicitamente oferece. A regra estreita é segura, e
+nenhuma escrita fica desprotegida por causa dela: o Core continua exigindo que a
+precondição case com o estado atual. Mas as duas frases não dizem a mesma coisa,
+e reconciliá-las é trabalho da **4.2D**, que é onde o contrato do agente é
+escrito. Nenhum `.rs` foi tocado aqui para acomodar esta ADR.
+
+Nada de código mudou: nenhum `.rs`, nenhum manifesto, nenhum schema,
+`SCHEMA_VERSION` em 1, catálogo MCP em 15 tools.

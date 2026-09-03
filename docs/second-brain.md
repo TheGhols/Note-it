@@ -365,7 +365,7 @@ grava nada.
 ```text
 noteit_context   → candidatos: note_id, label, snippet, reason[], updated_at
                    nenhum token autoritativo de versão
-noteit_read      → conteúdo completo + revision   ← a revisão nasce aqui
+noteit_read      → conteúdo completo + revision   ← autoriza a primeira escrita
 decisão do agente
 mutação com expected_revision   ← a única precondição autoritativa
 ```
@@ -374,6 +374,59 @@ Um agente que precise saber se a nota ainda é a que ele leu não olha um carimb
 ele lê a nota e compara `revision`, ou grava com `expected_revision` e deixa o
 Core reprovar com `revision_conflict`. Não existe atalho, e o contexto não abre
 um.
+
+### Três revisions, e só duas autorizam escrita
+
+A regra não é "toda `revision` vem de `noteit_read`". É mais estreita e mais
+exata:
+
+> **Nenhuma revisão autoriza uma escrita sobre um estado que o agente não
+> conhece.**
+
+O contrato MCP publica `revision` em três lugares, e eles não são equivalentes
+(`noteit-mcp/src/contract.rs`):
+
+| Origem | O agente conhece o estado? | Autoriza escrita? | Precisa reler? |
+| --- | :---: | :---: | :---: |
+| `NoteView.revision`, de `noteit_read` | **sim** — acabou de lê-lo | **sim** | não |
+| `WriteResult.revision`, após operação bem-sucedida | **sim** — acabou de produzi-lo, e o servidor confirmou | **sim**, para encadear | não |
+| `WriteResult.current_revision`, de um `revision_conflict` | **não** — é só o hash de conteúdo que ele não viu | **não** | **sim** |
+
+O que `noteit_context` publica não aparece nesta tabela, e é o ponto: ele não
+publica nenhuma das três.
+
+**Encadeamento é legítimo.** `WriteResult.revision` existe exatamente para isso
+— "the note's revision after this operation, so the next conditional write needs
+no extra read". Um agente que leu em R1, mandou uma mutação com
+`expected_revision = R1` e recebeu sucesso com R2 conhece R2: é o estado que ele
+mesmo pediu e que o servidor confirmou.
+
+```text
+noteit_read → R1 → mutação A(R1) → sucesso, R2 → mutação B(R2) → sucesso, R3
+```
+
+Nenhuma releitura obrigatória no meio. Isso não é sobrescrita cega; é uma
+sequência cuja base o agente conhece inteira.
+
+**`current_revision` nunca é.** Ela prova só que a nota deixou de ser R1. O
+conteúdo de R2 não vem junto — deliberadamente, diz o contrato: "enough to
+notice the note moved, and deliberately not enough to retry". Reenviá-la como
+`expected_revision` gravaria sobre uma mudança que ninguém olhou, e o `refused()`
+do servidor nem preenche `revision` num conflito, justamente para que "leia de
+novo" não vire "repita com o token que o erro te deu".
+
+```text
+mutação(R1) → revision_conflict, current_revision = R2
+              ↓
+        PROIBIDO: mutação(R2)
+              ↓
+        noteit_read → conteúdo atual + revision → decidir de novo
+```
+
+E a propriedade que a §8 e a D-13 protegem continua exatamente onde estava: uma
+nota **descoberta pelo contexto** e ainda não lida exige `noteit_read` antes da
+primeira mutação. O encadeamento só começa depois que essa primeira autorização
+existiu.
 
 ---
 
@@ -463,25 +516,60 @@ grava. O que se perde é a **proveniência**. O candidato afirma "esta nota, est
 trecho, por estes motivos" sobre uma nota que nunca existiu naquele estado, e a
 §9 inteira depende dessa afirmação ser verdadeira.
 
-Portanto, requisito da 4.2B:
+Portanto, **propriedade obrigatória** do Context Engine (D-27):
 
-> **Cada candidato deve ser derivado de uma projeção internamente coerente da
-> nota.** O Context Engine não pode combinar silenciosamente texto, metadados,
+> **Cada candidato é uma projeção internamente coerente de uma única nota.**
+> `note_id`, label, snippet, `matched_text`, `updated_at`, `reason[]` e os
+> sinais de texto, tag, propriedade e tarefa daquele candidato vêm todos da
+> mesma projeção daquela nota. O Context Engine não combina texto, metadados,
 > tarefas ou outros sinais obtidos de estados diferentes da mesma nota.
 
-A forma de cumpri-lo é decisão da 4.2B, com o código na mão, entre duas — e o
-requisito não pode ficar sem decisão:
+Isto **não** é preferência, recomendação nem melhor esforço. Não existe a opção
+de publicar um candidato incoerente com um aviso dizendo que ele pode ser
+incoerente: um candidato que talvez misture estados não é proveniência com
+ressalva, é proveniência falsa, e a §9 inteira depende dele dizer a verdade.
 
-| Opção | Como | Custo |
-| --- | --- | --- |
-| **A. projeção única por nota** *(preferida)* | uma leitura coerente por nota candidata, e todos os sinais daquele candidato derivados dela | uma leitura completa onde hoje um resumo bastaria |
-| B. incoerência declarada | documentar formalmente que não há projeção coerente, marcá-la na proveniência e exigir revalidação por `noteit_read` antes de qualquer uso consequente | o candidato passa a valer menos, e a resposta precisa dizer isso |
+Direção de implementação para a 4.2B: carregar uma projeção coerente de cada
+nota candidata e derivar dela todos os sinais daquele candidato. A rota concreta
+— uma leitura do Core já existente, ou uma API interna somente leitura nova — é
+decisão do bloco 4.2B.6; o **resultado** não está em aberto.
 
-O que **não** é opção: inventar um lease de leitura, ou dar ao Context Engine
-qualquer capacidade de escrita. Ele é somente leitura, e continua sendo.
+O que **não** é opção, em nenhuma rota: inventar um lease de leitura, exigir
+snapshot transacional do store, ou dar ao Context Engine qualquer capacidade de
+escrita. Ele é somente leitura, e continua sendo.
 
-A coerência é **por nota**, e só. Não há transação sobre o store, e a §9 já diz
-que notas diferentes podem vir de instantes diferentes.
+E `noteit_read` não conserta isto retrospectivamente. Ele é a autorização antes
+da primeira escrita (§10); não é uma desculpa para um candidato ter mentido
+sobre a própria proveniência. São propriedades diferentes:
+
+```text
+coerência do candidato   → a verdade do resultado de recuperação
+noteit_read              → a autorização antes da primeira escrita
+```
+
+### O escopo da coerência é a nota, não o store
+
+A garantia é **per-note**, e deliberadamente não mais que isso:
+
+```text
+aceitável      candidato A ← estado da nota A em T1
+               candidato B ← estado da nota B em T2
+               candidato C ← estado da nota C em T3
+
+proibido       candidato A ← snippet de A em T1
+                            + tags de A em T2
+                            + tarefas de A em T3
+```
+
+Não há transação sobre o store, a §9 já diz que notas diferentes podem vir de
+instantes diferentes, e é isso que mantém a arquitetura simples: sem snapshot
+global, sem lease de leitura, sem camada de coordenação nova, sem escrita.
+
+**Se a 4.2B descobrir que a coerência per-note é inviável** — impossível com as
+garantias atuais, ou só alcançável com mudança arquitetural grande, regressão,
+ou um lease/snapshot não previsto — a fase **para e volta à decisão
+arquitetural**. Não existe degradação silenciosa para candidato incoerente: uma
+dificuldade de implementação não reescreve a arquitetura sem auditoria.
 
 ---
 
@@ -598,9 +686,14 @@ Inalterado e não negociável:
 
 ```text
 noteit_read → revision → mutação com expected_revision
-revision_conflict  → reler, reavaliar, decidir de novo; nunca repetir
+mutação bem-sucedida → WriteResult.revision → pode encadear a próxima
+revision_conflict  → reler, reavaliar, decidir de novo; nunca repetir,
+                     e nunca com o current_revision que o erro devolveu
 indeterminate      → não repetir; ler e verificar
 ```
+
+A segunda linha é do contrato da Fase 4.1, não uma concessão desta fase: ver
+§10, "Três revisions, e só duas autorizam escrita".
 
 Nunca serão introduzidos:
 

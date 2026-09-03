@@ -795,13 +795,24 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           `noteit-core/src/revision.rs` afirma o contrário desde a Fase 4.1, e os testes provam:
           uma tag, uma propriedade, uma cor, um papel ou um tamanho de fonte movem a `revision` sem
           mover `updated_at`. Corrigido: `updated_at` é sinal de recência textual, a `revision`
-          continua sendo a única precondição autoritativa e só nasce em `noteit_read`, e o candidato
-          continua sem `revision` — a decisão de segurança não foi revertida, só explicada
-          corretamente. Acrescentado à 4.2B o requisito de **coerência do candidato sob
-          concorrência**; determinismo redefinido sem prometer snapshot transacional; `readOnlyHint`
-          descrito como annotation e não como enforcement; findings do runtime e de `noteit_read`
-          sem teto reconfirmados abertos. Nenhum `.rs`, nenhum schema, nenhuma dependência.
-          Justificativa na ADR-048.1.
+          continua sendo a única precondição autoritativa, e o candidato continua sem `revision` —
+          a decisão de segurança não foi revertida, só explicada corretamente. Acrescentado à 4.2B
+          o requisito de **coerência do candidato sob concorrência**; determinismo redefinido sem
+          prometer snapshot transacional; `readOnlyHint` descrito como annotation e não como
+          enforcement; findings do runtime e de `noteit_read` sem teto reconfirmados abertos.
+          Nenhum `.rs`, nenhum schema, nenhuma dependência. Justificativa na ADR-048.1.
+    - [x] **4.2A.R1.1 — Fechamento do contrato de autorização de escrita.** Duas portas que a R1
+          deixou encostadas. Primeira: "a revisão só nasce em `noteit_read`" era largo demais —
+          descreve o caminho que a D-13 protege e não o contrato MCP inteiro, porque
+          `WriteResult.revision` existe para encadear a próxima escrita condicional sem leitura
+          extra. A regra correta é mais estreita: nenhuma revisão autoriza escrita sobre um estado
+          que o agente não conhece. Duas origens autorizam — `noteit_read` e a revisão pós-operação
+          de uma mutação bem-sucedida; a `current_revision` de um conflito nunca autoriza, porque
+          nomeia conteúdo que o agente não viu. A D-13 não muda: uma nota vinda do contexto exige
+          `noteit_read` antes da **primeira** mutação. Segunda: a coerência do candidato era
+          requisito e trazia junto a permissão de descumpri-lo com aviso; a alternativa foi removida
+          e **D-27 é obrigatória**. Nenhum `.rs`, nenhum schema, nenhuma dependência. Justificativa
+          na ADR-048.2.
   - [ ] **4.2B — Context Engine v1 no Core.** Camada somente leitura, determinística, sobre as
         leituras que o Core já tem; sinais de texto, tag, propriedade, tarefa e recência, cada um
         explicável. Saída: API interna tipada, benchmarks de 100/1 000/10 000 notas e limites
@@ -820,10 +831,12 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         4.2B.9  gates + store real inalterado + CI
         ```
 
-        4.2B.6 vem da 4.2A.R1: os sinais saem de leituras diferentes do Core e o store pode mudar
-        entre elas, então um candidato não pode combinar silenciosamente texto, metadados e tarefas
-        de estados diferentes da mesma nota. Preferência por uma projeção coerente por nota; a
-        alternativa é declarar formalmente a ausência dela e exigir revalidação por `noteit_read`.
+        4.2B.6 implementa e prova a **D-27**, decidida na 4.2A.R1.1: os sinais saem de leituras
+        diferentes do Core e o store pode mudar entre elas, então cada candidato deve ser uma
+        projeção internamente coerente de uma única nota. Não há escolha entre coerência e
+        incoerência declarada — a garantia é per-note, obrigatória, e não implica snapshot
+        transacional do store. Se a implementação provar que ela é inviável com as garantias
+        atuais, a fase para e volta à decisão arquitetural em vez de degradar em silêncio.
   - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
         `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
         rede, sem escrita.
