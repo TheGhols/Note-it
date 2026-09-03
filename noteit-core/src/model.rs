@@ -141,6 +141,37 @@ impl NoteDocument {
         }
     }
 
+    /// The default document for a file that has no front matter of its own.
+    ///
+    /// Distinct from [`Self::new_with_id`] in exactly one way, and it is the
+    /// one that matters: the timestamps stay **absent** rather than being
+    /// stamped with the clock. The file does not record when it was written, so
+    /// neither does this — which is what the fields already promise: "a missing
+    /// timestamp is reported as unknown, never replaced by a guess".
+    ///
+    /// Stamping `now()` here made a note's parsed form depend on when it was
+    /// read: two reads of an untouched file produced two different documents,
+    /// so nothing downstream could say whether the note had changed. Ordering
+    /// is unaffected — a note with no front matter has always been ordered by
+    /// its file's modification time, because that is the only date there is.
+    fn anchored_to_file(id: Uuid) -> Self {
+        Self {
+            metadata: NoteFrontMatter {
+                version: 1,
+                id,
+                color: default_color(),
+                paper_type: default_paper_type(),
+                paper_intensity: default_paper_intensity(),
+                font_size: default_font_size(),
+                created_at: None,
+                updated_at: None,
+            },
+            user_metadata: NoteMetadata::default(),
+            content: String::new(),
+            unknown_front_matter: BTreeMap::new(),
+        }
+    }
+
     /// Records a content edit. Appearance-only metadata (paper colour, paper
     /// pattern, pattern intensity, font size) deliberately does not go through
     /// here: `updated_at` tracks the last change to the note's text, not to
@@ -216,8 +247,9 @@ impl NoteDocument {
                     "Invalid markdown front matter: missing closing delimiter '---'".to_string(),
                 );
             }
-            // No front matter present: anchor default metadata to expected_id
-            let doc = Self::new_with_id(expected_id);
+            // No front matter present: anchor default metadata to expected_id.
+            // Deterministically — see `anchored_to_file`.
+            let doc = Self::anchored_to_file(expected_id);
             return Ok(Self {
                 metadata: doc.metadata,
                 user_metadata: doc.user_metadata,
