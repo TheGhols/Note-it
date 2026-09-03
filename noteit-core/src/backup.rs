@@ -329,6 +329,91 @@ fn reserve_snapshot_name(backups_dir: &Path, now: DateTime<Utc>) -> Result<PathB
     ))
 }
 
+/// An inspection failure asked for by a test.
+///
+/// Whether `symlink_metadata` can fail with `PermissionDenied` depends on who
+/// is running: `chmod 000` is inert for root, and the container CI is root. So
+/// the error is injectable, and the invariant is proven the same way for
+/// everyone. It exists only under `cfg(test)` and reaches no public API.
+#[cfg(test)]
+fn injected_inspection_failure(source: &Path) -> Option<std::io::Error> {
+    INSPECTION_FAILURE.with(|slot| {
+        slot.borrow().as_ref().and_then(|(path, kind)| {
+            (path == source).then(|| std::io::Error::new(*kind, "injected inspection failure"))
+        })
+    })
+}
+
+#[cfg(not(test))]
+fn injected_inspection_failure(_source: &Path) -> Option<std::io::Error> {
+    None
+}
+
+#[cfg(test)]
+thread_local! {
+    static INSPECTION_FAILURE: std::cell::RefCell<Option<(PathBuf, std::io::ErrorKind)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Makes one path fail inspection for as long as it is held.
+#[cfg(test)]
+struct FailingInspection;
+
+#[cfg(test)]
+impl FailingInspection {
+    fn at(path: &Path, kind: std::io::ErrorKind) -> Self {
+        INSPECTION_FAILURE.with(|slot| *slot.borrow_mut() = Some((path.to_path_buf(), kind)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FailingInspection {
+    fn drop(&mut self) {
+        INSPECTION_FAILURE.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+/// What is known about an optional root the snapshot has to copy.
+enum ManagedRoot {
+    /// It is there and can be walked.
+    Present,
+    /// It is genuinely not there. A store written before this directory
+    /// existed is a store without that content, not a broken one.
+    Absent,
+    /// It could not be looked at, so whether it holds content is unknown.
+    Undetermined(String),
+}
+
+/// Inspects an optional managed root, keeping the difference between "nothing
+/// is here" and "I could not find out".
+fn inspect_managed_root(source: &Path) -> ManagedRoot {
+    match inspect_managed_root_metadata(source) {
+        Ok(Some(_)) => ManagedRoot::Present,
+        Ok(None) => ManagedRoot::Absent,
+        Err(error) => ManagedRoot::Undetermined(error),
+    }
+}
+
+/// `Ok(None)` only for a root that is genuinely absent. Every other failure to
+/// inspect is an error, so no caller can mistake one for the other.
+fn inspect_managed_root_metadata(source: &Path) -> Result<Option<fs::Metadata>, String> {
+    if let Some(error) = injected_inspection_failure(source) {
+        return Err(format!(
+            "Failed to inspect {} for the backup: {error}",
+            source.display()
+        ));
+    }
+    match fs::symlink_metadata(source) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Failed to inspect {} for the backup: {error}",
+            source.display()
+        )),
+    }
+}
+
 /// Copies the regular files of one directory, and only those.
 ///
 /// A symlink is never followed and never copied. A store is a directory of
@@ -342,11 +427,17 @@ fn reserve_snapshot_name(backups_dir: &Path, now: DateTime<Utc>) -> Result<PathB
 /// not a directory is a broken store and fails the backup, because copying
 /// nothing and calling it a backup of everything is the one thing a backup may
 /// never do.
+///
+/// Known absence may be treated as absence; uncertainty may not. `exists()`
+/// answers false for a path it could not look at, so the error is read
+/// directly and only `NotFound` counts as "there is nothing here".
 fn copy_directory(source: &Path, destination: &Path) -> Result<usize, String> {
     crate::permissions::create_private_dir_all(destination)?;
 
-    if !source.exists() {
-        return Ok(0);
+    match inspect_managed_root(source) {
+        ManagedRoot::Absent => return Ok(0),
+        ManagedRoot::Present => {}
+        ManagedRoot::Undetermined(error) => return Err(error),
     }
 
     let entries = fs::read_dir(source)
@@ -426,9 +517,14 @@ fn copy_assets_tree(source: &Path, destination: &Path) -> Result<usize, String> 
     crate::permissions::create_private_dir_all(destination)?;
 
     // A store written before images existed has no assets directory at all,
-    // and that is a store with no pictures rather than a broken one.
-    let Ok(metadata) = fs::symlink_metadata(source) else {
-        return Ok(0);
+    // and that is a store with no pictures rather than a broken one. An error
+    // that is not `NotFound` says something else entirely: the directory could
+    // not be looked at, so whether it holds pictures is unknown, and a
+    // snapshot that reported zero would be claiming knowledge it lacks.
+    let metadata = match inspect_managed_root_metadata(source) {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) => return Ok(0),
+        Err(error) => return Err(error),
     };
     if !metadata.file_type().is_dir() {
         return Err(format!(
@@ -760,6 +856,153 @@ mod tests {
 
     fn manifest_of(snapshot: &Path) -> SnapshotManifest {
         read_manifest(&snapshot.join(MANIFEST_FILE)).expect("a snapshot has a manifest")
+    }
+
+    /// R003-A: a store from before images existed still backs up.
+    #[test]
+    fn r003_a_a_store_without_an_assets_directory_backs_up_with_no_images() {
+        let store = store_without_assets();
+        fs::write(store.notes.join(format!("{}.md", note_uuid(1))), b"nota").expect("note");
+
+        let snapshot = store
+            .backup(Utc::now())
+            .expect("a store with no images backs up");
+        let manifest = manifest_of(&snapshot);
+        assert_eq!(manifest.assets, 0, "no images is zero images");
+        assert_eq!(manifest.notes, 1);
+        assert_eq!(list_snapshots(&store.backups).len(), 1);
+    }
+
+    /// R003-B: images present are copied whole.
+    #[test]
+    fn r003_b_present_assets_are_copied_byte_for_byte() {
+        let store = store();
+        fs::write(store.notes.join(format!("{}.md", note_uuid(1))), b"nota").expect("note");
+        let bytes = put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 7);
+
+        let snapshot = store.backup(Utc::now()).expect("backup");
+        let copied = snapshot
+            .join("assets")
+            .join(note_uuid(1))
+            .join(format!("{}.png", asset_uuid(1)));
+        assert_eq!(fs::read(&copied).expect("copied asset"), bytes);
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+    }
+
+    /// R003-C: an assets root that could not be inspected is not zero assets.
+    ///
+    /// Injected rather than produced with `chmod`, because `chmod 000` is inert
+    /// for root and the container CI is root: this proof has to hold for every
+    /// user, not only for the ones DAC applies to.
+    #[test]
+    fn r003_c_an_assets_root_that_cannot_be_inspected_fails_the_backup() {
+        let store = store();
+        fs::write(store.notes.join(format!("{}.md", note_uuid(1))), b"nota").expect("note");
+        put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 3);
+        let before = list_snapshots(&store.backups).len();
+
+        let _injected = FailingInspection::at(&store.assets, std::io::ErrorKind::PermissionDenied);
+        let outcome = store.backup(Utc::now());
+
+        let error = outcome.expect_err("an assets root that cannot be looked at fails the backup");
+        assert!(
+            error.contains("Failed to inspect"),
+            "the failure must name the inspection, got: {error}"
+        );
+        assert_eq!(
+            list_snapshots(&store.backups).len(),
+            before,
+            "no snapshot may be committed when the images could not be determined"
+        );
+    }
+
+    /// R003-D: the same rule for the other optional roots.
+    #[test]
+    fn r003_d_other_managed_roots_fail_closed_when_they_cannot_be_inspected() {
+        for root in ["notes", "trash"] {
+            let store = store();
+            fs::write(store.notes.join(format!("{}.md", note_uuid(1))), b"nota").expect("note");
+            let target = if root == "notes" {
+                store.notes.clone()
+            } else {
+                store.trash.clone()
+            };
+            let before = list_snapshots(&store.backups).len();
+
+            let _injected = FailingInspection::at(&target, std::io::ErrorKind::PermissionDenied);
+            let error = store
+                .backup(Utc::now())
+                .expect_err("a root that cannot be looked at fails the backup");
+            assert!(
+                error.contains("Failed to inspect"),
+                "{root}: the failure must name the inspection, got: {error}"
+            );
+            assert_eq!(
+                list_snapshots(&store.backups).len(),
+                before,
+                "{root}: no snapshot may be committed"
+            );
+        }
+    }
+
+    /// The distinction itself, stated once: absence is absence, and anything
+    /// else is not.
+    #[test]
+    fn r003_only_not_found_reads_as_an_absent_managed_root() {
+        let store = store_without_assets();
+        assert!(
+            matches!(inspect_managed_root(&store.assets), ManagedRoot::Absent),
+            "a root that is genuinely gone is absent"
+        );
+        assert!(
+            matches!(inspect_managed_root(&store.notes), ManagedRoot::Present),
+            "a root that is there is present"
+        );
+        let _injected = FailingInspection::at(&store.notes, std::io::ErrorKind::PermissionDenied);
+        assert!(
+            matches!(
+                inspect_managed_root(&store.notes),
+                ManagedRoot::Undetermined(_)
+            ),
+            "a root that could not be looked at is neither present nor absent"
+        );
+    }
+
+    /// R003-E: a failed snapshot leaves nothing behind that a later one trips on.
+    #[test]
+    fn r003_e_a_failed_snapshot_leaves_no_scratch_and_a_later_one_succeeds() {
+        let store = store();
+        fs::write(store.notes.join(format!("{}.md", note_uuid(1))), b"nota").expect("note");
+        put_asset(&store, &note_uuid(1), &asset_uuid(1), "png", 5);
+
+        {
+            let _injected =
+                FailingInspection::at(&store.assets, std::io::ErrorKind::PermissionDenied);
+            store.backup(Utc::now()).expect_err("the backup fails");
+        }
+        assert!(
+            list_snapshots(&store.backups).is_empty(),
+            "nothing was committed"
+        );
+
+        let scratch: Vec<String> = fs::read_dir(&store.backups)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with(".tmp"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            scratch.is_empty(),
+            "a failed snapshot left scratch behind: {scratch:?}"
+        );
+
+        // And the store is still backup-able once the trouble is gone.
+        let snapshot = store.backup(Utc::now()).expect("a later backup succeeds");
+        assert_eq!(manifest_of(&snapshot).assets, 1);
+        assert_eq!(list_snapshots(&store.backups).len(), 1);
     }
 
     /// Copies a snapshot subtree the way a person restoring one with `cp -r`
