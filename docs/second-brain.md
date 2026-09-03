@@ -463,6 +463,52 @@ Implementados no Core como `DEFAULT_CANDIDATES`, `MAX_CANDIDATES` e o
 não da tool: a 4.2C não terá que inventá-lo, e nenhum pedido pode passar dele —
 `limit` é aplicado com `clamp(1, 50)`.
 
+### O envelope inteiro, sem coleção sem teto
+
+A tabela acima limitava a resposta pelo que ela **listava**, não pelo que cada
+item podia carregar. A 4.2B.R1 fechou o resto: nenhuma coleção ou texto que o
+Context Engine publica pode crescer sem teto em função do conteúdo do store.
+
+| Campo | Teto | De onde vem |
+| --- | ---: | --- |
+| `query` | 512 caracteres | `MAX_QUERY_CHARS`; acima disso é **recusa**, não corte |
+| `candidates` | 50 | `MAX_CANDIDATES`, com `clamp(1, 50)` |
+| `label` | 121 caracteres | `MAX_LABEL_CHARS` + reticência, já garantido por `label_for` |
+| `snippet` | ~242 caracteres | `MAX_SNIPPET_CHARS`, já garantido por `search` |
+| `reasons` | 5 | o enum é fechado e não há repetição |
+| `matched_text` | 241 caracteres | `MAX_CONTEXT_MATCHED_TEXT_CHARS` |
+| `tasks` por candidato | 3 | `MAX_CONTEXT_TASKS_PER_CANDIDATE` |
+| texto de uma task | 121 caracteres | `MAX_CONTEXT_TASK_TEXT_CHARS` |
+| `task_ref` | 8 caracteres | estrutural: é `{:08x}` de um digest, e **não** é truncado — um identificador encurtado não nomeia tarefa nenhuma |
+| `warnings` | 20 | `MAX_CONTEXT_WARNINGS` |
+| mensagem de warning | — | **não existe**: um warning é `note_id` + `kind`, ambos de tamanho fixo |
+
+`matched_text` precisava de teto próprio, e o motivo não é óbvio: a dobra
+*descarta* marcas combinantes, então `a` seguido de cinquenta mil acentos
+combinantes e um `b` dobra para `ab` e casa com uma consulta de dois
+caracteres — enquanto o trecho na fonte, que é o que seria publicado, tem os
+cinquenta mil. Medido, não deduzido.
+
+Truncamento continua não sendo silencioso, agora também por candidato:
+
+```text
+tasks_truncated        / omitted_task_count
+warnings_truncated     / omitted_warning_count
+```
+
+Um store danificado continua dizendo o quanto está danificado; o teto limita o
+que viaja, nunca o que é admitido.
+
+**Um warning não carrega mensagem.** A mensagem do Core é escrita para quem
+está depurando um store e por isso nomeia o arquivo — "Leitura recusada: o
+arquivo `/home/.../notes/<uuid>.md` é um link simbólico". Essa frase não pode
+sair por aqui: a §19 diz que a IA nunca recebe caminho, e um diagnóstico livre é
+exatamente a fresta por onde um caminho passa. O que viaja é `note_id` e `kind`,
+o que também resolve o tamanho por construção em vez de por regra de corte.
+
+Ordem de corte, determinística: tarefas na ordem em que aparecem na nota — a
+ordem que quem lê o Markdown vê —, warnings na ordem que a varredura produziu.
+
 Cálculo do máximo: 50 × 240 caracteres ≈ 12 KB ≈ 3 000 tokens de snippet, mais
 metadados. É uma fatia significativa mas não dominante de uma janela de
 contexto típica, e mantém a resposta legível por uma pessoa depurando.
@@ -554,10 +600,17 @@ de publicar um candidato incoerente com um aviso dizendo que ele pode ser
 incoerente: um candidato que talvez misture estados não é proveniência com
 ressalva, é proveniência falsa, e a §9 inteira depende dele dizer a verdade.
 
-**Como ficou, na 4.2B.** Uma leitura por nota, e uma só: `retrieve` chama
-`read_note` uma vez, constrói uma `Projection` a partir daquele `NoteDocument` e
-a descarta antes da nota seguinte. Todo sinal — texto, label, snippet, tags,
-propriedades, tarefas, `updated_at` — sai dessa projeção. As funções de sinal
+**Como ficou, na 4.2B.** Uma **leitura autoritativa** por candidato: `retrieve`
+chama `read_note` uma vez, constrói uma `Projection` a partir daquele
+`NoteDocument` e a descarta antes da nota seguinte. Todo sinal — texto, label,
+snippet, tags, propriedades, tarefas, `updated_at` — sai dessa projeção.
+
+A varredura que **enumera** as notas roda antes e pode observar o que a
+enumeração e a ordenação exigirem — é assim que o Core lista por recência. Nada
+do que ela observou entra no candidato: o dado publicado vem exclusivamente do
+`NoteDocument` que alimentou aquela `Projection`. Dizer "uma leitura por nota"
+seria literal demais; a afirmação exata é a de cima, e é ela que a D-27
+sustenta. As funções de sinal
 recebem `&Projection` e nenhuma delas tem caminho até o store, então misturar
 versões não é um descuido possível: seria preciso reescrever `retrieve` para
 ler duas vezes.

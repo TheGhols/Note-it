@@ -843,8 +843,9 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         Truncamento nunca silencioso: `truncated` e `omitted_count`. Lixeira fora, symlink
         recusado pelo Core, nota ilegível vira warning e nunca candidato parcial.
 
-        **D-27 por construção.** Uma leitura por nota, uma `Projection` derivada dela, e todo
-        sinal daquele candidato saindo dessa projeção; as funções de sinal recebem `&Projection` e
+        **D-27 por construção.** Uma leitura autoritativa do `NoteDocument` por candidato, uma
+        `Projection` derivada dela, e todo sinal daquele candidato saindo dessa projeção — a
+        varredura que enumera as notas não compõe o candidato; as funções de sinal recebem `&Projection` e
         nenhuma tem caminho até o store. Provado sob concorrência real: uma thread alterna a mesma
         nota entre duas versões que discordam de tudo — corpo, tag, propriedade e tarefa — e
         nenhum candidato mistura as duas. O teste foi verificado contra um defeito injetado de
@@ -860,6 +861,29 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         depende. Nenhum índice foi criado para melhorar o número; isso continua sendo 4.3.
 
         Catálogo MCP continua com 15 tools: `noteit_context` é da 4.2C.
+    - [x] **4.2B.R1 — Orçamento de saída e barreira do offload.** Correção antes de publicar
+          qualquer coisa. A 4.2B limitou o que a resposta *listava* e não o que cada item podia
+          carregar: `tasks[]` e `warnings[]` cresciam com o conteúdo do store, e uma auditoria dos
+          tipos públicos encontrou mais dois. `matched_text` era ilimitado porque a dobra descarta
+          marcas combinantes — `a` mais cinquenta mil acentos mais `b` dobra para `ab`, casa com
+          uma consulta de dois caracteres e publicava os cinquenta mil (medido). E a mensagem de
+          warning do Core nomeia o arquivo, então caminho absoluto chegava à resposta, contra a
+          regra de que a IA nunca recebe caminho. Agora: 3 tarefas por candidato, 121 caracteres
+          por tarefa, 241 por `matched_text`, 20 warnings, e um warning que é `note_id` + `kind`
+          sem texto livre — tamanho fixo e caminho impossível por construção. Truncamento
+          contado, nunca silencioso; `task_ref` **não** é truncado, porque um identificador
+          encurtado não nomeia tarefa nenhuma.
+
+          A barreira: `OffThread` impedia esquecer o offload nas funções de `domain.rs`, mas não
+          impedia abrir uma segunda porta — uma 16ª tool chamando `noteit_core` direto do handler
+          satisfaria todos os tipos e ainda travaria o protocolo. O gate agora recusa acesso ao
+          store nomeado fora de `domain.rs`, e exige que a porta continue sendo porta:
+          `spawn_blocking` presente, `reader` e `perform` exigindo o testemunho, e exatamente uma
+          fábrica de `OffThread`. Cinco violações foram injetadas e as cinco reprovaram.
+
+          Também corrigido: "uma leitura por nota" era literal demais. A afirmação exata é uma
+          leitura **autoritativa** do `NoteDocument` por candidato — a varredura que enumera as
+          notas roda antes e não compõe o candidato. D-27 inalterada. Justificativa na ADR-049.1.
   - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
         `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
         rede, sem escrita.

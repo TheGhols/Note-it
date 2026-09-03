@@ -217,4 +217,51 @@ declared="$(grep -c '^mutation_input! {' "$sources/contract.rs" || true)"
 offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
   && fail "an optional precondition type appeared at the MCP boundary."
 
-printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket at all, reaches the Core over its Unix authority socket and nothing else, and every mutation of an existing note requires a revision."
+# 10. Core I/O enters through one door, and the door is offloaded.
+#
+#     `OffThread` already makes it impossible to *call* a store function in
+#     `domain.rs` on the reactor: the witness has one constructor and it lives
+#     inside the closure `spawn_blocking` runs. What it cannot do is stop
+#     somebody opening a second door — a sixteenth tool that skips `domain.rs`
+#     and calls `noteit_core` directly from its handler would satisfy every
+#     type in this crate and still block the protocol.
+#
+#     So the rule is about *where* Core I/O may be named. `domain.rs` is the
+#     adapter and is allowed to; nothing else in the crate is. This is not a
+#     ban on `noteit_core` — `server.rs` legitimately builds a `NoteMutation`
+#     and passes a `Uuid`, and those touch no file. It names the handles and
+#     the calls that reach the store.
+io_surface='\b(NoteItCore|StorageManager|open_read_only(_at)?|from_storage|authority::|perform_at|read_note|list_summaries|list_notes(_by_recency)?(_with_warnings)?|search_notes(_filtered)?|list_tasks|list_trash|metadata_catalog(_with_warnings)?|study_state|resolve_note_id|resolve_trash_id|save_note_atomic|move_note_to_trash|ensure_directories|context::retrieve|write::execute|commit_addressed)\b'
+
+outside_the_adapter() {
+  find "$sources" -name '*.rs' ! -name 'domain.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||'
+}
+found="$(outside_the_adapter | grep -E "$io_surface" || true)"
+if [ -n "$found" ]; then
+  printf '%s\n' "$found" >&2
+  fail "Core store access is named outside noteit-mcp/src/domain.rs; every store operation must go through the offloaded adapter so it cannot run on the protocol thread."
+fi
+
+#     And the door must still be a door. Without these, the rule above would be
+#     satisfied perfectly by a `domain.rs` that had stopped offloading at all —
+#     passing an offload check by deleting the offload.
+grep -q 'tokio::task::spawn_blocking' "$sources/domain.rs" \
+  || fail "noteit-mcp/src/domain.rs no longer hands Core work to spawn_blocking; the rule above allows it to name the store precisely because this is how that work leaves the reactor."
+grep -q 'fn reader(&self, _off: &OffThread)' "$sources/domain.rs" \
+  || fail "Store::reader no longer requires the OffThread witness; a read could run on the protocol thread again."
+grep -q 'fn perform(_off: &OffThread' "$sources/domain.rs" \
+  || fail "the write path no longer requires the OffThread witness; a write could run on the protocol thread again."
+grep -q 'pub struct OffThread(());' "$sources/domain.rs" \
+  || fail "the OffThread witness no longer has a module-private field; anything could build one."
+#     Two mentions of the empty-tuple form: the declaration above, and the one
+#     construction inside off_reactor. A third is a second way to mint the
+#     proof, which would make it prove nothing.
+minted="$(grep -c 'OffThread(())' "$sources/domain.rs" || true)"
+if [ "$minted" != "2" ]; then
+  grep -n 'OffThread(())' "$sources/domain.rs" >&2 || true
+  fail "the OffThread witness is declared and built in $minted places rather than 2; exactly one construction, inside off_reactor, is what makes it proof of anything."
+fi
+
+printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket at all, reaches the Core over its Unix authority socket and nothing else, reaches the store only through the offloaded adapter, and every mutation of an existing note requires a revision."

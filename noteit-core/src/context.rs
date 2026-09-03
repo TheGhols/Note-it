@@ -33,7 +33,9 @@
 //!
 //! Every signal about a note — its text, its label, its snippet, its tags, its
 //! properties, its tasks, its `updated_at` — comes from a single
-//! [`Projection`], built from one [`NoteDocument`] read once. That is D-27,
+//! [`Projection`], built from one authoritative read of the [`NoteDocument`].
+//! The scan before it may look at whatever enumerating and ordering the store
+//! requires, and none of *that* reaches a candidate. That is D-27,
 //! and it is a property rather than a preference: a candidate assembled from a
 //! snippet read before an edit and tags read after it is not a note that ever
 //! existed, and provenance about a note that never existed is a lie. The type
@@ -47,9 +49,9 @@
 use crate::filter::NoteFilter;
 use crate::metadata::semantic_identity;
 use crate::model::NoteDocument;
-use crate::search::{self, Folded, MAX_QUERY_CHARS};
+use crate::search::{self, Folded, MAX_LABEL_CHARS, MAX_QUERY_CHARS, MAX_SNIPPET_CHARS};
 use crate::task::{self, TaskEntry};
-use crate::warning::{ReadBatch, ReadWarning, ReadWarningKind};
+use crate::warning::{ReadWarning, ReadWarningKind};
 use crate::NoteItCore;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -63,6 +65,39 @@ pub const DEFAULT_CANDIDATES: usize = 10;
 /// Fifty snippets of 240 characters is about 12 KB — a real slice of a context
 /// window, and still small enough for a person to read while debugging.
 pub const MAX_CANDIDATES: usize = 50;
+
+/// Tasks published with one candidate.
+///
+/// A handful, deliberately. Tasks are a *signal* that this note has work in it
+/// that matches; the list itself is one `noteit_read` away. Without a ceiling
+/// here a single note with a thousand matching checkboxes would decide the size
+/// of the whole answer, which is the opposite of what a context budget is for.
+pub const MAX_CONTEXT_TASKS_PER_CANDIDATE: usize = 3;
+
+/// Characters of one task's text.
+///
+/// A task is a *line* of a note, and the product already has a measure for how
+/// much of a line to show somebody: [`MAX_LABEL_CHARS`]. The same number is
+/// used here for the same reason, as its own constant so the two can part
+/// company later without one silently dragging the other.
+pub const MAX_CONTEXT_TASK_TEXT_CHARS: usize = MAX_LABEL_CHARS;
+
+/// Characters of the matched occurrence published with a candidate.
+///
+/// `matched_text` is an excerpt of the note, so it is measured the way the
+/// other excerpt is. It needs a ceiling of its own and not just the query's:
+/// folding *drops* combining marks entirely, so `a` followed by fifty thousand
+/// combining accents and then `b` folds to `ab` and matches a two-character
+/// query — while the span in the source, which is what gets published, is the
+/// whole fifty thousand. Measured, not reasoned about.
+pub const MAX_CONTEXT_MATCHED_TEXT_CHARS: usize = MAX_SNIPPET_CHARS;
+
+/// Warnings published with one answer.
+///
+/// Enough to characterise a damaged store — which notes, and what kind of
+/// damage — without letting a store full of unreadable files decide how big a
+/// context answer is. What is left out is counted, never hidden.
+pub const MAX_CONTEXT_WARNINGS: usize = 20;
 
 /// What a caller wants context about.
 ///
@@ -147,6 +182,34 @@ impl Reason {
     }
 }
 
+/// A note the answer could not read, as the answer publishes it.
+///
+/// A projection of [`ReadWarning`] rather than the thing itself, and the
+/// difference is the point. The Core's message is written for whoever is
+/// debugging a store, so it names the file — "Leitura recusada: o arquivo
+/// `/home/.../notes/<uuid>.md` é um link simbólico". That sentence must not
+/// leave through this surface: the contract is that a caller is given
+/// `note_id` and never a path (`docs/second-brain.md` §19), and a free-form
+/// diagnostic is exactly the crack a path slips through.
+///
+/// So nothing free-form travels. `kind` says what went wrong, `note_id` says
+/// where, and both are fixed-size — which settles the length question by
+/// construction rather than by a truncation rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextWarning {
+    pub note_id: Option<Uuid>,
+    pub kind: ReadWarningKind,
+}
+
+impl From<&ReadWarning> for ContextWarning {
+    fn from(warning: &ReadWarning) -> Self {
+        Self {
+            note_id: warning.note_id,
+            kind: warning.kind,
+        }
+    }
+}
+
 /// One task travelling beside a candidate.
 ///
 /// Everything a caller needs to complete or reopen it, and nothing that names
@@ -181,8 +244,17 @@ pub struct Candidate {
     pub reasons: Vec<Reason>,
     /// The first occurrence as the note spells it, when the query matched.
     pub matched_text: Option<String>,
-    /// Matching tasks, when the request asked for them.
+    /// Matching tasks, when the request asked for them. At most
+    /// [`MAX_CONTEXT_TASKS_PER_CANDIDATE`], in the order they appear in the
+    /// note.
     pub tasks: Vec<ContextTask>,
+    /// Whether the task ceiling cut this candidate's list.
+    ///
+    /// Only ever true when tasks were asked for: a caller that did not ask for
+    /// them was not truncated, it was answered.
+    pub tasks_truncated: bool,
+    /// How many matching tasks the ceiling left out of this candidate.
+    pub omitted_task_count: usize,
 }
 
 /// The answer to one request.
@@ -193,8 +265,16 @@ pub struct ContextResult {
     pub truncated: bool,
     /// How many eligible candidates were left out by the ceiling.
     pub omitted_count: usize,
-    /// Notes that could not be read, reported beside the ones that could.
-    pub warnings: Vec<ReadWarning>,
+    /// Notes that could not be read, reported beside the ones that could. At
+    /// most [`MAX_CONTEXT_WARNINGS`].
+    pub warnings: Vec<ContextWarning>,
+    /// Whether the warning ceiling cut the list.
+    pub warnings_truncated: bool,
+    /// How many warnings the ceiling left out.
+    ///
+    /// A damaged store still says how damaged it is: the ceiling limits what
+    /// travels, never what is admitted to.
+    pub omitted_warning_count: usize,
 }
 
 /// Why a request produced no answer at all.
@@ -229,11 +309,13 @@ impl std::fmt::Display for ContextError {
 
 impl std::error::Error for ContextError {}
 
-/// One note, read once, as every signal about it will see it.
+/// One note, as every signal about it will see it.
 ///
-/// This is D-27 in a type. It is built from a single [`NoteDocument`] and
-/// nothing may reach past it to the store, so a candidate cannot be assembled
-/// out of two different versions of the same note. It is not a cache, not a
+/// This is D-27 in a type. It is built from one authoritative read of a
+/// [`NoteDocument`] and nothing may reach past it to the store, so a candidate
+/// cannot be assembled out of two different versions of the same note. The
+/// enumeration that found the note is not part of it: nothing the scan
+/// observed is carried into a candidate. It is not a cache, not a
 /// second source of truth and not persisted: it lives for the length of one
 /// note's turn in one query and is dropped.
 struct Projection {
@@ -306,8 +388,10 @@ pub fn retrieve(
 
     let mut candidates = Vec::new();
     for id in ids {
-        // One read. Everything about this candidate comes from what it
-        // returned, and the document is dropped before the next note.
+        // The authoritative read. The scan above already looked at each note's
+        // header to order the identifiers, and deliberately none of what it saw
+        // is used below: everything about this candidate comes from what this
+        // call returned, and the document is dropped before the next note.
         let document = match core.read_note(&id) {
             Ok(document) => document,
             Err(message) => {
@@ -333,12 +417,34 @@ pub fn retrieve(
     let omitted_count = candidates.len().saturating_sub(ceiling);
     candidates.truncate(ceiling);
 
+    // The warnings keep the order the scan produced — notes by recency, then
+    // whatever the scan itself reported — which is already deterministic, so
+    // the ones that survive the ceiling are the same ones every time. Sorting
+    // them by message would be ordering by a sentence written for a person.
+    let omitted_warning_count = warnings.len().saturating_sub(MAX_CONTEXT_WARNINGS);
+    warnings.truncate(MAX_CONTEXT_WARNINGS);
+
     Ok(ContextResult {
         candidates,
         truncated: omitted_count > 0,
         omitted_count,
-        warnings,
+        warnings: warnings.iter().map(ContextWarning::from).collect(),
+        warnings_truncated: omitted_warning_count > 0,
+        omitted_warning_count,
     })
+}
+
+/// Cuts text to a character ceiling, and says so where it cut.
+///
+/// Characters and never bytes: `chars().nth()` lands on a boundary by
+/// construction, so a slice here cannot split one. The ellipsis is the same
+/// convention a label already uses, which makes the cut visible to whoever
+/// reads the text rather than something they have to be told about.
+fn clip(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        None => text.to_string(),
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+    }
 }
 
 /// The query as it will be compared, or a refusal.
@@ -371,11 +477,12 @@ fn consider(
     let mut snippet = None;
     let mut matched_text = None;
     let mut tasks = Vec::new();
+    let mut omitted_task_count = 0;
 
     if let Some(query) = query {
         if let Some(hit) = search::search_note(query, projection.note_id, &projection.content) {
             reasons.push(Reason::TextMatch);
-            matched_text = Some(hit.matched_text);
+            matched_text = Some(clip(&hit.matched_text, MAX_CONTEXT_MATCHED_TEXT_CHARS));
             snippet = Some(hit.snippet);
         }
     }
@@ -398,12 +505,22 @@ fn consider(
         if !matching.is_empty() {
             reasons.push(Reason::TaskMatch);
             if request.include_tasks {
+                // Counted from the set already derived from this projection,
+                // never by reading the note again: the number of tasks left out
+                // must not cost the coherence the candidate is built on.
+                omitted_task_count = matching
+                    .len()
+                    .saturating_sub(MAX_CONTEXT_TASKS_PER_CANDIDATE);
                 tasks = matching
                     .into_iter()
+                    // The note's own order, which is the order somebody reading
+                    // the Markdown sees. Keeping the first few is the only cut
+                    // that needs no rule of its own to explain.
+                    .take(MAX_CONTEXT_TASKS_PER_CANDIDATE)
                     .map(|entry| ContextTask {
                         note_id: entry.note_id,
                         task_ref: entry.task_ref.as_str().to_string(),
-                        text: entry.text,
+                        text: clip(&entry.text, MAX_CONTEXT_TASK_TEXT_CHARS),
                         checked: entry.checked,
                     })
                     .collect();
@@ -429,6 +546,8 @@ fn consider(
         reasons,
         matched_text,
         tasks,
+        tasks_truncated: omitted_task_count > 0,
+        omitted_task_count,
     })
 }
 
@@ -491,12 +610,4 @@ fn order(left: &Candidate, right: &Candidate) -> std::cmp::Ordering {
             (None, None) => std::cmp::Ordering::Equal,
         })
         .then_with(|| left.note_id.cmp(&right.note_id))
-}
-
-/// The same answer, as a [`ReadBatch`], for a caller that already speaks that
-/// shape.
-impl ContextResult {
-    pub fn into_batch(self) -> ReadBatch<Candidate> {
-        ReadBatch::new(self.candidates, self.warnings)
-    }
 }

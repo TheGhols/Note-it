@@ -1349,7 +1349,7 @@ escrito. Nenhum `.rs` foi tocado aqui para acomodar esta ADR.
 Nada de código mudou: nenhum `.rs`, nenhum manifesto, nenhum schema,
 `SCHEMA_VERSION` em 1, catálogo MCP em 15 tools.
 
-## ADR-049: O protocolo respira enquanto o disco trabalha, e um candidato é uma leitura só
+## ADR-049: O protocolo respira enquanto o disco trabalha, e um candidato vem de uma leitura autoritativa
 
 **Contexto.** A Fase 4.2B é a primeira implementação do Segundo Cérebro, e
 tinha duas coisas para fazer numa ordem que não era negociável: tirar o I/O do
@@ -1368,7 +1368,8 @@ tempo em que ele não responde absolutamente nada.
    função que abre o store.
 4. **O Context Engine vive em `noteit-core/src/context.rs`**, tipado, sem
    nenhum tipo de MCP, somente leitura.
-5. **Um candidato vem de uma leitura só** — D-27 por construção.
+5. **Um candidato vem de uma leitura autoritativa do `NoteDocument`** — D-27
+   por construção. A varredura que enumera as notas não compõe o candidato.
 6. **A ordenação é total**, com `note_id` como último degrau.
 7. **Os limites são do motor**, não da futura tool.
 
@@ -1398,7 +1399,7 @@ tempo em que ele não responde absolutamente nada.
    nada, então uma busca longa responderia necessariamente antes do `ping`
    atrás dela. Ambas reprovavam contra o commit anterior.
 
-3. **Por que uma leitura por candidato.** D-27 dizia que um candidato não pode
+3. **Por que uma leitura autoritativa por candidato.** D-27 dizia que um candidato não pode
    combinar sinais de versões diferentes da mesma nota. A forma óbvia de montar
    um candidato seria a errada: `list_summaries` para os metadados, `search`
    para o trecho, `list_tasks` para as tarefas, unidos por `note_id`. Cada uma
@@ -1407,7 +1408,10 @@ tempo em que ele não responde absolutamente nada.
    corrompe; a proveniência é que vira mentira, e a proveniência é o produto
    inteiro desta fase. `retrieve` lê a nota uma vez, constrói uma `Projection`
    daquele documento e a descarta antes da próxima; as funções de sinal recebem
-   `&Projection` e nenhuma tem caminho até o store. Misturar versões exigiria
+   `&Projection` e nenhuma tem caminho até o store. A varredura que enumera as
+   notas roda antes e pode observar o que a ordenação exigir — o que ela viu não
+   entra no candidato, e é por isso que a afirmação correta é "uma leitura
+   autoritativa por candidato" e não "uma leitura por nota". Misturar versões exigiria
    reescrever a função que orquestra, não esquecer um detalhe. O teste que
    prova isso alterna a nota entre duas versões que discordam de corpo, tag,
    propriedade e tarefa enquanto a consulta roda, e foi verificado contra um
@@ -1460,3 +1464,85 @@ não tem superfície. `noteit_context` é a 4.2C. Os dois findings herdados
 continuam abertos — `noteit_read` sem teto de tamanho, e a tensão entre as
 `INSTRUCTIONS` do servidor e o encadeamento que `WriteResult.revision` oferece,
 que é da 4.2D.
+
+### ADR-049.1: Um teto por coleção, e uma segunda porta que não abre (Fase 4.2B.R1)
+
+A ADR-049 limitou a resposta pelo número de candidatos e pelo tamanho do
+snippet. Isso limita o que a resposta **lista**, não o que cada item **carrega**,
+e a diferença é a fase inteira: um teto que não cobre todos os campos variáveis
+não é um teto, é uma média.
+
+**O que crescia sem limite.** Quatro coisas, duas conhecidas e duas encontradas
+ao auditar os tipos públicos por `Vec` e `String`:
+
+| Campo | O que o fazia crescer |
+| --- | --- |
+| `tasks[]` | uma nota com mil checkboxes que casam publica mil |
+| `warnings[]` | um store danificado publica um warning por nota ilegível |
+| `matched_text` | a dobra **descarta** marcas combinantes, então `a` + cinquenta mil acentos + `b` dobra para `ab`, casa com uma consulta de dois caracteres, e o trecho publicado é o da fonte: cinquenta mil caracteres. Medido, não deduzido |
+| mensagem de warning | a do Core nomeia o arquivo, e caminho absoluto não pode sair por esta superfície |
+
+O terceiro é o interessante, porque contraria a intuição de que `matched_text`
+está limitado pela consulta. Está limitado pela consulta *dobrada*, e a fonte
+pode ter um número arbitrário de caracteres que dobram para nada.
+
+O quarto não é sequer sobre tamanho. `docs/second-brain.md` §19 diz que a IA
+nunca recebe caminho, e as mensagens do Core dizem "Leitura recusada: o arquivo
+`/home/.../notes/<uuid>.md` é um link simbólico". Uma frase escrita para quem
+depura um store, correta lá e errada aqui.
+
+**Decisão.** Tetos explícitos no Core, e um warning sem texto livre:
+
+```text
+tasks por candidato        3
+texto de uma task        121 caracteres
+matched_text             241 caracteres
+warnings                  20
+mensagem de warning        não existe: note_id + kind
+```
+
+Três consequências que valem escrever:
+
+1. **`task_ref` não é truncado.** Oito caracteres hexadecimais por construção,
+   e um identificador encurtado para economizar espaço não nomearia tarefa
+   nenhuma. Um teto que estraga o que limita não é um teto.
+2. **O warning perde a mensagem em vez de ser saneado.** Tentar remover o
+   caminho de uma frase livre é uma regra que alguém quebra depois; publicar só
+   `note_id` e `kind` torna o vazamento impossível e o tamanho fixo de uma vez
+   só. `ReadWarningKind` já distingue as quatro coisas que um chamador precisa
+   saber, e a mensagem completa continua disponível em toda leitura do Core que
+   não seja esta superfície.
+3. **O corte é contado.** `tasks_truncated`/`omitted_task_count` por candidato,
+   `warnings_truncated`/`omitted_warning_count` na resposta. Um store danificado
+   continua dizendo o quanto está danificado. E a contagem de tarefas omitidas
+   sai do conjunto já derivado da projeção, nunca de uma segunda leitura —
+   contar não pode custar a coerência que o candidato existe para ter.
+
+**A segunda porta.** `OffThread` prova que as funções de `domain.rs` não rodam
+no reactor. O que ele não prova é que alguém não abra outro caminho: uma 16ª
+tool chamando `noteit_core` direto do seu handler satisfaz todos os tipos deste
+crate e trava o protocolo exatamente como antes. O testemunho é sobre *como* se
+chama, e faltava uma regra sobre *onde* se pode chamar.
+
+`scripts/check-mcp-boundary` passa a recusar acesso ao store nomeado fora de
+`domain.rs`. Não é uma proibição de `noteit_core` — `server.rs` legitimamente
+constrói `NoteMutation` e passa `Uuid`, e nada disso toca arquivo; a regra mira
+os handles e as chamadas que alcançam o store. E, como a regra 5 já fazia com o
+socket Unix, ela vem acompanhada da exigência de que o mecanismo permitido
+continue existindo: `spawn_blocking` presente em `domain.rs`, `reader` e
+`perform` exigindo o testemunho, e exatamente uma fábrica de `OffThread`. Sem
+isso, o gate seria satisfeito por um `domain.rs` que tivesse deixado de fazer
+offload — passando um teste de offload por deletar o offload.
+
+Cinco violações foram injetadas e as cinco reprovaram, entre elas a que
+importa para a fase seguinte: um `noteit_context` chamando
+`noteit_core::context::retrieve` direto do handler.
+
+**Uma correção de redação.** "Uma leitura por nota" era literal demais: a
+varredura que enumera as notas lê o cabeçalho de cada uma para ordenar por
+recência. A afirmação exata é uma leitura **autoritativa** do `NoteDocument` por
+candidato, e nada do que a varredura observou compõe o candidato. D-27 não muda:
+o que é publicado continua vindo inteiro de uma `Projection`.
+
+Nenhuma dependência nova, `Cargo.lock` byte-idêntico, catálogo em 15 tools,
+`SCHEMA_VERSION` em 1.
