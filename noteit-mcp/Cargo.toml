@@ -1,0 +1,52 @@
+[package]
+name = "noteit-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Local stdio Model Context Protocol server for Note-it"
+publish = false
+
+[[bin]]
+name = "noteit-mcp"
+path = "src/main.rs"
+
+[dependencies]
+noteit-core = { path = "../noteit-core" }
+# The official Rust SDK for the Model Context Protocol. Nothing here
+# implements JSON-RPC, framing or version negotiation: that is the SDK's job
+# and a second implementation of a protocol is a second set of bugs.
+#
+# `default-features = false` is deliberate. The default set carries `base64`,
+# which exists for image and audio content this server never produces. What is
+# left is the minimum a local server needs:
+#
+#   server        the server half of the protocol, and its schema generation
+#   macros        `#[tool]` / `#[tool_router]`, so the catalogue is the code
+#   transport-io  standard input and output, and nothing else
+#
+# Every HTTP, SSE, OAuth, TLS and client feature stays off. See
+# `scripts/check-mcp-boundary`, which fails the build if one arrives.
+rmcp = { version = "3.2", default-features = false, features = [
+    "server",
+    "macros",
+    "transport-io",
+] }
+# The runtime `transport-io` requires. `rt` and not `rt-multi-thread`: this
+# server does one thing at a time against one store, and every Core call is
+# blocking file I/O handed to `spawn_blocking` rather than run on the reactor.
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "io-std", "sync"] }
+# The tool schemas and the structured results. Already in the workspace graph
+# through `noteit-core`; stated here because this crate uses them directly.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Derives the JSON Schema for every tool input. Pulled in by `rmcp/server`
+# anyway; stated directly because the `JsonSchema` derives are in this crate
+# and the version has to be the one `rmcp` builds its schemas with.
+schemars = "1"
+
+[dev-dependencies]
+noteit-core = { path = "../noteit-core", features = ["test-support"] }
+tempfile = "3.10"
