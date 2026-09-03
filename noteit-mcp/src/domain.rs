@@ -30,9 +30,7 @@ use crate::contract::{
 use noteit_core::authority;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
 use noteit_core::revision::NoteRevision;
-use noteit_core::write::{
-    NoteDraft, NoteMutation, WriteError, WriteOperation, WriteOutcome, WriteOutcomeKind,
-};
+use noteit_core::write::{NoteDraft, NoteMutation, WriteError, WriteOperation, WriteOutcome};
 use noteit_core::{
     NoteDocument, NoteFilter, NoteItCore, NoteProperty, NoteSelectorError, NoteSummary,
     ReadWarning, ReadWarningKind, StorePaths, TaskEntry, TaskStateFilter, TrashEntry, Uuid,
@@ -181,6 +179,19 @@ fn perform(store: &Store, operation: &WriteOperation) -> WriteResult {
     }
 }
 
+/// Turns a committed outcome into the published answer.
+///
+/// `WriteOutcome::kind` is deliberately **not** published. An agent knows which
+/// tool it called, so `content_appended` beside a `noteit_append` answer says
+/// nothing it did not already know, and every field this contract carries is
+/// one more thing that can never be renamed. The machine interface publishes
+/// `kind` because a `--json` document has to say which command produced it;
+/// this boundary does not have that problem.
+///
+/// That is a decision, not an oversight, and it is one a new `WriteOutcomeKind`
+/// in the Core has to be measured against — so it is pinned by
+/// `mcp_contract_decisions.rs`, whose exhaustive `match` over the enum does not
+/// compile until somebody has looked at the new variant.
 fn committed(outcome: WriteOutcome) -> WriteResult {
     WriteResult {
         status: Status::Ok,
@@ -245,26 +256,6 @@ fn refused(error: &WriteError) -> WriteResult {
         result.note_id = Some(note_id.to_string());
     }
     result
-}
-
-/// Which outcomes a write can name. Unused at runtime; here so that adding an
-/// outcome kind to the Core makes somebody look at this boundary.
-#[allow(dead_code)]
-fn outcome_is_known(kind: WriteOutcomeKind) -> bool {
-    matches!(
-        kind,
-        WriteOutcomeKind::NoteCreated
-            | WriteOutcomeKind::ContentAppended
-            | WriteOutcomeKind::ContentReplaced
-            | WriteOutcomeKind::ContentCleared
-            | WriteOutcomeKind::TagAdded
-            | WriteOutcomeKind::TagRemoved
-            | WriteOutcomeKind::PropertySet
-            | WriteOutcomeKind::PropertyRemoved
-            | WriteOutcomeKind::TaskCompleted
-            | WriteOutcomeKind::TaskReopened
-            | WriteOutcomeKind::NoteRestored
-    )
 }
 
 // =================================================================== reads
