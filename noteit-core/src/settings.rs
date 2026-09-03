@@ -202,7 +202,7 @@ impl AppConfig {
             }
         };
 
-        match toml::from_str::<AppConfig>(content_str) {
+        match parse_config(content_str) {
             Ok(config) => ConfigLoadOutcome::Valid(config),
             Err(parse_err) => {
                 eprintln!(
@@ -266,11 +266,11 @@ impl AppConfig {
         // Before replacing an existing file, verify/preserve previous contents.
         match reader(path) {
             Ok(existing_bytes) => {
-                let is_valid = std::str::from_utf8(&existing_bytes)
-                    .ok()
-                    .and_then(|s| toml::from_str::<toml::Value>(s).ok())
-                    .is_some();
-                if !is_valid {
+                // The same question the loader asks. A file that only happens
+                // to be well-formed TOML is not a configuration, and the loader
+                // calls it corrupt; the save may not call it valid and replace
+                // it without preserving what it holds.
+                if !existing_bytes_are_valid_config(&existing_bytes) {
                     crate::quarantine::quarantine_corrupted_file(path, &existing_bytes).map_err(
                         |e| {
                             format!(
@@ -306,6 +306,22 @@ impl AppConfig {
 
         write_atomic(path, toml_str.as_bytes(), "the configuration")
     }
+}
+
+/// Parses a configuration exactly as the loader does.
+///
+/// One definition of "this is a configuration", used by the load and by the
+/// check the save makes before replacing a file, so the two cannot drift apart
+/// and disagree about whether the bytes on disk are worth preserving.
+fn parse_config(content: &str) -> Result<AppConfig, toml::de::Error> {
+    toml::from_str::<AppConfig>(content)
+}
+
+/// Whether the bytes already on disk are a configuration this program wrote.
+fn existing_bytes_are_valid_config(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|text| parse_config(text).is_ok())
 }
 
 /// Result of resolving configuration during application startup.

@@ -680,3 +680,296 @@ fn r006_startup_resolvers_block_persistence_on_read_failure_or_preservation_fail
         "CorruptedPreservationFailed must block persistence"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R-006 (4.0R.R2.R1.2): the check made before overwriting asks the same
+// question the loader asks.
+//
+// A file can be well-formed TOML or JSON and still not be a configuration or a
+// state file. The loader has always called that corruption and preserved the
+// bytes. The guard in front of the save asked only whether the syntax parsed,
+// so it called the same file valid and replaced it — the loss the whole
+// quarantine mechanism exists to prevent, reached through the other door.
+// ---------------------------------------------------------------------------
+
+/// Every `*.corrupted.*` file beside `path`, with its bytes.
+fn quarantined_beside(path: &Path) -> Vec<(String, Vec<u8>)> {
+    let parent = path.parent().expect("parent");
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let mut found: Vec<(String, Vec<u8>)> = fs::read_dir(parent)
+        .expect("read dir")
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{name}.corrupted."))
+        })
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).expect("read quarantine"),
+            )
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
+/// Valid TOML, and not a configuration: `theme` is a string.
+const SEMANTICALLY_INVALID_CONFIG: &[u8] = b"theme = 12345\ndefault_color = 'yellow'\n";
+
+/// Valid JSON, and not a state file: `notes` is a map.
+const SEMANTICALLY_INVALID_STATE: &[u8] = b"{\"notes\": \"not-an-object\"}\n";
+
+#[test]
+fn r006_cfg_a_a_valid_configuration_is_replaced_without_quarantine() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("config.toml");
+
+    let original = AppConfig {
+        theme: "dark".to_string(),
+        ..AppConfig::default()
+    };
+    original.save_to_file(&path).expect("write a valid config");
+    assert!(matches!(
+        AppConfig::load_detailed(&path),
+        ConfigLoadOutcome::Valid(_)
+    ));
+
+    let next = AppConfig {
+        theme: "light".to_string(),
+        ..AppConfig::default()
+    };
+    next.save_to_file(&path)
+        .expect("a valid config is replaced normally");
+
+    assert_eq!(
+        AppConfig::load_from_file(&path).theme,
+        "light",
+        "the new configuration is what is on disk"
+    );
+    assert!(
+        quarantined_beside(&path).is_empty(),
+        "replacing a valid configuration quarantines nothing"
+    );
+}
+
+#[test]
+fn r006_cfg_b_syntactically_valid_but_semantically_invalid_config_is_preserved_first() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, SEMANTICALLY_INVALID_CONFIG).expect("write the odd config");
+
+    // The precondition: this is well-formed TOML, and it is not a configuration.
+    let text = std::str::from_utf8(SEMANTICALLY_INVALID_CONFIG).expect("utf-8");
+    assert!(
+        toml::from_str::<toml::Value>(text).is_ok(),
+        "the scenario needs syntactically valid TOML"
+    );
+    assert!(
+        toml::from_str::<AppConfig>(text).is_err(),
+        "the scenario needs it to be invalid as a configuration"
+    );
+
+    let before = fs::read(&path).expect("original bytes");
+    assert_eq!(before, SEMANTICALLY_INVALID_CONFIG);
+
+    AppConfig::default()
+        .save_to_file(&path)
+        .expect("the save proceeds once the original has been preserved");
+
+    let quarantined = quarantined_beside(&path);
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "the original must be preserved before it is replaced, found {quarantined:?}"
+    );
+    assert_eq!(
+        quarantined[0].1, before,
+        "the quarantined bytes must be the original bytes, unchanged"
+    );
+
+    // And the loader agrees the file that was there was not a configuration.
+    fs::write(&path, SEMANTICALLY_INVALID_CONFIG).expect("restore for the loader");
+    assert!(
+        matches!(
+            AppConfig::load_detailed(&path),
+            ConfigLoadOutcome::CorruptedRecovered { .. }
+        ),
+        "loader and save must agree about what counts as a configuration"
+    );
+}
+
+#[test]
+fn r006_cfg_c_preservation_failure_blocks_replacing_a_semantically_invalid_config() {
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        return;
+    }
+
+    let tmp = tempdir().expect("tempdir");
+    let dir = tmp.path().join("config");
+    fs::create_dir(&dir).expect("create dir");
+    let path = dir.join("config.toml");
+    fs::write(&path, SEMANTICALLY_INVALID_CONFIG).expect("write the odd config");
+
+    // Nothing new may be created here, so the quarantine cannot be written.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).expect("read-only dir");
+    let outcome = AppConfig::default().save_to_file(&path);
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+
+    assert!(
+        outcome.is_err(),
+        "a save that cannot preserve the original must not replace it"
+    );
+    assert_eq!(
+        fs::read(&path).expect("read back"),
+        SEMANTICALLY_INVALID_CONFIG,
+        "the original must remain byte-identical"
+    );
+    assert!(
+        quarantined_beside(&path).is_empty(),
+        "a failed preservation leaves no partial quarantine behind"
+    );
+}
+
+#[test]
+fn r006_cfg_d_an_unreadable_config_still_blocks_the_save() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, SEMANTICALLY_INVALID_CONFIG).expect("write");
+
+    let failing_reader = |_p: &Path| -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "deterministic read failure",
+        ))
+    };
+
+    let outcome = AppConfig::default().save_to_file_with_reader(&path, failing_reader);
+    assert!(outcome.is_err(), "an unreadable original is never replaced");
+    assert_eq!(
+        fs::read(&path).expect("read back"),
+        SEMANTICALLY_INVALID_CONFIG,
+        "the original must remain byte-identical"
+    );
+}
+
+#[test]
+fn r006_state_a_a_valid_state_is_replaced_without_quarantine() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("state.json");
+
+    let original = AppState {
+        active_layer_mode: LayerMode::Overlay,
+        ..AppState::default()
+    };
+    original.save_to_file(&path).expect("write a valid state");
+    assert!(matches!(
+        AppState::load_detailed(&path),
+        StateLoadOutcome::Valid(_)
+    ));
+
+    AppState::default()
+        .save_to_file(&path)
+        .expect("a valid state is replaced normally");
+    assert!(
+        quarantined_beside(&path).is_empty(),
+        "replacing a valid state quarantines nothing"
+    );
+}
+
+#[test]
+fn r006_state_b_syntactically_valid_but_semantically_invalid_state_is_preserved_first() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("state.json");
+    fs::write(&path, SEMANTICALLY_INVALID_STATE).expect("write the odd state");
+
+    let text = std::str::from_utf8(SEMANTICALLY_INVALID_STATE).expect("utf-8");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(text).is_ok(),
+        "the scenario needs syntactically valid JSON"
+    );
+    assert!(
+        serde_json::from_str::<AppState>(text).is_err(),
+        "the scenario needs it to be invalid as a state file"
+    );
+
+    let before = fs::read(&path).expect("original bytes");
+
+    AppState::default()
+        .save_to_file(&path)
+        .expect("the save proceeds once the original has been preserved");
+
+    let quarantined = quarantined_beside(&path);
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "the original must be preserved before it is replaced, found {quarantined:?}"
+    );
+    assert_eq!(
+        quarantined[0].1, before,
+        "the quarantined bytes must be the original bytes, unchanged"
+    );
+
+    fs::write(&path, SEMANTICALLY_INVALID_STATE).expect("restore for the loader");
+    assert!(
+        matches!(
+            AppState::load_detailed(&path),
+            StateLoadOutcome::CorruptedRecovered { .. }
+        ),
+        "loader and save must agree about what counts as a state file"
+    );
+}
+
+#[test]
+fn r006_state_c_preservation_failure_blocks_replacing_a_semantically_invalid_state() {
+    if is_running_as_root() {
+        eprintln!("TEST REGISTERED: passed by harness; SCENARIO EXECUTED: NO; REASON: root/CAP_DAC_OVERRIDE");
+        return;
+    }
+
+    let tmp = tempdir().expect("tempdir");
+    let dir = tmp.path().join("state");
+    fs::create_dir(&dir).expect("create dir");
+    let path = dir.join("state.json");
+    fs::write(&path, SEMANTICALLY_INVALID_STATE).expect("write the odd state");
+
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).expect("read-only dir");
+    let outcome = AppState::default().save_to_file(&path);
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+
+    assert!(
+        outcome.is_err(),
+        "a save that cannot preserve the original must not replace it"
+    );
+    assert_eq!(
+        fs::read(&path).expect("read back"),
+        SEMANTICALLY_INVALID_STATE,
+        "the original must remain byte-identical"
+    );
+    assert!(quarantined_beside(&path).is_empty());
+}
+
+#[test]
+fn r006_state_d_an_unreadable_state_still_blocks_the_save() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("state.json");
+    fs::write(&path, SEMANTICALLY_INVALID_STATE).expect("write");
+
+    let failing_reader = |_p: &Path| -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "deterministic read failure",
+        ))
+    };
+
+    let outcome = AppState::default().save_to_file_with_reader(&path, failing_reader);
+    assert!(outcome.is_err(), "an unreadable original is never replaced");
+    assert_eq!(
+        fs::read(&path).expect("read back"),
+        SEMANTICALLY_INVALID_STATE,
+        "the original must remain byte-identical"
+    );
+}

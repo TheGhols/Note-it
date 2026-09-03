@@ -249,7 +249,7 @@ impl AppState {
             }
         };
 
-        match serde_json::from_str::<AppState>(content_str) {
+        match parse_state(content_str) {
             Ok(state) => StateLoadOutcome::Valid(state),
             Err(parse_err) => {
                 eprintln!("State file at {} is malformed: {parse_err}", path.display());
@@ -315,8 +315,10 @@ impl AppState {
         // Before replacing an existing file, verify/preserve previous contents.
         match reader(path) {
             Ok(existing_bytes) => {
-                let is_valid = serde_json::from_slice::<serde_json::Value>(&existing_bytes).is_ok();
-                if !is_valid {
+                // The same question the loader asks. Well-formed JSON that
+                // is not a state file is corruption to the loader, and the save
+                // may not disagree and overwrite it unpreserved.
+                if !existing_bytes_are_valid_state(&existing_bytes) {
                     crate::quarantine::quarantine_corrupted_file(path, &existing_bytes).map_err(
                         |e| {
                             format!(
@@ -365,6 +367,21 @@ impl AppState {
         };
         crate::permissions::create_private_dir_all(parent)
     }
+}
+
+/// Parses a state file exactly as the loader does.
+///
+/// One definition of "this is a state file", shared by the load and by the
+/// check the save makes before replacing one, so the two cannot drift apart.
+fn parse_state(content: &str) -> Result<AppState, serde_json::Error> {
+    serde_json::from_str::<AppState>(content)
+}
+
+/// Whether the bytes already on disk are a state file this program wrote.
+fn existing_bytes_are_valid_state(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|text| parse_state(text).is_ok())
 }
 
 /// Result of resolving state during application startup.
