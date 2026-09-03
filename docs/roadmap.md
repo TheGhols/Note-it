@@ -773,7 +773,44 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
 
       **Gate técnico para início da Fase 4.2: LIBERADO.** Não resta blocker conhecido herdado da
       série 4.1.
-- [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.
+- [ ] **Fase 4.2 — IA/Segundo Cérebro.** Transformar o Note-it numa fonte de conhecimento local,
+      recuperável e rastreável, para que uma IA externa use as notas como contexto através do MCP.
+      **A IA continua fora do Core**: ela interpreta e raciocina, o Note-it armazena, identifica,
+      busca, recupera e controla escrita. Markdown continua sendo a fonte da verdade. Arquitetura em
+      `docs/second-brain.md`, justificativa na ADR-048.
+  - [x] **4.2A — Arquitetura e contrato.** Gate arquitetural, sem funcionalidade: inventário do que
+        existe, definição normativa do Segundo Cérebro v1, fronteiras de confiança, threat model,
+        modelo de injeção de prompt, proveniência, orçamento de contexto, decisão de persistência e
+        as subfases abaixo. Decidido: Context Engine somente leitura no `noteit-core`, cálculo sob
+        demanda (sem índice e sem cache na 4.2), **uma** tool nova (`noteit_context`), sem Resources
+        e sem Prompts, modo somente leitura delegado ao host via `readOnlyHint`, e um candidato de
+        contexto carregando `updated_at` e **nunca** uma `revision` — porque uma revisão num
+        candidato deixaria um agente gravar a partir de um trecho de 240 caracteres, e um carimbo de
+        tempo é recusado por `NoteRevision::parse`, o que torna a proteção mecânica. Medido:
+        busca custa 10 ms com 100 notas, 48 ms com 1 000 e 435 ms com 10 000. Auditado o modelo de
+        execução do MCP, com um finding registrado (ver 4.2B).
+  - [ ] **4.2B — Context Engine v1 no Core.** Camada somente leitura, determinística, sobre as
+        leituras que o Core já tem; sinais de texto, tag, propriedade, tarefa e recência, cada um
+        explicável. Requisito de entrada: corrigir o comentário falso sobre `spawn_blocking` em
+        `noteit-mcp/src/main.rs` e resolver o bloqueio do runtime — hoje um handler longo para o
+        servidor inteiro. Saída: API interna tipada, benchmarks de 100/1 000/10 000 notas e limites
+        honestos publicados.
+  - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
+        `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
+        rede, sem escrita.
+  - [ ] **4.2D — Contrato do agente.** Como uma IA deve usar o Note-it: ler antes de escrever,
+        minimizar contexto, tratar conteúdo como dado não confiável, respeitar `revision_conflict` e
+        `indeterminate`. Neutro em relação ao provedor.
+  - [ ] **4.2E — Validação ponta a ponta.** Store sintético; recuperar contexto, seguir
+        proveniência, abrir apenas as notas necessárias, não gravar durante consulta.
+  - [ ] **4.2R — Auditoria ofensiva do Segundo Cérebro.** Injeção de prompt, envenenamento e
+        estouro de contexto, contexto e revisão obsoletos, symlink, traversal, Markdown hostil,
+        notas enormes, stores grandes, concorrência GUI/IA, escrita não autorizada, vazamento em
+        rede e em log. A Fase 4.2 só é encerrada depois dela.
+- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Reservado. Registrado na 4.2A para não
+      entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por similaridade e um
+      eventual índice persistente, se os benchmarks justificarem. Cada um com sua própria análise de
+      privacidade, tamanho, invalidação e honestidade de nomenclatura.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 
