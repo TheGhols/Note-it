@@ -20,6 +20,16 @@
 //! appears in anything this file publishes. Nothing below names a runtime
 //! directory, a socket, a lock file, a lease generation, or which of the two
 //! write paths a change took.
+//!
+//! ## Every tool here is `async`, and none of them does the work
+//!
+//! A tool body parses its arguments, hands the store operation to
+//! [`NoteItMcpServer::offload`], and turns the answer into a result. The Core
+//! call itself happens on Tokio's blocking pool, never on the thread that
+//! reads standard input — see [`crate::domain::off_reactor`]. That is what
+//! lets the server answer `ping` while a search is walking the store, and it
+//! is enforced by the type system rather than by remembering: the store
+//! functions all require an `OffThread`, which only `offload` can produce.
 
 use crate::contract::{
     AppendInput, CreateInput, EditInput, ListInput, ListResult, PropertyRemoveInput,
@@ -27,7 +37,7 @@ use crate::contract::{
     TagRemoveInput, TaskCompleteInput, TaskReopenInput, TasksListInput, TasksResult,
     TrashRestoreInput, TrashResult, WriteResult,
 };
-use crate::domain::{self, ExistingNoteMutation, Store};
+use crate::domain::{self, ExistingNoteMutation, OffThread, OffloadFailed, Store};
 use noteit_core::write::NoteMutation;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::schema_for_output;
@@ -97,6 +107,37 @@ impl NoteItMcpServer {
     pub fn store(&self) -> &Store {
         &self.store
     }
+
+    /// Runs one store operation off the protocol's thread.
+    ///
+    /// The only route from a tool to the Core, because the closure is handed
+    /// the [`OffThread`] every store function demands and nothing else can
+    /// make one.
+    async fn offload<T, F>(&self, work: F) -> Result<T, ErrorData>
+    where
+        F: FnOnce(&OffThread, &Store) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        domain::off_reactor(&self.store, work)
+            .await
+            .map_err(executor_failure)
+    }
+}
+
+/// The executor itself failed, which is not something a store can answer.
+///
+/// Deliberately says nothing about *what* was running. A panic's payload can
+/// quote the note it was holding, and this text goes to the host; the panic
+/// was already printed on standard error, which is where a developer reads it
+/// and where it cannot corrupt the protocol.
+fn executor_failure(failure: OffloadFailed) -> ErrorData {
+    ErrorData::internal_error(
+        match failure {
+            OffloadFailed::Panicked => "a operação falhou dentro do servidor".to_string(),
+            OffloadFailed::Cancelled => "a operação foi interrompida".to_string(),
+        },
+        None,
+    )
 }
 
 impl Default for NoteItMcpServer {
@@ -137,14 +178,20 @@ fn write_response(result: WriteResult) -> Result<CallToolResult, ErrorData> {
 ///
 /// Every mutation tool goes through here, so the precondition is parsed in one
 /// place and a tool cannot reach the store having skipped it.
-fn mutate(
-    store: &Store,
+async fn mutate(
+    server: &NoteItMcpServer,
     note_id: String,
     expected_revision: &str,
     mutation: NoteMutation,
 ) -> Result<CallToolResult, ErrorData> {
+    // Parsed here, on the reactor: reading a revision out of a string touches
+    // no file, and a refusal never needs to reach the store at all.
     match ExistingNoteMutation::new(note_id, expected_revision, mutation) {
-        Ok(mutation) => write_response(domain::mutate(store, mutation)),
+        Ok(mutation) => write_response(
+            server
+                .offload(move |off, store| domain::mutate(off, store, mutation))
+                .await?,
+        ),
         Err(refusal) => write_response(*refusal),
     }
 }
@@ -160,12 +207,15 @@ impl NoteItMcpServer {
         annotations(title = "List notes", read_only_hint = true),
         output_schema = schema_for_output::<ListResult>()
     )]
-    fn noteit_list(
+    async fn noteit_list(
         &self,
         Parameters(input): Parameters<ListInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let filter = domain::filter_of(input.filter.tags, input.filter.properties);
-        let result = domain::list(&self.store, &filter, domain::limit_of(input.filter.limit));
+        let limit = domain::limit_of(input.filter.limit);
+        let result = self
+            .offload(move |off, store| domain::list(off, store, &filter, limit))
+            .await?;
         let status = result.status;
         respond(&result, status)
     }
@@ -180,11 +230,13 @@ impl NoteItMcpServer {
         annotations(title = "Read a note", read_only_hint = true),
         output_schema = schema_for_output::<ReadResult>()
     )]
-    fn noteit_read(
+    async fn noteit_read(
         &self,
         Parameters(input): Parameters<ReadInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let result = domain::read(&self.store, &input.note_id);
+        let result = self
+            .offload(move |off, store| domain::read(off, store, &input.note_id))
+            .await?;
         let status = result.status;
         respond(&result, status)
     }
@@ -196,17 +248,15 @@ impl NoteItMcpServer {
         annotations(title = "Search notes", read_only_hint = true),
         output_schema = schema_for_output::<SearchResult>()
     )]
-    fn noteit_search(
+    async fn noteit_search(
         &self,
         Parameters(input): Parameters<SearchInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let filter = domain::filter_of(input.filter.tags, input.filter.properties);
-        let result = domain::search(
-            &self.store,
-            &input.query,
-            &filter,
-            domain::limit_of(input.filter.limit),
-        );
+        let limit = domain::limit_of(input.filter.limit);
+        let result = self
+            .offload(move |off, store| domain::search(off, store, &input.query, &filter, limit))
+            .await?;
         let status = result.status;
         respond(&result, status)
     }
@@ -222,17 +272,15 @@ impl NoteItMcpServer {
         annotations(title = "List tasks in notes", read_only_hint = true),
         output_schema = schema_for_output::<TasksResult>()
     )]
-    fn noteit_tasks_list(
+    async fn noteit_tasks_list(
         &self,
         Parameters(input): Parameters<TasksListInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let filter = domain::filter_of(input.filter.tags, input.filter.properties);
-        let result = domain::tasks(
-            &self.store,
-            input.state,
-            &filter,
-            domain::limit_of(input.filter.limit),
-        );
+        let limit = domain::limit_of(input.filter.limit);
+        let result = self
+            .offload(move |off, store| domain::tasks(off, store, input.state, &filter, limit))
+            .await?;
         let status = result.status;
         respond(&result, status)
     }
@@ -243,8 +291,8 @@ impl NoteItMcpServer {
         annotations(title = "List deleted notes", read_only_hint = true),
         output_schema = schema_for_output::<TrashResult>()
     )]
-    fn noteit_trash_list(&self) -> Result<CallToolResult, ErrorData> {
-        let result = domain::trash(&self.store);
+    async fn noteit_trash_list(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self.offload(domain::trash).await?;
         let status = result.status;
         respond(&result, status)
     }
@@ -260,16 +308,16 @@ impl NoteItMcpServer {
         annotations(title = "Create a note", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_create(
+    async fn noteit_create(
         &self,
         Parameters(input): Parameters<CreateInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        write_response(domain::create(
-            &self.store,
-            input.content,
-            input.tags,
-            input.properties,
-        ))
+        write_response(
+            self.offload(move |off, store| {
+                domain::create(off, store, input.content, input.tags, input.properties)
+            })
+            .await?,
+        )
     }
 
     // ----------------------------------------------------------- mutating
@@ -292,18 +340,19 @@ impl NoteItMcpServer {
         annotations(title = "Append to a note", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_append(
+    async fn noteit_append(
         &self,
         Parameters(input): Parameters<AppendInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::Append {
                 payload: input.text,
             },
         )
+        .await
     }
 
     /// Replaces a note's whole body, or empties it with `clear`.
@@ -315,7 +364,7 @@ impl NoteItMcpServer {
         annotations(title = "Replace a note's body", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_edit(
+    async fn noteit_edit(
         &self,
         Parameters(input): Parameters<EditInput>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -340,12 +389,7 @@ impl NoteItMcpServer {
                 ))
             }
         };
-        mutate(
-            &self.store,
-            input.note_id,
-            &input.expected_revision,
-            mutation,
-        )
+        mutate(self, input.note_id, &input.expected_revision, mutation).await
     }
 
     /// Adds a tag to a note. Requires `expected_revision`.
@@ -354,16 +398,17 @@ impl NoteItMcpServer {
         annotations(title = "Add a tag", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_tag_add(
+    async fn noteit_tag_add(
         &self,
         Parameters(input): Parameters<TagAddInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::AddTag { tag: input.tag },
         )
+        .await
     }
 
     /// Removes a tag from a note. Requires `expected_revision`.
@@ -372,16 +417,17 @@ impl NoteItMcpServer {
         annotations(title = "Remove a tag", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_tag_remove(
+    async fn noteit_tag_remove(
         &self,
         Parameters(input): Parameters<TagRemoveInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::RemoveTag { tag: input.tag },
         )
+        .await
     }
 
     /// Sets a property on a note, adding it or replacing its value.
@@ -391,12 +437,12 @@ impl NoteItMcpServer {
         annotations(title = "Set a property", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_property_set(
+    async fn noteit_property_set(
         &self,
         Parameters(input): Parameters<PropertySetInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::SetProperty {
@@ -404,6 +450,7 @@ impl NoteItMcpServer {
                 value: input.value,
             },
         )
+        .await
     }
 
     /// Removes a property from a note. Requires `expected_revision`.
@@ -412,16 +459,17 @@ impl NoteItMcpServer {
         annotations(title = "Remove a property", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_property_remove(
+    async fn noteit_property_remove(
         &self,
         Parameters(input): Parameters<PropertyRemoveInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::RemoveProperty { key: input.key },
         )
+        .await
     }
 
     /// Marks one Markdown task in a note as done. Requires
@@ -431,18 +479,19 @@ impl NoteItMcpServer {
         annotations(title = "Complete a task", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_task_complete(
+    async fn noteit_task_complete(
         &self,
         Parameters(input): Parameters<TaskCompleteInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::CompleteTask {
                 task_ref: input.task_ref,
             },
         )
+        .await
     }
 
     /// Marks one Markdown task in a note as not done. Requires
@@ -452,18 +501,19 @@ impl NoteItMcpServer {
         annotations(title = "Reopen a task", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_task_reopen(
+    async fn noteit_task_reopen(
         &self,
         Parameters(input): Parameters<TaskReopenInput>,
     ) -> Result<CallToolResult, ErrorData> {
         mutate(
-            &self.store,
+            self,
             input.note_id,
             &input.expected_revision,
             NoteMutation::ReopenTask {
                 task_ref: input.task_ref,
             },
         )
+        .await
     }
 
     // ------------------------------------------------------------- restore
@@ -479,11 +529,14 @@ impl NoteItMcpServer {
         annotations(title = "Restore a deleted note", read_only_hint = false),
         output_schema = schema_for_output::<WriteResult>()
     )]
-    fn noteit_trash_restore(
+    async fn noteit_trash_restore(
         &self,
         Parameters(input): Parameters<TrashRestoreInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        write_response(domain::restore(&self.store, input.note_id))
+        write_response(
+            self.offload(move |off, store| domain::restore(off, store, input.note_id))
+                .await?,
+        )
     }
 }
 

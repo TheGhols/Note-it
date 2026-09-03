@@ -24,9 +24,12 @@ use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 
 fn main() -> std::process::ExitCode {
-    // A current-thread runtime: this server does one thing at a time against
-    // one store, and every Core call is blocking file I/O handed to a blocking
-    // thread rather than run on the reactor.
+    // A current-thread runtime, which is enough because this thread does not
+    // do the work: it reads standard input, routes, and writes answers, while
+    // every Core call goes to Tokio's blocking pool through
+    // `domain::off_reactor`. One thread on the protocol, other threads on the
+    // disk — so a search that walks ten thousand notes does not stop the
+    // server from answering `ping` or accepting the next request.
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

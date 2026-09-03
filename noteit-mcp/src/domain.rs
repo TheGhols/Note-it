@@ -13,6 +13,15 @@
 //! is the authority's, in the Core, in one implementation shared with the
 //! command line.
 //!
+//! ## Why nothing here can run on the protocol's thread
+//!
+//! Every function below that touches the store takes an [`OffThread`]. It has
+//! one constructor, it is private to this module, and [`off_reactor`] is the
+//! only thing that calls it — inside the closure `spawn_blocking` runs. So a
+//! Core call on the reactor is not a mistake this crate can make: it does not
+//! compile. A sixteenth tool added later cannot forget the runtime for the
+//! same reason the fifteenth cannot forget `expected_revision`.
+//!
 //! ## Why a mutation cannot be built without a revision
 //!
 //! [`ExistingNoteMutation`] is the only way this crate can produce a
@@ -66,8 +75,56 @@ impl Store {
     }
 
     /// The read-only view. Creates no directory, no state file and no backup.
-    fn reader(&self) -> NoteItCore {
+    ///
+    /// Takes the witness rather than checking anything: opening the store is
+    /// where a read starts touching the filesystem, so this is the narrowest
+    /// place the rule can be made unforgettable.
+    fn reader(&self, _off: &OffThread) -> NoteItCore {
         NoteItCore::open_read_only_at(self.paths.clone())
+    }
+}
+
+/// Proof that the caller is not on the protocol's thread.
+///
+/// Carried by every function here that opens the store. The field is private
+/// and the only value is built inside [`off_reactor`], so possessing one means
+/// the work really is running on a blocking thread rather than on the reactor
+/// `noteit-mcp` reads standard input with.
+pub struct OffThread(());
+
+/// Why a Core call did not produce an answer at all.
+///
+/// Not a refusal from the store — those are [`WriteResult`]s and read results
+/// with a code. This is the executor itself failing, and it deliberately
+/// carries no detail from the failure: a panic message can quote whatever the
+/// code was holding, which here is note content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffloadFailed {
+    /// The work panicked. The panic itself was already reported by the default
+    /// hook, on standard error, where it does not corrupt the protocol.
+    Panicked,
+    /// The blocking task was cancelled. Nothing here cancels one, so this
+    /// means the runtime is shutting down under the call.
+    Cancelled,
+}
+
+/// Runs one Core operation off the protocol's thread.
+///
+/// The single door to the store, and the only place an [`OffThread`] comes
+/// from. `spawn_blocking` puts the work on Tokio's blocking pool, which is a
+/// separate set of threads from the runtime's own — so a *current-thread*
+/// runtime keeps reading standard input, answering `ping` and accepting the
+/// next request while the disk is busy.
+pub async fn off_reactor<T, F>(store: &Store, work: F) -> Result<T, OffloadFailed>
+where
+    F: FnOnce(&OffThread, &Store) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let store = store.clone();
+    match tokio::task::spawn_blocking(move || work(&OffThread(()), &store)).await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_panic() => Err(OffloadFailed::Panicked),
+        Err(_) => Err(OffloadFailed::Cancelled),
     }
 }
 
@@ -128,19 +185,21 @@ impl ExistingNoteMutation {
 // ================================================================== writes
 
 /// Runs one mutation of an existing note.
-pub fn mutate(store: &Store, mutation: ExistingNoteMutation) -> WriteResult {
-    perform(store, &mutation.into_operation())
+pub fn mutate(off: &OffThread, store: &Store, mutation: ExistingNoteMutation) -> WriteResult {
+    perform(off, store, &mutation.into_operation())
 }
 
 /// Creates a note. The only write that takes no precondition, because there is
 /// no earlier version of a note that does not exist yet.
 pub fn create(
+    off: &OffThread,
     store: &Store,
     content: String,
     tags: Vec<String>,
     properties: Vec<Property>,
 ) -> WriteResult {
     perform(
+        off,
         store,
         &WriteOperation::CreateNote {
             draft: NoteDraft {
@@ -160,15 +219,15 @@ pub fn create(
 
 /// Moves a note back out of the trash. A move, not an edit — see
 /// [`crate::contract::TrashRestoreInput`].
-pub fn restore(store: &Store, selector: String) -> WriteResult {
-    perform(store, &WriteOperation::RestoreFromTrash { selector })
+pub fn restore(off: &OffThread, store: &Store, selector: String) -> WriteResult {
+    perform(off, store, &WriteOperation::RestoreFromTrash { selector })
 }
 
 /// The single place a write leaves this crate.
 ///
 /// Every write tool ends here, so there is exactly one call to the authority
 /// and exactly one translation of its answer.
-fn perform(store: &Store, operation: &WriteOperation) -> WriteResult {
+fn perform(_off: &OffThread, store: &Store, operation: &WriteOperation) -> WriteResult {
     match authority::perform_at(store.paths(), operation) {
         // The path the write took — direct or through the running desktop
         // instance — is deliberately dropped. It is a detail of a private
@@ -260,8 +319,13 @@ fn refused(error: &WriteError) -> WriteResult {
 
 // =================================================================== reads
 
-pub fn list(store: &Store, filter: &NoteFilter, limit: Option<usize>) -> ListResult {
-    match store.reader().list_summaries(filter, limit) {
+pub fn list(
+    off: &OffThread,
+    store: &Store,
+    filter: &NoteFilter,
+    limit: Option<usize>,
+) -> ListResult {
+    match store.reader(off).list_summaries(filter, limit) {
         Ok(batch) => {
             let notes: Vec<NoteSummaryView> = batch.items.iter().map(summary_view).collect();
             ListResult {
@@ -277,8 +341,8 @@ pub fn list(store: &Store, filter: &NoteFilter, limit: Option<usize>) -> ListRes
     }
 }
 
-pub fn read(store: &Store, selector: &str) -> ReadResult {
-    let core = store.reader();
+pub fn read(off: &OffThread, store: &Store, selector: &str) -> ReadResult {
+    let core = store.reader(off);
     let note_id = match core.resolve_note_id(selector) {
         Ok(note_id) => note_id,
         Err(error) => {
@@ -309,12 +373,16 @@ pub fn read(store: &Store, selector: &str) -> ReadResult {
 }
 
 pub fn search(
+    off: &OffThread,
     store: &Store,
     query: &str,
     filter: &NoteFilter,
     limit: Option<usize>,
 ) -> SearchResult {
-    match store.reader().search_notes_filtered(query, filter, limit) {
+    match store
+        .reader(off)
+        .search_notes_filtered(query, filter, limit)
+    {
         Ok(batch) => {
             let results: Vec<SearchHitView> = batch
                 .items
@@ -342,6 +410,7 @@ pub fn search(
 }
 
 pub fn tasks(
+    off: &OffThread,
     store: &Store,
     state: TaskState,
     filter: &NoteFilter,
@@ -352,7 +421,7 @@ pub fn tasks(
         TaskState::Completed => TaskStateFilter::Completed,
         TaskState::All => TaskStateFilter::All,
     };
-    match store.reader().list_tasks(state, filter, limit) {
+    match store.reader(off).list_tasks(state, filter, limit) {
         Ok(batch) => {
             let tasks: Vec<TaskView> = batch.items.iter().map(task_view).collect();
             TasksResult {
@@ -368,8 +437,13 @@ pub fn tasks(
     }
 }
 
-pub fn trash(store: &Store) -> TrashResult {
-    let entries: Vec<TrashEntryView> = store.reader().list_trash().iter().map(trash_view).collect();
+pub fn trash(off: &OffThread, store: &Store) -> TrashResult {
+    let entries: Vec<TrashEntryView> = store
+        .reader(off)
+        .list_trash()
+        .iter()
+        .map(trash_view)
+        .collect();
     TrashResult {
         status: Status::Ok,
         count: entries.len(),

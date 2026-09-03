@@ -34,9 +34,10 @@ rmcp = { version = "3.2", default-features = false, features = [
     "macros",
     "transport-io",
 ] }
-# The runtime `transport-io` requires. `rt` and not `rt-multi-thread`: this
-# server does one thing at a time against one store, and every Core call is
-# blocking file I/O handed to `spawn_blocking` rather than run on the reactor.
+# The runtime `transport-io` requires. `rt` and not `rt-multi-thread`: the
+# protocol needs exactly one thread, and the store work does not run on it.
+# `rt` is also what provides `spawn_blocking` and the blocking pool it moves
+# every Core call onto — see `noteit-mcp/src/domain.rs`.
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "io-std", "sync"] }
 # The tool schemas and the structured results. Already in the workspace graph
 # through `noteit-core`; stated here because this crate uses them directly.

@@ -25,10 +25,63 @@ use noteit_core::{NoteItCore, StorePaths, Uuid};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 use tempfile::{tempdir, TempDir};
+
+/// How long any single answer may take before the suite calls it a hang.
+///
+/// Generous enough that no healthy machine reaches it, and finite so that a
+/// server which stops answering fails with a sentence instead of stalling the
+/// run until the harness kills it. The concurrency suite depends on this: a
+/// reactor blocked behind a Core call would otherwise deadlock the test rather
+/// than fail it.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A latch the test opens by hand.
+///
+/// Two of these replace every `sleep` the concurrency proof would otherwise
+/// need: one says "the server has reached the blocking work", the other says
+/// "you may finish now". What is between them is ordering the test controls,
+/// not a duration it hopes for.
+#[derive(Clone, Default)]
+pub struct Gate {
+    inner: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Gate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Lets everyone waiting through, now and later.
+    pub fn open(&self) {
+        let (lock, condvar) = &*self.inner;
+        *lock.lock().expect("gate") = true;
+        condvar.notify_all();
+    }
+
+    /// Blocks until [`Gate::open`], or gives up. `false` means it timed out.
+    pub fn wait_for(&self, limit: Duration) -> bool {
+        let (lock, condvar) = &*self.inner;
+        let deadline = std::time::Instant::now() + limit;
+        let mut open = lock.lock().expect("gate");
+        while !*open {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            let (guard, timeout) = condvar.wait_timeout(open, left).expect("gate");
+            open = guard;
+            if timeout.timed_out() && !*open {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 /// The MCP revision this harness asks for in `initialize`.
 ///
@@ -172,7 +225,16 @@ pub struct McpClient {
     /// Taken away by `finish`, which closes it to let the server end the way a
     /// host ends it: by hanging up.
     stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+    /// Lines the server has written, pumped off the pipe by a thread.
+    ///
+    /// Reading straight from the pipe would make "the server never answered"
+    /// indistinguishable from "the test is still waiting", and the suite that
+    /// proves the reactor keeps answering while a handler is busy has to be
+    /// able to tell those apart. A thread and a channel make every read
+    /// bounded by [`ANSWER_TIMEOUT`].
+    lines: Receiver<Option<String>>,
+    /// Answers read off the channel while looking for a different id.
+    held: Vec<Value>,
     next_id: i64,
 }
 
@@ -202,11 +264,14 @@ impl McpClient {
             .spawn()
             .expect("spawn noteit-mcp");
         let stdin = child.stdin.take().expect("stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+        let stdout = child.stdout.take().expect("stdout");
+        let (sender, lines) = channel();
+        std::thread::spawn(move || pump(stdout, sender));
         Self {
             child,
             stdin: Some(stdin),
-            stdout,
+            lines,
+            held: Vec::new(),
             next_id: 1,
         }
     }
@@ -233,6 +298,16 @@ impl McpClient {
     /// is an `Ok` carrying `isError`, which is the distinction MCP draws and
     /// the one these suites keep.
     pub fn request(&mut self, method: &str, params: Value) -> Result<Value, Value> {
+        let id = self.send_request(method, params);
+        self.await_response(id)
+    }
+
+    /// Sends one request and does **not** wait for its answer.
+    ///
+    /// The half of `request` the concurrency suite needs: it has to have a
+    /// call in flight before it can ask whether anything else still gets
+    /// through.
+    pub fn send_request(&mut self, method: &str, params: Value) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({
@@ -241,19 +316,55 @@ impl McpClient {
             "method": method,
             "params": params,
         }));
+        id
+    }
 
+    /// Waits for the answer belonging to `id`, keeping any other answer that
+    /// arrives first.
+    pub fn await_response(&mut self, id: i64) -> Result<Value, Value> {
+        if let Some(index) = self
+            .held
+            .iter()
+            .position(|held| held.get("id").and_then(Value::as_i64) == Some(id))
+        {
+            return Self::split(self.held.remove(index));
+        }
         loop {
             let message = self.read_message();
             // Notifications and server-initiated requests are not this
             // answer; skipping them is what makes the correlation real.
-            if message.get("id").and_then(Value::as_i64) != Some(id) {
-                continue;
+            match message.get("id").and_then(Value::as_i64) {
+                Some(answered) if answered == id => return Self::split(message),
+                Some(_) => self.held.push(message),
+                None => continue,
             }
-            if let Some(error) = message.get("error") {
-                return Err(error.clone());
-            }
-            return Ok(message.get("result").cloned().unwrap_or(Value::Null));
         }
+    }
+
+    /// The next answer to arrive, whatever it answers.
+    ///
+    /// This is the one the concurrency proof reads: *which* answer reaches the
+    /// host first is the observation, and a call that waited for a particular
+    /// id could not make it.
+    pub fn next_response(&mut self) -> (i64, Result<Value, Value>) {
+        if !self.held.is_empty() {
+            let message = self.held.remove(0);
+            let id = message.get("id").and_then(Value::as_i64).expect("id");
+            return (id, Self::split(message));
+        }
+        loop {
+            let message = self.read_message();
+            if let Some(id) = message.get("id").and_then(Value::as_i64) {
+                return (id, Self::split(message));
+            }
+        }
+    }
+
+    fn split(message: Value) -> Result<Value, Value> {
+        if let Some(error) = message.get("error") {
+            return Err(error.clone());
+        }
+        Ok(message.get("result").cloned().unwrap_or(Value::Null))
     }
 
     pub fn notify(&mut self, method: &str, params: Value) {
@@ -345,9 +456,17 @@ impl McpClient {
     /// printed to standard output corrupts the stream, and the test that
     /// notices must be the one that names it.
     fn read_message(&mut self) -> Value {
-        let mut line = String::new();
-        let read = self.stdout.read_line(&mut line).expect("read stdout");
-        assert!(read > 0, "the server closed its output unexpectedly");
+        let line = match self.lines.recv_timeout(ANSWER_TIMEOUT) {
+            Ok(Some(line)) => line,
+            Ok(None) => panic!("the server closed its output unexpectedly"),
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "the server said nothing for {ANSWER_TIMEOUT:?}; \
+                 a handler is holding the protocol"
+            ),
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("the server closed its output unexpectedly")
+            }
+        };
         serde_json::from_str(&line).unwrap_or_else(|error| {
             panic!("a line on stdout was not a JSON-RPC message ({error}): {line:?}")
         })
@@ -356,8 +475,16 @@ impl McpClient {
     /// Closes standard input and collects what the process said and returned.
     pub fn finish(mut self) -> Finished {
         drop(self.stdin.take());
-        let mut remaining_stdout = Vec::new();
-        std::io::copy(&mut self.stdout, &mut remaining_stdout).ok();
+        let mut remaining = Vec::new();
+        // Everything already taken off the pipe while looking for some other
+        // answer counts as trailing output too.
+        for held in self.held.drain(..) {
+            remaining.push(held.to_string());
+        }
+        while let Ok(Some(line)) = self.lines.recv_timeout(ANSWER_TIMEOUT) {
+            remaining.push(line);
+        }
+        let remaining_stdout = remaining.join("\n").into_bytes();
         let status = self.child.wait().expect("wait");
         let mut stderr = String::new();
         if let Some(mut handle) = self.child.stderr.take() {
@@ -368,6 +495,29 @@ impl McpClient {
             code: status.code(),
             trailing_stdout: String::from_utf8_lossy(&remaining_stdout).to_string(),
             stderr,
+        }
+    }
+}
+
+/// Moves the server's lines off the pipe as they arrive.
+///
+/// `None` is end of stream. Nothing here parses or judges: a line that is not
+/// JSON is still delivered, because the suite that notices rubbish on standard
+/// output has to be the one that names it.
+fn pump(stdout: std::process::ChildStdout, sender: Sender<Option<String>>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => {
+                let _ = sender.send(None);
+                return;
+            }
+            Ok(_) => {
+                if sender.send(Some(line.trim_end().to_string())).is_err() {
+                    return;
+                }
+            }
         }
     }
 }
@@ -493,6 +643,14 @@ pub enum AuthorityBehaviour {
     /// Refuse every request the way a peer speaking an older private protocol
     /// does: read the frame, see a version it does not know, and say so.
     RefuseOnVersion,
+    /// Commit properly, but only once the test says so.
+    ///
+    /// `arrived` opens the moment the authority has the request in its hands,
+    /// which is the moment the server is provably inside the blocking Core
+    /// call; `release` is the test's answer to "you may finish now". Between
+    /// them the tool call cannot complete, and that window is where the
+    /// concurrency proof asks whether the protocol still answers.
+    CommitWhenReleased { arrived: Gate, release: Gate },
     /// Answer the way a desktop instance with an open editor does: the base is
     /// not the file, it is the committed note with the editor's unsaved text
     /// folded in, and the precondition is checked against *that*.
@@ -619,6 +777,21 @@ impl FakeAuthority {
                                     }
                                 }
                             }
+                        };
+                        let _ = write_frame(&mut stream, &response);
+                    }
+                    AuthorityBehaviour::CommitWhenReleased { arrived, release } => {
+                        arrived.open();
+                        // Held here, inside the operation the tool is waiting
+                        // on, until the test has asked its question.
+                        release.wait_for(Duration::from_secs(30));
+                        let storage =
+                            StorageManager::from_paths(paths.clone()).expect("open the store");
+                        let core = NoteItCore::from_storage(storage);
+                        let response = match noteit_core::write::execute(&core, &request.operation)
+                        {
+                            Ok(outcome) => ControlResponse::accepted(request.request_id, outcome),
+                            Err(error) => ControlResponse::refused(request.request_id, error),
                         };
                         let _ = write_frame(&mut stream, &response);
                     }
