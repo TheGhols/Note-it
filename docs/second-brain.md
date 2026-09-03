@@ -509,6 +509,26 @@ o que também resolve o tamanho por construção em vez de por regra de corte.
 Ordem de corte, determinística: tarefas na ordem em que aparecem na nota — a
 ordem que quem lê o Markdown vê —, warnings na ordem que a varredura produziu.
 
+### E a recusa também
+
+A tabela acima cobria a resposta de sucesso. Faltava o canal de erro, e ele
+tinha a mesma fresta: `ContextError::StoreUnavailable` carregava a mensagem do
+storage, que nomeia o diretório — "The notes path `/home/.../notes` is not a
+directory". Fechado na 4.2B.R1.1 pela forma do tipo, não por saneamento:
+
+| Recusa | O que carrega |
+| --- | --- |
+| `QueryTooLong { limit, actual }` | dois inteiros; **não** ecoa a consulta |
+| `StoreUnavailable` | **nada** — variante sem payload, `Display` fixo |
+
+As duas continuam distinguíveis: uma vale corrigir o pedido, a outra não.
+
+A afirmação exata, agora:
+
+> Todo dado publicado pelo Context Engine — em sucesso, em warning ou em recusa
+> — é tipado, de tamanho limitado ou fixo, e não carrega mensagem livre nem
+> caminho.
+
 Cálculo do máximo: 50 × 240 caracteres ≈ 12 KB ≈ 3 000 tokens de snippet, mais
 metadados. É uma fatia significativa mas não dominante de uma janela de
 contexto típica, e mantém a resposta legível por uma pessoa depurando.

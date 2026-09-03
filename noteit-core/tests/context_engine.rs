@@ -158,7 +158,7 @@ fn a_store_that_does_not_exist_is_not_created_by_asking() {
 
     match answer {
         Ok(answer) => assert!(answer.candidates.is_empty()),
-        Err(ContextError::StoreUnavailable(_)) => {}
+        Err(ContextError::StoreUnavailable) => {}
         Err(other) => panic!("a missing store must answer or refuse cleanly: {other:?}"),
     }
     assert!(!root.exists(), "asking a question created the store");
@@ -1259,4 +1259,105 @@ fn a_hostile_task_is_clipped_and_still_only_text() {
         fingerprint(&store.root),
         "the task told the engine to delete the notes and something moved"
     );
+}
+
+// ------------------------------------------- o canal de erro (4.2B.R1.1)
+
+/// A store whose notes path is a regular file instead of a directory.
+///
+/// The one scan failure that is reproducible everywhere, needs no special
+/// privileges, and does not depend on how a CI container treats permissions.
+fn store_that_cannot_be_scanned() -> (TempDir, NoteItCore) {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let notes = root.join("data/note-it/notes");
+    std::fs::create_dir_all(notes.parent().expect("parent")).expect("create");
+    std::fs::write(&notes, "isto não é um diretório").expect("write a file in the way");
+    let core = NoteItCore::open_read_only_at(StorePaths::from_custom_paths(
+        notes,
+        root.join("config/note-it"),
+        root.join("state/note-it"),
+        root.join("runtime/note-it"),
+    ));
+    (tmp, core)
+}
+
+#[test]
+fn a_store_that_cannot_be_scanned_is_refused_without_saying_where_it_is() {
+    let (tmp, core) = store_that_cannot_be_scanned();
+
+    let error = retrieve(&core, &query("agulha")).expect_err("the scan cannot succeed");
+
+    // Structural: the variant carries nothing, so a `_` pattern would not
+    // compile. Adding a payload later has to come through here first.
+    match error {
+        ContextError::StoreUnavailable => {}
+        other => panic!("expected StoreUnavailable, got {other:?}"),
+    }
+
+    // The Core's own message for this is "The notes path /…/notes is not a
+    // directory". None of it may travel.
+    let shown = format!("{error}");
+    let debugged = format!("{error:?}");
+    let root = tmp.path().display().to_string();
+    for rendered in [&shown, &debugged] {
+        assert!(
+            !rendered.contains(&root),
+            "the temporary path escaped: {rendered}"
+        );
+        assert!(
+            !rendered.contains("/"),
+            "a path separator escaped: {rendered}"
+        );
+        assert!(
+            !rendered.contains("notes"),
+            "the store's layout escaped: {rendered}"
+        );
+        assert!(!rendered.contains(".md"), "a filename escaped: {rendered}");
+        assert!(
+            !rendered.contains("not a directory") && !rendered.contains("Failed"),
+            "the operating system's own words escaped: {rendered}"
+        );
+    }
+    assert_eq!(shown, "o store não pôde ser lido");
+}
+
+#[test]
+fn the_two_refusals_stay_distinguishable() {
+    // Collapsing both into one error would lose a distinction a caller acts
+    // on: one is worth fixing the request, the other is not.
+    let (_tmp, unscannable) = store_that_cannot_be_scanned();
+    assert!(matches!(
+        retrieve(&unscannable, &query("agulha")),
+        Err(ContextError::StoreUnavailable)
+    ));
+
+    let healthy = Store::new();
+    healthy.note("agulha");
+    assert!(matches!(
+        retrieve(&healthy.core, &query(&"a".repeat(513))),
+        Err(ContextError::QueryTooLong {
+            limit: 512,
+            actual: 513
+        })
+    ));
+}
+
+#[test]
+fn the_refusal_that_carries_numbers_carries_only_numbers() {
+    let store = Store::new();
+    store.note("agulha");
+
+    // A marker that cannot appear in the refusal's own wording, so this is
+    // about the query and not about Portuguese spelling.
+    let error = retrieve(&store.core, &query(&"SEGREDO🔑".repeat(75))).expect_err("too long");
+
+    // QueryTooLong keeps its payload because both fields are fixed-size
+    // integers — and it must not echo the query back.
+    let rendered = format!("{error}{error:?}");
+    assert!(
+        !rendered.contains("SEGREDO") && !rendered.contains('🔑'),
+        "the query was echoed back: {rendered}"
+    );
+    assert!(rendered.contains("512") && rendered.contains("600"));
 }

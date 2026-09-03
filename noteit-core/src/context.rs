@@ -290,7 +290,18 @@ pub enum ContextError {
     /// none.
     QueryTooLong { limit: usize, actual: usize },
     /// The store could not be scanned.
-    StoreUnavailable(String),
+    ///
+    /// Deliberately carries nothing. The Core's own message names the
+    /// directory — "The notes path /home/…/notes is not a directory" — which is
+    /// right for whoever is debugging a store and wrong for anything that
+    /// leaves through this surface, where a caller is given `note_id` and never
+    /// a path. The lesson from bounding the warnings applies again: a variant
+    /// with no payload cannot leak, and no sanitiser has to be trusted to keep
+    /// working.
+    ///
+    /// What is lost is a diagnostic, and only here: every other read path in
+    /// the Core still returns the full message.
+    StoreUnavailable,
 }
 
 impl std::fmt::Display for ContextError {
@@ -300,9 +311,7 @@ impl std::fmt::Display for ContextError {
                 formatter,
                 "a consulta aceita no máximo {limit} caracteres, e esta tem {actual}"
             ),
-            Self::StoreUnavailable(detail) => {
-                write!(formatter, "o store não pôde ser lido: {detail}")
-            }
+            Self::StoreUnavailable => formatter.write_str("o store não pôde ser lido"),
         }
     }
 }
@@ -384,7 +393,9 @@ pub fn retrieve(
     let (ids, mut warnings) = core
         .storage()
         .list_notes_by_recency_with_warnings()
-        .map_err(ContextError::StoreUnavailable)?;
+        // The message is dropped here on purpose, and this is the only place
+        // it could have entered the answer.
+        .map_err(|_| ContextError::StoreUnavailable)?;
 
     let mut candidates = Vec::new();
     for id in ids {
