@@ -25,6 +25,11 @@ desaparece. Toda a superfície abaixo é organizada em torno de fechar essa port
 Não é um daemon. Não é um servidor de filesystem. Não é uma segunda
 implementação do Note-it.
 
+> **Fase 4.2 em diante.** A arquitetura do Segundo Cérebro — a camada de
+> recuperação de contexto que uma IA externa usará através deste servidor — está
+> em [`docs/second-brain.md`](second-brain.md). Nada dela está implementado; o
+> catálogo abaixo continua sendo exatamente o da Fase 4.1.
+
 **Não implementado nesta fase, deliberadamente:** MCP Resources, MCP Prompts,
 sampling, elicitation, a extensão MCP Tasks, transporte HTTP/SSE/Streamable HTTP,
 OAuth, servidor remoto, IA interna, Segundo Cérebro, embeddings, banco vetorial,

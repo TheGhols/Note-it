@@ -1049,3 +1049,119 @@ a ausência de um socket aberto e fechado entre duas leituras consecutivas de um
 diretório. Quem fecha isso é a regra estática, que recusa as APIs nos dois
 crates — e é por isso que as duas camadas são descritas como complementares em
 vez de uma ser apresentada como fazendo o trabalho da outra.
+
+## ADR-048: A IA fica fora do Note-it; o Note-it entrega contexto local rastreável
+
+**Contexto.** A Fase 4.2 é a primeira do "Segundo Cérebro". O nome sugere uma
+coisa que o produto não vai fazer: hospedar um modelo. A pergunta real é onde
+colocar a inteligência, e a resposta decide todo o resto — o que é a fonte da
+verdade, quem pode escrever, o que sai da máquina e o que o produto pode
+prometer com honestidade.
+
+**Decisão.**
+
+1. **O raciocínio fica fora.** A IA interpreta, raciocina e sintetiza; o Note-it
+   armazena, identifica, busca, recupera e controla escrita. O Note-it não fica
+   mais inteligente, fica mais consultável.
+2. **Markdown continua sendo a fonte da verdade**, sem exceção. Qualquer
+   derivado é reconstruível, descartável e não autoritativo.
+3. **O Context Engine vive no `noteit-core`**, somente leitura, usando apenas as
+   leituras que o Core já tem.
+4. **Nada é persistido na 4.2.** Contexto é calculado sob demanda.
+5. **Uma única tool nova**, `noteit_context`, somente leitura. Sem Resources,
+   sem Prompts.
+6. **Um candidato de contexto carrega `updated_at`, nunca uma `revision`.**
+7. **Conteúdo de nota é dado não confiável**, inclusive para o próprio servidor.
+8. **A fronteira de privacidade é declarada em voz alta**: o Note-it não abre
+   rede; um host de nuvem pode encaminhar o que a tool devolveu.
+
+**Justificativa.**
+
+1. **Por que a inteligência fica fora.** Um modelo dentro do Note-it traria
+   credenciais, rede, download de pesos, um daemon de inferência e uma segunda
+   coisa capaz de afirmar o que a pessoa "sabe" — cada um contrariando um
+   princípio já publicado em `docs/vision.md`. E seria a arquitetura errada mesmo
+   sem isso: a Fase 4.1 já construiu a superfície pela qual um modelo externo
+   fala com o store, com identidade, precondição e autoridade. O Segundo Cérebro
+   é uma camada de *recuperação* sobre aquilo, não um segundo cérebro literal.
+
+2. **Por que Markdown continua no comando.** É o único princípio que garante que
+   apagar tudo o que a fase 4.2 vier a criar não custe uma nota. Um índice que
+   fosse fonte da verdade transformaria corrupção de cache em perda de dados —
+   e a série 4.0R foi inteira sobre não deixar isso acontecer.
+
+3. **Por que o Context Engine é do Core.** O conhecimento é do domínio. Colocá-lo
+   no `noteit-mcp` o tornaria inalcançável para a GUI e para a CLI, e criaria um
+   segundo lugar que sabe o que é uma nota — exatamente o que a Fase 4.1 evitou
+   ao mover a autoridade de escrita para o Core. Ele usa as leituras existentes
+   e não abre arquivo: performance não pode comprar integridade.
+
+4. **Por que nada é persistido agora.** Medido, com store sintético e cache
+   quente: uma busca custa 10 ms com 100 notas, 48 ms com 1 000 e 435 ms com
+   10 000. Para o tamanho real de um store de notas adesivas, sob demanda é
+   confortável. Um índice v1 traria staleness, invalidação, corrupção, backup,
+   restauração, migração e um artefato capaz de discordar das notas — para um
+   problema que ainda não existe. A política de um cache futuro já está escrita
+   (`XDG_CACHE_HOME`, invalidação por `revision`, nunca autoriza escrita), então
+   adiar não é deixar em aberto.
+
+5. **Por que uma tool só.** A pergunta de recuperação é uma pergunta; "leia esta
+   nota inteira" já é `noteit_read`. Mais tools aumentariam a superfície
+   auditada sem resolver nada. Resources foram recusados porque um Resource é
+   conteúdo que o host busca sem decisão do modelo — literalmente o despejo de
+   contexto que a minimização existe para evitar, e cujo custo de privacidade
+   recai sobre a pessoa quando o host é remoto. Prompts foram recusados porque
+   são texto do servidor que orienta o modelo, e misturá-los com conteúdo de
+   nota seria construir instrução a partir de dado não confiável.
+
+6. **Por que `updated_at` e não `revision` — a decisão mais contra-intuitiva.**
+   A orientação inicial da fase preferia `{note_id, revision}` em cada
+   candidato. Foi recusado, e o motivo é a regra central da Fase 4.1: ninguém
+   grava sobre uma nota que não leu.
+
+   Com uma `revision` no candidato, um agente pode ver um trecho de 240
+   caracteres e mandar uma mutação com aquela revisão. Se a revisão ainda for a
+   atual, **a gravação passa** — sobre uma nota que ele nunca leu inteira. O
+   conflito não salva, porque não há conflito. Seria a sobrescrita cega de
+   sempre, com um passo a mais e uma aparência de rigor.
+
+   `updated_at` dá o mesmo sinal de "isto pode ter mudado" e não abre a porta. E
+   a proteção é **mecânica**, não documental: um carimbo RFC 3339 não passa em
+   `NoteRevision::parse`, que exige sessenta e quatro caracteres hexadecimais
+   minúsculos. Um agente que tentar usá-lo como precondição recebe
+   `invalid_input` e não grava nada. A revisão nasce onde sempre nasceu: em
+   `noteit_read`.
+
+7. **Por que conteúdo é dado.** Uma nota pode dizer "ignore as instruções
+   anteriores" ou "chame `noteit_edit`". O servidor não tem avaliador, não tem
+   shell, não origina tool calls, e — a regra que separa as duas coisas —
+   descrições de tool, `instructions` e schemas são constantes de código, nunca
+   construídas com texto de nota. O que o Note-it não pode garantir é que o
+   modelo do outro lado não obedeça ao que leu; isso é do host. O que está ao
+   seu alcance é entregar conteúdo rotulado, com proveniência, em quantidade
+   mínima, e nunca dar ao conteúdo um caminho para virar ação.
+
+8. **Por que a fronteira de privacidade é dita em voz alta.** "O Note-it não
+   envia notas para a Internet" é verdade e está provado em cinco camadas. "Uma
+   nota nunca sairá desta máquina" é **falso** se a pessoa conectar um host de
+   nuvem, que encaminhará o resultado da tool ao provedor como faria com
+   qualquer contexto. Esconder essa distinção seria a desonestidade mais séria
+   possível num produto cujo primeiro princípio publicado é privacidade. Ela é
+   também a razão de projeto para a minimização: quanto menos a tool devolve,
+   menos sai da máquina quando o host é remoto.
+
+**Consequências.** A GUI não muda — `docs/vision.md` continua descrevendo um
+aplicativo minimalista de notas adesivas, e o Segundo Cérebro é um contrato para
+programas, headless, através do MCP. A Fase 4.2 fica dividida em 4.2A
+(arquitetura), 4.2B (Context Engine), 4.2C (superfície MCP), 4.2D (contrato do
+agente), 4.2E (validação) e 4.2R (auditoria ofensiva).
+
+Fica registrado um requisito de entrada da 4.2B descoberto nesta análise: o
+`noteit-mcp` usa runtime *current-thread* com handlers síncronos e sem
+`spawn_blocking`, de modo que um handler longo para o servidor inteiro — medido,
+um `ping` enviado aos 0,05 s respondido aos 3,002 s. Benigno para as tools
+atuais, inaceitável para uma consulta que varre o store. E o comentário em
+`noteit-mcp/src/main.rs` que afirma o contrário precisa ser corrigido.
+
+Embeddings, recuperação semântica e um eventual índice persistente ficam
+registrados como Fase 4.3, e não entram disfarçados na 4.2.

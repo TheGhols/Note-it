@@ -465,6 +465,7 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 - [Integração com o Niri](docs/niri.md)
 - [Segurança e sanitização de HTML](docs/security.md)
 - [Servidor MCP local (`noteit-mcp`)](docs/mcp.md)
+- [Segundo Cérebro — arquitetura e contrato](docs/second-brain.md)
 - [Guia de desenvolvimento](docs/development.md)
 - [Decisões arquiteturais](docs/decisions.md)
 - [Roadmap](docs/roadmap.md)
