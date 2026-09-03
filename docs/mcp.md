@@ -111,6 +111,28 @@ Não há argumentos, não há flags e não há variável para escolher o store: 
 servidor resolve o store do ambiente XDG em que o host o iniciou, exatamente
 como qualquer outro programa do Note-it.
 
+### Modelo de execução: uma thread no protocolo, outras no disco
+
+```text
+host  ──stdio──►  reactor (current-thread)  ──spawn_blocking──►  Core / arquivos
+```
+
+O runtime é *current-thread*, e é suficiente porque essa thread não faz o
+trabalho: ela lê a entrada padrão, roteia e escreve respostas. Toda chamada ao
+Core — leitura e escrita — vai para o pool de blocking do Tokio. Por isso uma
+busca que varre o store inteiro não impede o servidor de responder `ping` nem de
+aceitar a requisição seguinte.
+
+Não é uma promessa de documentação. Toda função que abre o store exige um
+`OffThread`, cujo construtor é privado ao módulo e só é chamado dentro do fecho
+que o `spawn_blocking` executa: uma chamada ao Core na thread do protocolo não
+compila. E `noteit-mcp/tests/mcp_concurrency.rs` prova o comportamento em duas
+frentes, sem depender de duração — ver `docs/second-brain.md` §22.
+
+O que isto **não** muda: as operações continuam serializadas onde precisam
+estar. O lease de escrita é quem decide quem grava, e ele não ficou mais frouxo
+porque a espera saiu do reactor.
+
 ---
 
 ## 3. Catálogo de tools

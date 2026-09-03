@@ -1,8 +1,10 @@
 # Segundo Cérebro do Note-it — arquitetura e contrato
 
-> **Estado:** arquitetura aprovada na Fase 4.2A. **Nada disto está
-> implementado.** Este documento é o contrato que a Fase 4.2B em diante deve
-> cumprir; onde ele descreve comportamento, descreve comportamento *futuro*.
+> **Estado:** arquitetura aprovada na 4.2A; o Context Engine foi implementado
+> na Fase 4.2B, em `noteit-core/src/context.rs`. A **superfície MCP ainda não
+> existe** — `noteit_context` é da 4.2C, e o catálogo continua com 15 tools.
+> Onde este documento descreve a tool, descreve comportamento *futuro*; onde
+> descreve o motor, descreve o que está no Core.
 
 ---
 
@@ -261,9 +263,21 @@ recent           entrou por recência, na ausência de sinal melhor
 ```
 
 Não existe score opaco. Um `0.873` que ninguém consegue auditar não é
-proveniência, é decoração. A ordenação é uma regra escrita e determinística —
-mais motivos distintos primeiro, empate resolvido por recência — e a posição na
-lista é o único "rank" publicado.
+proveniência, é decoração. A ordenação é uma regra escrita e determinística, e a
+posição na lista é o único "rank" publicado. Implementada na 4.2B, ela é
+**total**, em três degraus:
+
+```text
+1. mais motivos distintos primeiro
+2. depois, escrita mais recentemente — e uma nota sem updated_at
+   vem depois de toda nota que tem um
+3. depois, por note_id
+```
+
+O terceiro degrau não é enfeite. Duas notas escritas no mesmo segundo, ou duas
+sem carimbo nenhum, cairiam na ordem que o filesystem devolveu, e a mesma
+pergunta responderia diferente no mesmo store. É estabilidade, não um score
+escondido.
 
 Uma relação **heurística nunca é apresentada como fato**. "Estas notas
 compartilham a tag `Medicina`" é um fato; "estas notas são sobre o mesmo
@@ -444,6 +458,11 @@ já usa, e o custo de contexto para o modelo.
 | caracteres da consulta | 512 | `MAX_QUERY_CHARS`, já existente |
 | corpos completos por consulta | **0** | corpo completo só por `noteit_read`, um por vez |
 
+Implementados no Core como `DEFAULT_CANDIDATES`, `MAX_CANDIDATES` e o
+`MAX_SNIPPET_CHARS`/`MAX_QUERY_CHARS` que a busca já tinha. O teto é do motor,
+não da tool: a 4.2C não terá que inventá-lo, e nenhum pedido pode passar dele —
+`limit` é aplicado com `clamp(1, 50)`.
+
 Cálculo do máximo: 50 × 240 caracteres ≈ 12 KB ≈ 3 000 tokens de snippet, mais
 metadados. É uma fatia significativa mas não dominante de uma janela de
 contexto típica, e mantém a resposta legível por uma pessoa depurando.
@@ -476,6 +495,12 @@ limitado **sempre**, qualquer que seja o tamanho da nota de origem.
 ## 12. Sinais de recuperação v1
 
 Determinísticos, explicáveis, e todos já existentes no Core:
+
+Tags e propriedades entram como **sinais**, não como filtro rígido: uma nota que
+carrega um deles vira candidata e diz isso nos motivos. Fosse um `AND`
+obrigatório, todo candidato teria sempre os mesmos motivos e a contagem que
+ordena a lista não distinguiria nada. A comparação é a `semantic_identity` do
+resto do produto — `Medicina` e `medicina` são uma tag só, aqui como na paleta.
 
 | Sinal | Base | Observação |
 | --- | --- | --- |
@@ -529,10 +554,16 @@ de publicar um candidato incoerente com um aviso dizendo que ele pode ser
 incoerente: um candidato que talvez misture estados não é proveniência com
 ressalva, é proveniência falsa, e a §9 inteira depende dele dizer a verdade.
 
-Direção de implementação para a 4.2B: carregar uma projeção coerente de cada
-nota candidata e derivar dela todos os sinais daquele candidato. A rota concreta
-— uma leitura do Core já existente, ou uma API interna somente leitura nova — é
-decisão do bloco 4.2B.6; o **resultado** não está em aberto.
+**Como ficou, na 4.2B.** Uma leitura por nota, e uma só: `retrieve` chama
+`read_note` uma vez, constrói uma `Projection` a partir daquele `NoteDocument` e
+a descarta antes da nota seguinte. Todo sinal — texto, label, snippet, tags,
+propriedades, tarefas, `updated_at` — sai dessa projeção. As funções de sinal
+recebem `&Projection` e nenhuma delas tem caminho até o store, então misturar
+versões não é um descuido possível: seria preciso reescrever `retrieve` para
+ler duas vezes.
+
+A `Projection` não é cache, não é persistida, não é segunda fonte da verdade e
+não recebe revision: vive o tempo de uma nota numa consulta.
 
 O que **não** é opção, em nenhuma rota: inventar um lease de leitura, exigir
 snapshot transacional do store, ou dar ao Context Engine qualquer capacidade de
@@ -609,6 +640,28 @@ iniciar o processo da CLI:
 | 10 000 | 435 ms | 220 ms | 625 ms |
 
 Linear, como esperado — a busca lê e analisa cada nota.
+
+O Context Engine, medido na 4.2B com build de release, store sintético em
+`tmpfs`, 9 execuções após aquecimento (medianas):
+
+| Notas | texto, poucos matches | tag + propriedade | recência | texto + tarefas |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 6,5 ms | 4,8 ms | 5,6 ms | 6,6 ms |
+| 1 000 | 66 ms | 51 ms | 59 ms | 67 ms |
+| 10 000 | 704 ms | 528 ms | 599 ms | 662 ms |
+
+Também linear, e cerca de 1,6× a busca em 10 000 notas. A diferença é trabalho
+real e não desperdício: a busca lia corpos, o Context Engine lê e analisa o
+`NoteDocument` inteiro de cada nota — front matter incluído — porque é disso que
+a coerência do candidato depende, e ainda avalia tags, propriedades e tarefas.
+
+Pico de memória do processo com 10 000 notas: **8 MiB**. O store não é carregado
+na memória; cada documento é descartado assim que o candidato é montado.
+
+Honestamente: 0,7 s em 10 000 notas é perceptível. Para o tamanho real de um
+store de notas adesivas — dezenas a centenas — a consulta é interativa, e desde
+a 4.2B uma consulta lenta já não congela o protocolo MCP. Um índice continua
+sendo assunto da 4.3, e não foi criado para melhorar este número.
 
 Para o tamanho real de um store de notas adesivas, sob demanda é confortável. Um
 índice persistente v1 traria staleness, invalidação, corrupção, semântica de
@@ -868,16 +921,37 @@ Para o Context Engine **não é**: uma consulta que varre 10 000 notas custa
 centenas de milissegundos e pararia o servidor inteiro nesse período — sem
 responder `ping`, sem processar cancelamento.
 
-Portanto é **requisito de entrada da Fase 4.2B**:
+**Resolvido na 4.2B**, antes de qualquer linha do Context Engine:
 
 ```text
-4.2B.1  corrigir o comentário falso em noteit-mcp/src/main.rs
-4.2B.2  decidir e implementar o offload (spawn_blocking ou equivalente)
-4.2B.3  provar com um teste que um handler longo não impede um ping
+4.2B.1  os dois comentários falsos corrigidos — main.rs e noteit-mcp/Cargo.toml
+4.2B.2  toda chamada ao Core passa por tokio::task::spawn_blocking
+4.2B.3  dois testes provam o comportamento, nenhum deles por sleep
 ```
 
-Nenhuma linha do Context Engine antes de 4.2B.3 passar. A ordem completa dos
-nove blocos da 4.2B está em `docs/roadmap.md`.
+O mecanismo é um **testemunho de tipo**. Toda função de `noteit-mcp/src/domain.rs`
+que abre o store exige um `OffThread`; o campo é privado ao módulo e só
+`off_reactor` constrói um, dentro do fecho que o `spawn_blocking` executa. Uma
+chamada ao Core na thread do protocolo não é um engano possível — não compila.
+Vale para leitura tanto quanto para escrita.
+
+O runtime continua `current_thread`: ele nunca precisou de mais de uma thread,
+precisava parar de fazer o trabalho do disco nela. O pool do `spawn_blocking` é
+separado, e é isso que mantém o protocolo respondendo.
+
+Prova em `noteit-mcp/tests/mcp_concurrency.rs`, e nenhum dos dois testes depende
+de duração:
+
+- **escrita:** uma autoridade falsa abre um portão no instante em que recebe a
+  operação — o servidor está provadamente dentro da chamada bloqueante — e só
+  responde quando o teste abre um segundo portão. O `ping` vai entre os dois e
+  precisa voltar primeiro;
+- **leitura:** o caminho de leitura não tem autoridade para segurar, então a
+  prova é de ordem. Uma busca sobre um store grande, um `ping` atrás dela, e o
+  `ping` tem de responder antes. Um reactor bloqueado não reordena nada.
+
+Ambos reprovavam no commit anterior: a primeira resposta era a da tool, nos dois
+casos.
 
 ---
 

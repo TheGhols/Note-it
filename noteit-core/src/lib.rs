@@ -9,6 +9,7 @@ pub mod assets;
 pub mod authority;
 pub mod autopaste;
 pub mod backup;
+pub mod context;
 pub mod control;
 pub mod coordination;
 pub mod diagnostics;

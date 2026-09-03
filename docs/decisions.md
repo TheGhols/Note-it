@@ -1348,3 +1348,115 @@ escrito. Nenhum `.rs` foi tocado aqui para acomodar esta ADR.
 
 Nada de código mudou: nenhum `.rs`, nenhum manifesto, nenhum schema,
 `SCHEMA_VERSION` em 1, catálogo MCP em 15 tools.
+
+## ADR-049: O protocolo respira enquanto o disco trabalha, e um candidato é uma leitura só
+
+**Contexto.** A Fase 4.2B é a primeira implementação do Segundo Cérebro, e
+tinha duas coisas para fazer numa ordem que não era negociável: tirar o I/O do
+Core da thread do protocolo MCP, e só então construir o motor de contexto. A
+segunda dependia da primeira — uma consulta que varre dez mil notas custa
+centenas de milissegundos, e num servidor que faz isso no reactor esse é o
+tempo em que ele não responde absolutamente nada.
+
+**Decisão.**
+
+1. **Toda chamada ao Core sai do reactor**, leitura tanto quanto escrita, por
+   `tokio::task::spawn_blocking`.
+2. **O runtime continua `current_thread`.** Ele nunca precisou de mais threads;
+   precisava parar de fazer o trabalho do disco na única que tem.
+3. **A regra é um tipo, não uma convenção.** Um `OffThread` é exigido por toda
+   função que abre o store.
+4. **O Context Engine vive em `noteit-core/src/context.rs`**, tipado, sem
+   nenhum tipo de MCP, somente leitura.
+5. **Um candidato vem de uma leitura só** — D-27 por construção.
+6. **A ordenação é total**, com `note_id` como último degrau.
+7. **Os limites são do motor**, não da futura tool.
+
+**Justificativa.**
+
+1. **Por que o tipo e não o cuidado.** A correção óbvia seria embrulhar as
+   quinze tools em `spawn_blocking` e confiar que a décima sexta lembre. A
+   Fase 4.1 já tinha resolvido o mesmo formato de problema de outro jeito:
+   `ExistingNoteMutation` não pode ser construída sem revisão, então nenhuma
+   tool pode gravar sem precondição *por não conseguir ser escrita*. Aqui vale
+   o mesmo. `OffThread` tem campo privado ao módulo e um único construtor,
+   dentro do fecho que o `spawn_blocking` executa; `Store::reader` e `perform`
+   — as duas portas para o filesystem — exigem um. Chamar o Core no reactor
+   deixou de ser um engano possível e passou a ser um erro de compilação.
+
+2. **Por que um teste e não um grep.** Havia dois comentários afirmando que o
+   offload já existia, e ambos eram falsos: o `main.rs` dizia que o I/O ia para
+   uma blocking thread, o `Cargo.toml` dizia `spawn_blocking`, e não havia
+   `spawn_blocking` no crate. Documentação não prova comportamento, e um grep
+   pelo nome da função provaria exatamente tanto quanto os comentários
+   provavam. As duas provas são sobre *ordem*, e nenhuma dorme: no caminho de
+   escrita, uma autoridade falsa abre um portão no instante em que tem a
+   operação — o servidor está provadamente dentro da chamada bloqueante — e só
+   responde quando o teste abre o segundo; o `ping` vai entre os dois e tem de
+   voltar primeiro. No caminho de leitura, que não tem autoridade para segurar,
+   a pergunta é qual resposta chega antes: um reactor bloqueado não reordena
+   nada, então uma busca longa responderia necessariamente antes do `ping`
+   atrás dela. Ambas reprovavam contra o commit anterior.
+
+3. **Por que uma leitura por candidato.** D-27 dizia que um candidato não pode
+   combinar sinais de versões diferentes da mesma nota. A forma óbvia de montar
+   um candidato seria a errada: `list_summaries` para os metadados, `search`
+   para o trecho, `list_tasks` para as tarefas, unidos por `note_id`. Cada uma
+   dessas leituras é correta sozinha, e a união pode descrever uma nota que
+   nunca existiu — trecho de antes de uma edição, tags de depois. O store não
+   corrompe; a proveniência é que vira mentira, e a proveniência é o produto
+   inteiro desta fase. `retrieve` lê a nota uma vez, constrói uma `Projection`
+   daquele documento e a descarta antes da próxima; as funções de sinal recebem
+   `&Projection` e nenhuma tem caminho até o store. Misturar versões exigiria
+   reescrever a função que orquestra, não esquecer um detalhe. O teste que
+   prova isso alterna a nota entre duas versões que discordam de corpo, tag,
+   propriedade e tarefa enquanto a consulta roda, e foi verificado contra um
+   defeito injetado de propósito — uma segunda leitura para os metadados —, que
+   ele reprovou de imediato.
+
+4. **Por que a coerência é por nota e não do store.** Um snapshot transacional
+   exigiria lease de leitura ou uma camada de coordenação nova, e o Core não
+   oferece nem uma coisa nem outra. Também não é necessário: candidatos de
+   notas diferentes virem de instantes diferentes não mente sobre nada, porque
+   nenhum candidato afirma algo sobre outro. O que mentiria é um único
+   candidato misturar duas versões da mesma nota, e é exatamente isso que está
+   fechado.
+
+5. **Por que `note_id` como último degrau.** "Mais motivos, depois recência"
+   não é uma ordem total: duas notas escritas no mesmo segundo, ou duas sem
+   `updated_at`, empatam nos dois primeiros critérios e cairiam na ordem que o
+   filesystem devolveu. A mesma pergunta responderia diferente no mesmo store,
+   o que é precisamente o que "determinística" promete que não acontece. O
+   terceiro degrau é estabilidade, não um score escondido — e uma nota sem
+   carimbo fica depois de toda nota que tem um, em vez de flutuar.
+
+6. **Por que os limites vivem no Core.** Se o teto fosse da tool MCP, a GUI e a
+   CLI poderiam pedir contexto sem teto nenhum, e a 4.2C teria que reinventar
+   números que a arquitetura já decidiu. `limit` é aplicado com
+   `clamp(1, MAX_CANDIDATES)`: nenhum pedido consegue passar dos cinquenta. A
+   consulta longa demais é recusada e não truncada, que é a regra que
+   `search::prepare_query` já seguia — responder a uma pergunta que ninguém fez
+   é pior do que não responder.
+
+7. **Por que tags e propriedades são sinais e não filtro.** `NoteFilter::matches`
+   é um `AND` obrigatório, e reutilizá-lo como porta de entrada teria feito
+   todo candidato carregar sempre os mesmos motivos — a contagem que ordena a
+   lista não distinguiria nada. Aqui uma tag pedida é um sinal: quem a tem vira
+   candidato e diz isso. A comparação continua sendo a `semantic_identity` do
+   resto do produto, que é o que estava em jogo em reutilizar o Core.
+
+**Consequências.** Medido em release, com store sintético: 6,5 ms com 100
+notas, 66 ms com 1 000, 704 ms com 10 000, e 8 MiB de pico com dez mil. Linear,
+cerca de 1,6× a busca da 3.8R, porque lê e analisa o `NoteDocument` inteiro de
+cada nota em vez de só o corpo — é o preço da coerência do candidato, e é o
+preço certo. Setecentos milissegundos em dez mil notas é perceptível, e fica
+dito: para o tamanho real de um store de notas adesivas a consulta é
+interativa, e desde esta fase uma consulta lenta já não congela o protocolo.
+Nenhum índice foi criado para melhorar esse número — continua sendo 4.3, e
+criá-lo aqui em silêncio teria sido trocar a decisão D-04 por um benchmark.
+
+O catálogo MCP continua com 15 tools e `SCHEMA_VERSION` em 1: o motor existe e
+não tem superfície. `noteit_context` é a 4.2C. Os dois findings herdados
+continuam abertos — `noteit_read` sem teto de tamanho, e a tensão entre as
+`INSTRUCTIONS` do servidor e o encadeamento que `WriteResult.revision` oferece,
+que é da 4.2D.

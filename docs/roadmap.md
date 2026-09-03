@@ -813,30 +813,53 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           requisito e trazia junto a permissão de descumpri-lo com aviso; a alternativa foi removida
           e **D-27 é obrigatória**. Nenhum `.rs`, nenhum schema, nenhuma dependência. Justificativa
           na ADR-048.2.
-  - [ ] **4.2B — Context Engine v1 no Core.** Camada somente leitura, determinística, sobre as
-        leituras que o Core já tem; sinais de texto, tag, propriedade, tarefa e recência, cada um
-        explicável. Saída: API interna tipada, benchmarks de 100/1 000/10 000 notas e limites
-        honestos publicados. A ordem dos blocos é obrigatória, e os três primeiros são requisito de
-        entrada — nenhuma linha do Context Engine antes de 4.2B.3 passar:
+  - [x] **4.2B — Context Engine v1 no Core.** Duas entregas, nesta ordem, e a ordem era o ponto.
 
-        ```text
-        4.2B.1  corrigir o comentário falso sobre offload em noteit-mcp/src/main.rs
-        4.2B.2  resolver a execução bloqueante — offload de operação longa
-        4.2B.3  teste concorrente: um handler longo não pode impedir um ping
-        4.2B.4  definir a API interna tipada do Context Engine
-        4.2B.5  implementar a recuperação somente leitura
-        4.2B.6  garantir o candidato internamente coerente
-        4.2B.7  ordenação determinística e proveniência
-        4.2B.8  benchmarks de 100 / 1 000 / 10 000 notas
-        4.2B.9  gates + store real inalterado + CI
-        ```
+        **O protocolo primeiro.** O servidor MCP rodava um runtime *current-thread* com quinze
+        tools síncronas, então uma chamada ao Core acontecia na mesma thread que lê a entrada
+        padrão: uma operação lenta parava o servidor inteiro. Dois comentários afirmavam o
+        contrário — `main.rs` dizia que o I/O ia para uma blocking thread, e o `Cargo.toml` do
+        crate dizia que ia para `spawn_blocking`. Não havia `spawn_blocking` nenhum. Agora há, e
+        ele é a única porta: toda função de `domain.rs` que abre o store exige um `OffThread`,
+        cujo campo é privado ao módulo e que só `off_reactor` constrói, dentro do fecho que o
+        `spawn_blocking` executa — uma chamada ao Core no reactor não compila. Leituras também,
+        não só escritas. O runtime continua `current_thread`, porque nunca precisou de mais de
+        uma thread; precisava parar de fazer o trabalho do disco nela. Falha de `join` virou erro
+        interno tipado que não cita nada do que estava em execução, porque uma mensagem de pânico
+        pode carregar a nota. Sem dependência nova e `Cargo.lock` byte-idêntico.
 
-        4.2B.6 implementa e prova a **D-27**, decidida na 4.2A.R1.1: os sinais saem de leituras
-        diferentes do Core e o store pode mudar entre elas, então cada candidato deve ser uma
-        projeção internamente coerente de uma única nota. Não há escolha entre coerência e
-        incoerência declarada — a garantia é per-note, obrigatória, e não implica snapshot
-        transacional do store. Se a implementação provar que ela é inviável com as garantias
-        atuais, a fase para e volta à decisão arquitetural em vez de degradar em silêncio.
+        Provado por dois testes, nenhum por `sleep`: uma autoridade falsa abre um portão no
+        instante em que recebe a escrita e só responde quando o teste abre o segundo, com o `ping`
+        entre os dois; e, no caminho de leitura, que não tem autoridade para segurar, a prova é de
+        ordem — uma busca sobre um store grande e um `ping` atrás dela, que precisa responder
+        antes. Ambos reprovavam no commit anterior.
+
+        **Depois o motor.** `noteit-core/src/context.rs`, somente leitura, tipado, sem tipo algum
+        de MCP. Sinais de texto, tag, propriedade, tarefa e recência, cada um explicável por um
+        `Reason` de conjunto fechado; nenhum score. Candidato sem `revision`, sem caminho e sem
+        corpo completo: `note_id`, label, snippet de no máximo 240 caracteres, `updated_at`,
+        `reason[]` e `matched_text`. Limites no Core — 10 por padrão, 50 no teto, consulta de 512
+        caracteres recusada e não truncada — para que a tool da 4.2C não precise inventá-los.
+        Truncamento nunca silencioso: `truncated` e `omitted_count`. Lixeira fora, symlink
+        recusado pelo Core, nota ilegível vira warning e nunca candidato parcial.
+
+        **D-27 por construção.** Uma leitura por nota, uma `Projection` derivada dela, e todo
+        sinal daquele candidato saindo dessa projeção; as funções de sinal recebem `&Projection` e
+        nenhuma tem caminho até o store. Provado sob concorrência real: uma thread alterna a mesma
+        nota entre duas versões que discordam de tudo — corpo, tag, propriedade e tarefa — e
+        nenhum candidato mistura as duas. O teste foi verificado contra um defeito injetado de
+        propósito, que ele reprovou. Sem snapshot global, sem lease de leitura, sem camada de
+        coordenação nova.
+
+        Determinismo com ordenação total: mais motivos primeiro, depois recência (sem `updated_at`
+        por último), depois `note_id` — para que um empate não caia na ordem do filesystem.
+
+        Medido em release, store sintético, medianas de 9 execuções: 6,5 ms com 100 notas, 66 ms
+        com 1 000, 704 ms com 10 000; pico de 8 MiB de memória com 10 000 notas. Linear, cerca de
+        1,6× a busca, porque lê o `NoteDocument` inteiro de cada nota — é disso que a coerência
+        depende. Nenhum índice foi criado para melhorar o número; isso continua sendo 4.3.
+
+        Catálogo MCP continua com 15 tools: `noteit_context` é da 4.2C.
   - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
         `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
         rede, sem escrita.
