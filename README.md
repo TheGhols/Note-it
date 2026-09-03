@@ -408,6 +408,15 @@ E, após construída ou instalada no sistema (`cargo install --path noteit-cli`)
 noteit ...
 ```
 
+O servidor MCP local vive em `noteit-mcp`. Ele não é para ser executado à mão: um host MCP faz
+`spawn` do processo e conversa com ele por entrada e saída padrão. Toda alteração de nota existente
+feita por ele exige a `revision` que serviu de base para a decisão — não existe gravação MCP
+incondicional. Ver `docs/mcp.md`.
+
+```bash
+cargo build --release -p noteit-mcp   # target/release/noteit-mcp
+```
+
 Atalhos dentro de uma nota: `Ctrl+N` cria outra nota, `Ctrl+W` fecha a atual, `Ctrl+=` / `Ctrl+-` /
 `Ctrl+0` controlam o zoom, `Ctrl+Shift+M` recolhe ou expande, `Ctrl+K` busca em todas as notas,
 `Ctrl+F` localiza dentro da nota e `Ctrl+H` localiza e substitui. A nota também aceita
@@ -455,6 +464,7 @@ A documentação técnica está em [`docs/`](docs/), em inglês:
 - [Armazenamento e caminhos XDG](docs/storage.md)
 - [Integração com o Niri](docs/niri.md)
 - [Segurança e sanitização de HTML](docs/security.md)
+- [Servidor MCP local (`noteit-mcp`)](docs/mcp.md)
 - [Guia de desenvolvimento](docs/development.md)
 - [Decisões arquiteturais](docs/decisions.md)
 - [Roadmap](docs/roadmap.md)

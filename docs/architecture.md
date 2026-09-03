@@ -2,28 +2,32 @@
 
 ## Visão geral da arquitetura
 
-Note-it tem uma autoridade de domínio/persistência headless e adaptadores em torno dele. O adaptador de desktop adiciona integração nativa do sistema e incorpora o editor TypeScript; futuros adaptadores CLI e MCP devem chamar o mesmo Core em vez de recriar suas regras.
+Note-it tem uma autoridade de domínio/persistência headless e adaptadores em torno dele. O adaptador de desktop adiciona integração nativa do sistema e incorpora o editor TypeScript; a CLI headless e o servidor MCP local chamam o mesmo Core em vez de recriar suas regras.
 
 ```text
-                         ┌───────────────────────────────┐
-                         │ noteit-core (crate headless)  │
-                         │ domínio + persistência XDG    │
-                         └───────▲───────────────▲───────┘
-                                 │               │
-                  adaptador desktop chama o Core │ CLI headless chama o Core
-                                 │               │
- ┌───────────────────────────────┴────────┐     ┌┴──────────────────────────────┐
- │ GUI note-it: GTK4 + layer-shell + WebKit│     │ CLI noteit: binário headless   │
- │ instância única, ciclo de vida, janelas│     │ terminal / script / agente     │
- └───────────────────────────────▲────────┘     └───────────────────────────────┘
-                                 │ mensagens JSON
- ┌───────────────────────────────▼────────────┐
+                    ┌────────────────────────────────────┐
+                    │ noteit-core (crate headless)       │
+                    │ domínio + persistência XDG         │
+                    │ + authority: quem pode gravar agora│
+                    └──▲──────────────▲──────────────▲───┘
+                       │              │              │
+      adaptador desktop │        CLI headless │        MCP local │
+ ┌─────────────────────┴───┐ ┌──────────┴─────────┐ ┌──┴──────────────────┐
+ │ GUI note-it             │ │ CLI noteit         │ │ noteit-mcp          │
+ │ GTK4 + layer-shell +    │ │ binário headless   │ │ binário headless    │
+ │ WebKit; instância única,│ │ terminal / script  │ │ stdio, MCP oficial  │
+ │ ciclo de vida, janelas  │ │                    │ │ iniciado pelo host  │
+ └─────────────────────▲───┘ └────────────────────┘ └─────────────────────┘
+                       │ mensagens JSON
+ ┌─────────────────────▼──────────────────────┐
  │ TypeScript WebView: Vite + Tiptap          │
  │ editor, serializador Markdown, sanitizador │
  └────────────────────────────────────────────┘
 ```
 
-A direção da dependência é imposta por Cargo: tanto o pacote desktop (`note-it`) quanto o pacote CLI (`noteit-cli`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop ou CLI. `scripts/check-core-boundary` e `scripts/check-cli-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless.
+A direção da dependência é imposta por Cargo: o pacote desktop (`note-it`), o pacote CLI (`noteit-cli`) e o pacote MCP (`noteit-mcp`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop, de CLI ou de MCP. `scripts/check-core-boundary`, `scripts/check-cli-boundary` e `scripts/check-mcp-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless; o do MCP verifica ainda que nenhuma pilha de rede, nenhum acesso direto ao sistema de arquivos e nenhuma escrita em stdout apareçam ali. Consulte `docs/mcp.md`.
+
+`noteit-core/src/authority.rs` é a razão de haver apenas uma resposta para "quem pode gravar agora". Ele começou dentro da CLI e mudou para o Core quando o servidor MCP passou a ser um segundo escritor programático: duas cópias dessa decisão acabam sendo duas respostas, e o lease só funciona porque há uma. A CLI o reexporta sob o nome que sempre usou.
 
 ## Componentes do Core (`noteit-core`, Rust)
 
@@ -34,6 +38,8 @@ A direção da dependência é imposta por Cargo: tanto o pacote desktop (`note-
 - `noteit-core/src/task.rs`: um scanner de tarefa compartilhado por leitura e gravação - estados de caixa de seleção, hierarquia de profundidade, exclusão de código protegido, extração ISO 8601 `completed_at`, o `TaskRef` otimista e a reescrita de linha que completa ou reabre uma tarefa. Uma tarefa falsa dentro de uma cerca é invisível para ambos, pois existe apenas um scanner.
 - `noteit-core/src/write.rs`: toda mutação como uma operação de domínio digitada — `WriteOperation`, `NoteMutation`, `WriteOutcome`, `WriteError` — mais `apply_over_live_body`, a regra para aplicar uma mutação sobre o texto que um editor está segurando, mas não salvou. Ambos os adaptadores executam esta implementação.
 - `noteit-core/src/coordination.rs`: o lease de escrita. Um `flock` consultivo por store, em um diretório de tempo de execução nomeado a partir do digest canônico físico desse store (`canonicalize_store_directory`), com verificações de propriedade e permissão que falham de modo seguro (fail-closed); consulte ADR-044.
+- `noteit-core/src/authority.rs`: a decisão de quem escreve, e a única cópia dela. Adquire o lease quando ele está livre e grava pelo Core; quando está ocupado, envia a alteração ao detentor pelo soquete privado; quando está ocupado e inacessível, falha de modo seguro e não altera nada. Nunca tenta contornar outro gravador, e nunca repete uma requisição cuja resposta se perdeu. A CLI e o servidor MCP a usam; ela vive no Core porque duas cópias dessa decisão acabariam sendo duas respostas.
+- `noteit-core/src/revision.rs`: a `revision` — o SHA-256 dos bytes exatos com que a nota seria persistida. É o que responde "a nota ainda é a que eu li?", pergunta que o lease não responde. Consulte ADR-045 e `docs/machine-interface.md` §10.
 - `noteit-core/src/control.rs`: o protocolo de controle privado — com prefixo de comprimento JSON sobre um soquete Unix local, versionado e limitado. **Não é uma interface pública**; consulte ADR-038.
 - `noteit-core/src/hashing.rs`: um resumo determinístico e documentado (FNV-1a 64) para a chave do store e a referência da tarefa. Nunca `DefaultHasher`, cuja estabilidade não é prometida.
 - `noteit-core/src/warning.rs`: anomalias de leitura não fatais estruturadas e digitadas (`ReadWarning`, `ReadBatch<T>`) retornadas por operações Core sem impressão de terminal.
@@ -91,7 +97,7 @@ funcionam de qualquer diretório de trabalho.
 - `output.rs`: o renderizador humano. Apresentação do terminal, estilo ANSI e higienização da segurança do terminal (`sanitize_for_terminal`). Aqui também mora `OutputContext` — o que **um** canal pode fazer (aceita cor, largura conhecida, desenha blocos) — e `Channels`, o par. Cada canal é decidido a partir dele mesmo: um terminal na saída padrão não diz nada sobre a saída de erro, e um aviso estilizado dentro de um arquivo redirecionado é um aviso que ninguém consegue filtrar. Como as capacidades são um valor, e não uma chamada a `is_terminal()` espalhada pelo código, toda a matriz (estilizado, puro, largo, estreito, `dumb`) é alcançável em teste sem terminal físico.
 - `welcome.rs`: a apresentação de `noteit` sem argumentos. Logotipo `NOTE-IT` em blocos, versão vinda de `CARGO_PKG_VERSION`, uma linha sobre o que o Note-it é e cinco comandos por onde começar. Função pura de `OutputContext` e da versão do pacote: não lê, não abre e não grava nada. Cor e largura variam de forma independente — retirando toda a cor e reduzindo à largura mínima, nenhuma informação se perde.
 - `machine.rs`: o renderizador da máquina. O esquema público JSON como DTOs explícitos, um documento versionado por execução, tokens em inglês estáveis ​​para cada decisão tomada por um consumidor. Consulte `docs/machine-interface.md` e ADR-041.
-- `authority.rs`: a decisão de quem escreve. Adquire o lease quando ele está livre e grava pelo Core; quando está ocupado, envia a alteração ao detentor pelo soquete privado; quando está ocupado e inacessível, falha de modo seguro e não altera nada. Nunca tenta contornar outro gravador.
+- a decisão de quem escreve **não vive mais aqui**. Ela é `noteit_core::authority`, reexportada por este crate sob o nome que sempre teve, porque o servidor MCP passou a ser um segundo escritor programático e duas cópias dessa decisão acabariam sendo duas respostas.
 - `lib.rs`: Interface programática (`run_with_args`), análise de filtro, despacho Core, códigos de saída padrão, tratamento de entrada padrão para `--stdin` e escolha do renderizador.
 
 ```text
@@ -109,6 +115,33 @@ O binário CLI não tem nenhuma dependência gráfica e é testado headless:
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli
 scripts/check-cli-boundary
+```
+
+## Componentes do adaptador MCP (`noteit-mcp`, Rust)
+
+O servidor **Model Context Protocol** local. Um host faz `spawn` do binário e conversa com ele por entrada e saída padrão; não há daemon, porta, listener, HTTP nem configuração persistente. Contrato completo em `docs/mcp.md`, justificativa no ADR-045.
+
+- `main.rs`: ponto de entrada do binário `noteit-mcp`. Monta o runtime, entrega o transporte stdio ao SDK e espera. **Não imprime nada**: a saída padrão pertence ao protocolo, e um único `println!` corromperia o fluxo JSON-RPC. O que precisa ser dito vai para a saída de erro, e nunca carrega o corpo de uma nota.
+- `contract.rs`: a superfície publicada — entradas tipadas, saídas estruturadas, códigos de erro e a lista de tools — escrita à mão em vez de derivada dos tipos do Core, para que uma renomeação lá seja erro de compilação aqui. É onde mora a regra central da fase: toda entrada que nomeia uma nota existente carrega `expected_revision: RevisionArgument`, nunca um `Option`.
+- `domain.rs`: a ponte para o domínio. Abre o Core em modo somente leitura para leituras e entrega `WriteOperation` a `noteit_core::authority::perform_at` para gravações. `ExistingNoteMutation` é o único tipo do crate capaz de produzir um `WriteOperation::MutateNote`, e ele guarda um `NoteRevision` já analisado — não há construtor que o omita.
+- `server.rs`: o catálogo. Quinze tools de domínio, cada uma correspondendo a uma operação que o Note-it já conhece. Nenhuma tool aceita um caminho, executa um comando ou lê um arquivo.
+- `schema.rs`: uma passada de portabilidade sobre os schemas publicados, reescrevendo `"type": ["string","null"]` como `anyOf` porque vários clientes MCP leem `type` como uma string só e descartariam a restrição — e uma restrição descartada sobre `expected_revision` é exatamente o que este servidor não pode permitir.
+
+```text
+host MCP ──stdio──▶ noteit-mcp ──▶ entrada tipada ──▶ ExistingNoteMutation
+                                                              │
+                                              noteit_core::authority::perform_at
+                                                              │
+                                        lease livre ──▶ grava aqui, pelo Core
+                                        lease ocupado ──▶ pede a quem o segura
+                                        inalcançável ──▶ fail closed, zero bytes
+```
+
+O binário MCP não tem nenhuma dependência gráfica nem de rede, e é testado headless:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-mcp
+scripts/check-mcp-boundary
 ```
 
 ## Componentes do adaptador de desktop (`src`, Rust)

@@ -705,3 +705,122 @@ A segunda: a adoção de um documento suspende brevemente o bloqueio de transaç
 2. **Eliminação de Arquivos Fantasmas e Perda Silenciosa de Mutação (Finding R-002/R-004):** Notas sem front matter recebiam UUIDs voláteis em `NoteDocument::parse`, e o armazenamento salvava no caminho derivado do metadata em vez do arquivo endereçado. Mutações repetidas geravam múltiplos arquivos fantasmas com UUIDs aleatórios enquanto a nota endereçada permanecia intacta.
 3. **Impedimento de Redirecionamento Silencioso de Escrita:** Se um arquivo `A.md` contivesse `id: B`, uma gravação poderia sobrescrever ou criar silenciosamente `B.md`. A ancoragem e a validação bidirecional impedem qualquer corrupção ou confusão de identidade.
 4. **Alinhamento com MCP:** A interface de agentes exige previsibilidade matemática em relação aos alvos de mutação e respostas de máquina (`note_id` retornado deve ser estritamente o `id` modificado no disco).
+
+## ADR-045: O MCP é mais uma entrada tipada para o domínio, e um agente nunca grava sem a revisão que leu
+
+**Contexto.** A Fase 4.0R fechou o que faltava para que um programa — e não uma
+pessoa — pudesse ser um escritor de primeira classe do store: uma identidade
+física por store (ADR-044), um único gravador por identidade (ADR-038), a
+recusa de uma gravação construída sobre uma nota que já mudou (R-016) e um
+protocolo privado versionado que se recusa a atender um par que discorda sobre o
+significado de uma precondição (`PROTOCOL_VERSION = 2`). A Fase 4.1 é o primeiro
+consumidor programático dessas garantias.
+
+**Decisão.**
+
+1. **Um binário separado, `noteit-mcp`, em um crate próprio.** Não um subcomando
+   da CLI, não um modo do desktop.
+2. **stdio, e somente stdio.** O host inicia o processo e é dono do seu tempo de
+   vida. Nenhuma porta, nenhum listener, nenhum HTTP, nenhum SSE, nenhum daemon,
+   nenhuma configuração persistente escrita em lugar nenhum.
+3. **O SDK oficial em Rust, `rmcp`, sem features padrão.** Apenas `server`,
+   `macros` e `transport-io`. Nada de JSON-RPC, framing ou negociação de versão
+   escritos aqui.
+4. **Somente tools.** Nem Resources, nem Prompts, nem sampling, nem elicitation,
+   nem a extensão MCP Tasks.
+5. **`expected_revision` é obrigatório em toda mutação de nota existente.**
+   Obrigatório no schema, e `NoteRevision` — não `Option<NoteRevision>` — no
+   único tipo deste crate capaz de construir uma mutação.
+6. **A autoridade de escrita mudou de crate.** `authority.rs` saiu de
+   `noteit-cli` e entrou em `noteit-core`; a CLI a reexporta sob o mesmo nome.
+7. **Nenhuma gravação direta e nenhum subprocesso.** O crate não abre um `.md`,
+   não executa `noteit` e não interpreta a saída JSON da CLI.
+
+**Justificativa.**
+
+1. **Por que um binário separado.** Um host MCP faz `spawn` de um processo e
+   conversa por um cano. Enfiar isso na CLI significaria que `noteit` teria um
+   modo em que sua saída padrão deixa de ser para pessoas, e a única coisa que
+   separaria um banner de um fluxo JSON-RPC corrompido seria uma flag. Um
+   binário próprio torna “stdout pertence ao protocolo” uma propriedade do
+   arquivo inteiro, verificável por um gate.
+
+2. **Por que stdio e nada além.** O store é um recurso local. Uma porta aberta
+   é uma superfície que ninguém pediu, um problema de autenticação que ninguém
+   tem, e um caminho para o store que não passa pelo lease. `transport-io` é a
+   única feature de transporte ligada, e `scripts/check-mcp-boundary` falha se
+   uma pilha HTTP, TLS, OAuth, SSE ou WebSocket aparecer na árvore.
+
+3. **Por que o SDK oficial.** Um protocolo implementado à mão é um segundo
+   conjunto de bugs e uma segunda opinião sobre negociação de versão. O que se
+   ganha ao escrever JSON-RPC de novo é zero; o que se perde é a compatibilidade
+   com hosts que este repositório nunca vai testar. A versão do MCP é decidida
+   pelo `rmcp` e por mais ninguém — inclusive porque a revisão `2026-07-28`
+   substituiu o handshake por metadados por requisição, e essa é exatamente a
+   classe de detalhe que não deve ser reimplementada aqui.
+
+4. **Por que só tools.** Um Resource é conteúdo que o host pode buscar sem uma
+   decisão do modelo, e um Prompt é texto que orienta o modelo. Nenhum dos dois
+   tem uma pergunta respondida nesta fase, e publicar uma superfície que não foi
+   pensada é publicar uma superfície que não foi auditada. `noteit_tasks_list` é
+   uma tool comum: as tarefas Markdown do Note-it não têm relação nenhuma com a
+   extensão MCP Tasks, e confundir as duas seria dar ao mesmo nome dois
+   significados.
+
+5. **Por que a precondição é obrigatória aqui e opcional na CLI.** Essa é a
+   decisão central da fase. `noteit editar <id>` sem `--if-revision` é *last
+   writer wins*, e está certo: a pessoa que digitou o comando está olhando para a
+   nota, e exigir um token dela seria cerimônia. Um agente não está olhando para
+   nada — ele leu a nota em algum momento, decidiu, e vai gravar. Se a nota mudou
+   nesse intervalo, uma gravação incondicional apaga a mudança e **nada falha**.
+
+   `Option<NoteRevision>` na fronteira MCP seria exatamente essa porta: campo
+   ausente → `None` → gravação incondicional, três passos e nenhum erro. Por isso
+   o tipo não é opcional em lugar nenhum do caminho: o schema publicado marca o
+   campo como obrigatório, a desserialização do SDK recusa a requisição antes de
+   qualquer código deste repositório rodar, e `ExistingNoteMutation` — o único
+   tipo do crate que produz um `WriteOperation::MutateNote` — guarda um
+   `NoteRevision` já parseado, sem construtor que o omita. Uma revisão malformada
+   é `invalid_input` e nunca “sem precondição”, porque um token corrompido que
+   virasse `None` seria a mesma gravação incondicional por outro caminho.
+
+   O corolário está nas descrições das tools e nas instruções do servidor: um
+   `revision_conflict` exige releitura, não uma nova tentativa — nem mesmo com a
+   `current_revision` que o erro devolveu, que nomeia um conteúdo que o cliente
+   não olhou. Por isso a resposta de conflito não traz `revision` nem o novo
+   corpo: encadear a partir dela seria a sobrescrita silenciosa com um passo
+   extra.
+
+6. **Por que a autoridade mudou de crate.** `noteit_cli::authority::perform` já
+   era a regra certa e não tinha nada de CLI: só usa `control`, `coordination`,
+   `storage`, `write` e o `NoteItCore`, todos do Core. Deixá-la onde estava
+   daria duas opções ruins — o servidor MCP dependeria do crate da linha de
+   comando e linkaria `clap`, o `ioctl` de largura de terminal e a camada de
+   estilo ANSI; ou o crate MCP teria a sua própria cópia da máquina de estados.
+   A segunda é impensável: duas cópias de “quem pode gravar agora” acabam sendo
+   duas respostas, e o lease só funciona porque há uma. Mover é a menor abstração
+   compartilhada possível, e a CLI reexporta o módulo para que nada mude do lado
+   dela.
+
+7. **Por que nenhuma gravação direta e nenhum subprocesso.** As duas alternativas
+   óbvias são as duas piores. Abrir o `.md` contorna o lease, a identidade da
+   nota, a precondição, o backup e a gravação atômica de uma vez só. Executar
+   `noteit --json` e interpretar a saída troca uma cadeia tipada por um parser de
+   texto, transforma o `SCHEMA_VERSION` público em uma dependência interna, e faz
+   de todo argumento uma questão de escape de linha de comando. A cadeia continua
+   tipada de ponta a ponta, e o gate mecânico recusa qualquer uma das duas.
+
+8. **Por que não existe uma tool genérica.** `read_file`, `write_file`,
+   `list_directory`, `shell`: qualquer uma delas destruiria o limite inteiro. As
+   garantias deste repositório valem porque o único jeito de alterar uma nota é
+   uma operação de domínio; uma tool que aceita um caminho é um caminho para o
+   store que não passa por nenhuma delas. `noteit-mcp` é um servidor do domínio
+   Note-it, e não um servidor de filesystem com um nome bonito.
+
+**Consequências.** O workspace tem um terceiro binário, e `scripts/build.sh`,
+`scripts/check` e o CI conferem os três. Existe um gate novo, `mcp-boundary`,
+listado nos mesmos lugares que os outros dois — `scripts/check`, o workflow,
+`CONTRIBUTING.md` e `docs/development.md` — para que as listas não voltem a
+divergir. `docs/mcp.md` documenta o contrato do agente. `SCHEMA_VERSION` do
+`noteit --json` **não** mudou: são contratos independentes, e o MCP ter passado a
+existir não é um fato sobre o documento que o `--json` publica.

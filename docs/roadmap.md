@@ -610,18 +610,84 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
       `dbus-daemon`/`dbus-send`, de `node` e de `pnpm` —, lendo a versão mínima do Rust do
       `rust-version` do próprio `Cargo.toml` em vez de redeclará-la, e sem instalar, elevar
       privilégio ou tocar em PATH, dotfiles ou configuração. `scripts/check` virou a autoridade
-      sobre os gates, com doze estágios atômicos e três agregados, fail-closed: para no primeiro que
+      sobre os gates, com estágios atômicos e três agregados, fail-closed: para no primeiro que
       falha e propaga o código dele. `scripts/build.sh` deixou de cair para `npm` e de instalar sem
       lockfile congelado; agora exige pnpm, usa `--frozen-lockfile`, compila o workspace inteiro em
-      release e confere que `target/release/note-it` e `target/release/noteit` existem antes de dizer
-      que terminou. O workflow parou de reimplementar os comandos: cada step chama um estágio, um
+      release e confere que os binários existem antes de dizer que terminou. O workflow parou de reimplementar os comandos: cada step chama um estágio, um
       step por gate, e ganhou `cargo check --workspace`, que estava documentado como gate local e
       faltava no CI. Foram eliminadas as listas divergentes de comandos que existiam entre CI,
       `CONTRIBUTING.md` e `docs/development.md` — a do CONTRIBUTING era mais fraca que a do CI em
       quatro pontos. Nenhum arquivo de runtime, manifesto ou lockfile foi alterado, nenhuma
       dependência foi adicionada e a interface de máquina não foi tocada. Justificativa no ADR-043.
-- [ ] **Fase 4.0R — Auditoria de Segurança e Regressão.** Reservado.
-- [ ] **Fase 4.1 — MCP.** Reservado.
+- [x] **Fase 4.0R — Auditoria de Segurança e Regressão.** Auditoria ofensiva sobre tudo o que a
+      Fase 4.0 construiu, conduzida em rodadas (4.0R → R3 → R4 → R5) e fechada. Ela existiu para
+      responder a uma pergunta só: um programa — e não uma pessoa — pode ser um escritor de primeira
+      classe deste store sem estragá-lo? Os bloqueadores que ela encontrou foram fechados:
+
+      **Identidade e locking (R-001, R-002/R-004).** A chave de coordenação passou a ser derivada do
+      caminho *físico canônico* do diretório de notas: link simbólico, `./`, `..` e barras
+      redundantes colapsam para a mesma autoridade e o mesmo lease, em vez de gerarem chaves
+      distintas e dois gravadores sobre um mesmo diretório. A identidade de uma nota passou a ser
+      ancorada no UUID do nome do arquivo, deterministicamente inclusive para uma nota sem front
+      matter — que antes ganhava um UUID novo a cada leitura e produzia arquivos fantasmas a cada
+      mutação. Uma divergência entre o nome do arquivo e o `id` do front matter passou a ser recusada
+      nos dois sentidos, sem alterar nada, e as camadas de storage e write ganharam verificação
+      explícita de que o documento gravado é o documento endereçado. Justificativa no ADR-044.
+
+      **Concorrência otimista (R-016).** A questão que o lease não responde: ele serializa
+      gravadores, mas não vê um gravador segurando uma base lida minutos antes — as duas gravações
+      dizem "commitado" e uma das duas edições desaparece sem nada falhar. A `revision` fecha isso:
+      o SHA-256 dos bytes exatos com que a nota seria persistida, publicado em toda leitura e aceito
+      como precondição em toda mutação. Uma base obsoleta é recusada com `revision_conflict` e zero
+      bytes alterados. `--if-revision` na CLI e `expected_revision` no protocolo; uma revisão
+      malformada é erro de uso e nunca "sem precondição". A regra de releitura ficou explícita: um
+      conflito exige olhar a nota de novo, nunca uma nova tentativa com a `current_revision`
+      devolvida.
+
+      **Protocolo privado v2.** O `expected_revision` havia sido adicionado ao protocolo interno sem
+      mover o número da versão: os dois lados diziam "1", a checagem passava, e uma autoridade antiga
+      descartava o campo em silêncio — uma gravação pedida como *condicional* era executada
+      **incondicionalmente**, exatamente pelo mecanismo que deveria impedi-lo. `PROTOCOL_VERSION`
+      passou a 2 e os dois sentidos recusam: nenhuma incompatibilidade transforma uma escrita
+      condicional em incondicional, e não há modo degradado.
+- [x] **Fase 4.1 — MCP.** Uma interface **Model Context Protocol** local, headless e tipada, para que
+      um agente consulte e altere o Note-it sem possuir nenhum caminho capaz de contornar o Core, o
+      writer lease, a autoridade de gravação, a identidade das notas ou a `revision`. Binário próprio
+      `noteit-mcp`, em crate próprio, sobre o SDK oficial em Rust (`rmcp`), por **stdio e somente
+      stdio**: o host faz `spawn` do processo e é dono do seu tempo de vida. Nenhum daemon, nenhuma
+      porta, nenhum listener, nenhum HTTP, nenhuma configuração escrita em lugar nenhum — e nenhuma
+      configuração de host do usuário tocada. Quinze tools de domínio: cinco de leitura, criação, oito
+      mutações de nota existente e a restauração da lixeira. Deliberadamente **nenhuma** tool genérica
+      de filesystem ou shell, e nenhum Resource, Prompt, sampling, elicitation ou extensão MCP Tasks —
+      as tarefas Markdown do Note-it continuam sendo tools comuns.
+
+      **A propriedade central: não existe gravação MCP incondicional sobre nota existente.** A CLI
+      humana mantém o *last writer wins* sem `--if-revision`, porque quem digitou o comando está
+      olhando para a nota; um agente não está. Então `expected_revision` é obrigatório no schema
+      publicado de toda mutação, e o tipo que constrói uma mutação neste crate guarda um
+      `NoteRevision` — não um `Option`. Um campo ausente é recusado pela desserialização antes de
+      qualquer código do repositório rodar; uma revisão malformada é `invalid_input` e nunca "sem
+      precondição". Um `revision_conflict` devolve as duas revisões, não devolve `revision` nem o novo
+      conteúdo, e as descrições das tools dizem que a saída é reler e decidir de novo — nunca repetir.
+      Um resultado `indeterminate` responde `commit_state: unknown` e nunca é repetido
+      automaticamente.
+
+      **Nada foi duplicado.** `authority.rs` mudou de `noteit-cli` para `noteit-core` e a CLI o
+      reexporta: há uma única máquina de estados de "quem pode gravar agora", e o MCP a usa. O crate
+      não abre um `.md`, não executa `noteit`, não interpreta a saída JSON da CLI e não reimplementa
+      lease, socket, janela de retry, timeout, commit ou escrita atômica. `SCHEMA_VERSION` do
+      `noteit --json` não mudou: são contratos independentes.
+
+      Provado com processos reais, soquetes reais, stdio real e stores descartáveis: catálogo e
+      schemas, pureza das leituras, toda variante de `NoteMutation` por exaustão compilada, corrida
+      entre dois clientes, texto não salvo na janela sobrevivendo a um agente obsoleto, protocolo
+      privado incompatível recusado sem fallback, aliases do store compartilhando um lease,
+      identidade da nota, conteúdo hostil e stdout limpo. Um gate novo, `mcp-boundary`, verifica o
+      limite headless — sem GTK, sem pilha HTTP/TLS/OAuth/SSE, sem banco, sem abertura de arquivo ou
+      processo filho no `noteit-mcp/src`, sem escrita em stdout e com exatamente um lugar capaz de
+      construir uma mutação condicional. O MCP Inspector oficial confirmou o catálogo e o fluxo
+      completo contra o binário de release. Contrato do agente em `docs/mcp.md`, justificativa no
+      ADR-045.
 - [ ] **Fase 4.2 — IA/Segundo Cérebro.** Reservado.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
