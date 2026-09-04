@@ -146,14 +146,28 @@ fn mcp_27_a_file_whose_identity_disagrees_with_its_name_is_refused() {
     assert_eq!(warnings.len(), 1, "{}", listing.raw);
     assert_eq!(warnings[0]["code"], "unreadable_note");
     assert_eq!(warnings[0]["note_id"], filename_id.to_string());
-    // The warning names the file that could not be read and says why, and it
-    // does so as data rather than as a sentence a client has to parse.
+    // The warning says which file could not be read and what kind of damage it
+    // is, and it says it as data. It deliberately carries no sentence at all.
+    //
+    // It did until Phase 4.2R, and this assertion is the one that used to
+    // require it: the sentence was the Core's, written for whoever is debugging
+    // a store, so it named the file — and on the symlink path it named the
+    // absolute path of the notes directory to whoever was listening. What a
+    // caller is owed is the code and the identifier, which is what the context
+    // surface settled on in 4.2C and what all five read surfaces publish now.
     assert!(
-        warnings[0]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&front_matter_id.to_string())),
-        "the warning does not say which identity it found: {}",
+        warnings[0].get("message").is_none(),
+        "a warning carried a sentence: {}",
         listing.raw
+    );
+    let rendered = listing.raw.to_string();
+    assert!(
+        !rendered.contains(&front_matter_id.to_string()),
+        "the identity found inside the file was published: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&sandbox.root.display().to_string()) && !rendered.contains(".md"),
+        "a listing over a damaged store named the filesystem: {rendered}"
     );
 }
 

@@ -36,7 +36,7 @@ use crate::contract::{
     CommitState, ContextCandidateView, ContextInput, ContextReason, ContextResult, ContextTaskView,
     ContextWarningView, ErrorCode, ListResult, NoteSummaryView, NoteView, Property, ReadResult,
     SearchHitView, SearchResult, Status, TaskState, TaskView, TasksResult, TrashEntryView,
-    TrashResult, Warning, WarningCode, WriteResult,
+    TrashResult, Warning, WarningCode, WriteResult, MAX_TRASH_ENTRIES, MAX_WARNINGS,
 };
 use noteit_core::authority;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
@@ -158,11 +158,15 @@ impl ExistingNoteMutation {
         expected_revision: &str,
         mutation: NoteMutation,
     ) -> Result<Self, Box<WriteResult>> {
-        let revision = NoteRevision::parse(expected_revision).map_err(|error| {
-            Box::new(WriteResult::refusal(
+        // The parse error says how the token was wrong, and saying so would
+        // mean quoting an argument of whatever length arrived. The code says
+        // `invalid_input`; the schema says what a revision is.
+        let revision = NoteRevision::parse(expected_revision).map_err(|_| {
+            Box::new(WriteResult::refusal_saying(
                 CommitState::NotCommitted,
                 ErrorCode::InvalidInput,
-                error.to_string(),
+                "`expected_revision` must be sixty-four lowercase hexadecimal characters, \
+                 exactly as `noteit_read` published them",
             ))
         })?;
         Ok(Self {
@@ -299,7 +303,12 @@ fn refused(error: &WriteError) -> WriteResult {
         _ => CommitState::NotCommitted,
     };
 
-    let mut result = WriteResult::refusal(commit_state, code, error.to_string());
+    // `error.to_string()` is deliberately never called. The Core writes those
+    // sentences for whoever is debugging a store, so they quote paths, parser
+    // output and arguments at whatever length they arrived; see
+    // `crate::contract::message_for`, which is where a public sentence comes
+    // from now.
+    let mut result = WriteResult::refusal(commit_state, code);
     if let WriteError::RevisionConflict {
         note_id,
         expected_revision,
@@ -333,16 +342,19 @@ pub fn list(
     match store.reader(off).list_summaries(filter, limit) {
         Ok(batch) => {
             let notes: Vec<NoteSummaryView> = batch.items.iter().map(summary_view).collect();
+            let reported = warnings(&batch.warnings);
             ListResult {
                 status: Status::Ok,
                 count: notes.len(),
                 notes,
-                warnings: warnings(&batch.warnings),
+                warnings: reported.carried,
+                warnings_truncated: reported.truncated,
+                omitted_warning_count: reported.omitted,
                 code: None,
                 message: None,
             }
         }
-        Err(detail) => ListResult::refusal(ErrorCode::ReadFailed, detail),
+        Err(_) => ListResult::refusal(ErrorCode::ReadFailed),
     }
 }
 
@@ -371,28 +383,25 @@ pub fn read(off: &OffThread, store: &Store, selector: &str) -> ReadResult {
     let core = store.reader(off);
     let note_id = match core.resolve_note_id(selector) {
         Ok(note_id) => note_id,
-        Err(error) => {
-            let (code, message) = selector_refusal(&error);
-            return ReadResult::refusal(code, message);
-        }
+        Err(error) => return ReadResult::refusal(selector_refusal(&error)),
     };
-    let document = match core.read_note(&note_id) {
-        Ok(document) => document,
-        Err(detail) => return ReadResult::refusal(ErrorCode::ReadFailed, detail),
+    let Ok(document) = core.read_note(&note_id) else {
+        return ReadResult::refusal(ErrorCode::ReadFailed);
     };
     // A note that cannot be serialised cannot be given a version, and
     // answering without one would invite a write built on a base nobody can
     // name — which is exactly the unconditional write this server refuses to
     // offer.
-    let revision = match NoteRevision::for_document(&document) {
-        Ok(revision) => revision,
-        Err(detail) => return ReadResult::refusal(ErrorCode::ReadFailed, detail),
+    let Ok(revision) = NoteRevision::for_document(&document) else {
+        return ReadResult::refusal(ErrorCode::ReadFailed);
     };
 
     let answer = ReadResult {
         status: Status::Ok,
         note: Some(note_view(&note_id, &document, &revision)),
         warnings: Vec::new(),
+        warnings_truncated: false,
+        omitted_warning_count: 0,
         code: None,
         message: None,
     };
@@ -403,14 +412,10 @@ pub fn read(off: &OffThread, store: &Store, selector: &str) -> ReadResult {
     // that is counted rather than assumed.
     match budget::result_bytes(&answer) {
         Ok(bytes) if budget::within_read_budget(bytes) => answer,
-        Ok(_) => ReadResult::refusal(
-            ErrorCode::ResponseTooLarge,
-            "reading this note in full would exceed the answer size this server publishes"
-                .to_string(),
-        ),
+        Ok(_) => ReadResult::refusal(ErrorCode::ResponseTooLarge),
         // A note that will not serialise is the same failure as one that will
         // not hash: there is no version to name it by, so there is no answer.
-        Err(error) => ReadResult::refusal(ErrorCode::ReadFailed, error.to_string()),
+        Err(_) => ReadResult::refusal(ErrorCode::ReadFailed),
     }
 }
 
@@ -437,17 +442,20 @@ pub fn search(
                     matched_text: hit.matched_text.clone(),
                 })
                 .collect();
+            let reported = warnings(&batch.warnings);
             SearchResult {
                 status: Status::Ok,
                 query: query.to_string(),
                 count: results.len(),
                 results,
-                warnings: warnings(&batch.warnings),
+                warnings: reported.carried,
+                warnings_truncated: reported.truncated,
+                omitted_warning_count: reported.omitted,
                 code: None,
                 message: None,
             }
         }
-        Err(detail) => SearchResult::refusal(ErrorCode::ReadFailed, detail),
+        Err(_) => SearchResult::refusal(ErrorCode::ReadFailed),
     }
 }
 
@@ -466,31 +474,44 @@ pub fn tasks(
     match store.reader(off).list_tasks(state, filter, limit) {
         Ok(batch) => {
             let tasks: Vec<TaskView> = batch.items.iter().map(task_view).collect();
+            let reported = warnings(&batch.warnings);
             TasksResult {
                 status: Status::Ok,
                 count: tasks.len(),
                 tasks,
-                warnings: warnings(&batch.warnings),
+                warnings: reported.carried,
+                warnings_truncated: reported.truncated,
+                omitted_warning_count: reported.omitted,
                 code: None,
                 message: None,
             }
         }
-        Err(detail) => TasksResult::refusal(ErrorCode::ReadFailed, detail),
+        Err(_) => TasksResult::refusal(ErrorCode::ReadFailed),
     }
 }
 
 pub fn trash(off: &OffThread, store: &Store) -> TrashResult {
-    let entries: Vec<TrashEntryView> = store
-        .reader(off)
-        .list_trash()
+    let found = store.reader(off).list_trash();
+    // The Core answers with the whole trash, ordered, because the desktop
+    // window shows the whole trash. This surface is a discovery surface like
+    // every other listing here and takes the same ceiling — see
+    // `MAX_TRASH_ENTRIES`. What the ceiling left out is published rather than
+    // silently dropped.
+    let omitted = found.len().saturating_sub(MAX_TRASH_ENTRIES);
+    let entries: Vec<TrashEntryView> = found
         .iter()
+        .take(MAX_TRASH_ENTRIES)
         .map(trash_view)
         .collect();
     TrashResult {
         status: Status::Ok,
         count: entries.len(),
         entries,
+        truncated: omitted > 0,
+        omitted_count: omitted,
         warnings: Vec::new(),
+        warnings_truncated: false,
+        omitted_warning_count: 0,
         code: None,
         message: None,
     }
@@ -565,14 +586,40 @@ fn trash_view(entry: &TrashEntry) -> TrashEntryView {
     }
 }
 
-fn warnings(raw: &[ReadWarning]) -> Vec<Warning> {
-    raw.iter()
-        .map(|warning| Warning {
-            code: warning_code(warning.kind),
-            message: warning.message.clone(),
-            note_id: warning.note_id.map(|id| id.to_string()),
-        })
-        .collect()
+/// The warnings one answer carries, and what it had to leave behind.
+struct ReportedWarnings {
+    carried: Vec<Warning>,
+    truncated: bool,
+    omitted: usize,
+}
+
+/// Turns the Core's read anomalies into the ones this boundary publishes.
+///
+/// Two things happen here and both are the point:
+///
+/// **The message is dropped.** `ReadWarning::message` is written for whoever is
+/// debugging a store, so it names the file — `Leitura recusada: o arquivo
+/// `/home/…/notes/….md` é um link simbólico` — and it is as long as whatever it
+/// is quoting, which for a corrupt front matter is a scalar out of the note.
+/// Neither belongs to a caller that is given `note_id` and no path anywhere else
+/// in this contract.
+///
+/// **The list is bounded.** A store with twenty thousand symbolic links in it
+/// answered a `noteit_list` asking for one note with twenty thousand warnings.
+/// The context surface already stopped at twenty; this is the same ceiling.
+fn warnings(raw: &[ReadWarning]) -> ReportedWarnings {
+    ReportedWarnings {
+        carried: raw
+            .iter()
+            .take(MAX_WARNINGS)
+            .map(|warning| Warning {
+                code: warning_code(warning.kind),
+                note_id: warning.note_id.map(|id| id.to_string()),
+            })
+            .collect(),
+        truncated: raw.len() > MAX_WARNINGS,
+        omitted: raw.len().saturating_sub(MAX_WARNINGS),
+    }
 }
 
 /// The one place a read anomaly becomes a published code.
@@ -589,16 +636,21 @@ fn warning_code(kind: ReadWarningKind) -> WarningCode {
     }
 }
 
-fn selector_refusal(error: &NoteSelectorError) -> (ErrorCode, String) {
-    let code = match error {
+/// The code a selector refusal publishes.
+///
+/// The Core's own sentence quotes the selector, which is an argument of
+/// whatever length arrived — three hundred kilobytes of `Z` came back as three
+/// hundred kilobytes of `Z`. The code says what was wrong with it; the schema
+/// says what a selector is.
+fn selector_refusal(error: &NoteSelectorError) -> ErrorCode {
+    match error {
         NoteSelectorError::InvalidFormat(_) | NoteSelectorError::SymlinkRefused(_) => {
             ErrorCode::InvalidInput
         }
         NoteSelectorError::NotFound(_) => ErrorCode::NotFound,
         NoteSelectorError::Ambiguous(_, _) => ErrorCode::AmbiguousSelector,
         NoteSelectorError::StoreUnavailable(_) => ErrorCode::StoreUnavailable,
-    };
-    (code, error.to_string())
+    }
 }
 
 /// Builds the Core's filter from the contract's.

@@ -445,19 +445,19 @@ impl NoteItMcpServer {
         // things and picking one silently is how the wrong text lands.
         let mutation = match (input.clear, input.body) {
             (true, Some(_)) => {
-                return write_response(WriteResult::refusal(
+                return write_response(WriteResult::refusal_saying(
                     crate::contract::CommitState::NotCommitted,
                     crate::contract::ErrorCode::InvalidInput,
-                    "`clear` empties the note and cannot be sent together with `body`".to_string(),
+                    "`clear` empties the note and cannot be sent together with `body`",
                 ))
             }
             (true, None) => NoteMutation::ClearBody,
             (false, Some(body)) => NoteMutation::ReplaceBody { body },
             (false, None) => {
-                return write_response(WriteResult::refusal(
+                return write_response(WriteResult::refusal_saying(
                     crate::contract::CommitState::NotCommitted,
                     crate::contract::ErrorCode::InvalidInput,
-                    "send `body` with the new text, or `clear` to empty the note".to_string(),
+                    "send `body` with the new text, or `clear` to empty the note",
                 ))
             }
         };

@@ -69,3 +69,22 @@ Colar um URL sobre o texto selecionado transforma esse texto em um link, e o URL
 Há deliberadamente exatamente uma opinião no aplicativo sobre o que é uma URL. O próprio `linkOnPaste` de Tiptap está desligado, porque usa `linkifyjs` — um segundo analisador, com uma resposta diferente, que aceita esquemas que esta aplicação não permite. Um teste afirma que colar `ftp://…`, `ssh://…` ou `www.…` não produz nenhum link.
 
 Nada é buscado. Nenhum título, nenhum favicon, nenhum OpenGraph, nenhuma visualização e nenhum cliente HTTP foram adicionados: a área de transferência já contém tudo o que o recurso precisa, portanto, o recurso não adiciona nenhuma superfície de rede.
+
+## Uma mensagem pública é uma frase que o servidor escreveu
+
+Todo `message` que o MCP publica é uma constante escolhida pelo `code`, e isso é
+garantido pelo tipo: uma recusa recebe `&'static str`, então uma frase montada
+em tempo de execução não tem como chegar ali.
+
+A regra existe porque a alternativa foi medida. As frases eram o `Display` do
+Core, e o Core as escreve para quem está depurando um store: elas nomeiam o
+arquivo. Um `noteit_list` sobre um store com um único link simbólico publicava
+o caminho absoluto do diretório de notas; uma nota com um escalar de trezentos
+kilobytes no front matter publicava trezentos kilobytes dele, porque a mensagem
+citava o parser; um seletor de trezentos kilobytes voltava inteiro. Um warning
+agora é `code` e `note_id` e nada mais, em todas as leituras — a decisão que o
+Context Engine já tinha tomado na 4.2C, aplicada às outras quatro.
+
+O que se perde é uma frase que ninguém podia usar para decidir nada. O `code` diz
+o que aconteceu, o `note_id` diz onde olhar, e quem precisa reparar o arquivo
+tem o arquivo.

@@ -149,7 +149,7 @@ determinística.
 | `noteit_read` | `note_id` | `note` (com `revision`), `warnings[]` — ou `response_too_large` |
 | `noteit_search` | `query`, `tags?`, `properties?`, `limit?` | `query`, `results[]`, `count` |
 | `noteit_tasks_list` | `state?`, `tags?`, `properties?`, `limit?` | `tasks[]`, `count` |
-| `noteit_trash_list` | — | `entries[]`, `count` |
+| `noteit_trash_list` | — | `entries[]`, `count`, `truncated`, `omitted_count` |
 
 Contra um store inexistente, nenhuma delas cria uma nota, um diretório, um lock,
 um soquete, uma configuração ou um estado. Uma leitura não prepara nada.
@@ -196,8 +196,9 @@ envelope em `docs/second-brain.md` §11 traz os valores de fio. Todo corte é co
 `readOnlyHint: true`, e a propriedade é real: a tool não tem código de escrita,
 não aceita `expected_revision`, não aceita caminho e não chama a autoridade.
 
-Um warning de contexto é `code` e `note_id`, sem `message`: a mensagem do Core
-nomeia o arquivo, e essa frase não sai por aqui. Uma recusa é `status: error`
+Um warning é `code` e `note_id`, sem `message`, aqui e em toda leitura: a
+mensagem do Core nomeia o arquivo, e essa frase não sai por aqui. Uma recusa é
+`status: error`
 mais `code` — `invalid_input` para uma query longa demais, `store_unavailable`
 para um store que não pôde ser varrido — e também sem texto livre.
 
@@ -312,7 +313,10 @@ que torna um caractere de controle seguro, e mutilar o corpo entregaria ao
 agente um texto que a nota não contém.
 
 `warnings` traz as notas que não puderam ser lidas, ao lado das que puderam. Um
-arquivo danificado é um aviso, nunca um store que não responde.
+arquivo danificado é um aviso, nunca um store que não responde. Um warning é
+`code` e `note_id`, sem `message`, em **todas** as leituras — não só em
+`noteit_context`. No máximo 20, com `warnings_truncated` e
+`omitted_warning_count` dizendo o que ficou de fora.
 
 Uma listagem **não** publica `revision`. Um resumo não é uma base sobre a qual
 gravar.
@@ -590,6 +594,14 @@ decidir o que fazer.
 | `read_failed` | — | uma nota ou uma listagem não pôde ser lida |
 | `response_too_large` | — | a nota existe e não cabe numa resposta; **sem corpo e sem revision** |
 | `indeterminate` | `unknown` | a resposta se perdeu — §7 |
+
+`message` é diagnóstico e **sempre uma frase que este servidor escreveu**: uma
+constante escolhida pelo `code`, nunca a frase do Core. Isso é tipo, não
+disciplina — a recusa recebe `&'static str`, então um caminho vindo do sistema
+de arquivos, a saída de um parser citando o front matter de uma nota, ou um
+argumento devolvido no tamanho em que chegou não têm como ser postos ali. Até
+a 4.2R eram a frase do Core, e o resultado era um `noteit_list` publicando o
+caminho absoluto do diretório de notas. Decidir pelo `code`, nunca pela frase.
 
 `authority_unavailable` merece uma frase: quando o store está seguro por outra
 instância que não responde, **nada é gravado**. Não existe caminho alternativo,

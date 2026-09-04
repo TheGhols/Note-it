@@ -144,7 +144,14 @@ fn r03_a_read_past_the_ceiling_refuses_with_no_body_and_no_revision() {
     let published: Vec<&String> = structured.as_object().expect("an object").keys().collect();
     assert_eq!(
         published,
-        vec!["code", "message", "status", "warnings"],
+        vec![
+            "code",
+            "message",
+            "omitted_warning_count",
+            "status",
+            "warnings",
+            "warnings_truncated"
+        ],
         "a refusal published something other than its own refusal: {}",
         answer.raw
     );

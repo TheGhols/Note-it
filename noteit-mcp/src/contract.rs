@@ -144,6 +144,51 @@ pub enum ErrorCode {
     ResponseTooLarge,
 }
 
+/// The sentence that goes with a code, for a person reading a log.
+///
+/// **Every public `message` this server can produce is one of these, or one of
+/// the handful of `&'static str` a tool passes in by hand.** That is the
+/// property, and it is enforced by the type: a refusal takes a `&'static str`,
+/// so a string built at runtime — a path from the filesystem, a parser
+/// quoting a note's front matter, an argument echoed back at whatever length
+/// it arrived — cannot be put here at all.
+///
+/// It was not always so. Until Phase 4.2R these sentences were the Core's own
+/// `Display`, and the Core writes them for whoever is debugging a store: they
+/// named the file. `noteit_list` over a store holding one symbolic link
+/// published the absolute path of the notes directory, and a note whose front
+/// matter held a three-hundred-kilobyte scalar published three hundred
+/// kilobytes of it. Both are gone by construction rather than by review.
+pub const fn message_for(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::InvalidInput => "the request could not be understood",
+        ErrorCode::Validation => "a domain rule refused the value",
+        ErrorCode::NotFound => "no note answers to that selector",
+        ErrorCode::AmbiguousSelector => "more than one note answers to that selector",
+        ErrorCode::RevisionConflict => {
+            "the note changed after it was read and nothing was written; read it again"
+        }
+        ErrorCode::StaleTaskRef => "that task reference no longer names a task in this note",
+        ErrorCode::AmbiguousTaskRef => "that task reference matches more than one task",
+        ErrorCode::WriterBusy => "another writer holds the store; nothing was written",
+        ErrorCode::AuthorityUnavailable => {
+            "the Note-it instance holding the store could not be reached; nothing was written"
+        }
+        ErrorCode::TrashTargetOccupied => {
+            "a live note already carries that identifier; neither file was changed"
+        }
+        ErrorCode::Persistence => "the write was attempted and did not happen",
+        ErrorCode::StoreUnavailable => "the store could not be read",
+        ErrorCode::ReadFailed => "the note could not be read",
+        ErrorCode::Indeterminate => {
+            "the request went out and the answer was lost; read the note before deciding anything"
+        }
+        ErrorCode::ResponseTooLarge => {
+            "reading this note in full would exceed the answer size this server publishes"
+        }
+    }
+}
+
 /// A non-fatal problem met while reading, reported beside the results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -154,14 +199,33 @@ pub enum WarningCode {
     IoError,
 }
 
+/// A note that could not be read, beside the ones that could.
+///
+/// A code and, where the file's name yielded one, an identifier. **No
+/// message.** The Core writes a diagnostic sentence for each of these and it
+/// names the file it met — which is how, until Phase 4.2R, `noteit_list` over
+/// a store holding one symbolic link published the absolute path of the notes
+/// directory to whoever was listening. The context surface had already stopped
+/// carrying it in 4.2C; this is the same decision, finished.
+///
+/// What is lost is nothing a caller could act on. `code` says what kind of
+/// damage it is and `note_id` says where to look, and the person who has to
+/// repair the file has the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Warning {
     pub code: WarningCode,
-    /// Diagnostic only. Never branch on it.
-    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_id: Option<String>,
 }
+
+/// The most warnings any read surface carries.
+///
+/// The same ceiling [`noteit_core::context::MAX_CONTEXT_WARNINGS`] puts on the
+/// context surface, applied to the other four. A store with twenty thousand
+/// damaged files is a store to repair, not a nine-megabyte answer to a request
+/// that asked for one note — and the counters beside the list say how much was
+/// left out, so a damaged store still says how damaged it is.
+pub const MAX_WARNINGS: usize = 20;
 
 /// Which tasks a listing wants.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -471,9 +535,11 @@ pub struct WriteResult {
     pub revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
-    /// Diagnostic only.
+    /// Diagnostic only, and always one of a finite set of sentences this crate
+    /// wrote. See [`message_for`]: nothing the store said and nothing the
+    /// caller sent is ever repeated here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub message: Option<&'static str>,
     /// On `revision_conflict` only: the precondition the **caller** sent.
     ///
     /// Echoed back so a client driving several writes can tell which one was
@@ -498,7 +564,21 @@ pub struct WriteResult {
 }
 
 impl WriteResult {
-    pub fn refusal(commit_state: CommitState, code: ErrorCode, message: String) -> Self {
+    /// A refusal carrying the sentence that belongs to its code.
+    pub fn refusal(commit_state: CommitState, code: ErrorCode) -> Self {
+        Self::refusal_saying(commit_state, code, message_for(code))
+    }
+
+    /// The same, for the two places a tool has something more exact to say
+    /// than the code does.
+    ///
+    /// `&'static str` and not `String`, which is the whole guarantee: there is
+    /// no way to reach this with a sentence assembled at runtime.
+    pub fn refusal_saying(
+        commit_state: CommitState,
+        code: ErrorCode,
+        message: &'static str,
+    ) -> Self {
         Self {
             status: if matches!(commit_state, CommitState::Unknown) {
                 Status::Indeterminate
@@ -529,22 +609,32 @@ macro_rules! read_result {
             $( $(#[$field_meta])* pub $field: $ty, )*
             /// Notes that could not be read, reported beside the ones that
             /// could. A store with one damaged file still answers.
+            ///
+            /// At most [`MAX_WARNINGS`] of them.
             pub warnings: Vec<Warning>,
+            /// Whether the warning ceiling cut the list.
+            pub warnings_truncated: bool,
+            /// How many warnings the ceiling left out. A damaged store still
+            /// says how damaged it is.
+            pub omitted_warning_count: usize,
             #[serde(skip_serializing_if = "Option::is_none")]
             pub code: Option<ErrorCode>,
-            /// Diagnostic only.
+            /// Diagnostic only, and always one of a finite set of sentences
+            /// this crate wrote. See [`message_for`].
             #[serde(skip_serializing_if = "Option::is_none")]
-            pub message: Option<String>,
+            pub message: Option<&'static str>,
         }
 
         impl $name {
-            pub fn refusal(code: ErrorCode, message: String) -> Self {
+            pub fn refusal(code: ErrorCode) -> Self {
                 Self {
                     status: Status::Error,
                     $( $field: $empty, )*
                     warnings: Vec::new(),
+                    warnings_truncated: false,
+                    omitted_warning_count: 0,
                     code: Some(code),
-                    message: Some(message),
+                    message: Some(message_for(code)),
                 }
             }
         }
@@ -585,11 +675,27 @@ read_result! {
     }
 }
 
+/// The most trash entries one listing carries.
+///
+/// The trash had no ceiling at all until Phase 4.2R, and no `limit` to ask for
+/// one with: twenty thousand discarded notes answered in nine and a half
+/// megabytes. The number matches [`noteit_core::search::MAX_RESULTS`], which is
+/// what bounds every other listing here, so the trash is now the same kind of
+/// surface as the rest — a place to find a note, not a way to export the store.
+pub const MAX_TRASH_ENTRIES: usize = 100;
+
 read_result! {
     /// The answer to `noteit_trash_list`.
+    ///
+    /// At most [`MAX_TRASH_ENTRIES`] entries, most recently discarded first,
+    /// with the counters that say what the ceiling left out.
     TrashResult {
         entries: Vec<TrashEntryView> = Vec::new(),
         count: usize = 0,
+        /// Whether the entry ceiling cut the listing.
+        truncated: bool = false,
+        /// How many entries the ceiling left out.
+        omitted_count: usize = 0,
     }
 }
 

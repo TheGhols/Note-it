@@ -1907,3 +1907,67 @@ construir a resposta, recusar 16 MiB custa uma passada sobre 16 MiB em vez dos
 controle expande até treze vezes e é recusada mais cedo. É a consequência de
 limitar o fio em vez do arquivo, e é a correta: o número que importa para quem
 recebe a resposta é o número de bytes que ele recebe.
+
+---
+
+## ADR-054: Uma mensagem pública é uma frase que o servidor escreveu
+
+**Contexto.** A auditoria ofensiva da 4.2R foi atrás dos `ErrorCode` públicos com
+canários e mediu o que cada recusa e cada warning carregava. Quatro achados
+materiais, todos da mesma raiz:
+
+```text
+4.2R-001  noteit_list, noteit_search e noteit_tasks_list publicavam o caminho
+          absoluto do arquivo:
+          "Leitura recusada: o arquivo `/home/…/note-it/notes/….md` é um link
+          simbólico."
+          e noteit_read publicava
+          "Failed to read note /home/…/….md: Permission denied (os error 13)"
+
+4.2R-002  as mesmas três publicavam um warning por arquivo danificado, sem teto:
+          2 000 symlinks devolviam 2 000 warnings e 920 KB para um `limit: 1`;
+          20 000 devolveriam 9,2 MB
+
+4.2R-003  noteit_trash_list não tinha teto nenhum e nem `limit` para pedir um:
+          20 000 notas descartadas responderam em 9 595 659 bytes
+
+4.2R-004  mensagens públicas repetiam a entrada e o front matter da nota no
+          tamanho em que chegaram: um seletor de 300 000 bytes voltava em
+          300 098; um escalar de front matter de 300 000 bytes virava um
+          warning de 300 111
+```
+
+**A raiz é uma só.** As frases eram o `Display` do Core, e o Core as escreve para
+quem está depurando um store. Elas nomeiam o arquivo, citam o parser, repetem o
+argumento. O `code` era tipado e a frase ao lado dele não era.
+
+Essa decisão já tinha sido tomada uma vez, para o Context Engine: a 4.2C criou
+`ContextWarningView` com `code` e `note_id` e sem `message`, e o comentário no
+código dizia por quê — "a mensagem do Core nomeia o arquivo". A conclusão foi
+aplicada a uma superfície e não às outras quatro.
+
+**Decisão.**
+
+1. **`message` é `&'static str`.** Não `String`. Uma recusa recebe uma constante
+   escolhida pelo `code` (`contract::message_for`) ou uma das três que uma tool
+   passa à mão. Uma frase montada em tempo de execução não tem como chegar ali —
+   é tipo, não disciplina, e `error.to_string()` deixou de ser chamado.
+2. **Um warning é `code` e `note_id`.** Em todas as leituras, não só no contexto.
+3. **Warnings têm teto de 20**, com `warnings_truncated` e
+   `omitted_warning_count`, como o contexto já tinha.
+4. **A lixeira tem teto de 100**, com `truncated` e `omitted_count`, igual às
+   outras listagens.
+
+**O que se perde.** Uma frase que ninguém podia usar para decidir nada — o
+contrato sempre disse "diagnostic only, never branch on it". O `code` diz o que
+aconteceu, o `note_id` diz onde olhar, e quem precisa reparar o arquivo tem o
+arquivo. Uma assertiva de teste que exigia a frase antiga foi substituída pela
+propriedade mais forte: a de que não existe frase.
+
+**O que fica medido e não corrigido.** `noteit_list` sobre um store construído
+para isso — 100 notas, cada uma com 32 tags de 64 caracteres e 32 propriedades
+de valor 512 — responde em 4 377 153 bytes. É finito, é o produto de tetos que o
+Core já impõe, e é o maior envelope desta superfície. Não foi reduzido de
+propósito: a listagem é recuperável pelo `limit` que o chamador controla, e
+recusá-la não teria a alternativa que uma leitura recusada tem. Está registrado
+como característica medida, não como dívida escondida.
