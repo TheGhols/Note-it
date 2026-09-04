@@ -773,7 +773,7 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
 
       **Gate técnico para início da Fase 4.2: LIBERADO.** Não resta blocker conhecido herdado da
       série 4.1.
-- [ ] **Fase 4.2 — IA/Segundo Cérebro.** Transformar o Note-it numa fonte de conhecimento local,
+- [x] **Fase 4.2 — IA/Segundo Cérebro.** Transformar o Note-it numa fonte de conhecimento local,
       recuperável e rastreável, para que uma IA externa use as notas como contexto através do MCP.
       **A IA continua fora do Core**: ela interpreta e raciocina, o Note-it armazena, identifica,
       busca, recupera e controla escrita. Markdown continua sendo a fonte da verdade. Arquitetura em
@@ -1063,6 +1063,11 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           errado. Ele vinha do `serde_json`, e o `serde_json` só o dá dentro da
           frase que repete a entrada. Os campos obrigatórios estão publicados no
           `inputSchema`.
+
+          **Gate técnico para início da Fase 4.3: LIBERADO.** Não resta blocker
+          conhecido herdado da série 4.2. A 4.2 foi dada por encerrada uma vez
+          antes desta R1 e não estava; o que fechou a diferença foi uma
+          reprodução no fio, e é essa a régua para a próxima.
 - [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R.R1. Reservado. Registrado na 4.2A para não
       entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por similaridade e um
       eventual índice persistente, se os benchmarks justificarem. Cada um com sua própria análise de
