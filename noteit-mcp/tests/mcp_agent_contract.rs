@@ -311,29 +311,28 @@ fn a_write_that_changed_nothing_still_names_a_state_worth_chaining_from() {
     assert_eq!(again.commit_state(), Some("not_needed"));
     assert_eq!(again.structured()["changed"], false);
 
-    // And whatever revision it names is still a state the agent knows.
-    let carried = again.structured().get("revision").and_then(Value::as_str);
-    if let Some(revision) = carried {
-        let next = client.call(
-            "noteit_append",
-            json!({ "note_id": &id, "text": "DEPOIS DO NO-OP", "expected_revision": revision }),
-        );
-        assert_eq!(
-            next.status(),
-            "ok",
-            "a no-op's revision did not chain: {}",
-            next.raw
-        );
-        assert!(sandbox.body(&id).contains("DEPOIS DO NO-OP"));
-    } else {
-        // Also acceptable: it published none, and then the agent must read.
-        let revision = read_revision(&mut client, &id);
-        let next = client.call(
-            "noteit_append",
-            json!({ "note_id": &id, "text": "DEPOIS DO NO-OP", "expected_revision": &revision }),
-        );
-        assert_eq!(next.status(), "ok", "{}", next.raw);
-    }
+    // It names the state the note was already in, and that is a state the agent
+    // knows. Asserted rather than tolerated: accepting "revision or no
+    // revision" would have let the two write paths drift apart unnoticed, which
+    // is exactly what finding 4.2D-TEST-001 was about. `mcp_second_brain_e2e`
+    // proves the same holds through the authority.
+    let carried = again.revision();
+    assert_eq!(
+        carried, r2,
+        "a no-op named a different state than the note was already in"
+    );
+
+    let next = client.call(
+        "noteit_append",
+        json!({ "note_id": &id, "text": "DEPOIS DO NO-OP", "expected_revision": &carried }),
+    );
+    assert_eq!(
+        next.status(),
+        "ok",
+        "a no-op's revision did not chain: {}",
+        next.raw
+    );
+    assert!(sandbox.body(&id).contains("DEPOIS DO NO-OP"));
 }
 
 #[test]

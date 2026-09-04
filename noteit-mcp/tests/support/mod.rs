@@ -636,8 +636,15 @@ pub enum AuthorityBehaviour {
     /// that operation, applied to this store.
     CommitForReal,
     /// Read the request and hang up without a word — the shape of a crash
-    /// after the change may already have been committed.
+    /// *before* the change was made. Nothing is written.
     HangUpAfterRequest,
+    /// Commit the operation for real and *then* hang up without answering.
+    ///
+    /// The other half of `indeterminate`, and the half that matters: the write
+    /// happened and the caller cannot know it. A client that treats the missing
+    /// answer as a failure and repeats the request lands the same paragraph in
+    /// the note twice.
+    CommitThenHangUp,
     /// Answer with a protocol version this build does not speak.
     WrongVersion(u32),
     /// Refuse every request the way a peer speaking an older private protocol
@@ -794,6 +801,15 @@ impl FakeAuthority {
                             Err(error) => ControlResponse::refused(request.request_id, error),
                         };
                         let _ = write_frame(&mut stream, &response);
+                    }
+                    AuthorityBehaviour::CommitThenHangUp => {
+                        let storage =
+                            StorageManager::from_paths(paths.clone()).expect("open the store");
+                        let core = NoteItCore::from_storage(storage);
+                        let _ = noteit_core::write::execute(&core, &request.operation);
+                        // The answer is never written: the socket closes with
+                        // the change already on disk.
+                        drop(stream);
                     }
                     AuthorityBehaviour::CommitForReal => {
                         // The real thing: this process holds the lease, so it

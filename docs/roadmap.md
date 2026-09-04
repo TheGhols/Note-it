@@ -946,8 +946,39 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         entrega mais um token para isso. Fechado junto o `4.2C-DOC-001`: os limites documentados
         contam conteúdo selecionado, e a reticência do truncador faz a string publicada chegar a
         242. Justificativa na ADR-051.
-  - [ ] **4.2E — Validação ponta a ponta.** Store sintético; recuperar contexto, seguir
-        proveniência, abrir apenas as notas necessárias, não gravar durante consulta.
+  - [x] **4.2E — Validação ponta a ponta.** As peças foram construídas separadamente; esta fase
+        perguntou se elas ainda dão as mãos. Vinte e cinco cenários contra o binário real, por
+        pipes reais, sobre stores descartáveis: pergunta vira candidatos, candidato vira leitura,
+        leitura vira escrita condicional, e a resposta da escrita vira a base da seguinte — ou um
+        conflito a reconciliar, ou um resultado que ninguém pode afirmar.
+
+        Nenhum defeito de produção apareceu, e a fase alterou apenas testes e documentação.
+
+        **`4.2D-TEST-001` fechado.** O teste do no-op aceitava "revision presente ou ausente". Ela
+        é presente, e agora é afirmado: um no-op nomeia o estado em que a nota já estava, e esse
+        estado encadeia. Provado nos **dois** caminhos de escrita — direto e pela autoridade — e o
+        fallback permissivo foi removido, porque aceitar dois comportamentos era o que deixaria os
+        dois caminhos divergirem sem ninguém notar.
+
+        **Direct e Authority publicam o mesmo.** Append, no-op e conflito executados pelos dois
+        caminhos e comparados campo a campo: mesmo `status`, mesmo `commit_state`, mesmo `changed`,
+        mesma presença de `revision`, mesmo corpo final. Quem segura o lease é detalhe interno.
+
+        **`indeterminate` nas duas metades.** Uma autoridade que comita e cai antes de responder, e
+        outra que cai antes de comitar. De fora são idênticos — e é exatamente por isso que repetir
+        é proibido: só uma leitura distingue. No caso comitado, o parágrafo aparece uma vez.
+
+        **Texto não salvo continua protegido.** Com uma janela segurando texto que ninguém salvou,
+        a escrita do agente sobre a revisão do arquivo é recusada com `revision_conflict`, o
+        arquivo não muda, e o texto não salvo não vaza pela recusa. Registrado também que o Context
+        Engine descreve o store persistido e não enxerga a janela — é a arquitetura como foi
+        construída, e agora há teste para que uma mudança nisso seja decidida e não descoberta.
+
+        Duas escritas sobre a mesma revisão: exatamente um commit e exatamente um conflito, nunca
+        as duas. Conteúdo hostil continua dado — inclusive uma revisão de 64 hex escrita dentro da
+        nota, que é recusada. Contexto continua limitado sob store adversarial, sessão de leitura
+        deixa o store byte-idêntico, e uma consulta de contexto responde com uma escrita presa
+        dentro do Core. Justificativa e limites em ADR-052.
   - [ ] **4.2R — Auditoria ofensiva do Segundo Cérebro.** Injeção de prompt, envenenamento e
         estouro de contexto, contexto e revisão obsoletos, symlink, traversal, Markdown hostil,
         notas enormes, stores grandes, concorrência GUI/IA, escrita não autorizada, vazamento em

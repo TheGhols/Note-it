@@ -1750,3 +1750,69 @@ caracteres" onde 240 é o **conteúdo selecionado** e o truncador acrescenta uma
 reticência onde cortou — um snippet cortado nas duas pontas chega a 242. A
 documentação passou a distinguir orçamento de conteúdo e string publicada, em
 vez de o código ser mexido para a documentação parecer certa.
+
+## ADR-052: O que a validação ponta a ponta provou, e o que ela não provou
+
+**Contexto.** Cinco fases construíram o Segundo Cérebro v1 em pedaços, cada um
+com a sua própria prova. Peças provadas isoladamente é o estado em que um
+sistema costuma parecer pronto e não estar: as propriedades que se perdem são as
+das *transições*, e nenhum teste unitário olha para uma transição.
+
+**Isto não é uma decisão nova.** É o registro do que foi verificado, e existe
+porque a diferença entre "os testes passam" e "o fluxo funciona" precisa estar
+escrita em algum lugar que sobreviva à memória de quem executou.
+
+**O que foi provado**, com o binário real, por pipes reais, sobre stores
+descartáveis:
+
+1. **A cadeia inteira.** Pergunta → candidatos sem revisão → leitura →
+   conteúdo + revisão → escrita condicional → nova revisão → próxima escrita.
+   E os três desfechos de uma escrita: sucesso que encadeia, conflito que exige
+   releitura, indeterminado que exige verificação.
+2. **Os dois caminhos de escrita são a mesma coisa por fora.** Append, no-op e
+   conflito comparados campo a campo entre direto e autoridade. Se divergissem,
+   as regras de um agente passariam a depender de haver uma janela aberta.
+3. **Um no-op nomeia um estado encadeável**, nos dois caminhos — o que fecha o
+   `4.2D-TEST-001` e removeu do teste anterior a tolerância a dois
+   comportamentos, que era a porta pela qual os caminhos divergiriam calados.
+4. **Duas escritas sobre a mesma base não vencem as duas.** Exatamente um
+   commit, exatamente um conflito.
+5. **Um conflito não custa o trabalho de ninguém.** Releitura mostra o que
+   mudou, a decisão é refeita, e o resultado contém as duas alterações.
+6. **`indeterminate` é ambíguo de propósito.** As duas metades — comitou e caiu,
+   caiu antes de comitar — são idênticas de fora. É a prova de que repetir
+   automaticamente estaria errado metade das vezes.
+7. **Texto que alguém está digitando continua intocável.** Uma escrita sobre a
+   revisão do arquivo é recusada quando a janela segura texto não salvo, e a
+   recusa não vaza esse texto.
+8. **O que a fase 4.2 prometeu sobre limites, caminhos e conteúdo** continua
+   verdadeiro no fio: contexto limitado sob store adversarial, warnings sem
+   caminho, recusa de store sem caminho, sessão de leitura byte-idêntica,
+   conteúdo hostil sem autoridade, protocolo respondendo durante uma escrita
+   presa.
+
+**O que não foi provado, e é importante dizer.**
+
+- **`noteit_read` continua sem teto de resposta** (`4.2A-002`). Os testes usam
+  nota grande e mostram que o *contexto* permanece limitado, mas uma leitura
+  integral de uma nota enorme continua produzindo uma resposta enorme. Aberto,
+  e é da 4.2R.
+- **O Context Engine descreve o store persistido**, não a janela: texto não
+  salvo não aparece num candidato. É a arquitetura como foi construída — o
+  motor é somente leitura e não participa do protocolo de controle — e agora
+  está sob teste para que uma mudança nisso seja uma decisão e não uma
+  descoberta.
+- **Um agente ainda pode se comportar mal.** O que o servidor garante é
+  mecânico e estreito: ele não entrega token de escrita por descoberta nem por
+  conflito. Que o agente releia depois de um conflito, não repita um
+  indeterminado e trate nota como dado continua sendo contrato normativo,
+  publicado nas `instructions` — e um cliente que o ignore ainda é recusado
+  pela precondição, mas não por ela ser impossível de tentar.
+- **Nada aqui é auditoria ofensiva completa.** Isto é o túnel de vento com as
+  cargas previstas. A 4.2R é quem tenta arrancar a asa.
+
+**Consequências.** Nenhuma alteração de produção foi necessária: a fase mexeu em
+testes e documentação. Benchmarks reexecutados e alinhados ao histórico
+(≈7 ms com 100 notas, ≈77 ms com 1 000, ≈710 ms com 10 000, sob carga de
+máquina alta), sem regressão material. Catálogo em 16 tools, `mutation_input!`
+em 8, zero dependência nova, `Cargo.lock` byte-idêntico.
