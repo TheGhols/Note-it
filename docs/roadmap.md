@@ -1068,10 +1068,64 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           conhecido herdado da série 4.2. A 4.2 foi dada por encerrada uma vez
           antes desta R1 e não estava; o que fechou a diferença foi uma
           reprodução no fio, e é essa a régua para a próxima.
-- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R.R1. Reservado. Registrado na 4.2A para não
-      entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por similaridade e um
-      eventual índice persistente, se os benchmarks justificarem. Cada um com sua própria análise de
-      privacidade, tamanho, invalidação e honestidade de nomenclatura.
+- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R.R1. Registrado na 4.2A
+      para não entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por
+      similaridade e um eventual índice persistente, se os benchmarks justificarem. Cada um com sua
+      própria análise de privacidade, tamanho, invalidação e honestidade de nomenclatura.
+      Especificação em `docs/semantic-retrieval.md`, justificativa na ADR-056.
+  - [x] **4.3A — Arquitetura, benchmark e contrato.** Gate arquitetural, sem funcionalidade:
+        nenhum `.rs` tocado, catálogo em 16 tools, `Cargo.lock` byte-idêntico, zero dependência.
+        A fase mediu antes de decidir, e a medição mudou a ordem da 4.3.
+
+        **O que foi medido.** Corpus sintético versionado em `docs/retrieval-corpus.json` — 30
+        notas e 32 consultas com ground truth explícito, em 18 categorias, incluindo paráfrase,
+        sinônimo, acentos, misto português/inglês, nota longa com trecho pequeno, prompt injection
+        guardado como conteúdo, Unicode hostil e duas consultas sem resposta. O baseline foi medido
+        contra o **binário real**, por stdio, sobre store sintético; uma reimplementação em Python
+        reproduziu os 32 rankings do motor real byte a byte, e só então foi usada para variar o
+        desenho.
+
+        **O achado que reordena a fase.** O Context Engine casa a consulta inteira como *substring*:
+        não há casamento por termo. Dezenove das trinta consultas com resposta voltam **vazias**, e
+        o baseline é R@1 0,333 / R@3 0,367 / MRR 0,350. "hipertensão arterial" não acha a nota sobre
+        pressão alta. Nenhuma dessas falhas é por falta de semântica.
+
+        BM25 por termos leva R@3 de 0,367 a **0,767** — sem dependência, sem modelo, sem cache e sem
+        superfície de privacidade nova. O passo semântico acrescenta mais 0,13, e custa um artefato
+        de 100 a 512 MB. Os dois se justificam; a ordem passou a ser decidida por número.
+
+        **Decidido.** Ampliar o Context Engine e não criar motor paralelo — ele tem hoje um único
+        consumidor, o MCP. Embeddings **estáticos de token** e não transformer: 1 250–1 400 notas/s
+        contra 23–29, qualidade dentro do ruído, e nenhum runtime de inferência, o que mantém ONNX
+        Runtime, C++ e download de binário em tempo de build longe do Core. Encadeamento e não
+        fusão: o lexical vem primeiro e o semântico preenche o resto, porque a RRF pontuou um pouco
+        melhor e **rebaixou um acerto exato**. Chunk por parágrafo com teto de 800 caracteres,
+        identidade `note_id` + `revision` + ordinal — a revisão canônica já é o detector de
+        staleness. Índice **em memória, força bruta, sem persistência**: consulta custa 3,5 ms com
+        10 000 vetores e indexar 10 000 notas custa 7 s, enquanto o store real desta máquina tem 41
+        notas e custa 30 ms. Sem score publicado; um `Reason::SemanticMatch` no lugar.
+
+        **A medição que restringe a arquitetura.** Nenhum limiar de similaridade separa "tem
+        resposta" de "não tem resposta" — as faixas se sobrepõem nos três modelos testados. Hoje o
+        motor devolve vazio quando nada casa, e isso é verdade; um motor semântico sempre tem
+        vizinho mais próximo. Por isso candidato puramente semântico é rotulado e limitado, em vez
+        de cortado por um número que não separa nada.
+
+        **O que não foi medido, dito por inteiro:** nada foi implementado em Rust e os números vêm
+        de um protótipo Python com ONNX Runtime; RSS não foi medido de forma utilizável; o corpus
+        tem 32 consultas e não separa dois modelos parecidos; quantização int8 não foi avaliada em
+        qualidade; a licença de `model2vec-rs` não foi verificada.
+
+        **Fechado junto:** DOC-01 e DOC-02, duas frases da 4.2R.R1 que descreviam comportamento que
+        o código não tem mais.
+  - [ ] **4.3B — Recuperação lexical por termos.** Liberada pela 4.3A e é por onde a 4.3 começa,
+        porque é o maior ganho medido e o mais barato: casamento por termo e ranking BM25 dentro do
+        Context Engine, sobre a dobra que o `search::fold` já faz, com o corpus da 4.3A como
+        regressão de qualidade. Sem modelo, sem cache, sem artefato e sem dependência nova.
+  - [ ] **4.3C — Camada semântica local.** Depois da 4.3B: embeddings estáticos de token, chunk por
+        parágrafo, índice em memória por força bruta, encadeamento atrás do lexical,
+        `Reason::SemanticMatch`, degradação para lexical em toda falha. As questões que a 4.3A
+        deixou abertas — quantização, licença, `k1`/`b`, RSS em Rust — são pré-requisito desta.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 

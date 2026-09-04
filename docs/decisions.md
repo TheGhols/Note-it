@@ -2074,3 +2074,154 @@ byte-idêntico.
 inválida na entrada padrão não recebe resposta nenhuma — é o transporte do SDK, e
 não vaza nada. `tools/list` responde em 123 977 bytes, que é o catálogo deste
 servidor e não a entrada de ninguém.
+
+---
+
+## ADR-056: A recuperação melhora primeiro por termos, e só depois por embeddings
+
+**Contexto.** A Fase 4.3 foi reservada para embeddings locais, índice vetorial e
+ranking por similaridade. A 4.3A não implementou nada disso: mediu primeiro, e a
+medição mudou a ordem da fase.
+
+**Problema.** O Context Engine casa **a consulta inteira como substring** do
+texto dobrado. Não há casamento por termo e não há pontuação. Medido contra o
+binário real, por stdio, sobre um store sintético de 30 notas e 32 consultas com
+ground truth explícito — corpus versionado em `docs/retrieval-corpus.json`:
+
+```text
+19 das 30 consultas com resposta voltam vazias
+R@1 0,333   R@3 0,367   R@5 0,367   MRR 0,350
+```
+
+"hipertensão arterial" não acha a nota sobre pressão alta. "problemas para
+dormir depois do plantão" não acha a nota sobre insônia após trabalho noturno.
+Nenhuma das duas falha por falta de semântica.
+
+**Opções consideradas e o que cada uma mediu.**
+
+```text
+motor                                   R@1     R@3     R@5     MRR    custo
+lexical de hoje (baseline)             0,333   0,367   0,367   0,350   —
+lexical por termos                     0,667   0,767   0,833   0,732   nenhum
+BM25                                   0,667   0,767   0,833   0,728   nenhum
+semântico e5-small fp32                0,767   0,867   0,933   0,830   470 MB + ONNX
+semântico e5-small int8                0,667   0,900   0,933   0,783   118 MB + ONNX
+semântico paraphrase-MiniLM fp32       0,700   0,867   0,933   0,793   470 MB + ONNX
+semântico potion (estático)            0,700   0,933   0,967   0,812   512 MB
+semântico static-mrl (estático)        0,767   0,900   0,933   0,845   434 MB
+semântico e5-small + chunks            0,833   0,867   0,967   0,870
+semântico potion + chunks              0,767   0,967   0,967   0,861
+RRF BM25 + e5-small chunks             0,867   0,967   1,000   0,919
+RRF BM25 + potion chunks               0,767   1,000   1,000   0,867
+BM25 → potion (encadeado)              0,767   0,900   0,967   0,845
+```
+
+**A leitura que decide a fase.** O passo lexical entrega **+0,40 de R@3 sem
+dependência, sem modelo, sem cache e sem superfície de privacidade nova**. O
+passo semântico entrega mais **+0,13** e custa um artefato de 100 a 512 MB e uma
+dependência. Os dois se justificam. A ordem não estava decidida e agora está: a
+4.3 começa pelo lexical.
+
+**Decisão.**
+
+1. **Ampliar o Context Engine, não criar motor paralelo.** `context::retrieve`
+   tem um único consumidor hoje (`noteit-mcp/src/domain.rs`), e um segundo motor
+   duplicaria as regras que a 4.2 levou seis subfases para acertar — leitura
+   autoritativa por candidato, ausência de `revision`, tetos, warnings sem
+   caminho.
+2. **Casamento por termo com BM25**, sobre a dobra que o `search::fold` já faz.
+   Nenhuma normalização nova: acento já é resolvido, e duas normalizações seriam
+   duas verdades sobre a mesma palavra.
+3. **Embeddings estáticos de token** (classe model2vec / static-embedding), não
+   transformer. 1 250–1 400 notas/s contra 23–29, qualidade dentro do ruído do
+   corpus, e — o que decide — **nenhum runtime de inferência**: um modelo
+   estático é uma tabela e uma média. Sem ONNX Runtime, sem C++, sem binário
+   baixado em tempo de build, sem risco à fronteira de rede fechada na 4.1R1.1.
+4. **Encadeamento, não fusão.** O lexical vem primeiro na ordem que decidiu; o
+   semântico preenche o resto. A RRF pontua um pouco melhor em R@3 e **rebaixou
+   um acerto exato** numa consulta. O encadeamento não pode rebaixar — não é uma
+   observação sobre este corpus, é a forma da operação.
+5. **Chunk por parágrafo**, teto de 800 caracteres com corte em sentença, sem
+   sobreposição. Identidade `note_id` + `revision` + ordinal: a revisão canônica
+   já é o detector de staleness que existe, e não é preciso inventar outro.
+6. **Índice em memória, força bruta, sem persistência em v1.**
+7. **Sem score publicado em v1**, e um `Reason::SemanticMatch` no lugar.
+
+**Benchmark de escala** (protótipo Python, modelo estático):
+
+```text
+escala    indexar    matriz    consulta p50   p95
+   100    0,07 s     0,10 MB      0,012 ms    0,024 ms
+ 1 000    0,79 s     1,02 MB      0,072 ms    0,091 ms
+ 5 000    4,02 s     5,12 MB      5,25 ms     7,47 ms
+10 000    7,13 s    10,24 MB      3,51 ms     6,91 ms
+```
+
+**Persistência: dispensada, com gatilho.** O store real desta máquina tem 41
+notas — cerca de 30 ms para embutir. Mil custam 0,8 s; dez mil, 7 s. O que custa
+não é o índice, é o artefato do modelo. Persistir 10 MB de vetores para poupar 7
+segundos enquanto se carregam 100 MB de pesos é otimizar a metade errada. Um
+cache entra quando a indexação a frio passar de **2 s num store real**, e então
+em `$XDG_CACHE_HOME/note-it/`, nunca em `notes/`, com cabeçalho de validade e
+renomeação como ponto de commit.
+
+**ANN: dispensado, com gatilho.** Consulta por força bruta custa 3,5 ms com
+10 000 vetores. ANN entra se passar de 50 ms, o que fica em centenas de milhares
+de vetores.
+
+**A medição que restringe a arquitetura.** Nenhum limiar de similaridade separa
+"tem resposta" de "não tem resposta":
+
+```text
+e5-small     menor topo-1 com resposta 0,8248   maior sem resposta 0,8494
+potion       menor topo-1 com resposta 0,1760   maior sem resposta 0,3469
+static-mrl   menor topo-1 com resposta 0,0995   maior sem resposta 0,1486
+```
+
+Hoje o motor devolve vazio quando nada casa, e isso é informação verdadeira. Um
+motor semântico sempre tem vizinho mais próximo e devolveria dez. Por isso
+candidatos puramente semânticos são rotulados e limitados, em vez de cortados por
+um número que não separa nada.
+
+**Privacidade.** Conteúdo de nota é dado privado. Nenhuma API remota, nenhuma
+telemetria, nenhum upload, nenhuma inferência em servidor. O artefato do modelo é
+obtido em desenvolvimento ou empacotado; conteúdo do usuário nunca sai da
+máquina. A escolha de modelo estático elimina o vetor de risco mais concreto: o
+`ort` traz `ureq` como dependência opcional para baixar binários do ONNX Runtime
+em tempo de build, e a fronteira de rede do MCP existe justamente para que isso
+não entre.
+
+**Fallback.** Falta de modelo, artefato corrompido, dimensão errada, valor não
+finito, cache ilegível ou memória insuficiente degradam para lexical e dizem
+`semantic_unavailable`. Nada disso afeta ler, escrever, listar, buscar, a CLI, o
+MCP ou as notas. A etapa lexical não depende de nada da semântica — é por isso
+que é implementada primeiro e sozinha.
+
+**Impacto na arquitetura existente.** Nenhum, nesta fase: nenhum `.rs` foi
+tocado, o catálogo continua com 16 tools, `SCHEMA_VERSION` não se move,
+`Cargo.lock` é byte-idêntico e nenhuma dependência foi adicionada. Quando a
+implementação vier: `Reason` ganha variantes, o Context Engine ganha etapas, e
+nada em `revision`, `expected_revision`, `WriteResult` ou no protocolo muda.
+
+**Alternativas rejeitadas.**
+
+* **Banco vetorial ou índice ANN** — 3,5 ms de força bruta com 10 000 vetores
+  não justifica estrutura, parâmetros, não-determinismo e dependência.
+* **Índice persistente em v1** — otimiza a metade barata do custo.
+* **Transformer local (`e5-small`, `MiniLM`)** — 50× mais lento a indexar,
+  qualidade dentro do ruído, e traz um runtime de inferência C++ para o centro
+  do Segundo Cérebro.
+* **RRF** — melhor em R@3 e sem a garantia estrutural de não rebaixar.
+* **Corte por limiar de similaridade** — medido, não separa.
+* **API remota de embeddings** — incompatível com a proposta local; nunca esteve
+  em consideração e fica registrado que não esteve.
+* **Substituir o motor lexical pelo semântico** — o semântico sozinho perde
+  casos exatos que hoje funcionam.
+
+**Questões deixadas para a implementação.** Qualidade sob quantização int8 dos
+modelos estáticos; verificação da licença de `model2vec-rs`, que o `crates.io`
+publica como `non-standard` enquanto o card do modelo diz MIT; confirmação de
+`k1` e `b` do BM25 contra o corpus; RSS real em Rust, já que os números desta
+fase vêm de um processo Python e não são representativos; e um corpus maior, já
+que 32 consultas separam arquiteturas com folga e não separam dois modelos
+parecidos.
