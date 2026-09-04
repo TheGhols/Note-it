@@ -60,9 +60,32 @@
 //! argument of the wrong type is still refused, and `expected_revision` is
 //! still required by the schema and by the type.
 //!
-//! **The channel.** A refusal is still the SDK's `invalid_params`, so a host
-//! that already distinguished "the arguments were wrong" from "the tool
-//! refused" goes on distinguishing them.
+//! ## What did change, and it is one thing: where the refusal comes out
+//!
+//! Two things are easy to conflate here, so they are named separately.
+//!
+//! **The classification is unchanged.** This module builds the same
+//! [`ErrorData`] the SDK's wrapper built: `invalid_params`, which is JSON-RPC
+//! `-32602`. Nothing about how the failure is *categorised* moved.
+//!
+//! **The observable answer did move.** Before, a host saw a `CallToolResult`
+//! with `isError: true` and a text block; now it sees a JSON-RPC error object
+//! with `code: -32602`. The reason is mechanical rather than chosen: the SDK's
+//! tool router converts an `invalid_params` error into a tool result **only
+//! when its message starts with the literal prefix
+//! `failed to deserialize parameters:`** — see `into_tool_argument_error` in
+//! `rmcp::handler::server::router::tool`. That prefix is exactly the sentence
+//! this module stopped producing, so the conversion no longer applies and the
+//! error stays an error.
+//!
+//! Both halves are deliberate. MCP classifies invalid arguments as a protocol
+//! error — a request whose shape is wrong was never a call — and the answer is
+//! now the more consistent one: a `CallToolResult` from this server always
+//! carries `structuredContent`, and the old refusal carried none. Reproducing
+//! the previous channel would mean emitting the SDK's private prefix and
+//! depending on it, which is a coupling this crate declines. See ADR-055 and
+//! `noteit-mcp/tests/mcp_argument_boundary.rs`, which measures the answer on
+//! the wire rather than reasoning about it.
 
 use rmcp::handler::server::common::FromContextPart;
 use rmcp::handler::server::tool::ToolCallContext;

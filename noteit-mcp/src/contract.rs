@@ -22,8 +22,17 @@
 //! unconditional write, and an unconditional programmatic write over a note
 //! somebody may be typing into is the failure the whole optimistic concurrency
 //! mechanism was built to prevent. A required field in the JSON schema means
-//! the request is refused by the deserializer, before this crate's code runs
-//! at all, before a store is opened and before a lease is taken.
+//! the request is refused while its arguments are being deserialised — before
+//! the tool body is entered, before a store is opened and before any write
+//! authority is taken. So there is no path to a mutation of an existing note
+//! that does not carry `expected_revision`.
+//!
+//! Where that refusal happens is worth stating precisely, because it moved in
+//! Phase 4.2R.R1 and the earlier wording is no longer literally true. It is
+//! not "before this crate's code runs at all": the deserialisation is done by
+//! [`crate::params::SafeParameters`], which belongs to this crate. What holds
+//! is the part the guarantee rests on — it happens before the handler, before
+//! the store and before the lease.
 //!
 //! The command line keeps its unconditional write, because a person typing
 //! `noteit editar` is looking at the note. An agent is not.
