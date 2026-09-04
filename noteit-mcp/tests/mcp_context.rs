@@ -606,17 +606,14 @@ fn context_never_hands_out_a_body_or_a_way_to_write() {
     );
 
     // Nothing in the answer is a precondition, so a write built from it alone
-    // is refused on deserialisation — before any code of this repository runs,
-    // and with the missing field named.
-    let refused = client.call(
+    // is refused on deserialisation — before any code of this repository runs.
+    let (_, refusal) = client.call_refused_by_the_argument_boundary(
         "noteit_append",
         json!({ "note_id": &id, "text": "ESCRITA CEGA" }),
     );
-    assert!(refused.is_error(), "{}", refused.raw);
     assert!(
-        refused.raw.to_string().contains("expected_revision"),
-        "a write without a precondition was not refused for the right reason: {}",
-        refused.raw
+        !refusal.to_string().contains(secret),
+        "the refusal carried the note's body: {refusal}"
     );
     assert_eq!(before, sandbox.note_bytes(&id), "the note changed");
 

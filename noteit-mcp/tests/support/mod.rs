@@ -452,6 +452,48 @@ impl McpClient {
         (ToolAnswer::from(result), bytes)
     }
 
+    /// A call the argument boundary refuses before any tool body runs, and the
+    /// bytes that refusal occupied on the pipe.
+    ///
+    /// Arguments that do not deserialise into a tool's input type never reach
+    /// this repository's code: the extractor answers the host itself. MCP
+    /// classifies that as a protocol error rather than a tool failure — a
+    /// request whose shape is wrong was never a call — so the answer is
+    /// JSON-RPC `-32602` and not a `CallToolResult`.
+    ///
+    /// What is asserted here is the whole shape of that refusal, in one place,
+    /// because six suites make this call and a property checked six different
+    /// ways is six things that can drift: the code, and the sentence, which is
+    /// [`noteit_mcp::params::INVALID_ARGUMENTS`] and is a constant. It
+    /// deliberately does **not** name the offending field or value — see
+    /// `noteit-mcp/tests/mcp_argument_boundary.rs` for what that buys.
+    pub fn call_refused_by_the_argument_boundary(
+        &mut self,
+        name: &str,
+        arguments: Value,
+    ) -> (usize, Value) {
+        let id = self.send_request(
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+        );
+        let (bytes, answer) = self.await_response_on_the_wire(id);
+        let error = match answer {
+            Ok(result) => panic!("{name} accepted arguments it had to refuse: {result}"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error["code"].as_i64(),
+            Some(-32602),
+            "{name} refused with the wrong JSON-RPC code: {error}"
+        );
+        assert_eq!(
+            error["message"].as_str(),
+            Some(noteit_mcp::params::INVALID_ARGUMENTS),
+            "{name} refused with a sentence this server did not write: {error}"
+        );
+        (bytes, error)
+    }
+
     /// A tool call that is expected to be refused by the protocol itself —
     /// a missing required argument, say — rather than by the tool.
     pub fn call_expecting_protocol_error(&mut self, name: &str, arguments: Value) -> Value {

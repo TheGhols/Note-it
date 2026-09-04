@@ -200,13 +200,16 @@ fn context_discovers_a_note_but_cannot_authorise_a_write_to_it() {
     assert!(!found.raw.to_string().contains("revision"));
 
     // A write built from the candidate alone is refused before any code of
-    // this repository runs.
-    let refused = client.call(
+    // this repository runs: `expected_revision` is required by the schema, so
+    // the arguments do not deserialise and the tool body is never entered.
+    let (_, refusal) = client.call_refused_by_the_argument_boundary(
         "noteit_append",
         json!({ "note_id": &id, "text": "ESCRITA A PARTIR DA DESCOBERTA" }),
     );
-    assert!(refused.is_error());
-    assert!(refused.raw.to_string().contains("expected_revision"));
+    assert!(
+        !refusal.to_string().contains("revision"),
+        "the refusal handed back something a write could be built from: {refusal}"
+    );
     assert_eq!(before, sandbox.note_bytes(&id));
 
     // Reading is what turns a discovered note into a writable one.

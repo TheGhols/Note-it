@@ -106,13 +106,12 @@ fn e2e_01_a_question_becomes_a_read_and_only_then_a_write() {
         found.raw
     );
 
-    // Discovery is not authorisation.
-    let refused = client.call(
+    // Discovery is not authorisation: without `expected_revision` the
+    // arguments do not deserialise, and the tool body is never entered.
+    client.call_refused_by_the_argument_boundary(
         "noteit_append",
         json!({ "note_id": &wanted, "text": "ESCRITO SEM LER" }),
     );
-    assert!(refused.is_error());
-    assert!(refused.raw.to_string().contains("expected_revision"));
     assert_eq!(
         untouched,
         sandbox.note_bytes(&wanted),
@@ -346,11 +345,10 @@ fn e2e_07_a_restored_note_must_be_read_before_it_can_be_changed() {
     );
 
     let before = sandbox.note_bytes(&id);
-    let refused = client.call(
+    client.call_refused_by_the_argument_boundary(
         "noteit_append",
         json!({ "note_id": &id, "text": "SEM LER" }),
     );
-    assert!(refused.is_error());
     assert_eq!(before, sandbox.note_bytes(&id));
 
     let (_, revision) = read(&mut client, &id);

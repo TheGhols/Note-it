@@ -212,28 +212,20 @@ fn mcp_04_a_request_without_the_field_is_refused_by_the_protocol() {
     let id = create_note(&mut client, "BASE");
     let before = sandbox.note_bytes(&id);
 
-    // The SDK refuses this while deserializing the arguments, which is
-    // earlier than anything in this repository runs: the tool body is never
-    // entered, no store is opened and no lease is taken. It comes back as a
-    // tool error rather than a JSON-RPC one, and it names the field.
-    let answer = client.call(
+    // The arguments are refused while being deserialized, which is earlier
+    // than anything in this repository runs: the tool body is never entered,
+    // no store is opened and no lease is taken. MCP calls that a protocol
+    // error rather than a tool failure — a request whose shape is wrong was
+    // never a call — so it is JSON-RPC `-32602` and carries no result at all.
+    //
+    // Since Phase 4.2R.R1 it does not name the missing field either. The field
+    // name was `serde_json`'s to give, and `serde_json` gives it inside a
+    // sentence that also quotes whatever the client sent; the schema in
+    // `tools/list` is where the required fields are published. See
+    // `mcp_argument_boundary.rs` and ADR-055.
+    client.call_refused_by_the_argument_boundary(
         "noteit_append",
         json!({ "note_id": &id, "text": "SEM REVISÃO" }),
-    );
-    assert!(
-        answer.is_error(),
-        "a write with no precondition was accepted: {}",
-        answer.raw
-    );
-    assert!(
-        answer.raw.get("structuredContent").is_none(),
-        "the request never reached the tool, so there is no structured result: {}",
-        answer.raw
-    );
-    let text = serde_json::to_string(&answer.raw).unwrap();
-    assert!(
-        text.contains("expected_revision"),
-        "the refusal must name the missing field: {text}"
     );
     assert_eq!(
         before,
@@ -264,12 +256,7 @@ fn mcp_04_a_request_without_the_field_is_refused_by_the_protocol() {
             json!({ "note_id": &id, "task_ref": "abcd1234" }),
         ),
     ] {
-        let answer = client.call(name, arguments);
-        assert!(
-            answer.is_error(),
-            "{name} accepted a write with no precondition: {}",
-            answer.raw
-        );
+        client.call_refused_by_the_argument_boundary(name, arguments);
         assert_eq!(
             before,
             sandbox.note_bytes(&id),

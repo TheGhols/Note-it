@@ -270,4 +270,71 @@ if [ "$minted" != "2" ]; then
   fail "the OffThread witness is declared and built in $minted places rather than 2; exactly one construction, inside off_reactor, is what makes it proof of anything."
 fi
 
-printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket at all, reaches the Core over its Unix authority socket and nothing else, reaches the store only through the offloaded adapter, and every mutation of an existing note requires a revision."
+# 11. Every public sentence is a constant, and arguments are read through this
+#     crate's own extractor.
+#
+#     Phase 4.2R made this true of everything the *domain* says: a `message` is
+#     a `&'static str` chosen by a `code`, so a runtime-built string cannot be
+#     put there. It was not true one layer earlier. Arguments are deserialised
+#     into a tool's input type before any handler in this crate runs, and the
+#     SDK's `Parameters<T>` answers a failure with `serde_json`'s sentence —
+#     which quotes the value it did not understand, in full. Three hundred
+#     kilobytes of wrong-typed argument came back as three hundred kilobytes,
+#     measured on the wire.
+#
+#     The fix is `crate::params::SafeParameters`, and these rules are what stop
+#     a sixteenth or seventeenth tool from quietly going back to the SDK's.
+
+#     11a. The SDK's extractor may not be named here at all. `server.rs`
+#          imports ours under the name `Parameters`, which is also the name the
+#          `#[tool]` macro looks for when it derives a tool's input schema — so
+#          a new tool written the ordinary way gets the safe one without
+#          knowing it exists, and the only way back to the unsafe one is to
+#          name it.
+offending 'wrapper::Parameters|rmcp( |)::(.*::)?Parameters' \
+  && fail "noteit-mcp/src names rmcp's own Parameters extractor; a bad argument would come back quoted at whatever length it arrived. Use crate::params::SafeParameters."
+
+#     11b. And the name every tool signature uses must still be bound to ours.
+#          Without this the rule above is satisfied perfectly by deleting the
+#          import and letting the tools fail to compile — or, worse, by binding
+#          `Parameters` to something else entirely.
+grep -q '^use crate::params::SafeParameters as Parameters;$' "$sources/server.rs" \
+  || fail "noteit-mcp/src/server.rs no longer binds Parameters to crate::params::SafeParameters; every tool's arguments must come through the safe extractor."
+
+#     11c. The safe extractor must still throw the error away. One
+#          `FromContextPart` implementation, and a refusal that is the
+#          constant. A `parse` that started describing what it refused would
+#          satisfy 11a and 11b and leak anyway.
+grep -q 'pub const INVALID_ARGUMENTS: &str' "$sources/params.rs" \
+  || fail "noteit-mcp/src/params.rs no longer answers a bad argument with a constant."
+extractors="$(grep -c 'impl<S, P> FromContextPart' "$sources/params.rs" || true)"
+[ "$extractors" = "1" ] \
+  || fail "noteit-mcp/src/params.rs declares $extractors argument extractors rather than 1; exactly one is what makes it the boundary."
+
+#     11d. No sentence in this crate is built at run time.
+#
+#          `format!` is how a library's error, a path or an argument becomes a
+#          string, and every string this crate can put on the wire is written
+#          in the source. `main.rs` is excluded and only `main.rs`: it writes
+#          to standard error, for a person, and never to the protocol — see
+#          rule 7, which is what keeps it off standard output.
+built_at_runtime() {
+  find "$sources" -name '*.rs' ! -name 'main.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||' \
+    | grep -E '(^|[^a-z_])format!' || true
+}
+found="$(built_at_runtime)"
+if [ -n "$found" ]; then
+  printf '%s\n' "$found" >&2
+  fail "noteit-mcp/src builds a sentence at run time; every message this server publishes is a literal, so a library's error text cannot become one."
+fi
+
+#     11e. And the method name of an unroutable request is not echoed either.
+#          The SDK's default `on_custom_request` answers with the method string
+#          the client sent, at the length the client chose — the same class of
+#          leak, one layer above the arguments.
+grep -q 'fn on_custom_request' "$sources/server.rs" \
+  || fail "noteit-mcp/src/server.rs no longer overrides on_custom_request; the SDK's default answers an unknown method by echoing its name."
+
+printf '%s\n' "MCP boundary OK: noteit-mcp is headless, opens no socket at all, reaches the Core over its Unix authority socket and nothing else, reaches the store only through the offloaded adapter, reads every argument through its own extractor and publishes no sentence it did not write, and every mutation of an existing note requires a revision."

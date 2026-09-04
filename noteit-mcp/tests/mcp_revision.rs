@@ -150,15 +150,17 @@ fn mcp_11_no_spelling_of_an_absent_revision_becomes_an_unconditional_write() {
     let id = create_note(&mut client, "BASE");
     let before = sandbox.note_bytes(&id);
 
-    for absent in [json!(null), json!(""), json!(false), json!(0)] {
-        let answer = client.call(
+    // Two of the four are refused by two different mechanisms, and the test
+    // says which is which rather than accepting "an error happened": `null`,
+    // `false` and `0` are not strings, so the arguments never deserialise and
+    // the tool body is never entered; `""` *is* a string, deserialises, and is
+    // then refused by `ExistingNoteMutation` for not being sixty-four
+    // hexadecimal characters. A change that moved one of them into the other
+    // channel would be a change in where the guarantee lives, and this notices.
+    for absent in [json!(null), json!(false), json!(0)] {
+        client.call_refused_by_the_argument_boundary(
             "noteit_append",
-            json!({ "note_id": &id, "text": "NÃO", "expected_revision": absent }),
-        );
-        assert!(
-            answer.is_error(),
-            "`{absent}` was accepted as a precondition: {}",
-            answer.raw
+            json!({ "note_id": &id, "text": "NÃO", "expected_revision": &absent }),
         );
         assert_eq!(
             before,
@@ -166,6 +168,18 @@ fn mcp_11_no_spelling_of_an_absent_revision_becomes_an_unconditional_write() {
             "`{absent}` reached the store"
         );
     }
+
+    let answer = client.call(
+        "noteit_append",
+        json!({ "note_id": &id, "text": "NÃO", "expected_revision": "" }),
+    );
+    assert!(
+        answer.is_error(),
+        "an empty revision was accepted as a precondition: {}",
+        answer.raw
+    );
+    assert_eq!(answer.code(), Some("invalid_input"), "{}", answer.raw);
+    assert_eq!(before, sandbox.note_bytes(&id), "`\"\"` reached the store");
 }
 
 // ------------------------------------------------------------------ MCP-12

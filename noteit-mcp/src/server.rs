@@ -38,10 +38,15 @@ use crate::contract::{
     TasksResult, TrashRestoreInput, TrashResult, WriteResult,
 };
 use crate::domain::{self, ExistingNoteMutation, OffThread, OffloadFailed, Store};
+// The argument extractor is **this crate's** and not the SDK's, and the alias
+// is how every tool below inherits that without a line of its own. The SDK's
+// `Parameters<T>` answers a bad argument by quoting it back at whatever length
+// it arrived — three hundred kilobytes, measured — and `scripts/check-mcp-boundary`
+// refuses to let it back into this crate. See [`crate::params`] and ADR-055.
+use crate::params::SafeParameters as Parameters;
 use noteit_core::write::NoteMutation;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::schema_for_output;
-use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use serde::Serialize;
@@ -181,6 +186,21 @@ impl Default for NoteItMcpServer {
     }
 }
 
+/// The one thing a caller is told when this server cannot serialise its own
+/// answer. A constant, for the reason given in [`respond`].
+const RESPONSE_NOT_SERIALISABLE: &str = "a resposta não pôde ser serializada";
+
+/// What a host is told when it asks for a method this server does not have.
+///
+/// The SDK's default answer is the method name it was sent, echoed back — so a
+/// `method` of three hundred kilobytes came back as three hundred kilobytes,
+/// measured in Phase 4.2R.R1 (307 261 bytes on the wire). It is the same class
+/// of leak as [`crate::params`] closes for a tool's arguments, one layer
+/// earlier: the client names something, the server repeats the name. This
+/// constant is the answer instead, and [`NoteItMcpServer::on_custom_request`]
+/// is where it replaces the default.
+const UNKNOWN_METHOD: &str = "this server does not implement that method";
+
 /// Turns one typed answer into a tool result.
 ///
 /// Success and refusal carry the same structured shape, so a client parses one
@@ -189,12 +209,13 @@ impl Default for NoteItMcpServer {
 /// something went wrong — but nothing programmatic has to read a sentence to
 /// find out *what*.
 fn respond<T: Serialize>(payload: &T, status: Status) -> Result<CallToolResult, ErrorData> {
-    let value = serde_json::to_value(payload).map_err(|error| {
-        ErrorData::internal_error(
-            format!("a resposta não pôde ser serializada: {error}"),
-            None,
-        )
-    })?;
+    // The serialisation error is dropped rather than described. It cannot
+    // happen — every result type in `contract` is strings, numbers, vectors
+    // and options — but "cannot happen" is not a reason to be the one place
+    // in this crate that would put a library's sentence on the wire if it
+    // did. Every public sentence here is a constant; see ADR-054 and ADR-055.
+    let value = serde_json::to_value(payload)
+        .map_err(|_| ErrorData::internal_error(RESPONSE_NOT_SERIALISABLE, None))?;
     Ok(match status {
         Status::Ok => CallToolResult::structured(value),
         // An indeterminate result is not a success and not a plain failure.
@@ -623,5 +644,31 @@ impl ServerHandler for NoteItMcpServer {
         info.server_info = Implementation::new("noteit-mcp", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(INSTRUCTIONS.to_string());
         info
+    }
+
+    /// Anything the SDK could not route, refused without repeating its name.
+    ///
+    /// This is the layer above [`crate::params`]. That one covers a call to a
+    /// tool this server has, whose *arguments* were wrong; this covers a
+    /// request whose `method` names nothing at all — including a `tools/call`
+    /// so malformed that the SDK could not see it as one.
+    ///
+    /// The default implementation of this method answers
+    /// `ErrorData::new(METHOD_NOT_FOUND, method, None)`, where `method` is the
+    /// string the client sent, at the length the client chose. Overriding it
+    /// is the whole fix: the name is dropped, the code is the same
+    /// `-32601` a host already handles, and the sentence is a constant.
+    ///
+    /// `request.params` is dropped with it, unread and unlogged.
+    async fn on_custom_request(
+        &self,
+        _request: rmcp::model::CustomRequest,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            UNKNOWN_METHOD,
+            None,
+        ))
     }
 }

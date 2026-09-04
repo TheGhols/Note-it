@@ -41,6 +41,7 @@
 pub mod budget;
 pub mod contract;
 pub mod domain;
+pub mod params;
 pub mod schema;
 pub mod server;
 
