@@ -1016,7 +1016,54 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         linha espúria no stdout, nenhum canário no stderr, nenhum estado oculto. Suíte em
         `noteit-mcp/tests/mcp_second_brain_red_team.rs`; catálogo em 16 tools, `mutation_input!`
         em 8, zero dependência nova, `Cargo.lock` byte-idêntico.
-- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R. Reservado. Registrado na 4.2A para não
+    - [x] **4.2R.R1 — Fechamento da desserialização pré-handler.** A 4.2R foi dada
+          por encerrada e uma revisão posterior reabriu `4.2R-004` numa fronteira
+          que ela não tinha olhado. A regra "toda mensagem pública é uma frase que
+          o servidor escreveu" valia para o que o **domínio** diz, e o domínio só
+          fala depois que os argumentos foram desserializados. Antes disso o
+          extractor de parâmetros do SDK respondia uma falha de desserialização
+          com a frase do `serde_json`, que cita o valor recusado por inteiro.
+
+          Reproduzido no fio, contra o binário real, com store sintético e o
+          store real byte-idêntico do começo ao fim: `limit` recebendo 300 KiB de
+          string respondeu em 307 361 bytes com o canário; `state` como variante
+          inválida em 307 387; `include_tasks` e `clear` como string em 307 367;
+          `tags[]` e `properties[]` recebendo escalar em 307 368 e 307 374. E uma
+          camada acima, o `method` de uma requisição que não roteia era devolvido
+          pelo nome: 307 261 bytes. Classificado `S3`.
+
+          **Por que passou pela 4.2R.** Havia um teste enviando exatamente esses
+          valores — o `r16` da suíte ofensiva, que percorre `limit` adversariais —
+          e ele pulava a recusa sem examiná-la. O teste que tinha a entrada certa
+          na mão tinha decidido que uma recusa não precisava ser olhada. Ele agora
+          afirma o tamanho e o conteúdo da recusa, que é a lição além do defeito.
+
+          **Corrigido na fronteira, não campo a campo.** `SafeParameters<T>` em
+          `noteit-mcp/src/params.rs`, importada por `server.rs` como
+          `Parameters` — que é o nome que a macro `#[tool]` procura para derivar o
+          `inputSchema` —, então toda tool a herda e uma tool nova não tem como
+          esquecê-la. O erro é descartado sem ser lido e a recusa é uma constante.
+          Argumento inválido passou a ser erro de protocolo `-32602`, que é a
+          classificação do próprio MCP e o contrato mais coerente: um
+          `CallToolResult` deste servidor sempre carrega `structuredContent`, e a
+          recusa antiga não carregava. `on_custom_request` sobrescrito para não
+          ecoar o método.
+
+          **Medido depois:** 112 e 113 bytes; o método desconhecido, 103. E a
+          forma forte da propriedade — 1 KiB, 64 KiB, 300 KiB e 1 MiB no mesmo
+          campo recebem **o mesmo** número de bytes, o que um teto não provaria.
+          Os 16 tools continuam; os 15 schemas foram comparados documento a
+          documento contra os do tipo embrulhado; `expected_revision` continua
+          exigida no schema e no tipo; `revision_conflict` inalterado. Cinco
+          regras novas em `check-mcp-boundary`, sete violações injetadas e as sete
+          reprovaram. Suíte em `noteit-mcp/tests/mcp_argument_boundary.rs`. Zero
+          dependência nova, `Cargo.lock` byte-idêntico. Justificativa na ADR-055.
+
+          **O que se perde, dito por inteiro:** a recusa não nomeia mais o campo
+          errado. Ele vinha do `serde_json`, e o `serde_json` só o dá dentro da
+          frase que repete a entrada. Os campos obrigatórios estão publicados no
+          `inputSchema`.
+- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R.R1. Reservado. Registrado na 4.2A para não
       entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por similaridade e um
       eventual índice persistente, se os benchmarks justificarem. Cada um com sua própria análise de
       privacidade, tamanho, invalidação e honestidade de nomenclatura.

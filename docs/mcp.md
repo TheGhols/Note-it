@@ -609,10 +609,30 @@ não existe “só desta vez”, e a recusa é dita em vez de contornada. Um fal
 para gravação direta reintroduziria precisamente a edição perdida que o lease
 existe para impedir.
 
-Um campo do schema que falta é recusado pelo SDK durante a desserialização,
-antes do corpo da tool. Essa recusa vem como erro de tool nomeando o campo
-ausente, e sem `structuredContent` — porque a requisição nunca chegou ao domínio.
-Um cliente que respeita o `inputSchema` publicado nunca a encontra.
+### Argumentos que não correspondem ao schema
+
+Um campo que falta, ou um campo com o tipo errado, é recusado **antes do corpo
+da tool** — os argumentos são desserializados no tipo de entrada e a requisição
+nunca chega ao domínio. O MCP classifica isso como erro de protocolo e não como
+falha de tool: uma requisição cuja forma está errada nunca foi uma chamada. Ela
+vem como erro JSON-RPC `-32602`, sem `structuredContent`, com a frase fixa:
+
+```json
+{"jsonrpc":"2.0","id":1,"error":{"code":-32602,
+ "message":"the arguments do not match this tool's input schema"}}
+```
+
+**A frase é constante e não diz qual campo estava errado.** Isso é deliberado e
+foi comprado com uma medição. Até a 4.2R.R1 a recusa era a frase do `serde_json`,
+que nomeia o campo — e, junto com ele, cita o valor recusado inteiro: um `limit`
+com trezentos kilobytes de string voltava em 307 361 bytes, e o mesmo valia para
+`state`, `include_tasks`, `clear` e `tags[]`. O nome do campo era do
+`serde_json` para dar, e o `serde_json` só o dá dentro de uma frase que também
+repete o que o cliente mandou. Quem publica os campos obrigatórios é o
+`inputSchema` de `tools/list`, e é lá que um cliente os lê.
+
+Um cliente que respeita o `inputSchema` publicado nunca encontra essa recusa.
+Consulte a ADR-055.
 
 ---
 

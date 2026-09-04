@@ -1971,3 +1971,106 @@ Core já impõe, e é o maior envelope desta superfície. Não foi reduzido de
 propósito: a listagem é recuperável pelo `limit` que o chamador controla, e
 recusá-la não teria a alternativa que uma leitura recusada tem. Está registrado
 como característica medida, não como dívida escondida.
+
+---
+
+## ADR-055: Um erro de desserialização não é lugar para o servidor repetir o que recebeu
+
+**Contexto.** A 4.2R fechou `4.2R-004` — mensagens públicas repetindo a entrada —
+tornando todo `message` do MCP um `&'static str` escolhido pelo `code`. A
+propriedade era verdadeira e a área em que ela valia era menor do que a auditoria
+supôs: ela vale para o que o **domínio** diz, e o domínio só fala depois que os
+argumentos foram desserializados no tipo de entrada da tool.
+
+Antes disso há uma fronteira que a 4.2R não olhou. O `Parameters<T>` do SDK
+desserializa `arguments` e, quando falha, monta a recusa assim:
+
+```rust
+ErrorData::invalid_params(format!("failed to deserialize parameters: {error}"), None)
+```
+
+`error` é do `serde_json`, que escreve suas mensagens para quem está depurando um
+payload: `invalid type: string "…", expected u32` carrega a string inteira, e
+`unknown variant \`…\`` carrega a variante inteira. Reproduzido no fio, contra o
+binário real, por pipes reais, com store sintético:
+
+```text
+tool               campo          enviado                  respondido   canário
+noteit_list        limit          string de 300 KiB        307 361 B    sim
+noteit_search      limit          string de 300 KiB        307 361 B    sim
+noteit_tasks_list  state          variante de 300 KiB      307 387 B    sim
+noteit_context     include_tasks  string de 300 KiB        307 367 B    sim
+noteit_edit        clear          string de 300 KiB        307 367 B    sim
+noteit_list        tags           string de 300 KiB        307 368 B    sim
+noteit_create      properties     item de 300 KiB          307 374 B    sim
+(JSON-RPC)         method         nome de 300 KiB          307 261 B    sim
+```
+
+A última linha é a mesma classe uma camada acima: o `on_custom_request` padrão do
+`ServerHandler` responde uma requisição que não roteia com o nome do método que o
+cliente escolheu.
+
+**Por que a auditoria anterior não viu.** Havia um teste enviando exatamente
+esses valores — o `r16` da suíte ofensiva, que percorre `limit` adversariais —
+e ele dizia `let Ok(result) = … else { continue };`. Um valor recusado pelo
+schema era pulado sem ser examinado. O teste que tinha a entrada certa na mão
+tinha decidido que uma recusa não precisava ser olhada.
+
+**Decisão.**
+
+1. **Uma fronteira própria de parâmetros.** `noteit-mcp/src/params.rs` declara
+   `SafeParameters<T>`, e `server.rs` a importa como `Parameters` — que é o nome
+   que a macro `#[tool]` procura para derivar o `inputSchema`. Uma tool escrita
+   do jeito comum recebe a segura sem saber que ela existe; voltar à insegura
+   exige nomeá-la, e o gate recusa o nome.
+2. **O erro é descartado sem ser lido.** O `Err(_)` não liga o erro a nome
+   nenhum: não há o que formatar, registrar ou anexar como `data`. A recusa é
+   uma constante — `INVALID_ARGUMENTS` — igual para todo campo, todo tipo e todo
+   tamanho.
+3. **A recusa é erro de protocolo `-32602`.** É a classificação do próprio MCP:
+   argumento inválido é forma errada de requisição, e uma requisição malformada
+   nunca foi uma chamada. O SDK a roteia para o canal de *tool result*, mas só
+   farejando o prefixo literal `failed to deserialize parameters:` na própria
+   mensagem — um detalhe privado dele, que este servidor deliberadamente não
+   produz. O canal novo também é o contrato mais coerente: um `CallToolResult`
+   deste servidor sempre carrega `structuredContent`, e o antigo não carregava.
+4. **O método não é ecoado.** `on_custom_request` é sobrescrito e responde
+   `-32601` com uma constante, sem nomear o método nem ler os `params`.
+5. **Nenhuma frase deste crate é montada em tempo de execução.** O último
+   `format!` fora do `main.rs` — a falha de serialização da própria resposta —
+   virou constante, e o gate reprova qualquer `format!` novo em
+   `noteit-mcp/src` fora do `main.rs`, que escreve para a saída de erro e nunca
+   para o protocolo.
+
+**A propriedade, e por que é uma só e não cinco.** Corrigir os cinco campos que
+a reprodução encontrou deixaria o sexto para quem o escrevesse. A propriedade é
+de classe: *nenhum texto derivado dos argumentos do cliente chega ao fio*, porque
+existe um único extractor, ele é o único lugar onde um erro de desserialização
+nasce, e ele não olha para esse erro.
+
+**Medido depois.** As mesmas chamadas respondem em 112 e 113 bytes; o método
+desconhecido, em 103. E a forma forte: um argumento de 1 KiB, 64 KiB, 300 KiB e
+1 MiB no mesmo campo recebe **o mesmo número de bytes** — um teto seria
+satisfeito por uma recusa que ecoasse os primeiros quinhentos bytes, e uma
+igualdade não é.
+
+**O que se perde, dito por inteiro.** A recusa não nomeia mais o campo. Nomear um
+campo seria seguro em si — é uma constante do schema —, mas produzi-lo não seria:
+o `serde_json` reporta a falha como frase e não como caminho, então o nome teria
+que ser recuperado analisando a frase que cita a entrada, e um parser sobre essa
+frase é exatamente o mecanismo que esta ADR remove. Os campos obrigatórios estão
+publicados no `inputSchema` de `tools/list`, e as `INSTRUCTIONS` dizem que toda
+mutação exige `expected_revision`. Quatro testes que afirmavam a frase antiga
+foram substituídos pela propriedade mais forte, num auxiliar único do harness:
+código `-32602`, a frase constante, e o arquivo intocado.
+
+**O que não mudou.** Os 16 tools, os schemas publicados — comparados documento a
+documento contra os do tipo embrulhado, para cada uma das 15 entradas —, quais
+requisições são aceitas, a exigência de `expected_revision` no schema e no tipo,
+e o comportamento de `revision_conflict`. Nenhuma dependência nova; `Cargo.lock`
+byte-idêntico.
+
+**O que fica fora do alcance, medido e registrado.** Uma linha sintaticamente
+inválida na entrada padrão não recebe resposta nenhuma — é o transporte do SDK, e
+não vaza nada. `tools/list` responde em 123 977 bytes, que é o catálogo deste
+servidor e não a entrada de ninguém.

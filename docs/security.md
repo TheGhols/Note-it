@@ -114,3 +114,26 @@ Context Engine já tinha tomado na 4.2C, aplicada às outras quatro.
 O que se perde é uma frase que ninguém podia usar para decidir nada. O `code` diz
 o que aconteceu, o `note_id` diz onde olhar, e quem precisa reparar o arquivo
 tem o arquivo.
+
+## E o que recusa um argumento também é uma frase que o servidor escreveu
+
+A regra acima valia para tudo que o **domínio** diz, e o domínio só fala depois
+que os argumentos foram desserializados. Antes disso há outra fronteira, e ela
+tinha a falha inteira: o extractor de parâmetros do SDK respondia uma falha de
+desserialização com a frase do `serde_json`, que cita o valor que não entendeu
+por inteiro. Medido no fio, contra o binário real: um `limit` recebendo
+trezentos kilobytes de string voltava em 307 361 bytes, com o canário. O mesmo
+para uma variante de enum, um booleano, uma lista — e, uma camada acima, para um
+`method` desconhecido de trezentos kilobytes, que o SDK devolvia pelo nome.
+
+Agora os argumentos entram por um extractor deste repositório, que **descarta o
+erro sem lê-lo** e responde uma constante; e o método de uma requisição que não
+roteia é recusado sem ser nomeado. As mesmas chamadas respondem em 112 e 103
+bytes, e um argumento de 1 KiB e outro de 1 MiB recebem exatamente o mesmo
+número de bytes — que é a propriedade, mais forte que um teto: o tamanho da
+recusa não é do cliente.
+
+O que se perde é o nome do campo dentro da recusa. Ele vinha do `serde_json`, e
+o `serde_json` só o dá dentro da frase que repete a entrada. Os campos
+obrigatórios de cada tool estão publicados no `inputSchema`. Consulte a
+ADR-055.
