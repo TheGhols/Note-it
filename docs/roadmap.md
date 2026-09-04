@@ -979,11 +979,44 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         nota, que é recusada. Contexto continua limitado sob store adversarial, sessão de leitura
         deixa o store byte-idêntico, e uma consulta de contexto responde com uma escrita presa
         dentro do Core. Justificativa e limites em ADR-052.
-  - [ ] **4.2R — Auditoria ofensiva do Segundo Cérebro.** Injeção de prompt, envenenamento e
-        estouro de contexto, contexto e revisão obsoletos, symlink, traversal, Markdown hostil,
-        notas enormes, stores grandes, concorrência GUI/IA, escrita não autorizada, vazamento em
-        rede e em log. A Fase 4.2 só é encerrada depois dela.
-- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Reservado. Registrado na 4.2A para não
+  - [x] **4.2R — Auditoria ofensiva do Segundo Cérebro.** Matriz ofensiva completa contra a
+        baseline `c5fe1bb`, em store sintético, com o store real byte-idêntico do começo ao fim.
+        Cinco achados materiais reproduzidos, corrigidos e provados; nenhum aberto.
+
+        **`4.2A-002` fechado.** `noteit_read` não tinha teto: 16 MiB de nota respondiam em
+        34 226 387 bytes, 7,8 s e 153 MB de processo, crescendo linearmente. A resposta agora
+        tem teto de 4 MiB medido no fio — não em `content.len()`, porque o SDK publica o payload
+        duas vezes e o escape JSON expande o corpo em 2,04× (ASCII) a 2,88× (aspas, contrabarras,
+        emoji). Acima do teto, `response_too_large` **sem corpo e sem revision**: entregar parte
+        de uma nota junto da revisão do todo autorizaria gravar sobre o que nunca foi lido, que é
+        a falha que a ADR-051 fechou no conflito. O número é quatro vezes o `MAX_FRAME_BYTES` de
+        1 MiB do protocolo privado, então toda nota que a escrita consegue carregar inteira a
+        leitura consegue publicar inteira. Fronteira medida: o maior sucesso pesa exatamente
+        4 194 304 bytes e um byte a mais de nota vira uma recusa de 533. ADR-053.
+
+        **Quatro achados novos, todos da mesma raiz.** `noteit_list`, `noteit_search` e
+        `noteit_tasks_list` publicavam o **caminho absoluto** do arquivo dentro do `message` de
+        um warning, e `noteit_read` fazia o mesmo numa falha de permissão (`4.2R-001`); as mesmas
+        três publicavam um warning por arquivo danificado sem teto — 2 000 symlinks viravam 920 KB
+        para um `limit: 1` (`4.2R-002`); `noteit_trash_list` não tinha teto nenhum — 20 000 notas
+        descartadas responderam em 9 595 659 bytes (`4.2R-003`); e mensagens públicas repetiam a
+        entrada e o front matter da nota no tamanho em que chegaram, um seletor de 300 000 bytes
+        voltando em 300 098 (`4.2R-004`). A correção é uma: `message` agora é `&'static str`,
+        escolhido pelo `code`, então uma frase montada em tempo de execução não tem como chegar
+        ao fio; um warning é `code` e `note_id` em todas as leituras, com teto de 20; a lixeira
+        tem teto de 100. ADR-054.
+
+        **O que foi atacado e não produziu achado.** Revisão de outra nota, notas de corpo
+        idêntico, revisão citada dentro de uma nota, ABA, contexto obsoleto, candidato movido
+        para a lixeira, JSON-RPC hostil dentro da nota, injeção de frame e de linha no stdout,
+        traversal em todo seletor, symlink pendurado e para diretório, identidade divergente
+        entre nome e front matter, `task_ref` de outra nota, `limit` adversarial, campos de
+        entrada não publicados, YAML com chaves duplicadas e bomba de alias, Unicode combinante,
+        ZWJ, RTL, emoji, CJK, I turco e ß, reinício sobre o mesmo store. Nenhum panic, nenhuma
+        linha espúria no stdout, nenhum canário no stderr, nenhum estado oculto. Suíte em
+        `noteit-mcp/tests/mcp_second_brain_red_team.rs`; catálogo em 16 tools, `mutation_input!`
+        em 8, zero dependência nova, `Cargo.lock` byte-idêntico.
+- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R. Reservado. Registrado na 4.2A para não
       entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por similaridade e um
       eventual índice persistente, se os benchmarks justificarem. Cada um com sua própria análise de
       privacidade, tamanho, invalidação e honestidade de nomenclatura.

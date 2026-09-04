@@ -486,6 +486,34 @@ documentação e o runtime começam a divergir.
 | `warnings` | 20 | `MAX_CONTEXT_WARNINGS` |
 | mensagem de warning | — | **não existe**: um warning é `note_id` + `kind`, ambos de tamanho fixo |
 
+### E o envelope das outras quatro leituras
+
+A tabela acima é do Context Engine, e até a 4.2R era a única superfície com o
+envelope inteiro fechado. A auditoria ofensiva mediu as outras e encontrou três
+coleções sem teto e uma classe de texto sem teto; ADR-054 tem os números. O
+estado agora, medido no fio contra um store construído para o pior caso:
+
+| Superfície | Itens | Texto por item | Warnings | Maior resposta medida |
+| --- | ---: | --- | ---: | ---: |
+| `noteit_context` | 50 | tabela acima | 20 | 49 803 B |
+| `noteit_list` | 100 | rótulo 121, snippet 242, 32 tags de 64, 32 propriedades de 64+512 | 20 | 4 377 153 B |
+| `noteit_search` | 100 | rótulo 121, snippet 242, `matched_text` | 20 | 77 795 B |
+| `noteit_tasks_list` | 100 | texto de tarefa, rótulo da nota | 20 | 35 773 B |
+| `noteit_trash_list` | 100 | rótulo 121, snippet 242 | — | 32 619 B |
+| `noteit_read` | 1 nota | **integral, ou recusa** | — | 4 194 304 B (o teto) |
+
+`noteit_list` é o maior envelope desta superfície e é finito: é o produto de
+tetos que o Core já impõe a tags e propriedades, e chegar perto dele exige um
+store construído de propósito — as notas reais medidas ocupam 1 595 bytes no
+maior caso. Foi deixado como está de propósito, e a razão é assimétrica: uma
+listagem grande demais é recuperável pelo `limit` que o chamador controla, e uma
+leitura recusada tem a alternativa de ler a nota fora do Note-it. Registrado
+como característica medida, não como dívida.
+
+`noteit_read` é a única superfície sem coleção para contar, e por isso é a única
+com teto sobre a própria resposta. Ver ADR-053: integral e com revisão, ou
+recusa sem revisão nenhuma.
+
 `matched_text` precisava de teto próprio, e o motivo não é óbvio: a dobra
 *descarta* marcas combinantes, então `a` seguido de cinquenta mil acentos
 combinantes e um `b` dobra para `ab` e casa com uma consulta de dois

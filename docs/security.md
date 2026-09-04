@@ -70,6 +70,32 @@ Há deliberadamente exatamente uma opinião no aplicativo sobre o que é uma URL
 
 Nada é buscado. Nenhum título, nenhum favicon, nenhum OpenGraph, nenhuma visualização e nenhum cliente HTTP foram adicionados: a área de transferência já contém tudo o que o recurso precisa, portanto, o recurso não adiciona nenhuma superfície de rede.
 
+## Uma resposta MCP é limitada, e uma leitura é integral ou é recusada
+
+O servidor MCP publica notas para um agente, e um agente é um programa com uma
+janela de contexto e um host do outro lado. Duas propriedades separadas
+protegem esse fio, e elas se protegem uma à outra.
+
+**Toda resposta tem envelope finito.** Cada listagem tem um teto de itens e cada
+texto por item tem um teto de caracteres — 100 resultados, 50 candidatos, 240 de
+snippet, 120 de rótulo, 100 entradas de lixeira, 20 warnings. `noteit_read` é a
+única superfície sem nada dessa forma para contar, porque devolve uma nota
+inteira, e por isso tem um teto sobre a própria resposta: 4 MiB do
+`CallToolResult` serializado, medido no fio e não em `content.len()`. O payload
+é publicado duas vezes pelo SDK e o escape JSON expande o que a nota contém —
+2,04× o corpo em ASCII e 2,88× em texto de aspas, contrabarras e emoji, medido —
+então contar bytes crus subestimaria a resposta em mais do que o dobro.
+
+**Uma leitura entrega o estado inteiro ou não entrega revision nenhuma.** A
+`revision` que `noteit_read` publica autoriza a próxima escrita, e autoriza uma
+escrita sobre *o estado que ela nomeia*. Devolver parte de uma nota junto da
+revision do todo daria a um agente permissão para gravar sobre um texto que ele
+nunca viu. Então acima do teto a recusa é `response_too_large` e não carrega
+corpo, revision, metadados, caminho nem pedaço de conteúdo: não há estado
+parcial que possa ser confundido com um inteiro, e não há token para gravar a
+partir dele. Não existe leitura paginada — seria protocolo novo, e um protocolo
+novo é onde essa propriedade voltaria a ser opcional.
+
 ## Uma mensagem pública é uma frase que o servidor escreveu
 
 Todo `message` que o MCP publica é uma constante escolhida pelo `code`, e isso é
