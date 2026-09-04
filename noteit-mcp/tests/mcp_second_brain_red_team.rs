@@ -33,6 +33,12 @@
 //! 4.2R-003  noteit_trash_list had no ceiling at all
 //! 4.2R-004  public messages echoed arguments and note front matter in full
 //! ```
+//!
+//! And what Phase 4.2R.R1 found afterwards, one layer earlier than any of
+//! them: the argument *deserialiser* echoed what it refused, so 300 KiB of
+//! wrong-typed argument came back as 300 KiB. Its matrix is
+//! `mcp_argument_boundary.rs`; what belongs here is R16, which is the test
+//! that had been stepping over exactly those refusals.
 
 mod support;
 
@@ -883,8 +889,41 @@ fn r15_every_read_surface_answers_within_a_finite_envelope() {
     assert!(wire < 128 * 1024, "the trash answered {wire} bytes");
 }
 
+/// A protocol-level refusal, held to the same standard as any other answer.
+///
+/// Short, and free of anything the request carried. Both halves matter: the
+/// second is the property `4.2R-004` is about, and the first is what makes a
+/// future regression visible even if the echoed value happened to be small.
+fn assert_refusal_says_nothing_of_its_own(tool: &str, sent: &Value, refusal: &Value) {
+    let rendered = refusal.to_string();
+    assert!(
+        rendered.len() < 512,
+        "{tool} refused `{sent}` in {} bytes: {rendered}",
+        rendered.len()
+    );
+    let message = refusal["message"].as_str().unwrap_or_default();
+    assert_eq!(
+        message,
+        noteit_mcp::params::INVALID_ARGUMENTS,
+        "{tool} refused `{sent}` with a sentence this server did not write"
+    );
+}
+
 /// R16. A `limit` nobody meant kindly changes how much comes back and never how
-/// much is allocated.
+/// much is allocated — and a refusal is looked at rather than stepped over.
+///
+/// **This test hid `4.2R-004`'s reopening.** Until Phase 4.2R.R1 the loops
+/// below said `let Ok(result) = … else { continue };`: a value the schema
+/// refused was skipped, unexamined. That was where the leak lived. The
+/// deserialiser's refusal quoted the value it had refused, so `"100"` came
+/// back as `"100"` and three hundred kilobytes came back as three hundred
+/// kilobytes — and the one test that sent hostile `limit` values had already
+/// decided that a refusal needed no looking at.
+///
+/// So a refusal is now a case with assertions of its own: it is small, and it
+/// says nothing the caller sent. The full matrix lives in
+/// `mcp_argument_boundary.rs`; what is kept here is the habit — a red team
+/// that steps over an answer is not testing that answer.
 #[test]
 fn r16_an_adversarial_limit_is_clamped_or_refused_and_never_honoured() {
     let sandbox = Sandbox::new();
@@ -913,9 +952,14 @@ fn r16_an_adversarial_limit_is_clamped_or_refused_and_never_honoured() {
                 arguments["query"] = json!("agulha");
             }
             let sent = json!({ "name": tool, "arguments": arguments });
-            let Ok(result) = client.request("tools/call", sent.clone()) else {
-                // Refused by the schema, which is one of the two right answers.
-                continue;
+            let result = match client.request("tools/call", sent.clone()) {
+                Ok(result) => result,
+                // Refused by the schema, which is one of the two right
+                // answers — and the refusal is measured rather than skipped.
+                Err(refusal) => {
+                    assert_refusal_says_nothing_of_its_own(tool, limit, &refusal);
+                    continue;
+                }
             };
             let answer = ToolAnswer::from(result);
             if answer.is_error() {
@@ -931,11 +975,15 @@ fn r16_an_adversarial_limit_is_clamped_or_refused_and_never_honoured() {
 
     for limit in &hostile {
         let arguments = json!({ "query": "agulha", "limit": limit });
-        let Ok(result) = client.request(
+        let result = match client.request(
             "tools/call",
             json!({ "name": "noteit_context", "arguments": arguments }),
-        ) else {
-            continue;
+        ) {
+            Ok(result) => result,
+            Err(refusal) => {
+                assert_refusal_says_nothing_of_its_own("noteit_context", limit, &refusal);
+                continue;
+            }
         };
         let answer = ToolAnswer::from(result);
         if answer.is_error() {
