@@ -38,6 +38,7 @@
 //! tool that changes an existing note **requires** the revision the change was
 //! decided from. Not "accepts"; requires. See [`contract`].
 
+pub mod budget;
 pub mod contract;
 pub mod domain;
 pub mod schema;

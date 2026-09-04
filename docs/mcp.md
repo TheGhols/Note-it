@@ -146,7 +146,7 @@ determinística.
 | --- | --- | --- |
 | `noteit_context` | `query?`, `tags?`, `properties?`, `include_tasks?`, `limit?` | `candidates[]`, contadores, `warnings[]` |
 | `noteit_list` | `tags?`, `properties?`, `limit?` | `notes[]`, `count`, `warnings[]` |
-| `noteit_read` | `note_id` | `note` (com `revision`), `warnings[]` |
+| `noteit_read` | `note_id` | `note` (com `revision`), `warnings[]` — ou `response_too_large` |
 | `noteit_search` | `query`, `tags?`, `properties?`, `limit?` | `query`, `results[]`, `count` |
 | `noteit_tasks_list` | `state?`, `tags?`, `properties?`, `limit?` | `tasks[]`, `count` |
 | `noteit_trash_list` | — | `entries[]`, `count` |
@@ -316,6 +316,35 @@ arquivo danificado é um aviso, nunca um store que não responde.
 
 Uma listagem **não** publica `revision`. Um resumo não é uma base sobre a qual
 gravar.
+
+#### Leitura integral ou recusa
+
+`noteit_read` é a única tool que devolve uma nota inteira, e a `revision` que
+vai junto autoriza a próxima escrita. As duas viajam juntas ou nenhuma viaja:
+
+```text
+cabe no teto      →  nota inteira + revision
+não cabe          →  status: error, code: response_too_large
+                     sem corpo, sem revision, sem metadados, sem caminho
+```
+
+Não existe leitura parcial. Uma resposta com metade da nota e a `revision` do
+estado inteiro daria ao agente permissão para gravar sobre o que ele nunca viu
+— exatamente a falha que a 4.2D fechou no caminho do conflito, chegando pelo
+caminho da leitura.
+
+O teto é de **4 MiB** e é medido no fio, não no `content.len()`: o payload é
+publicado duas vezes pelo SDK (`structuredContent` e o bloco de texto
+equivalente) e o escape JSON expande o que a nota contém. Medido: 2,04× o corpo
+em ASCII simples e 2,88× em texto denso de aspas, contrabarras e emoji. Quatro
+megabytes são quatro vezes o `MAX_FRAME_BYTES` de 1 MiB que o protocolo privado
+já impõe a uma operação de escrita, então a propriedade é:
+
+> uma nota cujo corpo inteiro a escrita consegue carregar é uma nota que a
+> leitura consegue publicar.
+
+Ver `noteit-mcp/src/budget.rs` e ADR-053. Não há `offset`, `range`, `cursor`
+nem paginação: isso seria protocolo novo, e a 4.2R resolve limite, não recurso.
 
 ---
 
@@ -559,6 +588,7 @@ decidir o que fazer.
 | `persistence` | `not_committed` | a gravação foi tentada e não aconteceu; o arquivo está intacto |
 | `store_unavailable` | `not_committed` | o store não pôde ser lido |
 | `read_failed` | — | uma nota ou uma listagem não pôde ser lida |
+| `response_too_large` | — | a nota existe e não cabe numa resposta; **sem corpo e sem revision** |
 | `indeterminate` | `unknown` | a resposta se perdeu — §7 |
 
 `authority_unavailable` merece uma frase: quando o store está seguro por outra

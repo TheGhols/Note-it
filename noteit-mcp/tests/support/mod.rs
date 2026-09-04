@@ -233,8 +233,9 @@ pub struct McpClient {
     /// able to tell those apart. A thread and a channel make every read
     /// bounded by [`ANSWER_TIMEOUT`].
     lines: Receiver<Option<String>>,
-    /// Answers read off the channel while looking for a different id.
-    held: Vec<Value>,
+    /// Answers read off the channel while looking for a different id, each
+    /// beside the number of bytes its line occupied on the pipe.
+    held: Vec<(usize, Value)>,
     next_id: i64,
 }
 
@@ -322,20 +323,31 @@ impl McpClient {
     /// Waits for the answer belonging to `id`, keeping any other answer that
     /// arrives first.
     pub fn await_response(&mut self, id: i64) -> Result<Value, Value> {
+        self.await_response_on_the_wire(id).1
+    }
+
+    /// The same, and how many bytes the answer occupied on the pipe.
+    ///
+    /// The count is the JSON-RPC message without its newline, which is what a
+    /// host reads before it parses anything. The suite that bounds a tool
+    /// answer needs the number the operating system moved, not a number
+    /// recomputed from a parsed value and hoped to agree.
+    pub fn await_response_on_the_wire(&mut self, id: i64) -> (usize, Result<Value, Value>) {
         if let Some(index) = self
             .held
             .iter()
-            .position(|held| held.get("id").and_then(Value::as_i64) == Some(id))
+            .position(|(_, held)| held.get("id").and_then(Value::as_i64) == Some(id))
         {
-            return Self::split(self.held.remove(index));
+            let (bytes, message) = self.held.remove(index);
+            return (bytes, Self::split(message));
         }
         loop {
-            let message = self.read_message();
+            let (bytes, message) = self.read_message();
             // Notifications and server-initiated requests are not this
             // answer; skipping them is what makes the correlation real.
             match message.get("id").and_then(Value::as_i64) {
-                Some(answered) if answered == id => return Self::split(message),
-                Some(_) => self.held.push(message),
+                Some(answered) if answered == id => return (bytes, Self::split(message)),
+                Some(_) => self.held.push((bytes, message)),
                 None => continue,
             }
         }
@@ -348,12 +360,12 @@ impl McpClient {
     /// id could not make it.
     pub fn next_response(&mut self) -> (i64, Result<Value, Value>) {
         if !self.held.is_empty() {
-            let message = self.held.remove(0);
+            let (_, message) = self.held.remove(0);
             let id = message.get("id").and_then(Value::as_i64).expect("id");
             return (id, Self::split(message));
         }
         loop {
-            let message = self.read_message();
+            let (_, message) = self.read_message();
             if let Some(id) = message.get("id").and_then(Value::as_i64) {
                 return (id, Self::split(message));
             }
@@ -419,15 +431,25 @@ impl McpClient {
 
     /// One tool call. Answers with the `CallToolResult`, refusal included.
     pub fn call(&mut self, name: &str, arguments: Value) -> ToolAnswer {
-        let result = self
-            .request(
-                "tools/call",
-                json!({ "name": name, "arguments": arguments }),
-            )
-            .unwrap_or_else(|error| {
-                panic!("tools/call {name} failed at the protocol level: {error}")
-            });
-        ToolAnswer::from(result)
+        self.call_on_the_wire(name, arguments).0
+    }
+
+    /// One tool call, and the bytes its answer occupied on the pipe.
+    ///
+    /// `bytes` is the whole JSON-RPC message: the `result` object plus the
+    /// `{"jsonrpc":"2.0","id":N,"result":}` the host itself asked for. The
+    /// budget in `noteit_mcp::budget` bounds the first of those, so a test
+    /// comparing against it works from [`Self::result_bytes`] and reports this.
+    pub fn call_on_the_wire(&mut self, name: &str, arguments: Value) -> (ToolAnswer, usize) {
+        let id = self.send_request(
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+        );
+        let (bytes, result) = self.await_response_on_the_wire(id);
+        let result = result.unwrap_or_else(|error| {
+            panic!("tools/call {name} failed at the protocol level: {error}")
+        });
+        (ToolAnswer::from(result), bytes)
     }
 
     /// A tool call that is expected to be refused by the protocol itself —
@@ -455,7 +477,7 @@ impl McpClient {
     /// A line that is not is the failure this is looking for: anything at all
     /// printed to standard output corrupts the stream, and the test that
     /// notices must be the one that names it.
-    fn read_message(&mut self) -> Value {
+    fn read_message(&mut self) -> (usize, Value) {
         let line = match self.lines.recv_timeout(ANSWER_TIMEOUT) {
             Ok(Some(line)) => line,
             Ok(None) => panic!("the server closed its output unexpectedly"),
@@ -467,9 +489,10 @@ impl McpClient {
                 panic!("the server closed its output unexpectedly")
             }
         };
-        serde_json::from_str(&line).unwrap_or_else(|error| {
+        let message = serde_json::from_str(&line).unwrap_or_else(|error| {
             panic!("a line on stdout was not a JSON-RPC message ({error}): {line:?}")
-        })
+        });
+        (line.len(), message)
     }
 
     /// Closes standard input and collects what the process said and returned.
@@ -478,7 +501,7 @@ impl McpClient {
         let mut remaining = Vec::new();
         // Everything already taken off the pipe while looking for some other
         // answer counts as trailing output too.
-        for held in self.held.drain(..) {
+        for (_, held) in self.held.drain(..) {
             remaining.push(held.to_string());
         }
         while let Ok(Some(line)) = self.lines.recv_timeout(ANSWER_TIMEOUT) {
@@ -549,6 +572,16 @@ impl From<Value> for ToolAnswer {
 }
 
 impl ToolAnswer {
+    /// The bytes this `CallToolResult` serialises to.
+    ///
+    /// What `noteit_mcp::budget::MAX_READ_RESPONSE_BYTES` bounds, measured the
+    /// way the wire measures it: the value came off the pipe, and putting it
+    /// back into JSON gives the same length the server wrote, whatever order
+    /// the keys ended up in.
+    pub fn result_bytes(&self) -> usize {
+        serde_json::to_string(&self.raw).expect("serialise").len()
+    }
+
     pub fn is_error(&self) -> bool {
         self.raw
             .get("isError")

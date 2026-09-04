@@ -1796,7 +1796,7 @@ descartáveis:
 - **`noteit_read` continua sem teto de resposta** (`4.2A-002`). Os testes usam
   nota grande e mostram que o *contexto* permanece limitado, mas uma leitura
   integral de uma nota enorme continua produzindo uma resposta enorme. Aberto,
-  e é da 4.2R.
+  e é da 4.2R. *(Fechado na 4.2R: reproduzido, medido e limitado — ADR-053.)*
 - **O Context Engine descreve o store persistido**, não a janela: texto não
   salvo não aparece num candidato. É a arquitetura como foi construída — o
   motor é somente leitura e não participa do protocolo de controle — e agora
@@ -1816,3 +1816,94 @@ testes e documentação. Benchmarks reexecutados e alinhados ao histórico
 (≈7 ms com 100 notas, ≈77 ms com 1 000, ≈710 ms com 10 000, sob carga de
 máquina alta), sem regressão material. Catálogo em 16 tools, `mutation_input!`
 em 8, zero dependência nova, `Cargo.lock` byte-idêntico.
+
+---
+
+## ADR-053: Uma leitura entrega o estado inteiro ou não entrega revisão nenhuma
+
+**Contexto.** A validação da 4.2E deixou um achado aberto e nomeado: `4.2A-002`,
+`noteit_read` sem teto de resposta. A auditoria ofensiva da 4.2R reproduziu-o
+contra a baseline `c5fe1bb`, em store isolado, antes de tocar em produção:
+
+| corpo da nota | JSON-RPC no fio | latência | RSS de pico |
+| ---: | ---: | ---: | ---: |
+| 64 KiB | 134 558 B | 33 ms | — |
+| 256 KiB | 535 640 B | 119 ms | — |
+| 1 MiB | 2 139 962 B | 442 ms | — |
+| 4 MiB | 8 557 247 B | 1 914 ms | — |
+| 8 MiB | 17 113 627 B | 3 925 ms | — |
+| 16 MiB | 34 226 387 B | 7 811 ms | 153 MB |
+
+Crescimento linear, sem teto, com um multiplicador de **2,04×** o corpo. E o
+mesmo corpo em texto denso de aspas, contrabarras, tabulações e emoji: **2,88×**.
+
+**O multiplicador é a primeira metade da decisão.** Ele não vem do escape apenas.
+Um `CallToolResult` com conteúdo estruturado publica o payload **duas vezes** —
+uma como `structuredContent`, outra como um bloco de texto com o mesmo JSON
+dentro de uma string, para um host anterior ao conteúdo estruturado. A segunda
+cópia é a primeira escapada de novo. Logo:
+
+```text
+resposta = payload + escape(payload) + 76 bytes de envelope
+```
+
+Exato, verificado contra o fio, e a razão pela qual `content.len() <= N` estaria
+errado por mais do que o dobro. `noteit-mcp/src/budget.rs` mede serializando o
+payload através de um escritor que conta e descarta: uma passada, sem alocar a
+resposta que vai ser recusada.
+
+**A segunda metade é o que não se pode fazer.** A saída óbvia — devolver o
+começo da nota e a revisão — é proibida:
+
+```text
+agente vê parte da nota
+        ↓
+recebe a revision do estado inteiro
+        ↓
+grava sobre um conteúdo que nunca leu
+```
+
+Isso é exatamente a falha que a ADR-051 fechou no caminho do conflito, chegando
+pelo caminho da leitura. Então:
+
+> Se `noteit_read` não pode entregar integralmente o estado que a revisão nomeia,
+> ele não pode entregar aquela revisão.
+
+**Decisão.** `MAX_READ_RESPONSE_BYTES = 4 MiB`, sobre o `CallToolResult`
+serializado. Acima disso, `response_too_large`: sem corpo, sem revisão, sem
+rótulo, sem carimbos, sem caminho, sem pedaço de conteúdo. Não há `offset`,
+`range`, `cursor` nem paginação — isso seria protocolo novo, e a 4.2R resolve
+limite, não recurso.
+
+**Por que quatro megabytes.** Não por gosto. O único teto que já existia sobre
+este mesmo dado é `control::MAX_FRAME_BYTES`, 1 MiB: quando uma janela do
+Note-it segura o store, toda escrita viaja até ela como um quadro, então um
+megabyte é o maior corpo inteiro que o caminho de escrita consegue carregar.
+Uma leitura que recusasse abaixo disso publicaria notas que a própria aplicação
+não consegue percorrer de volta. Com a expansão medida coberta, quatro
+megabytes preservam a propriedade:
+
+> uma nota cujo corpo inteiro a escrita consegue carregar é uma nota que a
+> leitura consegue publicar.
+
+Verificado nos dois sentidos: 1 MiB de ASCII responde em 2 140 072 B, e 1 MiB de
+texto escapado responde em 3 227 203 B — ambos publicados. A fronteira medida no
+fio: o maior corpo publicado é de 2 055 570 bytes, cujo `CallToolResult` pesa
+**exatamente** 4 194 304 bytes; um byte a mais de nota e a resposta é uma recusa
+de 533 bytes.
+
+**Para escala.** Uma leitura comum responde em cerca de 800 bytes. A maior nota
+que qualquer suíte deste repositório constrói — 400 000 caracteres — responde em
+836 560. O store da máquina onde isto foi escrito tem 154 notas, e a maior
+ocupa 1 595 bytes.
+
+**O teto é do adaptador, não do Core.** O Core continua capaz de ler uma nota de
+qualquer tamanho: a GUI, o CLI e a pesquisa não ganharam limite nenhum. O MCP é
+quem decide se consegue publicá-la inteira. Com a medição feita antes de
+construir a resposta, recusar 16 MiB custa uma passada sobre 16 MiB em vez dos
+34 MB de resposta e 153 MB de processo que a reprodução mediu.
+
+**Consequência honesta.** Uma nota deliberadamente feita de caracteres de
+controle expande até treze vezes e é recusada mais cedo. É a consequência de
+limitar o fio em vez do arquivo, e é a correta: o número que importa para quem
+recebe a resposta é o número de bytes que ele recebe.

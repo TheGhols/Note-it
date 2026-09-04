@@ -31,6 +31,7 @@
 //! added later cannot reach the store unconditionally by forgetting something
 //! — it cannot be written at all.
 
+use crate::budget;
 use crate::contract::{
     CommitState, ContextCandidateView, ContextInput, ContextReason, ContextResult, ContextTaskView,
     ContextWarningView, ErrorCode, ListResult, NoteSummaryView, NoteView, Property, ReadResult,
@@ -345,6 +346,27 @@ pub fn list(
     }
 }
 
+/// Reads one note in full, or refuses to read it at all.
+///
+/// ## Full read or refusal, and never anything between
+///
+/// This is the only tool that answers with a whole note and the `revision` that
+/// names it, and the two travel together for a reason: the revision is what
+/// authorises the next write, and it authorises a write over *the state it
+/// names*. An answer carrying part of a note and the revision of the whole of
+/// it would hand a caller permission to overwrite text it had never seen — the
+/// precise failure Phase 4.2D closed on the conflict path, arriving instead
+/// through the read path.
+///
+/// So when the answer will not fit, nothing goes out but the code. No body, no
+/// revision, no label, no tags, no timestamps: there is no partial state here
+/// to be mistaken for a whole one, and no token to write from. See ADR-053.
+///
+/// The size is measured before the answer is built, not after — see
+/// [`crate::budget`]. Sixteen megabytes of note cost one pass over sixteen
+/// megabytes to refuse, instead of the thirty-four-megabyte answer and the
+/// hundred and fifty megabytes of process the measurement found before this
+/// existed.
 pub fn read(off: &OffThread, store: &Store, selector: &str) -> ReadResult {
     let core = store.reader(off);
     let note_id = match core.resolve_note_id(selector) {
@@ -367,12 +389,28 @@ pub fn read(off: &OffThread, store: &Store, selector: &str) -> ReadResult {
         Err(detail) => return ReadResult::refusal(ErrorCode::ReadFailed, detail),
     };
 
-    ReadResult {
+    let answer = ReadResult {
         status: Status::Ok,
         note: Some(note_view(&note_id, &document, &revision)),
         warnings: Vec::new(),
         code: None,
         message: None,
+    };
+
+    // Weighed as the host will receive it: the payload, the copy of it the
+    // SDK publishes as a text block, and the envelope around both. A note that
+    // is mostly quotation marks weighs more than its bytes, and this is where
+    // that is counted rather than assumed.
+    match budget::result_bytes(&answer) {
+        Ok(bytes) if budget::within_read_budget(bytes) => answer,
+        Ok(_) => ReadResult::refusal(
+            ErrorCode::ResponseTooLarge,
+            "reading this note in full would exceed the answer size this server publishes"
+                .to_string(),
+        ),
+        // A note that will not serialise is the same failure as one that will
+        // not hash: there is no version to name it by, so there is no answer.
+        Err(error) => ReadResult::refusal(ErrorCode::ReadFailed, error.to_string()),
     }
 }
 

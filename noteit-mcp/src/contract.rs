@@ -133,6 +133,15 @@ pub enum ErrorCode {
     ReadFailed,
     /// The request went out and the answer was lost. See [`Status::Indeterminate`].
     Indeterminate,
+    /// The note exists and reading it in full would produce an answer larger
+    /// than this server will publish.
+    ///
+    /// **Nothing partial is sent.** No body, no revision, no metadata — see
+    /// [`crate::budget`] and ADR-053. A read that cannot deliver the whole
+    /// state cannot deliver the revision that names it, because a caller
+    /// holding a revision for content it has not seen is exactly the
+    /// unconditional write this server exists to refuse.
+    ResponseTooLarge,
 }
 
 /// A non-fatal problem met while reading, reported beside the results.

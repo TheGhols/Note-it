@@ -260,6 +260,13 @@ impl NoteItMcpServer {
     /// The revision is the version this answer describes. To change the note
     /// on the strength of what you just read, send that exact revision back as
     /// `expected_revision`.
+    ///
+    /// A note whose full answer would be larger than this server publishes is
+    /// refused with `response_too_large`, and the refusal carries **no body and
+    /// no revision**: a revision names a state, and one handed out beside part
+    /// of a note would authorise writing over the part you never saw. There is
+    /// no way to ask for a piece of a note; read it outside Note-it, or make it
+    /// smaller.
     #[tool(
         name = "noteit_read",
         annotations(title = "Read a note", read_only_hint = true),
