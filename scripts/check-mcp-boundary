@@ -231,7 +231,13 @@ offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
 #     ban on `noteit_core` — `server.rs` legitimately builds a `NoteMutation`
 #     and passes a `Uuid`, and those touch no file. It names the handles and
 #     the calls that reach the store.
-io_surface='\b(NoteItCore|StorageManager|open_read_only(_at)?|from_storage|authority::|perform_at|read_note|list_summaries|list_notes(_by_recency)?(_with_warnings)?|search_notes(_filtered)?|list_tasks|list_trash|metadata_catalog(_with_warnings)?|study_state|resolve_note_id|resolve_trash_id|save_note_atomic|move_note_to_trash|ensure_directories|context::retrieve|write::execute|commit_addressed)\b'
+#
+#     The module paths are listed as well as the call names, because a `use`
+#     that renames one would otherwise walk straight past a rule that only knew
+#     the original spelling — `use noteit_core::context as engine;` and then
+#     `engine::retrieve(...)`. Naming the module catches the import itself,
+#     whatever the caller decides to call it afterwards.
+io_surface='(noteit_core *:: *(context|authority|storage)|\b(NoteItCore|StorageManager|open_read_only(_at)?|from_storage|authority::|perform_at|read_note|list_summaries|list_notes(_by_recency)?(_with_warnings)?|search_notes(_filtered)?|list_tasks|list_trash|metadata_catalog(_with_warnings)?|study_state|resolve_note_id|resolve_trash_id|save_note_atomic|move_note_to_trash|ensure_directories|context::retrieve|write::execute|commit_addressed)\b)'
 
 outside_the_adapter() {
   find "$sources" -name '*.rs' ! -name 'domain.rs' -print0 \

@@ -884,9 +884,44 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           Também corrigido: "uma leitura por nota" era literal demais. A afirmação exata é uma
           leitura **autoritativa** do `NoteDocument` por candidato — a varredura que enumera as
           notas roda antes e não compõe o candidato. D-27 inalterada. Justificativa na ADR-049.1.
-  - [ ] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, tipada, com
-        `outputSchema`, proveniência, orçamento e truncamento explícito. Sem caminho, sem shell, sem
-        rede, sem escrita.
+    - [x] **4.2B.R1.1 — Fechamento do canal de erro.** A última fresta livre da superfície de
+          contexto. `ContextError::StoreUnavailable` carregava a mensagem do storage, que nomeia o
+          diretório — medido, o `Display` imprimia o caminho absoluto do store. Fechado pela forma
+          do tipo e não por saneamento: a variante deixou de ter payload e o `Display` é uma frase
+          fixa. `QueryTooLong` mantém `limit` e `actual`, que são inteiros e não ecoam a consulta,
+          e as duas recusas continuam distinguíveis. Provado com um store cujo caminho de notas é
+          um arquivo regular — reproduzível em qualquer lugar, sem privilégio nenhum.
+          Justificativa na ADR-049.2.
+  - [x] **4.2C — Superfície MCP de conhecimento.** A tool `noteit_context`, publicada. O catálogo
+        passou de 15 para 16 e essa é a única adição; `SCHEMA_VERSION` continua em 1, porque ele
+        versiona o documento da interface de máquina da CLI e não o catálogo MCP — verificado antes
+        de não ser tocado.
+
+        Uma fase de tradução, e a disciplina é essa: `contract.rs` declara tipos MCP próprios,
+        `domain.rs` copia campo a campo, e nada é recalculado. O adapter não lê nota, não ordena,
+        não constrói snippet, não parseia tarefa e não recalcula truncamento — todo contador vem do
+        Core, porque um número recomputado depois do corte só poderia ser um palpite sobre o que já
+        foi descartado.
+
+        `tags` e `properties` entram como **sinais** e o schema diz isso, em vez de reusar a
+        redação do `FilterInput` — "toda tag que a nota precisa ter" seria um schema mentindo sobre
+        o comportamento. As tarefas ficam **dentro** do candidato, e não numa lista global: o Core
+        já as modela assim, o truncamento é por candidato, e fica evidente de qual nota cada
+        conjunto nasceu.
+
+        O que a tool nunca devolve: corpo de nota, revision de tipo algum, caminho, mensagem livre
+        e score. Warning de contexto é `code` + `note_id`; recusa é `status` + `code`. Provado por
+        varredura recursiva dos nomes de propriedade dos dois schemas — dos nomes, não das
+        descrições, que mencionam `revision` de propósito para dizer que não existe.
+
+        O caminho é `handler → offload → domain → context::retrieve`, e a barreira da R1 provou
+        seu valor aqui: duas violações injetadas — a chamada direta e a mesma coisa escondida atrás
+        de `use noteit_core::context as engine` — e a segunda **passou**, então a regra foi
+        ampliada para nomear o módulo além da chamada. As duas reprovam agora.
+
+        Concorrência provada para a tool nova nas duas direções: um `ping` ultrapassa uma consulta
+        de contexto varrendo o store, e uma consulta de contexto responde enquanto uma escrita está
+        presa dentro do Core.
   - [ ] **4.2D — Contrato do agente.** Como uma IA deve usar o Note-it: ler antes de escrever,
         minimizar contexto, tratar conteúdo como dado não confiável, respeitar `revision_conflict` e
         `indeterminate`. Neutro em relação ao provedor.

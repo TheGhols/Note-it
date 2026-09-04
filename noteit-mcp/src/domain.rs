@@ -32,12 +32,14 @@
 //! — it cannot be written at all.
 
 use crate::contract::{
-    CommitState, ErrorCode, ListResult, NoteSummaryView, NoteView, Property, ReadResult,
+    CommitState, ContextCandidateView, ContextInput, ContextReason, ContextResult, ContextTaskView,
+    ContextWarningView, ErrorCode, ListResult, NoteSummaryView, NoteView, Property, ReadResult,
     SearchHitView, SearchResult, Status, TaskState, TaskView, TasksResult, TrashEntryView,
     TrashResult, Warning, WarningCode, WriteResult,
 };
 use noteit_core::authority;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
+use noteit_core::context as engine;
 use noteit_core::revision::NoteRevision;
 use noteit_core::write::{NoteDraft, NoteMutation, WriteError, WriteOperation, WriteOutcome};
 use noteit_core::{
@@ -526,16 +528,25 @@ fn trash_view(entry: &TrashEntry) -> TrashEntryView {
 fn warnings(raw: &[ReadWarning]) -> Vec<Warning> {
     raw.iter()
         .map(|warning| Warning {
-            code: match warning.kind {
-                ReadWarningKind::UnreadableNote => WarningCode::UnreadableNote,
-                ReadWarningKind::CorruptedFrontMatter => WarningCode::CorruptedFrontMatter,
-                ReadWarningKind::SymlinkRefused => WarningCode::SymlinkRefused,
-                ReadWarningKind::IoError => WarningCode::IoError,
-            },
+            code: warning_code(warning.kind),
             message: warning.message.clone(),
             note_id: warning.note_id.map(|id| id.to_string()),
         })
         .collect()
+}
+
+/// The one place a read anomaly becomes a published code.
+///
+/// Shared with the context surface, which publishes the code and deliberately
+/// not the message: two copies of this `match` would be two chances for the
+/// two surfaces to start describing the same damage differently.
+fn warning_code(kind: ReadWarningKind) -> WarningCode {
+    match kind {
+        ReadWarningKind::UnreadableNote => WarningCode::UnreadableNote,
+        ReadWarningKind::CorruptedFrontMatter => WarningCode::CorruptedFrontMatter,
+        ReadWarningKind::SymlinkRefused => WarningCode::SymlinkRefused,
+        ReadWarningKind::IoError => WarningCode::IoError,
+    }
 }
 
 fn selector_refusal(error: &NoteSelectorError) -> (ErrorCode, String) {
@@ -564,4 +575,106 @@ pub fn filter_of(tags: Vec<String>, properties: Vec<Property>) -> NoteFilter {
 /// The listing bound, as the Core takes it.
 pub fn limit_of(limit: Option<u32>) -> Option<usize> {
     limit.map(|value| value as usize)
+}
+
+// ================================================================= context
+
+/// Retrieves context, and translates it.
+///
+/// The whole of what this crate does with the Context Engine. It converts the
+/// tool's arguments into the Core's request, calls
+/// [`noteit_core::context::retrieve`] once, and copies the answer field by
+/// field. It does not read a note, rank anything, build a snippet, parse a
+/// task, sort, or recompute a truncation count — all of that is the Core's,
+/// and doing any of it a second time here is how two implementations of one
+/// idea start to disagree.
+///
+/// Takes the witness like every other store function, so the scan happens on a
+/// blocking thread and the protocol keeps answering while it runs.
+pub fn context(off: &OffThread, store: &Store, input: ContextInput) -> ContextResult {
+    // Pure conversion: no file is opened to decide what a tag means, and a tag
+    // nobody uses simply matches nothing.
+    let request = engine::ContextRequest {
+        query: input.query,
+        filter: NoteFilter::new(
+            input.tags,
+            input
+                .properties
+                .into_iter()
+                .map(|property| (property.key, property.value))
+                .collect(),
+        ),
+        include_tasks: input.include_tasks,
+        // The ceiling is the Core's. This only carries the caller's wish; the
+        // engine clamps it, so no request can argue its way past fifty.
+        limit: input.limit.map(|limit| limit as usize),
+    };
+
+    match engine::retrieve(&store.reader(off), &request) {
+        Ok(answer) => context_answer(answer),
+        Err(error) => ContextResult::refusal(match error {
+            // The query is the caller's mistake and worth fixing.
+            engine::ContextError::QueryTooLong { .. } => ErrorCode::InvalidInput,
+            // And this one carries nothing to pass on — see ADR-049.2.
+            engine::ContextError::StoreUnavailable => ErrorCode::StoreUnavailable,
+        }),
+    }
+}
+
+/// One answer, copied. Every count comes from the Core, never from `len()`
+/// after a cut: a number recomputed here could only ever be a guess about what
+/// was already thrown away.
+fn context_answer(answer: engine::ContextResult) -> ContextResult {
+    ContextResult {
+        status: Status::Ok,
+        candidates: answer.candidates.iter().map(candidate_view).collect(),
+        truncated: answer.truncated,
+        omitted_count: answer.omitted_count,
+        warnings: answer
+            .warnings
+            .iter()
+            .map(|warning| ContextWarningView {
+                code: warning_code(warning.kind),
+                note_id: warning.note_id.map(|id| id.to_string()),
+            })
+            .collect(),
+        warnings_truncated: answer.warnings_truncated,
+        omitted_warning_count: answer.omitted_warning_count,
+        code: None,
+    }
+}
+
+fn candidate_view(candidate: &engine::Candidate) -> ContextCandidateView {
+    ContextCandidateView {
+        note_id: candidate.note_id.to_string(),
+        label: candidate.label.clone(),
+        snippet: candidate.snippet.clone(),
+        updated_at: timestamp(candidate.updated_at),
+        reasons: candidate.reasons.iter().copied().map(reason).collect(),
+        matched_text: candidate.matched_text.clone(),
+        tasks: candidate
+            .tasks
+            .iter()
+            .map(|task| ContextTaskView {
+                note_id: task.note_id.to_string(),
+                task_ref: task.task_ref.clone(),
+                text: task.text.clone(),
+                checked: task.checked,
+            })
+            .collect(),
+        tasks_truncated: candidate.tasks_truncated,
+        omitted_task_count: candidate.omitted_task_count,
+    }
+}
+
+/// Exhaustive on purpose: a reason added to the Core is a compile error here
+/// rather than a variant nobody decided how to publish.
+fn reason(reason: engine::Reason) -> ContextReason {
+    match reason {
+        engine::Reason::TextMatch => ContextReason::TextMatch,
+        engine::Reason::SharedTag => ContextReason::SharedTag,
+        engine::Reason::PropertyMatch => ContextReason::PropertyMatch,
+        engine::Reason::TaskMatch => ContextReason::TaskMatch,
+        engine::Reason::Recent => ContextReason::Recent,
+    }
 }

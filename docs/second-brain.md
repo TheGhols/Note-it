@@ -1,10 +1,9 @@
 # Segundo Cérebro do Note-it — arquitetura e contrato
 
-> **Estado:** arquitetura aprovada na 4.2A; o Context Engine foi implementado
-> na Fase 4.2B, em `noteit-core/src/context.rs`. A **superfície MCP ainda não
-> existe** — `noteit_context` é da 4.2C, e o catálogo continua com 15 tools.
-> Onde este documento descreve a tool, descreve comportamento *futuro*; onde
-> descreve o motor, descreve o que está no Core.
+> **Estado:** implementado. O Context Engine vive em
+> `noteit-core/src/context.rs` desde a Fase 4.2B; a tool `noteit_context` foi
+> publicada na 4.2C e o catálogo MCP tem 16 tools. Este documento descreve o
+> que existe.
 
 ---
 
@@ -871,9 +870,10 @@ esses nomes.
 
 ---
 
-## 20. Superfície MCP planejada
+## 20. Superfície MCP
 
-Proposta, **não implementada**: exatamente **uma** tool nova.
+Publicada na 4.2C: exatamente **uma** tool nova, e o catálogo passou de 15 para
+16.
 
 ```text
 noteit_context     somente leitura
@@ -885,24 +885,45 @@ Por que uma só: a pergunta de recuperação é uma pergunta. O passo seguinte �
 auditada sem resolver nada que a dupla `noteit_context` + `noteit_read` não
 resolva.
 
-Forma conceitual da entrada (nomes a fixar na 4.2C):
+Entrada, como publicada:
 
 ```text
-query          texto livre, opcional
-tags           filtro opcional
-properties     filtro opcional
-include_tasks  se tarefas relevantes entram
-limit          teto de candidatos, dentro do orçamento
+query          texto livre, ≤ 512 caracteres, opcional
+tags           sinais, não filtro
+properties     sinais, não filtro
+include_tasks  se tarefas casadas viajam junto (padrão: false)
+limit          teto de candidatos, clamp(1, 50)
 ```
 
-Forma conceitual da saída:
+**`tags` e `properties` são sinais, e o schema diz isso.** É a diferença que
+separa `noteit_context` das outras tools de leitura, cujo `FilterInput`
+significa "toda tag que a nota precisa ter para aparecer". Aqui uma nota que
+carregue uma delas vira candidata e ganha `shared_tag`; uma que não carregue
+nenhuma ainda pode entrar por outro sinal. Publicar a redação do filtro sobre
+este comportamento seria um schema que mente.
+
+Saída, como publicada:
 
 ```text
-candidates[]   note_id, label, snippet, updated_at, reason[], matched_text?
-tasks[]        task_ref, note_id, text, checked   (quando pedido)
+status
+candidates[]   note_id, label, snippet, updated_at, reason[], matched_text?,
+               tasks[], tasks_truncated, omitted_task_count
 truncated      bool
 omitted_count  número
-warnings[]     notas ilegíveis, como no resto da API de leitura
+warnings[]     code, note_id?   — sem message
+warnings_truncated     bool
+omitted_warning_count  número
+code?          quando status = error
+```
+
+**As tarefas ficam dentro do candidato**, e não numa lista global como a forma
+conceitual anterior sugeria. Fixado assim na 4.2C por cinco razões que puxam
+todas na mesma direção: o Core já as modela por candidato, o truncamento é por
+candidato, `omitted_task_count` é por candidato, a tradução vira 1:1 sem
+transformação inventada, e fica evidente de qual nota cada conjunto nasceu.
+
+Não há `message` em lugar nenhum desta resposta: tudo em que um chamador
+ramifica é `status` e `code`.
 ```
 
 Requisitos herdados, sem exceção: tipada, `outputSchema`, sem caminho, sem
@@ -934,7 +955,7 @@ Analisado, e a conclusão **não** é automática.
 | --- | --- |
 | A. catálogo completo atual | as proteções de escrita da 4.1 já impedem gravação silenciosa; simples e previsível |
 | B. modo read-only no servidor | exigiria flag, variável ou configuração — que a Fase 4.1 §5 proíbe; e uma segunda superfície para manter |
-| C. **o host controla** | o host sabe a intenção da sessão; o MCP já tem `readOnlyHint`, que este servidor publica corretamente em todas as 15 tools |
+| C. **o host controla** | o host sabe a intenção da sessão; o MCP já tem `readOnlyHint`, que este servidor publica corretamente em todas as suas tools |
 | D. combinação | complexidade sem ganho demonstrado hoje |
 
 **Decisão: C.** O servidor continua publicando `readOnlyHint` fiel, e a decisão
@@ -980,19 +1001,21 @@ precaução abstrata.
 
 ## 22. Modelo de execução
 
-**Auditado na 4.2A, e o resultado é um finding.**
+**Auditado na 4.2A, corrigido na 4.2B.**
 
-O `noteit-mcp` usa um runtime Tokio *current-thread*, e as quinze tools são
-funções **síncronas**. Não existe `spawn_blocking` no crate. Medido: com uma
-gravação presa no caminho de retry de 3 s, um `ping` enviado aos 0,05 s só foi
-respondido aos 3,002 s — o runtime fica completamente parado durante um handler.
+O finding, como estava: o `noteit-mcp` usava um runtime Tokio *current-thread*
+com as quinze tools de então implementadas como funções **síncronas**, e não
+havia `spawn_blocking` no crate. Medido: com uma gravação presa no caminho de
+retry de 3 s, um `ping` enviado aos 0,05 s só foi respondido aos 3,002 s — o
+runtime ficava completamente parado durante um handler.
 
-Para as tools atuais isso é largamente benigno: um host espera a resposta, e
+Para aquelas tools era largamente benigno: um host espera a resposta, e
 gravações num store são serializadas pelo lease de qualquer forma.
 
-Para o Context Engine **não é**: uma consulta que varre 10 000 notas custa
+Para o Context Engine **não era**: uma consulta que varre 10 000 notas custa
 centenas de milissegundos e pararia o servidor inteiro nesse período — sem
-responder `ping`, sem processar cancelamento.
+responder `ping`, sem processar cancelamento. Por isso o runtime foi corrigido
+antes de o motor existir.
 
 **Resolvido na 4.2B**, antes de qualquer linha do Context Engine:
 

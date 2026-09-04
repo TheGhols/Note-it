@@ -137,13 +137,14 @@ porque a espera saiu do reactor.
 
 ## 3. Catálogo de tools
 
-Quinze tools, todas no namespace `noteit_`. `tools/list` as devolve em ordem
+Dezesseis tools, todas no namespace `noteit_`. `tools/list` as devolve em ordem
 determinística.
 
 ### Leitura
 
 | Tool | Entrada | Saída |
 | --- | --- | --- |
+| `noteit_context` | `query?`, `tags?`, `properties?`, `include_tasks?`, `limit?` | `candidates[]`, contadores, `warnings[]` |
 | `noteit_list` | `tags?`, `properties?`, `limit?` | `notes[]`, `count`, `warnings[]` |
 | `noteit_read` | `note_id` | `note` (com `revision`), `warnings[]` |
 | `noteit_search` | `query`, `tags?`, `properties?`, `limit?` | `query`, `results[]`, `count` |
@@ -152,6 +153,51 @@ determinística.
 
 Contra um store inexistente, nenhuma delas cria uma nota, um diretório, um lock,
 um soquete, uma configuração ou um estado. Uma leitura não prepara nada.
+
+#### `noteit_context` — recuperação de contexto
+
+Encontra notas que valem a pena ler sobre alguma coisa, e diz por quê. É
+recuperação de contexto: casamento de texto e metadados sobre as notas vivas.
+**Não** é busca semântica, não há embeddings, não há modelo, e o produto não vai
+chamar de semântico o que é casamento de substring.
+
+`query` casa sobre o texto visível com acentos e caixa dobrados, como a busca.
+`tags` e `properties` são **sinais**, não filtro: uma nota que carregue uma
+delas vira candidata com `shared_tag` ou `property_match` entre os motivos, e
+uma que não carregue nenhuma ainda pode entrar por outro sinal. Sem query, sem
+tags e sem properties, a resposta é por recência, e cada candidato diz `recent`.
+
+Cada candidato traz `note_id`, `label`, `snippet`, `updated_at`, `reason[]`,
+`matched_text?` e — quando `include_tasks` pede — até três tarefas casadas.
+
+O que ela **nunca** devolve, e é metade do contrato:
+
+```text
+o corpo da nota          snippet de no máximo 240 caracteres, e só
+uma revision             de tipo nenhum, em lugar nenhum
+um caminho               nem em candidato, nem em warning, nem em erro
+uma mensagem livre       nem de warning, nem de recusa
+um score                 os motivos são um conjunto fechado, sem número
+```
+
+Tetos, todos do Core e nenhum inventado aqui: query 512 caracteres (acima
+disso é recusa e não corte), 10 candidatos por padrão e 50 no máximo, snippet
+240, `matched_text` 240, 3 tarefas por candidato com 120 caracteres cada, 20
+warnings. Todo corte é contado — `truncated`/`omitted_count`,
+`tasks_truncated`/`omitted_task_count`,
+`warnings_truncated`/`omitted_warning_count` — e nunca silencioso.
+
+`readOnlyHint: true`, e a propriedade é real: a tool não tem código de escrita,
+não aceita `expected_revision`, não aceita caminho e não chama a autoridade.
+
+Um warning de contexto é `code` e `note_id`, sem `message`: a mensagem do Core
+nomeia o arquivo, e essa frase não sai por aqui. Uma recusa é `status: error`
+mais `code` — `invalid_input` para uma query longa demais, `store_unavailable`
+para um store que não pôde ser varrido — e também sem texto livre.
+
+**O que vem depois dela.** `noteit_context` descobre; `noteit_read` abre. Uma
+nota encontrada pelo contexto e ainda não lida não tem como ser gravada, porque
+nada na resposta serve de `expected_revision` — ver §5.
 
 ### Criação
 

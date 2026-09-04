@@ -1546,3 +1546,113 @@ o que é publicado continua vindo inteiro de uma `Projection`.
 
 Nenhuma dependência nova, `Cargo.lock` byte-idêntico, catálogo em 15 tools,
 `SCHEMA_VERSION` em 1.
+
+### ADR-049.2: A recusa também é publicação (Fase 4.2B.R1.1)
+
+Duas rodadas de hardening cobriram o que a resposta de sucesso carrega e o que
+os warnings carregam. Faltava a terceira coisa que sai por esta superfície: a
+recusa.
+
+`ContextError::StoreUnavailable(String)` guardava a mensagem do storage, e essa
+mensagem nomeia o diretório — "The notes path `/home/.../notes` is not a
+directory". Medido antes de corrigido: uma sonda contra um store cujo caminho de
+notas era um arquivo imprimiu o caminho absoluto direto do `Display`.
+
+É o mesmo defeito da mensagem de warning, um nível abaixo, e leva a mesma
+correção pela mesma razão: **a variante deixou de ter payload**. Um tipo que não
+tem onde guardar um caminho não vaza um, e ninguém precisa confiar que um
+saneador continue funcionando depois de a próxima mensagem do sistema mudar de
+formato. `Display` é uma frase fixa.
+
+`QueryTooLong` mantém `limit` e `actual` porque os dois são inteiros e nenhum
+ecoa a consulta de volta. As duas recusas continuam distinguíveis, e colapsá-las
+em um `Failed` genérico jogaria fora uma distinção sobre a qual um chamador age:
+uma vale corrigir o pedido, a outra não.
+
+O que se perde é um diagnóstico, e só aqui: todo outro caminho de leitura do
+Core continua devolvendo a mensagem inteira.
+
+Agora a afirmação cobre a superfície toda: **tudo o que o Context Engine
+publica — em sucesso, em warning ou em recusa — é tipado, de tamanho limitado ou
+fixo, e não carrega mensagem livre nem caminho.**
+
+## ADR-050: A décima sexta tool traduz e não decide
+
+**Contexto.** O Context Engine existia no Core desde a 4.2B, limitado e provado,
+e não tinha superfície. A 4.2C publica uma tool — `noteit_context` — e a
+pergunta de projeto não era o que ela deveria fazer, que já estava decidido, mas
+o quanto do adapter tem direito a pensar.
+
+**Decisão.** Nada. O adapter traduz.
+
+1. **Tipos MCP declarados no `contract.rs`**, não derivados dos do Core.
+2. **`domain.rs` copia campo a campo**, e não recalcula nada.
+3. **`tags` e `properties` publicadas como sinais**, com redação própria.
+4. **Tarefas dentro do candidato**, não numa lista global.
+5. **Nenhuma `message` em lugar nenhum** da resposta.
+6. **O caminho é o mesmo das outras quinze**: handler, offload, domain, Core.
+
+**Justificativa.**
+
+1. **Por que tipos próprios.** É a regra que o `contract.rs` já seguia, e a
+   razão continua valendo: uma mudança num tipo de domínio não pode virar em
+   silêncio uma mudança no protocolo. `Candidate` no Core e
+   `ContextCandidateView` no fio são duas coisas que hoje têm os mesmos campos e
+   que precisam poder deixar de ter sem que ninguém descubra pelo host.
+
+2. **Por que nada é recalculado.** A tentação óbvia é o adapter olhar
+   `candidates.len()` e decidir sozinho se houve truncamento. Seria errado por
+   construção: depois do corte, o que foi descartado não está mais lá, e
+   qualquer número derivado dali é um palpite. Todo contador — `omitted_count`,
+   `omitted_task_count`, `omitted_warning_count` — vem do Core, que os produziu
+   quando ainda sabia a resposta. Pela mesma razão o adapter não ordena, não
+   constrói snippet, não parseia tarefa e não corta texto: cada uma dessas
+   coisas seria uma segunda implementação de uma ideia que já tem uma, e duas
+   implementações de uma ideia acabam discordando.
+
+3. **Por que `tags` não reusa o `FilterInput`.** O tipo existia, tinha os campos
+   certos e teria economizado trinta linhas. Só que a descrição dele diz "every
+   tag a note **must** carry to appear", e aqui uma tag é um sinal: quem a tem
+   entra e diz por quê, quem não a tem ainda pode entrar por outro motivo. Um
+   agente constrói sobre o que o schema diz, e um schema que descreve um filtro
+   sobre um comportamento de sinal não é uma imprecisão de redação — é a tool
+   mentindo sobre si mesma. O tipo separado custa pouco e diz a verdade.
+
+4. **Por que as tarefas ficaram dentro do candidato.** A forma conceitual da
+   4.2A previa uma lista global de tarefas ao lado dos candidatos. Cinco coisas
+   puxam na direção oposta e nenhuma na dela: o Core já modela tarefas por
+   candidato, o truncamento é por candidato, `omitted_task_count` é por
+   candidato, aninhá-las torna a tradução 1:1 sem transformação inventada, e o
+   leitor vê de qual nota cada conjunto nasceu sem cruzar identificadores. A
+   forma conceitual era conceitual; esta é a fixada.
+
+5. **Por que nenhuma `message`.** O macro `read_result!` que as outras leituras
+   usam acrescenta um `message: Option<String>` diagnóstico. Usá-lo aqui
+   reintroduziria, no mesmo commit, exatamente o campo que as duas ADRs
+   anteriores gastaram uma fase cada removendo. A resposta é escrita à mão e
+   tudo em que um chamador ramifica é `status` e `code`.
+
+6. **Por que a barreira valeu a pena.** A R1 criou a regra de que o store só é
+   nomeado em `domain.rs` e a provou com uma violação simulada da futura décima
+   sexta tool. Aqui essa tool chegou de verdade, e a regra foi exercitada duas
+   vezes: a chamada direta reprovou como esperado, e a mesma chamada escondida
+   atrás de `use noteit_core::context as engine` **passou**. A regra conhecia o
+   nome da função e não o do módulo. Ampliada para nomear os dois, as duas
+   reprovam. Uma barreira que nunca é atacada é uma barreira sobre a qual nada
+   se sabe.
+
+**Consequências.** O catálogo tem 16 tools e essa é a única adição.
+`SCHEMA_VERSION` continua em 1: ele versiona o documento da interface de máquina
+da CLI, não o catálogo MCP, e isso foi verificado antes de ser deixado em paz.
+Nenhuma dependência nova, `Cargo.lock` byte-idêntico, nenhum Resource, nenhum
+Prompt, nenhuma extensão de Tasks do protocolo, nenhuma rede.
+
+A propriedade que a fase entrega cabe numa frase: `noteit_context` pode
+**descobrir** uma nota, e não pode entregar o corpo dela, nem um caminho, nem
+uma revisão, nem uma escrita, nem uma mensagem do sistema de arquivos. Para
+conhecer a nota inteira o agente usa `noteit_read`; para gravar sobre uma nota
+que o contexto encontrou, precisa primeiro tê-la lido.
+
+Continuam abertos, e nenhum foi tocado aqui: `noteit_read` sem teto de tamanho,
+e a tensão entre as `INSTRUCTIONS` do servidor e o encadeamento que
+`WriteResult.revision` oferece, que é da 4.2D.
