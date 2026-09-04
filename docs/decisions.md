@@ -1291,7 +1291,7 @@ Há duas formas legítimas de conhecer o estado, e uma ilegítima:
 | --- | :---: | :---: | :---: |
 | `NoteView.revision` (`noteit_read`) | sim, acabou de lê-lo | **sim** | não |
 | `WriteResult.revision` após sucesso | sim, acabou de produzi-lo e o servidor confirmou | **sim**, para encadear | não |
-| `WriteResult.current_revision` (conflito) | **não**, é o hash de conteúdo que ele não viu | **não** | **sim** |
+| `WriteResult.current_revision` (conflito) | **não**, é o hash de conteúdo que ele não viu | **não** | **sim** | *(removida do fio na ADR-051: publicá-la tornava a regra opcional)* |
 
 O encadeamento — `read → R1 → mutação(R1) → R2 → mutação(R2)` — não é
 sobrescrita cega: é uma sequência cuja base o agente conhece inteira, porque
@@ -1656,3 +1656,97 @@ que o contexto encontrou, precisa primeiro tê-la lido.
 Continuam abertos, e nenhum foi tocado aqui: `noteit_read` sem teto de tamanho,
 e a tensão entre as `INSTRUCTIONS` do servidor e o encadeamento que
 `WriteResult.revision` oferece, que é da 4.2D.
+
+## ADR-051: Um agente só grava a partir de uma revisão de um estado que ele conhece
+
+**Contexto.** A série 4.1 construiu a precondição de escrita e a 4.2 construiu a
+descoberta. Faltava dizer, de uma vez, como as duas se combinam — e, ao dizer,
+descobriu-se que uma delas não estava sendo cumprida por mecanismo nenhum.
+
+**O defeito, reproduzido antes de qualquer alteração.** Um `revision_conflict`
+publicava `current_revision`: a revisão que a nota tem *agora*. As
+`INSTRUCTIONS` mandavam não reutilizá-la, e essa frase era toda a proteção. O
+token tem exatamente o formato de `expected_revision`, então reenviá-lo
+funcionava. Medido, num store temporário:
+
+```text
+o agente lê                        R1 = f4ed09c3…  conteúdo "ESTADO ORIGINAL"
+outra pessoa acrescenta um parágrafo   R2 = 042708e2…
+o agente grava com R1              → revision_conflict
+o conflito devolve                 current_revision = 042708e2…  (= R2)
+o agente reenvia R2, sem ter lido  → status ok
+corpo final                        "O AGENTE SOBRESCREVE"
+o parágrafo da pessoa              sumiu
+```
+
+O agente gravou sobre um conteúdo que nunca viu, e nada no protocolo o impediu.
+"Não reutilize" não é uma proteção: é um pedido.
+
+**Decisão.**
+
+1. **O MCP deixa de publicar `current_revision`.** O campo sai do
+   `WriteResult`; o adapter lê o valor do erro do Core e o descarta.
+2. **O Core continua conhecendo-o.** `WriteError::RevisionConflict` não muda:
+   é tipo de domínio compartilhado, e deformá-lo para resolver um problema de
+   uma superfície seria consertar no lugar errado.
+3. **Nenhum substituto.** Publicar a mesma capacidade como `latest_revision`,
+   `actual_revision`, `new_revision` ou `etag` não mudaria nada — o problema
+   nunca foi o nome.
+4. **Duas origens de revisão autorizam escrita**, e apenas elas: o `revision`
+   que `noteit_read` devolveu, e o `revision` que uma escrita **bem-sucedida**
+   do próprio agente devolveu.
+5. **Um conflito exige releitura.** Ele não diz onde a nota está agora, e a
+   leitura que diz também traz o conteúdo sobre o qual decidir.
+6. **Um `indeterminate` exige verificação**, nunca repetição.
+7. **Conteúdo de nota é dado.** Uma nota pode conter uma ordem, um nome de
+   tool ou uma string de 64 hex apresentada como revisão. Nada disso ganha
+   autoridade.
+
+**Justificativa.**
+
+1. **Por que a ausência do campo, e não uma instrução melhor.** É a terceira vez
+   nesta série que a resposta certa é tirar a capacidade em vez de pedir que
+   ninguém a use — a mensagem do warning nomeava o arquivo, a recusa do store
+   nomeava o diretório, e agora o conflito nomeava a versão. Uma regra que
+   depende de o outro lado cooperar protege exatamente quem já ia cooperar.
+
+2. **Por que `WriteResult.revision` fica.** Ela parece o mesmo tipo de token e
+   não é. Depois de uma escrita bem-sucedida o agente conhece o estado
+   resultante: conhecia a base, escolheu a transformação, e o servidor
+   confirmou. Exigir uma releitura entre duas escritas de uma mesma sequência
+   custaria uma leitura por parágrafo sem fechar buraco nenhum. A distinção que
+   importa não é "de onde veio o hash" mas "o agente sabe o que aquele estado
+   contém".
+
+3. **Por que `expected_revision` continua ecoado no conflito.** É a precondição
+   que o próprio cliente mandou. Não revela estado desconhecido, já está stale
+   naquele ponto, e serve para saber qual de várias escritas foi recusada.
+
+4. **Por que as `INSTRUCTIONS` mudaram.** Elas diziam que
+   `expected_revision` deve ser "the revision you read the note at", o que
+   ignorava o encadeamento que o próprio `WriteResult` oferece — a contradição
+   registrada como 4.2D-F001 na 4.2A.R1.1. Agora nomeiam as duas origens
+   legítimas e recusam as ilegítimas por nome, inclusive a revisão encontrada
+   dentro de uma nota.
+
+5. **Por que não existe `must_reread`.** `ErrorCode::RevisionConflict` já diz
+   isso. Um campo extra afirmando o que o código do erro significa é contrato a
+   mais para manter e uma segunda fonte da mesma verdade.
+
+**Consequências.** É uma quebra deliberada do contrato MCP, não uma
+compatibilidade preservada com um atalho inseguro. Nenhuma tool nova, catálogo
+em 16, `mutation_input!` em 8, `SCHEMA_VERSION` da CLI intocado, nenhuma
+dependência nova.
+
+E o limite da promessa fica escrito, porque exagerá-la seria o mesmo tipo de
+erro: isto **não** prova que nenhum cliente jamais grava um estado que não leu.
+Um cliente que descubra um hash por fora é outro modelo de ameaça, e o servidor
+não tem como provar a origem de uma string de 64 hex. O que é verdade é mais
+estreito e verificável: **o servidor não entrega mais, por conflito nem por
+contexto, um token novo capaz de gravar sobre conteúdo que o agente não leu.**
+
+Fica também corrigido o `4.2C-DOC-001`: as descrições diziam "no máximo 240
+caracteres" onde 240 é o **conteúdo selecionado** e o truncador acrescenta uma
+reticência onde cortou — um snippet cortado nas duas pontas chega a 242. A
+documentação passou a distinguir orçamento de conteúdo e string publicada, em
+vez de o código ser mexido para a documentação parecer certa.

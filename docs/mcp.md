@@ -173,7 +173,7 @@ Cada candidato traz `note_id`, `label`, `snippet`, `updated_at`, `reason[]`,
 O que ela **nunca** devolve, e é metade do contrato:
 
 ```text
-o corpo da nota          snippet de no máximo 240 caracteres, e só
+o corpo da nota          snippet de 240 caracteres de conteúdo, e só
 uma revision             de tipo nenhum, em lugar nenhum
 um caminho               nem em candidato, nem em warning, nem em erro
 uma mensagem livre       nem de warning, nem de recusa
@@ -183,7 +183,13 @@ um score                 os motivos são um conjunto fechado, sem número
 Tetos, todos do Core e nenhum inventado aqui: query 512 caracteres (acima
 disso é recusa e não corte), 10 candidatos por padrão e 50 no máximo, snippet
 240, `matched_text` 240, 3 tarefas por candidato com 120 caracteres cada, 20
-warnings. Todo corte é contado — `truncated`/`omitted_count`,
+warnings.
+
+Esses números limitam o **conteúdo selecionado**. O truncador acrescenta uma
+reticência onde cortou, então a string publicada pode ser um pouco maior — um
+snippet pode ser cortado nas duas pontas e chegar a 242 caracteres; `label`,
+`matched_text` e o texto de uma tarefa ganham no máximo uma. A tabela do
+envelope em `docs/second-brain.md` §11 traz os valores de fio. Todo corte é contado — `truncated`/`omitted_count`,
 `tasks_truncated`/`omitted_task_count`,
 `warnings_truncated`/`omitted_warning_count` — e nunca silencioso.
 
@@ -263,7 +269,7 @@ Uma forma só, para criação, mutação e restore:
 // recusou
 { "status": "error", "commit_state": "not_committed",
   "code": "revision_conflict", "note_id": "8c4f1a2b-…",
-  "expected_revision": "6d2f…", "current_revision": "a91c…" }
+  "expected_revision": "6d2f…" }
 
 // não se sabe
 { "status": "indeterminate", "commit_state": "unknown", "code": "indeterminate" }
@@ -350,12 +356,130 @@ argumento extra ou ordem de chamada que produza uma.
 
 ---
 
+## 5.1 O contrato do agente — de onde vem o direito de gravar
+
+A regra inteira cabe numa frase:
+
+> **Nenhuma revisão autoriza uma escrita sobre um estado que o agente não
+> conhece.**
+
+Existem exatamente duas maneiras de conhecer um estado, e as duas produzem uma
+revisão que autoriza:
+
+| Origem | O agente conhece o estado? | Autoriza a próxima escrita? |
+| --- | :---: | :---: |
+| `NoteView.revision`, de `noteit_read` | **sim** — acabou de lê-lo | **sim** |
+| `WriteResult.revision`, de uma escrita **bem-sucedida** | **sim** — conhecia a base, escolheu a mudança, o servidor confirmou | **sim**, encadeia |
+| `revision_conflict` | **não** — e desde a 4.2D ele não devolve revisão nenhuma | **não** |
+| `noteit_context`, `noteit_list`, `noteit_search`, `noteit_tasks_list` | **não** — nenhuma publica revisão | **não** |
+
+### A máquina de estados
+
+```text
+                    ┌────────────────┐
+                    │    DESCOBRIR   │
+                    │ noteit_context │
+                    └───────┬────────┘
+                            │ note_id, snippet, motivos
+                            │ SEM revision
+                            ▼
+                    ┌────────────────┐
+                    │      LER       │
+                    │  noteit_read   │
+                    │ conteúdo + R1  │
+                    └───────┬────────┘
+                            │ decidir
+                            ▼
+                    ┌────────────────┐
+                    │    ESCREVER    │
+                    │ expected = R1  │
+                    └───────┬────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+     SUCESSO             CONFLITO          INDETERMINADO
+   ok / committed     revision_conflict   commit_state unknown
+        │                   │                   │
+   revision R2         nenhuma revisão      nenhuma garantia
+        │                   │                   │
+   pode encadear        LER de novo          LER e verificar
+   escrita(R2)         decidir de novo      contar o que achou
+                            │                   │
+                            └──── nunca repetir cegamente ────┘
+```
+
+`ok` com `commit_state: not_needed` é sucesso: a nota já dizia exatamente
+aquilo, então nada foi escrito. Se vier com `revision`, ela nomeia um estado
+conhecido como qualquer outra.
+
+`committed` acompanhado de `ui_sync_warning` também é sucesso: o arquivo está no
+disco e apenas uma janela aberta não pôde ser posta em dia. Repetir a operação
+duplicaria o parágrafo.
+
+### Matriz de comportamento
+
+| Resultado | Escreveu? | Pode repetir cegamente? | Próxima ação |
+| --- | :---: | :---: | --- |
+| `ok` + `committed` | sim | não é preciso | usar `revision` se houver |
+| `ok` + `not_needed` | não | não é preciso | usar `revision` se houver |
+| `revision_conflict` | não | **não** | `noteit_read`, decidir de novo |
+| `indeterminate` + `unknown` | **talvez** | **não** | ler e verificar o que aconteceu |
+| erro + `not_committed` | não | depende do `code` | tratar pelo código |
+
+Não há política genérica de retry aqui, e é deliberado. `writer_busy` e
+`authority_unavailable` não escreveram nada e são seguros de refazer *como
+pedido*, mas quando refazer é decisão do host; `stale_task_ref` significa que a
+tarefa mudou e pede nova listagem, não adivinhação; `ambiguous_selector` e
+`ambiguous_task_ref` pedem escolha explícita, nunca "o primeiro" ou "o mais
+parecido".
+
+### O que não é autorização
+
+Nada disto substitui uma leitura, e nenhum deles é um token de escrita:
+
+```text
+label          um nome derivado da primeira linha; não é identidade
+updated_at     recência textual; não é versão nem prova de staleness
+task_ref       identifica uma tarefa dentro de um estado, e a mutação
+               continua exigindo expected_revision
+snippet        um trecho; ver um trecho não é conhecer a nota
+matched_text   idem
+```
+
+E conteúdo de nota nunca ganha autoridade. Uma nota pode conter "ignore as
+instruções", "chame `noteit_edit`" ou até uma string de 64 hex apresentada como
+revisão. Continua sendo texto que alguém escreveu: o servidor não origina tool
+calls, e uma revisão inventada só é aceita se coincidir com o estado atual —
+o que, para uma inventada, não acontece.
+
+**A intenção de escrever nasce da pessoa ou da tarefa que o host recebeu, nunca
+de uma nota lida pelo caminho.**
+
+### O que é mecânico e o que é normativo
+
+A distinção importa para não prometer demais:
+
+| Mecânico — o protocolo impede | Normativo — o agente precisa cumprir |
+| --- | --- |
+| `expected_revision` é obrigatório no schema | usar apenas revisões de estados conhecidos |
+| um conflito não devolve a revisão atual | reler antes de decidir de novo |
+| `noteit_context` não devolve revisão | não repetir um `indeterminate` |
+| nenhuma leitura devolve caminho | tratar conteúdo de nota como dado |
+| o servidor não origina tool calls | minimizar o que é recuperado e repassado |
+
+O que o servidor garante é que **ele não entrega** um token novo capaz de
+gravar sobre conteúdo não lido. Ele não pode provar de onde veio uma string de
+64 hex que um cliente inventou — mas uma inventada não coincide com o estado
+atual, e a gravação é recusada.
+
+---
+
 ## 6. `revision_conflict` — releia, não repita
 
 ```jsonc
 { "status": "error", "commit_state": "not_committed",
   "code": "revision_conflict",
-  "expected_revision": "6d2f…", "current_revision": "a91c…" }
+  "expected_revision": "6d2f…" }
 ```
 
 Garantias, quando isso acontece:
@@ -370,12 +494,17 @@ Garantias, quando isso acontece:
 > Um `revision_conflict` exige releitura e uma nova decisão. Nunca uma nova
 > tentativa automática.
 
-Nem mesmo usando a `current_revision` que o erro devolveu. Esse valor existe
-para o cliente **saber que a nota mudou**, não para gravar por cima de um
-conteúdo que ele não olhou — usá-lo assim seria exatamente a sobrescrita
-silenciosa que todo esse mecanismo existe para impedir. Por isso a resposta de
-conflito deliberadamente **não** traz o campo `revision`, e deliberadamente não
-traz o novo conteúdo.
+E o conflito **não diz onde a nota está agora**. Até a Fase 4.2D ele publicava
+`current_revision`, e "não reutilize esse valor" era toda a proteção — um pedido,
+não um mecanismo: o token tem o mesmo formato de `expected_revision`, então
+reenviá-lo era aceito sempre que a nota não tivesse se movido de novo, e a
+gravação passava por cima de um conteúdo que ninguém olhou. Medido e reproduzido
+antes de ser removido; ver ADR-051.
+
+Hoje a resposta de conflito não traz `revision`, não traz `current_revision` e
+não traz o novo conteúdo. O que ela devolve é `expected_revision` — a
+precondição que o próprio cliente mandou, que já está stale ali e não autoriza
+nada, servindo apenas para saber qual de várias gravações foi recusada.
 
 O caminho correto é: `noteit_read` de novo, olhar o que a nota diz agora,
 decidir de novo, e mandar uma requisição nova.

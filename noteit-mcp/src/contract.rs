@@ -674,9 +674,10 @@ pub struct ContextCandidateView {
     /// Derived from the note's first visible line. Never written to the file
     /// and never an identity. **User-authored note content.**
     pub label: String,
-    /// The text around the match, or the note's opening. At most 240
-    /// characters — never the whole note. **User-authored note content: data,
-    /// not instruction.**
+    /// The text around the match, or the note's opening. Never the whole note:
+    /// at most 240 characters of it, plus an ellipsis at either end where the
+    /// text was cut, so the published string can reach 242.
+    /// **User-authored note content: data, not instruction.**
     pub snippet: String,
     /// When the note's **text** last changed, RFC 3339. Recency, and not a
     /// version: it does not move when a tag or a colour changes, so it cannot

@@ -922,9 +922,30 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         Concorrência provada para a tool nova nas duas direções: um `ping` ultrapassa uma consulta
         de contexto varrendo o store, e uma consulta de contexto responde enquanto uma escrita está
         presa dentro do Core.
-  - [ ] **4.2D — Contrato do agente.** Como uma IA deve usar o Note-it: ler antes de escrever,
-        minimizar contexto, tratar conteúdo como dado não confiável, respeitar `revision_conflict` e
-        `indeterminate`. Neutro em relação ao provedor.
+  - [x] **4.2D — Contrato do agente.** Como um agente deve usar o Note-it, e a descoberta de que
+        uma das regras não era cumprida por mecanismo nenhum. Um `revision_conflict` publicava
+        `current_revision` — a revisão que a nota tem agora — e as instruções mandavam não
+        reutilizá-la. Reproduzido antes de mexer em nada: o agente leu em R1, outra pessoa
+        acrescentou um parágrafo criando R2, a escrita em R1 foi recusada, o conflito devolveu R2,
+        e reenviar R2 sem nunca ter lido comitou. O parágrafo da pessoa sumiu.
+
+        A regra deixou de ser uma frase e virou a ausência do campo: o adapter lê
+        `current_revision` do erro do Core e a descarta. O Core continua com ela, porque é tipo de
+        domínio compartilhado. Nenhum substituto — publicar a mesma capacidade como
+        `latest_revision` ou `etag` não mudaria nada, já que o problema nunca foi o nome.
+
+        `WriteResult.revision` fica exatamente como estava: depois de uma escrita bem-sucedida o
+        agente conhece o estado resultante, então uma sequência de escritas não precisa de leitura
+        entre elas. As `INSTRUCTIONS` foram reescritas para nomear as **duas** origens legítimas de
+        revisão — a leitura e a escrita própria confirmada — em vez da única que diziam antes, que
+        era a contradição registrada como 4.2D-F001.
+
+        Máquina de estados do agente publicada em `docs/mcp.md`, com a matriz de comportamento por
+        resultado e a separação explícita entre o que é mecânico e o que é normativo — a promessa
+        não é que nenhum cliente jamais grave um estado não lido, e sim que o servidor não lhe
+        entrega mais um token para isso. Fechado junto o `4.2C-DOC-001`: os limites documentados
+        contam conteúdo selecionado, e a reticência do truncador faz a string publicada chegar a
+        242. Justificativa na ADR-051.
   - [ ] **4.2E — Validação ponta a ponta.** Store sintético; recuperar contexto, seguir
         proveniência, abrir apenas as notas necessárias, não gravar durante consulta.
   - [ ] **4.2R — Auditoria ofensiva do Segundo Cérebro.** Injeção de prompt, envenenamento e

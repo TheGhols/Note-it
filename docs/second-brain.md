@@ -403,7 +403,7 @@ O contrato MCP publica `revision` em três lugares, e eles não são equivalente
 | --- | :---: | :---: | :---: |
 | `NoteView.revision`, de `noteit_read` | **sim** — acabou de lê-lo | **sim** | não |
 | `WriteResult.revision`, após operação bem-sucedida | **sim** — acabou de produzi-lo, e o servidor confirmou | **sim**, para encadear | não |
-| `WriteResult.current_revision`, de um `revision_conflict` | **não** — é só o hash de conteúdo que ele não viu | **não** | **sim** |
+| um `revision_conflict` | **não** — e desde a 4.2D ele não devolve revisão alguma | **não** | **sim** |
 
 O que `noteit_context` publica não aparece nesta tabela, e é o ponto: ele não
 publica nenhuma das três.
@@ -421,17 +421,15 @@ noteit_read → R1 → mutação A(R1) → sucesso, R2 → mutação B(R2) → s
 Nenhuma releitura obrigatória no meio. Isso não é sobrescrita cega; é uma
 sequência cuja base o agente conhece inteira.
 
-**`current_revision` nunca é.** Ela prova só que a nota deixou de ser R1. O
-conteúdo de R2 não vem junto — deliberadamente, diz o contrato: "enough to
-notice the note moved, and deliberately not enough to retry". Reenviá-la como
-`expected_revision` gravaria sobre uma mudança que ninguém olhou, e o `refused()`
-do servidor nem preenche `revision` num conflito, justamente para que "leia de
-novo" não vire "repita com o token que o erro te deu".
+**Um conflito nunca é.** Ele prova só que a nota deixou de ser R1. Até a 4.2D o
+contrato publicava `current_revision` e pedia que ninguém a reutilizasse; isso
+foi reproduzido funcionando — reenviar o token gravava sobre conteúdo não lido e
+apagava o parágrafo de outra pessoa. A regra virou a ausência do campo: o
+conflito não devolve `revision`, não devolve `current_revision`, e não devolve o
+conteúdo novo (ADR-051).
 
 ```text
-mutação(R1) → revision_conflict, current_revision = R2
-              ↓
-        PROIBIDO: mutação(R2)
+mutação(R1) → revision_conflict — sem revisão nenhuma
               ↓
         noteit_read → conteúdo atual + revision → decidir de novo
 ```
@@ -453,7 +451,7 @@ já usa, e o custo de contexto para o modelo.
 | --- | ---: | --- |
 | candidatos por consulta, padrão | 10 | metade do `unwrap_or(20)` das leituras atuais; um contexto inicial deve ser estreito |
 | candidatos por consulta, máximo | 50 | metade do `MAX_RESULTS = 100` do Core; ver cálculo abaixo |
-| caracteres por snippet | 240 | `MAX_SNIPPET_CHARS`, já existente |
+| caracteres por snippet | 240 de conteúdo | `MAX_SNIPPET_CHARS`, já existente |
 | caracteres da consulta | 512 | `MAX_QUERY_CHARS`, já existente |
 | corpos completos por consulta | **0** | corpo completo só por `noteit_read`, um por vez |
 
@@ -468,7 +466,13 @@ A tabela acima limitava a resposta pelo que ela **listava**, não pelo que cada
 item podia carregar. A 4.2B.R1 fechou o resto: nenhuma coleção ou texto que o
 Context Engine publica pode crescer sem teto em função do conteúdo do store.
 
-| Campo | Teto | De onde vem |
+Os números abaixo são o **texto publicado**, reticência incluída. Os limites do
+Core contam o **conteúdo selecionado**, e o truncador acrescenta uma reticência
+onde cortou: um snippet pode ser cortado nas duas pontas, e por isso 240 de
+conteúdo viram até 242 no fio. Confundir as duas contagens é como a
+documentação e o runtime começam a divergir.
+
+| Campo | Teto no fio | De onde vem |
 | --- | ---: | --- |
 | `query` | 512 caracteres | `MAX_QUERY_CHARS`; acima disso é **recusa**, não corte |
 | `candidates` | 50 | `MAX_CANDIDATES`, com `clamp(1, 50)` |
@@ -812,8 +816,8 @@ Inalterado e não negociável:
 ```text
 noteit_read → revision → mutação com expected_revision
 mutação bem-sucedida → WriteResult.revision → pode encadear a próxima
-revision_conflict  → reler, reavaliar, decidir de novo; nunca repetir,
-                     e nunca com o current_revision que o erro devolveu
+revision_conflict  → reler, reavaliar, decidir de novo; nunca repetir
+                     — o conflito não devolve revisão para repetir com
 indeterminate      → não repetir; ler e verificar
 ```
 
