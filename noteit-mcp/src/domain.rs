@@ -267,7 +267,6 @@ fn committed(outcome: WriteOutcome) -> WriteResult {
         code: None,
         message: None,
         expected_revision: None,
-        current_revision: None,
         ui_sync_warning: outcome.ui_sync_warning,
     }
 }
@@ -303,15 +302,18 @@ fn refused(error: &WriteError) -> WriteResult {
     if let WriteError::RevisionConflict {
         note_id,
         expected_revision,
-        current_revision,
+        // The Core knows where the note actually is. This adapter is where
+        // that stops: `current_revision` is read out of the error and dropped
+        // here, and nothing below writes it anywhere. See ADR-051 — publishing
+        // it made "read again" a rule an agent could decline to follow, because
+        // the token it needed to ignore was in its hands.
+        current_revision: _,
     } = error
     {
         result.note_id = Some(note_id.to_string());
         result.expected_revision = Some(expected_revision.to_string());
-        result.current_revision = Some(current_revision.to_string());
-        // Deliberately no `revision`: the field a caller chains the next write
-        // from must never be filled in by a conflict, or "read again" becomes
-        // "retry with the token the error handed you".
+        // Deliberately no `revision` either: the field a caller chains the next
+        // write from must never be filled in by a conflict.
     }
     if let WriteError::TrashTargetOccupied { note_id } = error {
         result.note_id = Some(note_id.to_string());

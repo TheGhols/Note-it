@@ -265,15 +265,21 @@ macro_rules! mutation_input {
             /// one. Never a path.
             pub note_id: String,
             $( $(#[$field_meta])* pub $field: $ty, )*
-            /// **Required.** The revision `noteit_read` gave for the note this
-            /// change was decided from, as sixty-four lowercase hexadecimal
-            /// characters.
+            /// **Required.** A revision naming the note state this change was
+            /// decided from, as sixty-four lowercase hexadecimal characters.
+            ///
+            /// Two revisions name a state you know, and only those two: the one
+            /// `noteit_read` answered with, and the one a **successful** write
+            /// of your own returned in `revision` — you knew its base, you
+            /// chose the change, and the server confirmed the result, so a run
+            /// of writes needs no read between them.
             ///
             /// If the note has moved on since, this write is refused with
-            /// `revision_conflict` and nothing is changed. Read the note
-            /// again, look at what it says now, and decide again — never send
-            /// the `current_revision` the conflict returned, which would write
-            /// over a change nobody has looked at.
+            /// `revision_conflict` and nothing is changed. Read the note again,
+            /// look at what it now says, and decide again. The conflict
+            /// deliberately does not tell you where the note is now: a token
+            /// you could resend would let you write over a change nobody has
+            /// looked at.
             pub expected_revision: RevisionArgument,
         }
     };
@@ -441,9 +447,17 @@ pub struct WriteResult {
     /// that.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed: Option<bool>,
-    /// The note's revision after this operation, so the next conditional write
-    /// needs no extra read. Absent for a restore, which does not describe one
-    /// note's new version, and absent on every refusal except a conflict.
+    /// The note's revision **after** this operation, so the next conditional
+    /// write needs no extra read.
+    ///
+    /// Present on success. Absent for a restore, which does not describe one
+    /// note's new version, and absent on **every** refusal — a conflict
+    /// included, and that one on purpose: a token here would turn "read again"
+    /// into "retry".
+    ///
+    /// It is a legitimate base for the next write because the caller knows the
+    /// state it names: it knew the base, it chose the change, and the server
+    /// confirmed the result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -451,16 +465,22 @@ pub struct WriteResult {
     /// Diagnostic only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// On `revision_conflict` only: the precondition that was sent.
+    /// On `revision_conflict` only: the precondition the **caller** sent.
+    ///
+    /// Echoed back so a client driving several writes can tell which one was
+    /// refused. It names a state the caller already knew and is stale by
+    /// definition here, so it authorises nothing.
+    ///
+    /// What is deliberately **not** beside it is the revision the note has now.
+    /// That token was published until Phase 4.2D, and "do not reuse it" was a
+    /// rule an agent could simply not follow: it has the same shape as
+    /// `expected_revision`, so resending it was accepted whenever the note had
+    /// not moved again — a write over content nobody had read. The rule is now
+    /// the absence of the field. To learn where the note actually is, read it;
+    /// that also brings the content the decision has to be made from. See
+    /// ADR-051.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<String>,
-    /// On `revision_conflict` only: the revision the note actually has now.
-    ///
-    /// Enough to notice the note moved, and deliberately not enough to retry:
-    /// the new content is not here, because a client that has not looked at
-    /// what changed has no business writing over it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_revision: Option<String>,
     /// Present only when the note was committed and an open window could not
     /// be brought into step with it. **Not a failure.** The file on disk holds
     /// the new content; repeating the operation would append twice.
@@ -483,7 +503,6 @@ impl WriteResult {
             code: Some(code),
             message: Some(message),
             expected_revision: None,
-            current_revision: None,
             ui_sync_warning: None,
         }
     }

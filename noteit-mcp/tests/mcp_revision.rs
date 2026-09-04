@@ -239,14 +239,27 @@ fn mcp_13_a_stale_revision_conflicts_and_the_file_is_byte_identical() {
     assert_eq!(answer.code(), Some("revision_conflict"));
     assert_eq!(answer.commit_state(), Some("not_committed"));
     assert_eq!(answer.str_field("expected_revision"), Some(stale.as_str()));
-    assert_eq!(answer.str_field("current_revision"), Some(current.as_str()));
     assert_eq!(answer.str_field("note_id"), Some(id.as_str()));
 
     // A conflict must not hand back a token the client could chain from: the
-    // rule is "read again", and a `revision` field here would make it "retry".
+    // rule is "read again", and any revision field here would make it "retry".
+    // Since 4.2D that includes the note's *current* revision, which used to be
+    // published and made the rule optional — see ADR-051.
     assert!(
         answer.structured().get("revision").is_none(),
         "a conflict published a usable precondition: {}",
+        answer.raw
+    );
+    assert!(
+        answer.structured().get("current_revision").is_none(),
+        "a conflict published the revision the client has not read: {}",
+        answer.raw
+    );
+    assert!(
+        !serde_json::to_string(&answer.raw)
+            .unwrap()
+            .contains(current.as_str()),
+        "the unread revision reached the client by another route: {}",
         answer.raw
     );
     // Nor the content, which a client that has not looked at it must not have.

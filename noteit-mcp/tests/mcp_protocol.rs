@@ -309,7 +309,7 @@ fn the_portable_schemas_still_say_what_they_said() {
         .any(|field| field == "expected_revision"));
 
     // And a genuinely nullable output field kept both of its possibilities.
-    let branches = &append["outputSchema"]["properties"]["current_revision"]["anyOf"];
+    let branches = &append["outputSchema"]["properties"]["expected_revision"]["anyOf"];
     let kinds: Vec<&str> = branches
         .as_array()
         .unwrap_or_else(|| panic!("{}", append["outputSchema"]))
