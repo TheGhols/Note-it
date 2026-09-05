@@ -1,10 +1,38 @@
 # Recuperação semântica — especificação
 
-Decidido na Fase 4.3A. **Nada disto está implementado**: este documento é a
-especificação que as subfases de implementação consomem, e a régua contra a qual
-elas serão medidas. Justificativa e medições na ADR-056.
+Decidido na Fase 4.3A, corrigido nas R1, R1.1 e R1.2, e **parcialmente
+implementado na 4.3B**. Este documento é a especificação que as subfases de
+implementação consomem, e a régua contra a qual elas são medidas. Justificativa e
+medições nas ADR-056 e ADR-057.
 
-O corpus de avaliação está em [`retrieval-corpus.json`](retrieval-corpus.json).
+O corpus de avaliação está em [`retrieval-corpus.json`](retrieval-corpus.json), e
+a posição, consulta por consulta, do motor de antes do BM25 está congelada em
+[`retrieval-baseline.json`](retrieval-baseline.json).
+
+## Estado: o que existe em código, e o que ainda é especificação
+
+A distinção importa, porque um documento que descreve tudo no presente vira uma
+promessa que ninguém fez. Em 2026-09-05:
+
+| | estado | onde |
+| --- | --- | --- |
+| recuperação por termo, BM25 `k1=1.2` `b=0.75` | **implementado, em produção** | `noteit-core/src/lexical.rs`, `context.rs` |
+| `Reason::TermMatch`, publicado como `term_match` | **implementado, em produção** | `context.rs`, `noteit-mcp/src/contract.rs` |
+| classes de precedência (§13) | **implementado** | `context.rs` |
+| `EmbeddingRole`, `EmbeddingSpaceId`, `ArtifactManifestV1` (§5, §5.1) | **implementado** | `noteit-core/src/embedding.rs` |
+| chunker versionado e `ChunkId` (§14) | **implementado** | `noteit-core/src/chunking.rs` |
+| `EmbeddingProvider`, `EmbeddingRecord`, índice em memória (§4, §6, §15) | **implementado** | `noteit-core/src/semantic.rs` |
+| validação de proveniência e invalidação (§7) | **implementado** | `context.rs` |
+| `Reason::SemanticMatch`, publicado como `semantic_match` | **implementado no motor, inalcançável pelo produto** | — |
+| provider local, modelo, artefato distribuído | **especificação** | 4.3C |
+| providers remotos, credenciais, `noteit-embed` (§8, §9, §10) | **especificação** | 4.3D |
+| cache em disco (§15.1), configuração de usuário (§12) | **especificação** | 4.3C/4.3D |
+
+"Inalcançável pelo produto" é literal e estrutural: o modo de recuperação que o
+`noteit_context` usa é uma variante de enum **sem campo onde um provider caiba**.
+Não há configuração ausente e não há flag desligada — não existe o que ligar. O
+motivo está no esquema porque um motivo que o Core sabe produzir e o esquema não
+declara é um contrato de fio que mente.
 
 O que o Note-it está construindo não é uma IA local, nem um cliente da OpenAI,
 nem um cliente do Gemini. É **uma memória semântica independente de fornecedor,

@@ -2546,3 +2546,120 @@ Estão congelados em 1.2 e 0.75, e a implementação os usa exatamente assim.
 Reabri-los exige um conjunto de tuning novo, um conjunto de avaliação separado que
 não seja usado no ajuste, e a decisão explícita de reabrir — nesta ordem. O corpus
 desta fase é régua de regressão e não serve para nenhum dos dois primeiros.
+
+## ADR-057: O motor tem três canais e uma única autoridade, e a classe é que protege o acerto exato
+
+**Contexto.** A 4.3A mediu, a 4.3A.R1 corrigiu o contrato, a R1.1 fechou a
+proveniência e a R1.2 congelou a política de admissão e ranking. A 4.3B é a
+primeira das quatro que escreve Rust: casamento por termo com BM25 no Context
+Engine real, mais a infraestrutura semântica **sem nenhum provider**.
+
+**Problema.** Três coisas podiam dar errado ao materializar aquele contrato, e
+duas delas são silenciosas.
+
+A primeira é ter dois motores. Um `semantic_context.rs` ao lado do
+`context.rs` seria um segundo lugar que lê o store, aplica filtros, monta
+snippet, conta tarefas, aplica tetos e ordena — e dois desses discordam na
+primeira semana. **A 4.3B evoluiu `noteit-core/src/context.rs`.** Há uma
+autoridade de recuperação contextual, e os canais novos são camadas dentro dela.
+
+A segunda é o acerto exato rebaixado por um número. É o defeito que a 4.3A mediu
+na Reciprocal Rank Fusion: melhor R@3, e um acerto exato empurrado para baixo.
+
+A terceira é o vetor obsoleto — um candidato publicado a partir de uma revisão
+que não existe mais.
+
+**Decisão 1: a classe é explícita, e a contagem que ordena a classe 1 não
+enxerga os canais novos.** Cada candidato recebe uma `CandidateClass` — quatro
+valores, atribuída a partir dos sinais e não de `reasons.len()` nem do ordinal
+de uma variante. A resposta é a concatenação das classes.
+
+O detalhe que faz a garantia ser real está uma camada abaixo. A classe 1 ordena
+por **quantos sinais declarados** admitiram o candidato, e `TermMatch` e
+`SemanticMatch` não são sinais declarados. Se a ordenação contasse o comprimento
+da lista de motivos, acrescentar BM25 teria reembaralhado candidatos que já
+existiam — silenciosamente, e em todo store. Com a contagem cega para as classes
+2 e 3, elas são **estritamente aditivas**: acrescentam candidatos abaixo de tudo
+o que havia e não movem nada.
+
+Medido: as 32 consultas do corpus, uma a uma, nenhuma respondeu pior.
+
+```text
+                       R@1     R@3     R@5     MRR
+baseline (pré-BM25)   0,333   0,367   0,367   0,350
+4.3B em Rust          0,633   0,767   0,833   0,711
+protótipo 4.3A        0,667   0,767   0,833   0,728
+```
+
+**A diferença para o protótipo é uma consulta, e ela é a garantia funcionando.**
+`q08 "sono"`: `n25` casa a frase inteira e fica em primeiro; o ground truth vem
+em segundo — exatamente onde já estava no baseline. Um BM25 puro teria posto o
+ground truth em primeiro e rebaixado `n25`. O protótipo podia; o motor não pode,
+e não é para poder. R@3, R@5 e todo o resto reproduzem o protótipo.
+
+**Decisão 2: os parâmetros não se mexem, e o corpus não é conjunto de
+validação.** `k1 = 1.2`, `b = 0.75`, escritos como constantes e usados como
+foram congelados. Nenhuma busca em grade, nenhum "1,3 melhora o número". A
+fórmula está fixada em teste unitário contra a aritmética escrita à mão, não
+contra uma fixture.
+
+**Decisão 3: uma dobra, e nenhuma segunda definição de palavra.** Os termos são
+as sequências maximais de `[0-9a-z]` sobre o texto que `search::fold` já
+produz — a mesma dobra da busca global desde muito antes de a recuperação ter
+fase própria. Sem stemming, sem lematização, sem stopwords, sem sinônimos, sem
+tabela por idioma: cada um deles é uma afirmação sobre a língua que precisaria da
+sua própria evidência, e nenhum foi medido.
+
+**O custo disso, medido e não escondido.** Sem stopwords, uma consulta cujo único
+termo comum é `de` admite toda nota que tem `de`. No corpus, as duas consultas
+sem resposta passaram de 0 para 22 e 13 candidatos, **inteiramente** por causa de
+`de` e `do` — os outros termos (`receita`, `bolo`, `fuba`, `configuracao`,
+`roteador`, `wifi`) somam uma nota entre todos. Eles pontuam quase nada e ficam
+no fim, mas são admitidos, porque admissão é booleana e ranking é numérico.
+Registrado como o que é: o preço medido de admitir por termo. Mudar isso — um
+piso de IDF na admissão, ou uma lista de palavras funcionais — é decisão de outra
+fase, com evidência, e não um ajuste feito de passagem para o número do corpus
+ficar mais bonito.
+
+**Decisão 4: o padrão lexical não depende de configuração.** `RetrievalMode` tem
+duas variantes e a primeira, `LexicalOnly`, **não tem campo onde um provider
+caiba**. Não é "o provider não foi configurado" nem "a flag está desligada": não
+há o que ligar por acidente, por arquivo faltando ou por inicialização que
+falhou. Um provider de teste que entra em pânico se for chamado prova o caminho
+de produção com zero chamadas.
+
+**Decisão 5: comparabilidade é identidade, nunca forma.** `EmbeddingSpaceId`
+carrega provider, modelo, identidade do artefato, dimensão, versão da receita do
+par e versão da normalização, e a igualdade é de todos. A regressão é a medição
+da 4.3A: dois espaços truncados para a mesma dimensão dão cosseno perfeitamente
+calculável e R@3 de 0,133 contra 0,933. O papel — documento ou consulta — fica
+**fora** do espaço, porque uma busca é justamente a comparação entre os dois.
+
+A identidade do artefato é `sha256("noteit.artifact.v1\n" ‖ codificação canônica
+do manifesto)`. Uma autoridade de codificação, não um `format!` espalhado: a
+concatenação de componentes de comprimento variável é ambígua, e o encoder aqui
+**recusa** qualquer valor fora de um alfabeto estreito em vez de escapá-lo — um
+encoder canônico cuja correção depende de uma rotina de escape é um encoder
+canônico com um bug esperando. O separador de domínio dá separação semântica
+entre formatos e versões; ele **não** promete ausência de colisão, que continua
+sendo propriedade do SHA-256.
+
+**Decisão 6: proveniência é a revisão canônica, e o snippet nasce da leitura.**
+Um registro do índice é preliminar. O motor lê o `NoteDocument` — a leitura que
+D-27 já obriga —, calcula `NoteRevision::for_document` e compara. Diferente:
+descarta e **esquece** o registro. Igual: o snippet, os motivos e as tarefas saem
+dessa leitura, nunca do cache. O índice não guarda texto de nota, então não há
+segundo lugar de onde publicar conteúdo velho.
+
+O teste que fecha isso é o da mudança **só de metadado**: mexer numa tag deixa
+`updated_at` parado — foi verificado no teste, não suposto — e move a revisão. É
+a prova de que ninguém voltou a usar `updated_at` como token de versão, que é o
+defeito de onde a R1-002 saiu.
+
+**O que a 4.3B deliberadamente não fez.** Nenhum provider real, nenhum modelo,
+nenhum byte de peso, nenhuma rede, nenhuma credencial, nenhuma dependência nova,
+`Cargo.lock` byte-idêntico, catálogo ainda em 16 tools, `semantic_match` no
+esquema e inalcançável pelo produto. Fundir com a 4.3C teria sido um commit a
+menos e teria custado a única coisa que importa depois: quando a recuperação
+semântica responder mal, distinguir bug do motor de bug do modelo. A separação
+vale o commit.

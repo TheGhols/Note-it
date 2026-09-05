@@ -157,15 +157,29 @@ um soquete, uma configuração ou um estado. Uma leitura não prepara nada.
 #### `noteit_context` — recuperação de contexto
 
 Encontra notas que valem a pena ler sobre alguma coisa, e diz por quê. É
-recuperação de contexto: casamento de texto e metadados sobre as notas vivas.
-**Não** é busca semântica, não há embeddings, não há modelo, e o produto não vai
-chamar de semântico o que é casamento de substring.
+recuperação de contexto: casamento léxico e de metadados sobre as notas vivas.
+**Não** é busca semântica: nenhum embedding é calculado, nenhum modelo existe e
+nada sai desta máquina. O produto não vai chamar de semântico o que é casamento
+de palavra.
 
-`query` casa sobre o texto visível com acentos e caixa dobrados, como a busca.
+`query` casa sobre o texto visível com acentos e caixa dobrados, como a busca,
+de duas formas. A **frase inteira**, como sempre casou, que produz `text_match`;
+e, desde a 4.3B, os **termos** dela — as palavras, separadamente —, que produzem
+`term_match` e são ordenados entre si por BM25. Uma nota que casa a frase nunca
+é rebaixada por uma que só casa termos: são camadas de precedência distintas, e
+o score de uma não alcança a outra.
+
 `tags` e `properties` são **sinais**, não filtro: uma nota que carregue uma
 delas vira candidata com `shared_tag` ou `property_match` entre os motivos, e
 uma que não carregue nenhuma ainda pode entrar por outro sinal. Sem query, sem
 tags e sem properties, a resposta é por recência, e cada candidato diz `recent`.
+
+O esquema declara um sétimo motivo, `semantic_match`, que **este servidor não
+produz**: o motor sabe gerar candidatos por proximidade desde a 4.3B, e nenhum
+caminho do produto liga esse canal — não há provider, não há modelo e não há
+onde configurar um. Ele está declarado porque um motivo que o Core sabe produzir
+e o esquema não declara é um contrato de fio que mente. Ligar o canal é assunto
+da 4.3C.
 
 Cada candidato traz `note_id`, `label`, `snippet`, `updated_at`, `reason[]`,
 `matched_text?` e — quando `include_tasks` pede — até três tarefas casadas.

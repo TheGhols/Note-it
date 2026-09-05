@@ -1255,14 +1255,56 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           garantia atribuída ao separador de domínio passou a ser a correta — separação semântica
           entre domínios, e não impossibilidade de colisão, que é propriedade do SHA-256 e não de
           um prefixo. Dez cenários de regressão congelados para a 4.3B rodar **antes** do BM25.
-  - [ ] **4.3B — Motor de recuperação provider-neutral.** Planejada. Os tipos centrais e o motor,
-        sem nenhum provider remoto e sem artefato de modelo. **Começa pelo lexical**, porque é o
-        que a 4.3A mediu como maior ganho e menor custo, e porque é o piso para onde tudo o mais
-        degrada: casamento por termo e ranking BM25 dentro do Context Engine, sobre a dobra que o
-        `search::fold` já faz, com o corpus da 4.3A como regressão. Depois, o esqueleto que a parte
-        semântica vai ocupar: `EmbeddingProvider`, `EmbeddingSpaceId`, `EmbeddingRecord`, chunker
-        versionado, identidade de chunk, validação de proveniência, índice abstrato em memória,
-        encadeamento lexical→semântico, política de fallback e invalidação. Sem dependência nova.
+  - [x] **4.3B — Motor de recuperação provider-neutral.** Os tipos centrais e o motor, sem nenhum
+        provider, sem artefato de modelo, sem rede e **sem dependência nova** — `Cargo.lock`
+        byte-idêntico, catálogo ainda em 16 tools. Detalhes e medições na ADR-057.
+
+        **A régua entrou antes da mudança.** Um commit só de testes, verde contra o motor de
+        então: os dez cenários que a R1.2 congelou, mais a posição — consulta por consulta — do
+        primeiro acerto do corpus, gravada em `docs/retrieval-baseline.json`. O harness reproduziu
+        exatamente o baseline publicado pela 4.3A (R@1 0,333 · R@3 0,367 · R@5 0,367 · MRR 0,350),
+        que é o que torna o número de depois comparável ao de antes.
+
+        **BM25 dentro do Context Engine, não ao lado dele.** Nenhum segundo motor: um
+        `semantic_context.rs` seria um segundo lugar que lê o store, filtra, monta snippet, conta
+        tarefas e ordena, e dois desses discordam na primeira semana. Termos são as sequências de
+        `[0-9a-z]` sobre a dobra que o `search::fold` já produz — nenhuma segunda definição de
+        palavra, nenhum stemming, nenhuma stopword. `k1 = 1.2` e `b = 0.75` como constantes, sem
+        ajuste, com a fórmula fixada em teste contra a aritmética escrita à mão.
+
+        ```text
+                               R@1     R@3     R@5     MRR
+        baseline (pré-BM25)   0,333   0,367   0,367   0,350
+        4.3B em Rust          0,633   0,767   0,833   0,711
+        protótipo 4.3A        0,667   0,767   0,833   0,728
+        ```
+
+        Zero regressões, consulta por consulta. **A única diferença para o protótipo é uma
+        consulta, e ela é a garantia funcionando**: em `q08 "sono"`, `n25` casa a frase inteira e
+        fica em primeiro, com o ground truth em segundo — onde já estava no baseline. Um BM25 puro
+        teria rebaixado `n25`; o motor não pode, porque a classe 1 é ordenada por **sinais
+        declarados** e `TermMatch` não é um deles. É isso que torna as classes 2 e 3 estritamente
+        aditivas em vez de uma aposta sobre escalas numéricas.
+
+        **O custo, medido e registrado:** sem stopwords, as duas consultas sem resposta do corpus
+        passaram de 0 para 22 e 13 candidatos, inteiramente por causa de `de` e `do`. Pontuam quase
+        nada e ficam no fim, mas são admitidos. Fica como diagnóstico de precisão, não como motivo
+        para mexer em parâmetro.
+
+        **A infraestrutura semântica existe e o produto não a alcança.** `EmbeddingRole` fora do
+        `EmbeddingSpaceId`; identidade de artefato como digest de manifesto canônico, com um
+        encoder que **recusa** em vez de escapar; chunker versionado por parágrafo com `ChunkId`
+        sem concatenação ambígua; `EmbeddingRecord` sem texto de nota; índice em memória por força
+        bruta; cosseno que verifica espaço antes de dimensão. Proveniência pela `NoteRevision`
+        canônica, da mesma leitura que o D-27 já obriga: vetor obsoleto é descartado e o registro
+        esquecido, mudança só de metadado é detectada — `updated_at` não se move e a revisão sim —
+        e órfão não ressuscita nada. `RetrievalMode::LexicalOnly` **não tem campo onde um provider
+        caiba**, provado por um provider de teste que entra em pânico se for chamado.
+
+        **Desempenho em release, stores sintéticos** (p50, consulta multi-termo): 30 notas
+        3,2 ms · 100 notas 11,6 ms · 1 000 notas 129 ms · 5 000 notas 642 ms. O custo é dominado
+        pela varredura e pela leitura de cada nota — o preço conhecido de não ter índice (D-04) —
+        e não pelo BM25.
   - [ ] **4.3C — Provider local.** Planejada. A implementação do provider local escolhido pela
         4.3A — embeddings estáticos de token, sem runtime de inferência —, distribuição do
         artefato, ciclo de vida, custo de CPU e memória medidos em Rust, operação offline e
@@ -1271,8 +1313,11 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         elas**: foram congelados em 1.2 e 0.75 e a 4.3B os usa exatamente assim. Reabri-los exige
         três coisas e não duas — um conjunto de tuning novo, um conjunto de avaliação separado que
         não seja usado no ajuste, e a decisão explícita de reabrir os parâmetros. O corpus da 4.3A
-        continua sendo régua de regressão e não serve para nenhuma das duas primeiras. Pode ser
-        fundida com a 4.3B se a implementação mostrar que é mais simples.
+        continua sendo régua de regressão e não serve para nenhuma das duas primeiras.
+
+        **Liberada pela 4.3B, e deliberadamente não fundida com ela.** Fundir teria custado a
+        única coisa que importa quando a recuperação semântica responder mal: distinguir bug do
+        motor de bug do modelo. Com as fases separadas, a 4.3B pode ser auditada sozinha.
   - [ ] **4.3D — Providers remotos opcionais.** Planejada. OpenAI, Gemini, Voyage ou outros
         aprovados, sempre opt-in: o processo `noteit-embed` separado, que é o único com cliente
         HTTP e o único que vê a credencial, falando com o Core por AF_UNIX — de modo que a

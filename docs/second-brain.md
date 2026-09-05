@@ -254,29 +254,62 @@ não acompanha o candidato.
 `reason` é uma **lista de motivos tipados**, não um número:
 
 ```text
-text_match       o texto da consulta ocorre na nota
+text_match       a consulta inteira ocorre no texto visível da nota
+term_match       termos da consulta ocorrem na nota, mas a frase não   (4.3B)
 shared_tag       a nota tem uma tag pedida
 property_match   a nota tem uma propriedade pedida
 task_match       a nota tem uma tarefa que casa
+semantic_match   admitida pelo canal semântico                    (motor 4.3B)
 recent           entrou por recência, na ausência de sinal melhor
 ```
 
+Essa é a **ordem publicada**, e ela é contrato: um candidato lista seus motivos
+nessa sequência, sem repetição. Ela está escrita em `Reason::PUBLISHED_ORDER` e
+fixada por teste, em vez de emergir da ordem em que as funções de sinal
+acontecem de rodar.
+
+`semantic_match` existe no motor desde a 4.3B e **nenhum caminho do produto o
+produz**: o modo que o `noteit_context` usa não tem onde guardar um provider, e
+não há provider. Ele está no catálogo porque um motivo que o Core sabe produzir
+e o esquema não declara é um contrato de fio que mente. Quem liga o canal é a
+4.3C.
+
 Não existe score opaco. Um `0.873` que ninguém consegue auditar não é
-proveniência, é decoração. A ordenação é uma regra escrita e determinística, e a
-posição na lista é o único "rank" publicado. Implementada na 4.2B, ela é
-**total**, em três degraus:
+proveniência, é decoração — e um score no fio ainda amarraria o protocolo à
+escala numérica de um fornecedor. BM25 e cosseno decidem ordem e ficam dentro.
+
+A ordenação é uma regra escrita e determinística, e a posição na lista é o único
+"rank" publicado. Desde a 4.3B ela tem duas camadas. Primeiro a **classe de
+precedência** (4.3A.R1.2 §13), que nada atravessa:
 
 ```text
-1. mais motivos distintos primeiro
-2. depois, escrita mais recentemente — e uma nota sem updated_at
-   vem depois de toda nota que tem um
-3. depois, por note_id
+classe 1  sinais declarados   text_match · shared_tag · property_match · task_match
+classe 2  termos              term_match
+classe 3  semântica           semantic_match
+classe 4  recência            recent — exclusiva, só existe sozinha
 ```
 
-O terceiro degrau não é enfeite. Duas notas escritas no mesmo segundo, ou duas
-sem carimbo nenhum, cairiam na ordem que o filesystem devolveu, e a mesma
-pergunta responderia diferente no mesmo store. É estabilidade, não um score
-escondido.
+A resposta é a concatenação das classes, cada uma ordenada por dentro. Um
+candidato pertence à **classe mais alta** que o admitiu, aparece **uma vez** e
+carrega **todos** os motivos aplicáveis. Dentro de cada uma:
+
+```text
+classe 1   mais sinais declarados · mais recente · note_id
+classe 2   BM25 decrescente · mais motivos · mais recente · note_id
+classe 3   similaridade decrescente · mais recente · note_id
+classe 4   mais recente · note_id
+```
+
+A classe 1 é a ordenação que a 4.2B implementou, **sem alteração** — e "sem
+alteração" é literal: ela conta os sinais *declarados*, não o comprimento da
+lista de motivos, então `term_match` e `semantic_match` não mexem em nenhum
+candidato que já existia. É isso que torna as classes 2 e 3 estritamente
+aditivas, e é assim que "um acerto exato nunca é rebaixado" vira propriedade da
+forma em vez de aposta sobre escalas numéricas.
+
+O último degrau não é enfeite. Duas notas escritas no mesmo segundo, ou duas sem
+carimbo nenhum, cairiam na ordem que o filesystem devolveu, e a mesma pergunta
+responderia diferente no mesmo store. É estabilidade, não um score escondido.
 
 Uma relação **heurística nunca é apresentada como fato**. "Estas notas
 compartilham a tag `Medicina`" é um fato; "estas notas são sobre o mesmo
