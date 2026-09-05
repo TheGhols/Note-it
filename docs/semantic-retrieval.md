@@ -103,11 +103,11 @@ Em qualquer conflito entre nota e derivado, **a nota vence**.
 
 ## 2. O problema, medido
 
-O Context Engine de hoje casa **a consulta inteira como substring** do texto
-dobrado. Não há casamento por termo, não há pontuação e não há ranking além de
-(mais motivos → recência → `note_id`).
+Na baseline histórica pré-4.3B, o Context Engine casava **a consulta inteira como substring** do texto
+dobrado. Não havia casamento por termo, não havia pontuação e não havia ranking além de
+(mais sinais declarados → recência → `note_id`).
 
-Medido contra o binário real, por stdio, sobre store sintético:
+Medido contra o binário real, por stdio, sobre store sintético (baseline pré-4.3B):
 
 ```text
 19 das 30 consultas com resposta voltam VAZIAS
@@ -119,20 +119,21 @@ R@1 0,333   R@3 0,367   R@5 0,367   MRR 0,350
 
 | motor | R@1 | R@3 | R@5 | MRR | custo |
 | --- | --- | --- | --- | --- | --- |
-| lexical de hoje | 0,333 | 0,367 | 0,367 | 0,350 | — |
-| BM25 por termos | 0,667 | 0,767 | 0,833 | 0,728 | nenhuma dependência |
-| BM25 → semântico local | 0,767 | 0,900 | 0,967 | 0,845 | artefato de modelo |
+| baseline pré-BM25 (pré-4.3B) | 0,333 | 0,367 | 0,367 | 0,350 | — |
+| BM25 por termos (protótipo 4.3A) | 0,667 | 0,767 | 0,833 | 0,728 | nenhuma dependência |
+| 4.3B implementada em Rust | 0,633 | 0,767 | 0,833 | 0,711 | em produção (corpus sintético) |
+| BM25 → semântico local (protótipo 4.3A) | 0,767 | 0,900 | 0,967 | 0,845 | artefato de modelo |
 
 O passo lexical entrega **+0,40 de R@3 sem modelo, sem cache, sem artefato e sem
 superfície de privacidade nova**. O semântico acrescenta mais +0,13. Os dois se
 justificam; a ordem passou a ser decidida por número, e é por isso que o lexical
-é a primeira coisa a ser implementada — ele também é o piso para onde tudo
+foi a primeira coisa implementada na 4.3B — ele também é o piso para onde tudo
 degrada.
 
 ## 3. Objetivos e não objetivos
 
 **Objetivos.** Encontrar a nota certa mesmo quando a consulta não usa as palavras
-dela; nunca perder nem rebaixar um acerto exato de hoje; manter cada candidato
+dela; nunca perder nem rebaixar um acerto exato; manter cada candidato
 explicável; funcionar por padrão sem enviar nada para lugar nenhum; e continuar
 inteiramente utilizável sem nada disto.
 
@@ -152,8 +153,22 @@ EmbeddingProvider
     identidade      -> EmbeddingSpaceId
     embed_document(textos) -> vetores        (lote)
     embed_query(texto)     -> vetor
-    limites         -> tamanho de lote, tokens por chamada, dimensões aceitas
 ```
+
+Limites específicos de fornecedor (tamanho de lote, limites de tokens, particionamento
+interno de requisições, restrições do modelo) pertencem internamente a cada provider.
+O Core entrega a lista de textos a embutir e exige do provider um embedding válido por
+texto, ou um erro tipado (`SemanticError`). O Context Engine não aprende limites
+particulares de fornecedores.
+
+**Fronteira de API e minimização, não sandbox.** `EmbeddingProvider` é uma fronteira
+de API e de minimização de dados, não uma sandbox. Implementações in-process
+(`LocalProvider`, 4.3C) são código confiável do Note-it e possuem os privilégios do
+processo. A interface estreita restringe o que o Context Engine entrega diretamente ao
+provider (apenas textos para embutir, sem caminhos, revisões, raízes de store ou
+autoridade de gravação), mas não isola execução de código no mesmo processo. O
+isolamento efetivo de processo é reservado para a Fase 4.3D, onde providers remotos
+conversam via AF_UNIX com o processo separado `noteit-embed`.
 
 `embed_document` e `embed_query` são **funções distintas** e não uma só. Não é
 simetria estética: `intfloat/multilingual-e5-*` exige os prefixos `passage: ` e
@@ -695,14 +710,14 @@ reordenação entre elas**.
 
 **Por que os quatro sinais de hoje ficam na mesma classe, e não em fila.** Foi
 medido, contra o binário real: hoje `TextMatch` **não** tem precedência sobre
-`SharedTag` nem `PropertyMatch`. A ordenação é por contagem de motivos, e uma
+`SharedTag` nem `PropertyMatch`. A ordenação é por contagem de sinais declarados, e uma
 nota com `shared_tag` + `property_match` fica **acima** de uma nota com
 `text_match` sozinho:
 
 ```text
 consulta "hipertensao", tags=[cardio], fonte=diretriz
-   A (tag + propriedade, 2 motivos)   ← primeira
-   B (text_match, 1 motivo)           ← segunda
+   A (tag + propriedade, 2 sinais declarados)   ← primeira
+   B (text_match, 1 sinal declarado)           ← segunda
 ```
 
 Pôr `TextMatch` numa camada acima das outras três seria mudar esse
@@ -714,7 +729,7 @@ acrescentam candidatos abaixo de tudo o que já existia e não movem nada.
 A consequência é a propriedade que a 4.3A.R1 pediu, na forma exata em que ela é
 verdadeira: **um candidato admitido por `TextMatch` nunca é rebaixado por
 `TermMatch` nem por `SemanticMatch`** — porque estes vivem em classes inferiores.
-Ele continua podendo ficar atrás de um candidato de `SharedTag` com mais motivos,
+Ele continua podendo ficar atrás de um candidato de `SharedTag` com mais sinais declarados,
 exatamente como hoje, e isso é preservação e não regressão.
 
 #### Como um candidato com vários sinais escolhe a classe
@@ -725,15 +740,15 @@ frase, carrega a tag e também é semanticamente próxima é um candidato de cla
 com `text_match`, `shared_tag` e `semantic_match` nos motivos.
 
 Corolário: assim que um candidato entra na classe 1, o BM25 e a similaridade
-dele deixam de influenciar sua posição — dentro da classe 1 a ordenação é a de
-hoje. É isso que torna a proteção estrutural em vez de dependente de escala
-numérica.
+dele deixam de influenciar sua posição — dentro da classe 1 a ordenação é por
+quantidade de sinais declarados e recência. É isso que torna a proteção estrutural
+em vez de dependente de escala numérica.
 
 #### Ordenação dentro de cada classe
 
 | classe | 1º | 2º | 3º | 4º |
-| --- | --- | --- | --- | --- |
-| 1 sinais declarados | mais motivos distintos | `updated_at` mais recente, ausente por último | `note_id` | — |
+| --- | --- | --- | --- | --- | --- |
+| 1 sinais declarados | mais sinais declarados | `updated_at` mais recente, ausente por último | `note_id` | — |
 | 2 termos | BM25 decrescente | mais motivos distintos | `updated_at` | `note_id` |
 | 3 semântica | similaridade decrescente | `updated_at` | `note_id` | — |
 | 4 recência | `updated_at` mais recente | `note_id` | — | — |
@@ -952,8 +967,8 @@ Reason::SemanticMatch    admitido pelo canal semântico     (semântico)
 Reason::SharedTag / PropertyMatch / TaskMatch / Recent      (existem)
 ```
 
-Um agente que recebe `semantic_match` sabe que aquela nota **não** usa as
-palavras dele e pode decidir se lê. Isso é o que um motivo dá e um número não.
+Um agente que recebe `semantic_match` sabe que aquela nota foi admitida pelo canal
+semântico e validada por proveniência contra a revisão atual. Isso é o que um motivo dá e um número não.
 
 **Sem score publicado em v1.** Se um dia houver, será uma similaridade de
 cosseno, nomeada `similarity`, nunca `confidence`, `score`, `relevance` nem
@@ -1209,7 +1224,7 @@ rebaixado pelo BM25` · `acerto exato nunca rebaixado pelo semântico` ·
 
 ### A matriz que a 4.3B congela ANTES de escrever o BM25
 
-Estes testes descrevem o motor **de hoje** e devem passar antes de qualquer
+Estes testes descrevem a baseline pré-BM25 e devem passar antes de qualquer
 mudança de ranking, para que a mudança seja medida contra eles e não contra a
 memória de ninguém:
 
@@ -1218,7 +1233,7 @@ memória de ninguém:
 | 1 | casamento de frase exata | admitido, `text_match` nos motivos |
 | 2 | tag sem consulta | admitido, `shared_tag`, **sem** consulta nenhuma |
 | 3 | propriedade sem consulta | admitido, `property_match` |
-| 4 | consulta + tag | ambos admitidos; ordem por contagem de motivos |
+| 4 | consulta + tag | ambos admitidos; ordem por contagem de sinais declarados |
 | 5 | consulta + propriedade | idem |
 | 6 | tarefa com `include_tasks = false` | `task_match` presente, `tasks` vazio |
 | 7 | tarefa com `include_tasks = true` | `task_match` presente, `tasks` preenchido, mesma ordem |
@@ -1226,7 +1241,7 @@ memória de ninguém:
 | 9 | vários motivos na mesma nota | um único candidato, motivos acumulados |
 | 10 | empate final | resolvido por `note_id`, estável entre execuções |
 
-E, sobre o corpus: **para cada consulta** em que o motor de hoje encontra o
+E, sobre o corpus: **para cada consulta** em que a baseline pré-BM25 encontrava o
 ground truth, registrar a posição do acerto; depois do BM25, nenhum desses
 acertos pode estar abaixo da posição registrada. Consulta por consulta, nunca
 por média.

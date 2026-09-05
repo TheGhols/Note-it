@@ -255,11 +255,11 @@ não acompanha o candidato.
 
 ```text
 text_match       a consulta inteira ocorre no texto visível da nota
-term_match       termos da consulta ocorrem na nota, mas a frase não   (4.3B)
+term_match       ao menos um termo lexical normalizado da consulta ocorre na nota (4.3B)
 shared_tag       a nota tem uma tag pedida
 property_match   a nota tem uma propriedade pedida
 task_match       a nota tem uma tarefa que casa
-semantic_match   admitida pelo canal semântico                    (motor 4.3B)
+semantic_match   admitida pelo canal semântico e validada por proveniência (motor 4.3B)
 recent           entrou por recência, na ausência de sinal melhor
 ```
 

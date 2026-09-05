@@ -32,11 +32,15 @@ use uuid::Uuid;
 
 /// Whatever turns text into vectors.
 ///
-/// What it is *not* given is the interesting half. No path, no filename, no
-/// store root, no expected revision, no way to write: a provider receives the
-/// text it has to embed and nothing else, so the worst a bad one can do is
-/// return bad numbers — which the boundary below checks — rather than touch a
-/// note.
+/// `EmbeddingProvider` is an API and data-minimisation boundary, not a sandbox.
+/// Implementations running in-process (such as `LocalProvider` in Phase 4.3C)
+/// are trusted code of the Note-it process and hold full process privileges.
+/// The narrow interface limits what the Context Engine hands directly to the
+/// provider — text chunks rather than paths, filenames, store roots, revisions
+/// or write authority — but does not sandbox in-process execution. True process
+/// boundary isolation is reserved for optional remote providers in Phase 4.3D,
+/// where `noteit-core` communicates over an `AF_UNIX` socket with a separate
+/// `noteit-embed` process.
 ///
 /// `embed_document` and `embed_query` are two functions and not one. Not
 /// symmetry for its own sake: `multilingual-e5` requires the prefixes

@@ -25,16 +25,16 @@ desaparece. Toda a superfície abaixo é organizada em torno de fechar essa port
 Não é um daemon. Não é um servidor de filesystem. Não é uma segunda
 implementação do Note-it.
 
-> **Fase 4.2 em diante.** A arquitetura do Segundo Cérebro — a camada de
-> recuperação de contexto que uma IA externa usará através deste servidor — está
-> em [`docs/second-brain.md`](second-brain.md). Nada dela está implementado; o
-> catálogo abaixo continua sendo exatamente o da Fase 4.1.
+> **Histórico e evolução.** Na Fase 4.1, o catálogo continha 15 tools e a recuperação de contexto
+> ainda não estava implementada. Desde a Fase 4.2, a arquitetura do Segundo Cérebro está implementada
+> via [`noteit_context`](#noteit_context), totalizando 16 tools (veja [`docs/second-brain.md`](second-brain.md)).
+> Desde a Fase 4.3B, a recuperação lexical conta com BM25 em produção e a infraestrutura semântica
+> está presente no Core; contudo, o provider real ainda está ausente e `semantic_match` permanece inalcançável pelo produto.
 
-**Não implementado nesta fase, deliberadamente:** MCP Resources, MCP Prompts,
+**Não implementado neste servidor, deliberadamente:** MCP Resources, MCP Prompts,
 sampling, elicitation, a extensão MCP Tasks, transporte HTTP/SSE/Streamable HTTP,
-OAuth, servidor remoto, IA interna, Segundo Cérebro, embeddings, banco vetorial,
-indexação semântica e RAG. Nada disso está presente, e nada disso é preparado
-aqui.
+OAuth, servidor remoto e IA interna. Banco vetorial externo, provedores de embeddings reais (locais ou remotos)
+e modelos permanecem fora do produto até as Fases 4.3C e 4.3D.
 
 ### Duas fronteiras, dois protocolos
 
