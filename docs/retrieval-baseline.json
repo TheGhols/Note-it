@@ -1,0 +1,348 @@
+{
+  "$schema_version": 1,
+  "consultas": [
+    {
+      "candidatos": 1,
+      "categoria": "lexical-direta",
+      "consulta": "apneia obstrutiva do sono",
+      "id": "q01",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n02"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "lexical-direta",
+      "consulta": "metformina",
+      "id": "q02",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n22"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "lexical-direta",
+      "consulta": "ferritina baixa",
+      "id": "q03",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n11"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "parafrase",
+      "consulta": "problemas para dormir depois do plantão",
+      "id": "q04",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n01",
+        "n28",
+        "n17"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "parafrase",
+      "consulta": "não consigo dormir direito trabalhando à noite",
+      "id": "q05",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n01",
+        "n28"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "sinonimo",
+      "consulta": "pressão alta",
+      "id": "q06",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n06",
+        "n07"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "sinonimo",
+      "consulta": "hipertensão arterial",
+      "id": "q07",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n06",
+        "n07"
+      ]
+    },
+    {
+      "candidatos": 4,
+      "categoria": "consulta-curta",
+      "consulta": "sono",
+      "id": "q08",
+      "posicao_do_acerto": 2,
+      "relevantes": [
+        "n01",
+        "n02",
+        "n03"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "consulta-longa",
+      "consulta": "paciente que trabalha em turno noturno e reclama que não dorme bem durante o dia, o que fazer para ajustar o relógio biológico dele",
+      "id": "q09",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n01",
+        "n28",
+        "n03"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "acentos",
+      "consulta": "hipertensão",
+      "id": "q10",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n06",
+        "n07"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "sem-acentos",
+      "consulta": "hipertensao",
+      "id": "q11",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n06",
+        "n07"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "misto-pt-en",
+      "consulta": "night shift e qualidade do sono",
+      "id": "q12",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n28",
+        "n01"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "tecnico",
+      "consulta": "taxa de filtração glomerular",
+      "id": "q13",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n10"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "tecnico",
+      "consulta": "CKD-EPI",
+      "id": "q14",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n10"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "notas-semelhantes",
+      "consulta": "protocolo de sepse 2025",
+      "id": "q15",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n13"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "distrator-lexical",
+      "consulta": "problema no plantão",
+      "id": "q16",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n04",
+        "n05"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "semantica-distante",
+      "consulta": "estudar melhor para prova",
+      "id": "q17",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n09",
+        "n08"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "semantica-distante",
+      "consulta": "como memorizar conteúdo a longo prazo",
+      "id": "q18",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n08",
+        "n09"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "tarefa",
+      "consulta": "renovar receita",
+      "id": "q19",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n15"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "tag-propriedade",
+      "consulta": "conciliação bancária pendente",
+      "id": "q20",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n16"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "nota-longa",
+      "consulta": "fibrilação atrial instável",
+      "id": "q21",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n14"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "injecao",
+      "consulta": "dormir mal depois de virar a noite",
+      "id": "q22",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n17",
+        "n01",
+        "n28"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "unicode",
+      "consulta": "coração",
+      "id": "q23",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n18"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "unicode",
+      "consulta": "Straße",
+      "id": "q24",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n18"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "sem-resposta",
+      "consulta": "receita de bolo de fubá",
+      "id": "q25",
+      "posicao_do_acerto": null,
+      "relevantes": []
+    },
+    {
+      "candidatos": 0,
+      "categoria": "sem-resposta",
+      "consulta": "configuração do roteador wifi",
+      "id": "q26",
+      "posicao_do_acerto": null,
+      "relevantes": []
+    },
+    {
+      "candidatos": 0,
+      "categoria": "parafrase",
+      "consulta": "remédio para dormir",
+      "id": "q27",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n03"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "sinonimo",
+      "consulta": "açúcar alto no sangue",
+      "id": "q28",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n22"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "parafrase",
+      "consulta": "dor de cabeça preocupante",
+      "id": "q29",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n23"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "parafrase",
+      "consulta": "queimação no estômago à noite",
+      "id": "q30",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n24"
+      ]
+    },
+    {
+      "candidatos": 1,
+      "categoria": "lexical-direta",
+      "consulta": "corticoide inalatório",
+      "id": "q31",
+      "posicao_do_acerto": 1,
+      "relevantes": [
+        "n21"
+      ]
+    },
+    {
+      "candidatos": 0,
+      "categoria": "semantica-distante",
+      "consulta": "cansaço sem explicação",
+      "id": "q32",
+      "posicao_do_acerto": null,
+      "relevantes": [
+        "n25"
+      ]
+    }
+  ],
+  "limite_de_candidatos": 50,
+  "metricas": {
+    "MRR": "0.350",
+    "R@1": "0.333",
+    "R@3": "0.367",
+    "R@5": "0.367",
+    "candidatos_nas_consultas_sem_resposta": 0
+  },
+  "regenerar": "NOTEIT_FREEZE_RETRIEVAL_BASELINE=1 cargo test -p noteit-core --test retrieval_corpus -- --exact freezing_the_baseline_is_an_explicit_act",
+  "sobre": "Posição, consulta por consulta, do primeiro acerto do ground truth do corpus no motor de recuperação do Note-it ANTES do BM25 (Fase 4.3B, commit de baseline 0222883a4284a254156c2af486066b1dcd893644). Régua de regressão: nenhuma consulta pode responder pior do que isto. Gerado a partir de docs/retrieval-corpus.json, que é inteiramente sintético — nenhuma linha vem de nota real."
+}
