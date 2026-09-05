@@ -1068,12 +1068,21 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           conhecido herdado da série 4.2. A 4.2 foi dada por encerrada uma vez
           antes desta R1 e não estava; o que fechou a diferença foi uma
           reprodução no fio, e é essa a régua para a próxima.
-- [ ] **Fase 4.3 — Recuperação semântica / embeddings.** Liberada pela 4.2R.R1. Registrado na 4.2A
-      para não entrar disfarçado na 4.2: embeddings locais, índice vetorial, ranking por
-      similaridade e um eventual índice persistente, se os benchmarks justificarem. Cada um com sua
-      própria análise de privacidade, tamanho, invalidação e honestidade de nomenclatura.
-      Especificação em `docs/semantic-retrieval.md`, justificativa na ADR-056.
-  - [x] **4.3A — Arquitetura, benchmark e contrato.** Gate arquitetural, sem funcionalidade:
+- [ ] **Fase 4.3 — Recuperação semântica independente de fornecedor.** Liberada pela 4.2R.R1.
+      Recuperação semântica *provider-neutral*, com caminho local e offline e providers remotos
+      opcionais configurados explicitamente pelo usuário; índice derivado e reconstruível; ranking
+      híbrido avaliado por benchmark; proveniência entre nota, revisão, chunks e vetores; e
+      **nenhuma alteração na autoridade de escrita das notas**. O Note-it não está construindo uma
+      IA local nem um cliente de nuvem nenhuma: está construindo uma memória semântica cuja fonte
+      da verdade são as notas e cuja recuperação usa o mecanismo que o usuário escolher — a IA que
+      raciocina pode mudar, o provider pode mudar, o índice pode ser apagado e reconstruído, e as
+      notas continuam sendo as notas. Especificação em `docs/semantic-retrieval.md`, justificativa
+      na ADR-056.
+
+      As subfases B a R abaixo são **planejadas e sujeitas às conclusões da própria 4.3A**: se um
+      benchmark mostrar que duas podem ser fundidas, funde-se com justificativa; se uma não for
+      necessária, remove-se com ADR.
+  - [x] **4.3A — Arquitetura, benchmark e contrato multi-provider.** Gate arquitetural, sem funcionalidade:
         nenhum `.rs` tocado, catálogo em 16 tools, `Cargo.lock` byte-idêntico, zero dependência.
         A fase mediu antes de decidir, e a medição mudou a ordem da 4.3.
 
@@ -1111,21 +1120,78 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         vizinho mais próximo. Por isso candidato puramente semântico é rotulado e limitado, em vez
         de cortado por um número que não separa nada.
 
+        **A recuperação é independente de fornecedor.** Um contrato `EmbeddingProvider` com
+        `embed_document` e `embed_query` separados — porque o `e5` exige prefixos, a Voyage
+        prepende instruções por `input_type` e o Gemini tem tipos de tarefa —, e um
+        `EmbeddingSpaceId` que responde a única pergunta que importa: estes dois vetores podem ser
+        comparados? **Dimensão igual não é compatibilidade, e isso foi medido**: truncar os vetores
+        de um modelo para a dimensão de outro produz números perfeitamente calculáveis e derruba o
+        R@3 de 0,933 para 0,133, sem que nada no cálculo avise.
+
+        **Proveniência, medida.** `EmbeddingRecord` carrega `source_revision`, que é a revisão
+        canônica que o Core já calcula — não se inventa um segundo detector de estado. Uma nota
+        indexada com o texto A e editada para B devolve o candidato obsoleto em primeiro lugar sem
+        validação; comparando `source_revision` com a revisão atual ele desaparece, e a comparação
+        custa nada porque não precisa ler a nota. A nota é lida depois, e **é a leitura que produz
+        o snippet publicado, nunca o cache**. `source_revision` é chave de cache e mais nada: nunca
+        é publicada, nunca chega ao agente, nunca autoriza escrita — o atalho
+        `embedding → revision → write` é proibido.
+
+        **Rede sem afrouxar a fronteira.** O provider remoto vive num processo separado,
+        `noteit-embed`, que é o único com cliente HTTP e o único que vê a credencial, falando com o
+        Core pelo mesmo AF_UNIX que a autoridade de escrita já usa e que o gate já permite por
+        nome. Assim `noteit-mcp` e `noteit-core` continuam sem crate HTTP no grafo, sem
+        `std::net` e sem credencial. O worker só existe quando um provider remoto está
+        configurado. Providers remotos verificados em fontes oficiais em 2026-09-04 — OpenAI,
+        Gemini e Voyage, com modelos, dimensões, limites e preços registrados — e **nenhum medido**,
+        por não haver credencial na sessão: documentação de fornecedor não vira benchmark interno.
+        Não existe provider da Anthropic, que não tem modelo próprio de embeddings e aponta a
+        Voyage.
+
+        **Padrão recomendado:** lexical por termos, sem modelo, sem chave e sem download. Nenhuma
+        credencial remota é requisito do primeiro uso, e nem o modelo local é.
+
         **O que não foi medido, dito por inteiro:** nada foi implementado em Rust e os números vêm
-        de um protótipo Python com ONNX Runtime; RSS não foi medido de forma utilizável; o corpus
-        tem 32 consultas e não separa dois modelos parecidos; quantização int8 não foi avaliada em
-        qualidade; a licença de `model2vec-rs` não foi verificada.
+        de um protótipo Python com ONNX Runtime; **nenhum provider remoto foi medido**, por
+        ausência de credencial; RSS não foi medido de forma utilizável; o corpus tem 32 consultas e
+        não separa dois modelos parecidos; quantização int8 não foi avaliada em qualidade; a
+        licença de `model2vec-rs` não foi verificada; e o `voyage-4-nano`, de pesos abertos, não
+        foi avaliado como provider local.
 
         **Fechado junto:** DOC-01 e DOC-02, duas frases da 4.2R.R1 que descreviam comportamento que
         o código não tem mais.
-  - [ ] **4.3B — Recuperação lexical por termos.** Liberada pela 4.3A e é por onde a 4.3 começa,
-        porque é o maior ganho medido e o mais barato: casamento por termo e ranking BM25 dentro do
-        Context Engine, sobre a dobra que o `search::fold` já faz, com o corpus da 4.3A como
-        regressão de qualidade. Sem modelo, sem cache, sem artefato e sem dependência nova.
-  - [ ] **4.3C — Camada semântica local.** Depois da 4.3B: embeddings estáticos de token, chunk por
-        parágrafo, índice em memória por força bruta, encadeamento atrás do lexical,
-        `Reason::SemanticMatch`, degradação para lexical em toda falha. As questões que a 4.3A
-        deixou abertas — quantização, licença, `k1`/`b`, RSS em Rust — são pré-requisito desta.
+  - [ ] **4.3B — Motor de recuperação provider-neutral.** Planejada. Os tipos centrais e o motor,
+        sem nenhum provider remoto e sem artefato de modelo. **Começa pelo lexical**, porque é o
+        que a 4.3A mediu como maior ganho e menor custo, e porque é o piso para onde tudo o mais
+        degrada: casamento por termo e ranking BM25 dentro do Context Engine, sobre a dobra que o
+        `search::fold` já faz, com o corpus da 4.3A como regressão. Depois, o esqueleto que a parte
+        semântica vai ocupar: `EmbeddingProvider`, `EmbeddingSpaceId`, `EmbeddingRecord`, chunker
+        versionado, identidade de chunk, validação de proveniência, índice abstrato em memória,
+        encadeamento lexical→semântico, política de fallback e invalidação. Sem dependência nova.
+  - [ ] **4.3C — Provider local.** Planejada. A implementação do provider local escolhido pela
+        4.3A — embeddings estáticos de token, sem runtime de inferência —, distribuição do
+        artefato, ciclo de vida, custo de CPU e memória medidos em Rust, operação offline e
+        indexação incremental. As questões que a 4.3A deixou abertas são pré-requisito: qualidade
+        sob quantização, licença de `model2vec-rs`, `k1`/`b` do BM25 confirmados contra o corpus e
+        RSS real. Pode ser fundida com a 4.3B se a implementação mostrar que é mais simples.
+  - [ ] **4.3D — Providers remotos opcionais.** Planejada. OpenAI, Gemini, Voyage ou outros
+        aprovados, sempre opt-in: o processo `noteit-embed` separado, que é o único com cliente
+        HTTP e o único que vê a credencial, falando com o Core por AF_UNIX — de modo que a
+        fronteira de rede do MCP e do Core seja **estendida e não afrouxada**. Credenciais, lote,
+        limites de taxa, timeouts, erros tipados, aviso de privacidade, troca de provider e reuso
+        ou reconstrução de índice. Cache persistente é obrigatório aqui, porque no modo remoto
+        reindexar custa dinheiro. Nenhum `AnthropicEmbeddingProvider`: a documentação oficial diz
+        que a Anthropic não tem modelo próprio de embeddings.
+  - [ ] **4.3E — Integração do Segundo Cérebro.** Planejada. `noteit_context` publicando o canal de
+        recuperação como motivo, superfície de CLI, configuração, estado do índice, ranking
+        híbrido, explicabilidade, fallback e comportamento na troca de provider. As 16 tools são
+        preservadas salvo decisão posterior extremamente justificada.
+  - [ ] **4.3R — Auditoria ofensiva da recuperação semântica.** Planejada. Vetor obsoleto, índice
+        trocado, provider trocado, modelo trocado dentro do mesmo provider, dimensão errada,
+        NaN/Inf, modelo ausente, cache corrompido, symlink no cache, prompt injection, resposta
+        remota hostil, erros de API, segredos, concorrência, exaustão de recurso, consulta enorme,
+        nota enorme, milhares de notas, queda durante reconstrução, edição durante a recuperação,
+        lixeira e restauração, autoridade de escrita e orçamento de resposta do MCP.
 
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 

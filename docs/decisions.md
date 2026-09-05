@@ -2077,7 +2077,7 @@ servidor e não a entrada de ninguém.
 
 ---
 
-## ADR-056: A recuperação melhora primeiro por termos, e só depois por embeddings
+## ADR-056: A recuperação melhora primeiro por termos, e o embedding é de quem o usuário escolher
 
 **Contexto.** A Fase 4.3 foi reservada para embeddings locais, índice vetorial e
 ranking por similaridade. A 4.3A não implementou nada disso: mediu primeiro, e a
@@ -2217,6 +2217,185 @@ nada em `revision`, `expected_revision`, `WriteResult` ou no protocolo muda.
   em consideração e fica registrado que não esteve.
 * **Substituir o motor lexical pelo semântico** — o semântico sozinho perde
   casos exatos que hoje funcionam.
+
+**Provider abstraction.** Existe uma interface, `EmbeddingProvider`, e nenhuma
+lógica de fornecedor espalhada pelo chunker, pelo índice, pelo ranking ou pelo
+Context Engine. Ela expõe `embed_document` e `embed_query` **separadamente**, e
+isso não é simetria estética: o `e5` exige os prefixos `passage: ` e `query: `, a
+Voyage prepende instruções diferentes conforme `input_type`, e o
+`gemini-embedding-001` tem `RETRIEVAL_DOCUMENT` e `RETRIEVAL_QUERY`. Uma função
+única obrigaria cada chamador a saber disso, que é exatamente o acoplamento que a
+interface existe para conter. Não existe `AnthropicProvider`: em 2026-09-04 a
+documentação oficial diz *"Anthropic does not offer its own embedding model"* e
+aponta a Voyage. Registrar um provider inexistente seria inventar API.
+
+**Local vs remote.** Dois modos oficiais e intercambiáveis. O local não envia
+nada, funciona offline, não tem chave nem cobrança, e roda em processo — um
+modelo estático é uma tabela e uma média, não há runtime a isolar. O remoto é
+**opt-in explícito**: nada sai da máquina porque uma atualização habilitou
+recuperação semântica. A distinção é dita e não deduzida — "o conteúdo não sai
+desta máquina" contra "trechos das suas notas são enviados para <provider>".
+Índice local não é privacidade: se o provider é remoto, o texto saiu para ser
+embedado, mesmo que o vetor volte. E o LLM é independente do provider: o host MCP
+não escolhe o fornecedor de embeddings, a configuração do Note-it escolhe.
+Nenhuma regra do tipo "ChatGPT → OpenAI" ou "Claude → Voyage".
+
+**Network boundary.** A fronteira de rede do MCP e do Core **não é afrouxada**.
+Ela é o motivo do desenho:
+
+```text
+noteit-mcp ──► noteit-core ──► EmbeddingProvider (trait)
+  sem rede        sem rede         ├── LocalProvider   em processo, sem rede
+                                   └── RemoteProvider  cliente do worker
+                                            │ AF_UNIX, já permitido pelo gate
+                                            ▼
+                                     noteit-embed  ← processo separado, o único
+                                            │        com cliente HTTP e o único
+                                            ▼        que vê a credencial
+                                     api do provider
+```
+
+O worker separado não está aí por elegância — a 4.1R1.1 e a 4.2B ensinaram a
+desconfiar disso. Ele é a única forma de ter provider remoto sem (1) pôr
+`reqwest`/`hyper` no grafo do `noteit-mcp`, o que reprova o gate; (2) pôr a
+credencial no processo que fala com o agente; (3) dar ao MCP a capacidade
+genérica de fazer HTTP. O canal é o mesmo padrão AF_UNIX da autoridade de
+escrita, que o `check-mcp-boundary` já permite **por nome**, distinguindo família
+de endereço de "socket" (ADR-047). O worker só existe quando um provider remoto
+está configurado: no modo local não é iniciado. A subfase que o implementar
+**estende** o gate — `noteit-embed` é o único lugar onde uma crate HTTP é
+permitida, e ele não ganha acesso ao store.
+
+**Credential boundary.** Uma chave nunca está em nota, front matter, índice,
+embedding, log, resposta MCP, stdout, stderr sem redação, Git ou documentação
+gerada. Configuração não secreta (provider, modelo, dimensão, modo, fallback) vai
+onde a configuração já vai; credencial não. Ordem proposta: variável de ambiente
+do processo `noteit-embed`, depois Secret Service/keyring, e arquivo com
+permissão restrita como último recurso e dito como tal. Nenhum armazenamento
+inseguro "só para o protótipo". O cliente MCP não precisa saber qual credencial o
+Note-it usa, e não há tool que a devolva. Erros de provider são tipados
+(`Unavailable`, `Authentication`, `RateLimited`, `InvalidResponse`,
+`ModelUnavailable`, `DimensionMismatch`) com mensagem pública escolhida pelo
+Note-it — nunca `format!("{external_error}")` no fio. É a lição da 4.2R.R1
+aplicada antes do defeito existir: **o fornecedor não escreve a mensagem pública
+do Note-it**.
+
+**EmbeddingSpaceId.** Responde uma pergunta só: estes dois vetores podem ser
+comparados? `{provider, model, model_version, dimension, task, normalization}`,
+e só entram na mesma busca se forem **iguais** — não "compatíveis o suficiente".
+
+Dimensão igual **não** é compatibilidade, e isso foi medido em vez de suposto.
+Truncando os vetores de um modelo para a dimensão de outro, o que produz números
+perfeitamente calculáveis:
+
+```text
+mesmo espaço      R@1 0,700   R@3 0,933   R@5 0,967   MRR 0,812
+espaços cruzados  R@1 0,033   R@3 0,133   R@5 0,133   MRR 0,094
+```
+
+O ranking colapsa e nada no cálculo avisa. Mesmo provider com modelo novo é
+espaço novo até prova explícita em contrário.
+
+**Note-vector provenance.** `EmbeddingRecord {note_id, source_revision, chunk_id,
+chunker_version, space, vector}`. `source_revision` é a **revisão canônica que o
+Core já calcula** — não se inventa um segundo detector de estado, e a 4.2A.R1 já
+registrou o custo de ter dois. `chunk_id` é `note_id + revision + ordinal + hash
+do texto do chunk`, para que notas diferentes de texto igual não colidam.
+
+E a regra que sustenta a Fase 4.2: **`source_revision` é chave de cache e mais
+nada**. Nunca é publicada num candidato, nunca chega ao agente, nunca autoriza
+escrita. O atalho `embedding → revision → write` é proibido; a cadeia continua
+sendo descobrir → `noteit_read` → revisão → decidir → `expected_revision`.
+
+**Staleness.** Medido. Uma nota indexada com o texto A é editada para B; o índice
+ainda tem o vetor de A. Consultando o assunto de A: sem validação de proveniência
+o candidato obsoleto vem em primeiro (`sim=0,5954`); comparando
+`source_revision` com a revisão atual ele desaparece. A comparação detecta o
+vetor velho **sem ler a nota**, e a nota só é lida depois — **é a leitura que
+produz o snippet publicado, nunca o cache**. Um registro obsoleto é descartado da
+resposta e agendado para reindexação. Daí também a decisão de o índice guardar
+apenas vetor e metadados, e nenhum texto: guardar texto pouparia uma leitura que
+o motor já faz por candidato (D-27) e compraria um segundo lugar onde conteúdo de
+nota vive em disco e uma segunda maneira de publicar texto velho.
+
+**Provider/model switching e multi-index.** Trocar de provider não pode comparar
+vetores de espaços diferentes — a medição acima diz o que acontece se comparar.
+Recomendado **um índice ativo por vez em v1**, com o diretório nomeado pelo
+`EmbeddingSpaceId`, de modo que guardar mais de um seja mudança de política de
+limpeza e não de formato. No modo local, rebuild custa 7 s para 10 000 notas e
+não justifica guardar espaços mortos; no modo remoto custa dinheiro, e é ali que
+guardar o espaço anterior compensa — decisão da subfase que implementar o remoto,
+com número na mão.
+
+**Reindexing.** Incremental por nota quando a revisão de uma nota muda; global
+quando muda o chunker, o provider, o modelo, a dimensão, a task ou a versão do
+formato. Uma edição numa nota não pode recalcular dez mil. Indexar é **leitura**:
+não move conteúdo, front matter, `updated_at`, `created_at`, `revision` nem
+`mtime` — a Fase 3.4R levou uma fase inteira para que abrir uma nota não movesse
+`updated_at`, e isto não desfaz aquilo.
+
+**Persistência, e por que a resposta difere por modo.** No local, o custo de
+reindexar é CPU ociosa e persistir não se justifica em v1. No remoto, cada
+reindexação custa tokens pagos e latência, então persistir vale desde a primeira
+nota — **o usuário não pode pagar para embedar tudo a cada busca**. A mesma
+pergunta tem respostas diferentes, e a especificação não finge que tem uma só.
+Quando houver cache: em `$XDG_CACHE_HOME/note-it/`, nunca em `notes/`, com
+cabeçalho que se autoidentifica (formato, `EmbeddingSpaceId` inteiro, versão do
+chunker), permissões restritas, validação na carga, e ponto de commit por
+renomeação atômica — construir em temporário, validar, publicar. Queda antes
+deixa o índice anterior válido; queda depois deixa o novo reconhecível; nunca
+meia-indexação que pareça completa. Incompatibilidade → **reconstruir**, jamais
+reinterpretar.
+
+**Privacy disclosure.** Sem telemetria, sem analytics, sem upload que não seja a
+geração de embedding do provider escolhido, para o endpoint daquele provider. O
+usuário deve poder ver provider, modelo, local/remoto, última indexação e estado
+do índice. Um vetor é dado derivado de nota privada e não é "não sensível" por
+não ser texto: permissões restritas e nunca publicado.
+
+**LLM independence.** O Note-it não está construindo uma IA local, nem um cliente
+da OpenAI, nem um cliente do Gemini. Está construindo uma memória semântica
+independente de fornecedor, cuja fonte da verdade são as notas e cuja recuperação
+usa o mecanismo que o usuário escolher. Claude, ChatGPT, Gemini ou qualquer host
+MCP futuro usam o mesmo Segundo Cérebro, com qualquer provider de embeddings.
+
+**Vendor lock-in.** Trocar de provider não migra nota: no máximo reindexa.
+Nenhum metadado de provider entra na nota — provider pertence à configuração e ao
+cache, e o Markdown continua portátil e sem saber que embeddings existem. Os
+serviços gerenciados de vetores dos fornecedores **não** são adotados por
+conveniência: mudariam a arquitetura de "o Note-it é dono do seu índice" para "o
+fornecedor é dono do estado da recuperação". Seriam decisão separada e de alto
+impacto; a preferência desta fase é explícita e contrária.
+
+**Embedding não valida fato.** Embedding mede proximidade representacional. Score
+alto não torna um texto verdadeiro; score baixo não o torna falso. Ele decide *o
+que talvez valha a pena ler*, não *o que é verdade*. Daí a forma do fluxo: o
+agente recebe **texto da nota atual** e nunca vetores, e é a leitura do estado
+atual que vira evidência. Uma arquitetura em que o LLM recebe números não tem como
+ser verificada por ninguém.
+
+**Providers remotos, verificados em 2026-09-04 nas fontes oficiais e não
+medidos.** OpenAI `text-embedding-3-small` 1536 dim reduzíveis, 8 192 tokens,
+US$ 0,02/1M; `-3-large` 3072, US$ 0,13/1M; `ada-002` 1536 fixa, US$ 0,10/1M;
+array por requisição e Batch a −50%. Gemini `gemini-embedding-2` 128–3072, 8 192
+tokens, US$ 0,20/1M texto; `gemini-embedding-001` 128–3072, 2 048 tokens,
+US$ 0,15/1M, com tipos de tarefa por parâmetro; mais de 100 idiomas, Batch a
+−50%, faixa gratuita. Voyage série 4 com 1024 padrão e 256/512/2048 por
+Matryoshka, contexto de 32 000, `input_type` query/document, lote de até 1 000
+textos, quantização na resposta, 200 milhões de tokens grátis por conta;
+`voyage-4-lite` US$ 0,02/1M, `voyage-4` US$ 0,06/1M, `voyage-4-large`
+US$ 0,12/1M. **Nenhum foi medido**: sem credencial nesta sessão, e documentação
+de fornecedor não é benchmark interno. `voyage-4-nano` tem pesos abertos sob
+Apache-2.0 e é o único candidato que poderia um dia ser provider local e remoto
+no mesmo espaço vetorial — não avaliado.
+
+**Padrão recomendado.** `DEFAULT` lexical por termos — sem modelo, sem chave, sem
+download. `PRIVACIDADE/OFFLINE` local estático, quando o usuário ligar.
+`MELHOR QUALIDADE` por medir, provavelmente remoto e **sem evidência ainda**.
+`REMOTO OPCIONAL` sempre opt-in. Nenhuma chave é requisito do primeiro uso, e nem
+o modelo local é: o padrão de fábrica leva R@3 de 0,367 a 0,767 e não baixa nada.
+Benchmark não é lock-in — mesmo que o local ganhe, os remotos continuam; mesmo
+que um remoto ganhe em qualidade, o local continua.
 
 **Questões deixadas para a implementação.** Qualidade sob quantização int8 dos
 modelos estáticos; verificação da licença de `model2vec-rs`, que o `crates.io`
