@@ -17,17 +17,29 @@ Note-it tem uma autoridade de domínio/persistência headless e adaptadores em t
  │ GTK4 + layer-shell +    │ │ binário headless   │ │ binário headless    │
  │ WebKit; instância única,│ │ terminal / script  │ │ stdio, MCP oficial  │
  │ ciclo de vida, janelas  │ │                    │ │ iniciado pelo host  │
- └─────────────────────▲───┘ └────────────────────┘ └─────────────────────┘
-                       │ mensagens JSON
- ┌─────────────────────▼──────────────────────┐
- │ TypeScript WebView: Vite + Tiptap          │
- │ editor, serializador Markdown, sanitizador │
- └────────────────────────────────────────────┘
+ └─────────────────────▲───┘ └──────────┬─────────┘ └──┬──────────────────┘
+                       │                   │             │
+                       │                   └──────┬──────┘
+                       │ mensagens JSON     ┌──────▼────────────────────────┐
+                       │                    │ noteit-embedding-local        │
+ ┌─────────────────────▼──────────────────┐ │ implementa EmbeddingProvider  │
+ │ TypeScript WebView: Vite + Tiptap      │ │ tokenizer + tabela, sem rede  │
+ │ editor, serializador Markdown, sanit.  │ │ carregado só se o usuário     │
+ └────────────────────────────────────────┘ │ ligar a semântica             │
+                                            └───────────────────────────────┘
 ```
 
-A direção da dependência é imposta por Cargo: o pacote desktop (`note-it`), o pacote CLI (`noteit-cli`) e o pacote MCP (`noteit-mcp`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop, de CLI ou de MCP. `scripts/check-core-boundary`, `scripts/check-cli-boundary` e `scripts/check-mcp-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless; o do MCP verifica ainda que nenhuma pilha de rede, nenhum acesso direto ao sistema de arquivos e nenhuma escrita em stdout apareçam ali — e, desde a 4.1R1.1, cobre também o `noteit-core`, para onde o adaptador MCP delega quase tudo: nenhuma API de Internet nos dois crates, e o socket Unix da autoridade permitido apenas no Core. Consulte `docs/mcp.md` e a ADR-047.
+A direção da dependência é imposta por Cargo: o pacote desktop (`note-it`), o pacote CLI (`noteit-cli`) e o pacote MCP (`noteit-mcp`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop, de CLI ou de MCP.
+
+Desde a 4.3C há um quinto crate, `noteit-embedding-local`, e a seta aponta na direção que importa: **ele depende do Core, e o Core não sabe que ele existe.** `noteit-core` define o contrato `EmbeddingProvider` e raciocina nos termos dele; o tokenizer, o formato dos pesos e a média que produz um vetor vivem do outro lado de uma fronteira de crate, que um tipo não atravessa por acidente. `noteit-mcp` e `noteit-cli` dependem dos dois — o servidor para construir o provider quando a configuração pede, a CLI só para saber onde o artefato deveria estar. Estar ligado ao binário não é estar carregado: no padrão de fábrica nenhum artefato é lido e nenhum modelo ocupa memória, e é isso que torna ligar a semântica uma questão de configuração e não de qual binário alguém instalou. `scripts/check-embedding-boundary` prova que esse crate não tem HTTP, TLS, socket, runtime de inferência, nenhuma forma de escrever um arquivo e nenhum identificador do store. `scripts/check-core-boundary`, `scripts/check-cli-boundary` e `scripts/check-mcp-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless; o do MCP verifica ainda que nenhuma pilha de rede, nenhum acesso direto ao sistema de arquivos e nenhuma escrita em stdout apareçam ali — e, desde a 4.1R1.1, cobre também o `noteit-core`, para onde o adaptador MCP delega quase tudo: nenhuma API de Internet nos dois crates, e o socket Unix da autoridade permitido apenas no Core. Consulte `docs/mcp.md` e a ADR-047.
 
 `noteit-core/src/authority.rs` é a razão de haver apenas uma resposta para "quem pode gravar agora". Ele começou dentro da CLI e mudou para o Core quando o servidor MCP passou a ser um segundo escritor programático: duas cópias dessa decisão acabam sendo duas respostas, e o lease só funciona porque há uma. A CLI o reexporta sob o nome que sempre usou.
+
+## Componentes do provider local (`noteit-embedding-local`, Rust)
+
+- `noteit-embedding-local/src/artifact.rs`: os dois arquivos do artefato, lidos e recusados por todos os motivos pelos quais podem ser recusados — ausente, não regular (um symlink é recusado, não seguido), ilegível, vazio, grande demais — e depois hasheados. `identity_of` monta o `ArtifactManifestV1` e deriva a identidade **dos bytes que foram lidos**, nunca de um nome nem de um digest que alguém informou.
+- `noteit-embedding-local/src/table.rs`: a tabela de embeddings, lida em posição dentro do mesmo buffer cujo SHA-256 virou a identidade — nada é convertido ou copiado entre o hash e a aritmética. `pool` é a média das linhas, normalizada em L2; um texto do qual não sobra linha nenhuma devolve `None`, porque a origem não tem direção.
+- `noteit-embedding-local/src/lib.rs`: `LocalProvider`, a receita versionada (§26.3 de `docs/semantic-retrieval.md`), o artefato fixado e o diretório XDG onde ele mora. Não tem campo onde um caminho de store ou uma autoridade de escrita caiba, e é por isso que "o provider não pode gravar uma nota" não precisa de verificação em tempo de execução.
 
 ## Componentes do Core (`noteit-core`, Rust)
 

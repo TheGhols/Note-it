@@ -1,9 +1,9 @@
 # Recuperação semântica — especificação
 
-Decidido na Fase 4.3A, corrigido nas R1, R1.1 e R1.2, e **parcialmente
-implementado na 4.3B**. Este documento é a especificação que as subfases de
-implementação consomem, e a régua contra a qual elas são medidas. Justificativa e
-medições nas ADR-056 e ADR-057.
+Decidido na Fase 4.3A, corrigido nas R1, R1.1 e R1.2, implementado no lexical
+pela 4.3B e **no provider local pela 4.3C**. Este documento é a especificação que
+as subfases de implementação consomem, e a régua contra a qual elas são medidas.
+Justificativa e medições nas ADR-056, ADR-057 e ADR-058.
 
 O corpus de avaliação está em [`retrieval-corpus.json`](retrieval-corpus.json), e
 a posição, consulta por consulta, do motor de antes do BM25 está congelada em
@@ -12,7 +12,7 @@ a posição, consulta por consulta, do motor de antes do BM25 está congelada em
 ## Estado: o que existe em código, e o que ainda é especificação
 
 A distinção importa, porque um documento que descreve tudo no presente vira uma
-promessa que ninguém fez. Em 2026-09-05:
+promessa que ninguém fez. Em 2026-09-05, depois da 4.3C:
 
 | | estado | onde |
 | --- | --- | --- |
@@ -23,16 +23,21 @@ promessa que ninguém fez. Em 2026-09-05:
 | chunker versionado e `ChunkId` (§14) | **implementado** | `noteit-core/src/chunking.rs` |
 | `EmbeddingProvider`, `EmbeddingRecord`, índice em memória (§4, §6, §15) | **implementado** | `noteit-core/src/semantic.rs` |
 | validação de proveniência e invalidação (§7) | **implementado** | `context.rs` |
-| `Reason::SemanticMatch`, publicado como `semantic_match` | **implementado no motor, inalcançável pelo produto** | — |
-| provider local, modelo, artefato distribuído | **especificação** | 4.3C |
+| **`LocalProvider`, tokenizer, tabela, identidade dos bytes** | **implementado (4.3C)** | `noteit-embedding-local/` |
+| **modelo local `potion-multilingual-128M`, artefato provisionado** | **implementado (4.3C)** | `scripts/fetch-embedding-artifact` |
+| **configuração de usuário `[semantic_retrieval]` (§12, §22)** | **implementado (4.3C)** | `noteit-core/src/settings.rs` |
+| **ciclo de vida do índice: carga única, reuso, incremental (§15, §16)** | **implementado (4.3C)** | `noteit-mcp/src/semantic.rs` |
+| **`Reason::SemanticMatch`, alcançável quando o usuário liga** | **implementado (4.3C)** | `context.rs`, `noteit-mcp/src/contract.rs` |
+| **`SemanticStatus` publicado no `noteit_context`** | **implementado (4.3C)** | `noteit-mcp/src/contract.rs` |
 | providers remotos, credenciais, `noteit-embed` (§8, §9, §10) | **especificação** | 4.3D |
-| cache em disco (§15.1), configuração de usuário (§12) | **especificação** | 4.3C/4.3D |
+| cache vetorial em disco (§15.1) | **especificação**, e continua sem existir | 4.3D |
+| ANN, banco vetorial, score publicado | **não implementado, por decisão** | ADR-056 |
 
-"Inalcançável pelo produto" é literal e estrutural: o modo de recuperação que o
-`noteit_context` usa é uma variante de enum **sem campo onde um provider caiba**.
-Não há configuração ausente e não há flag desligada — não existe o que ligar. O
-motivo está no esquema porque um motivo que o Core sabe produzir e o esquema não
-declara é um contrato de fio que mente.
+**O padrão de fábrica não mudou e não muda por versão.** Uma instalação nova, e
+uma instalação que atualizou e nunca foi configurada, continuam em
+`lexical_only`: nenhum modelo é carregado, nenhum artefato é lido, nenhum índice
+é construído e nada é baixado. O que a 4.3C acrescentou foi **o que acontece
+quando o usuário liga**, e ligar continua sendo um ato dele.
 
 O que o Note-it está construindo não é uma IA local, nem um cliente da OpenAI,
 nem um cliente do Gemini. É **uma memória semântica independente de fornecedor,
@@ -1091,12 +1096,12 @@ remoto, e reindexação incremental um requisito e não uma otimização.
 | dimensão | Local (estático) | OpenAI | Gemini | Voyage |
 | --- | --- | --- | --- | --- |
 | qualidade PT-BR | MEASURED: bem no corpus | UNKNOWN | UNKNOWN | UNKNOWN |
-| R@3 (encadeado) | MEASURED 0,900 | UNKNOWN | UNKNOWN | UNKNOWN |
-| MRR (encadeado) | MEASURED 0,845 | UNKNOWN | UNKNOWN | UNKNOWN |
-| latência de indexação | MEASURED 1 250–1 400 notas/s | UNKNOWN (rede) | UNKNOWN | UNKNOWN |
-| latência de consulta | MEASURED 3,5 ms @ 10 k | UNKNOWN (rede) | UNKNOWN | UNKNOWN |
+| R@3 (encadeado) | **MEASURED em Rust 0,900** | UNKNOWN | UNKNOWN | UNKNOWN |
+| MRR (encadeado) | **MEASURED em Rust 0,828** (0,845 no protótipo) | UNKNOWN | UNKNOWN | UNKNOWN |
+| latência de indexação | **MEASURED em Rust 4 600 notas/s** | UNKNOWN (rede) | UNKNOWN | UNKNOWN |
+| latência de consulta | **MEASURED em Rust 8,7 ms @ 10 k vetores** | UNKNOWN (rede) | UNKNOWN | UNKNOWN |
 | CPU local | alta na indexação | mínima | mínima | mínima |
-| RAM local | UNKNOWN em Rust; o artefato domina | mínima | mínima | mínima |
+| RAM local | **MEASURED em Rust 1,007 GiB**; o tokenizer domina | mínima | mínima | mínima |
 | disco | 108–512 MB de artefato + vetores | só vetores | só vetores | só vetores |
 | custo de API | N/A | DOCUMENTED US$ 0,02–0,13 /1M | DOCUMENTED US$ 0,15–0,20 /1M | DOCUMENTED US$ 0,02–0,12 /1M |
 | offline | **SIM** | NÃO | NÃO | NÃO |
@@ -1185,17 +1190,266 @@ foi a última indexação, e o estado do índice.
 
 ## 25. Orçamentos propostos
 
-| grandeza | orçamento | de onde vem |
-| --- | --- | --- |
-| indexação a frio, 1 000 notas (local) | ≤ 2 s | medido 0,79 s em Python |
-| indexação a frio, 10 000 notas (local) | ≤ 20 s | medido 7,13 s |
-| consulta quente, 10 000 vetores | ≤ 20 ms | medido 3,5 ms p50 / 6,9 ms p95 |
-| carga do artefato local | ≤ 2 s | medido 1,0–1,8 s |
-| RSS acrescido pelo modelo | a medir em Rust | os números desta fase são de processo Python e **não são representativos** |
-| consulta com provider remoto | a medir | latência de rede domina |
-| resposta MCP | inalterada | os tetos da 4.2R continuam valendo |
+| grandeza | orçamento | de onde vem | **medido em Rust (4.3C)** |
+| --- | --- | --- | --- |
+| indexação a frio, 1 000 notas (local) | ≤ 2 s | medido 0,79 s em Python | **0,274 s** ✔ |
+| indexação a frio, 10 000 notas (local) | ≤ 20 s | medido 7,13 s | **2,16 s** ✔ |
+| consulta quente, 10 000 vetores | ≤ 20 ms | medido 3,5 ms p50 / 6,9 ms p95 | **8,73 ms p50 / 10,51 ms p95** ✔ |
+| carga do artefato local | ≤ 2 s | medido 1,0–1,8 s, **sem verificação do artefato** | **3,48 s** ✘ — §26.7 |
+| RSS acrescido pelo modelo | a medir em Rust | os números da 4.3A são de processo Python e **não são representativos** | **1,007 GiB**, medido |
+| consulta com provider remoto | a medir | latência de rede domina | 4.3D |
+| resposta MCP | inalterada | os tetos da 4.2R continuam valendo | inalterada ✔ |
 
-## 26. O que a 4.3A não mediu
+O único orçamento não atendido é a carga do artefato, e §26.7 mostra a medição
+componente a componente em vez de mover o número: o orçamento foi derivado de uma
+operação que não verificava o artefato, e a verificação — obrigatória por §5.1 —
+responde por 83% do tempo.
+
+## 26. O provider local, como foi implementado (4.3C)
+
+Tudo nesta seção é **código**, medido nesta máquina em release. Onde um número
+diverge de um orçamento, o número está aqui e o orçamento não foi movido.
+
+### 26.1 A escolha, e o que foi rejeitado
+
+Três caminhos Rust foram levados a sério e medidos, e não apenas comparados por
+reputação:
+
+| candidato | licença | por que ficou ou saiu |
+| --- | --- | --- |
+| **tabela estática lida com `tokenizers` + `safetensors`** | Apache-2.0 / Apache-2.0 | **escolhido.** Nenhum runtime de inferência, nenhum C++, nenhum binário baixado em tempo de build, nenhuma feature de rede a desligar |
+| `model2vec-rs` 0.2.1 | MIT (verificado no `LICENSE` da crate; o `crates.io` publica `non-standard` por usar `license-file`) | **rejeitado como dependência, mantido como oráculo.** Traz `clap`, `ndarray 0.15`, `half` e `anyhow` como dependências obrigatórias; liga `onig` (C) e `hf-hub`+`ureq` por padrão; `encode` faz `expect` e entra em pânico; os erros são `anyhow` |
+| `fastembed` 6.0.2 → `ort` 2.0.0-rc.13 | Apache-2.0 / MIT-Apache | **rejeitado.** Exige o ONNX Runtime — ou baixado em tempo de build, que é exatamente o que a fronteira de rede existe para impedir, ou fornecido pelo sistema, o que troca um download por um requisito de instalação. Release candidate |
+
+**A implementação direta foi verificada contra a de referência, não assumida.**
+Um projeto isolado em `/tmp` carregou os mesmos bytes nas duas e comparou os
+vetores de oito textos — português clínico, string vazia, um único caractere,
+Unicode hostil com marca de direção, prompt injection e uma frase longa — em dois
+modelos:
+
+```text
+potion-multilingual-128M    cosseno 1,000000000000   maior diferença absoluta 0,0e0
+static-similarity-mrl       cosseno 1,000000000000   maior diferença absoluta 0,0e0
+```
+
+Idênticos **bit a bit**, e com uma versão diferente do `tokenizers` de cada lado
+(0.23 aqui, 0.21 na crate de referência) — o que também mostra que a versão do
+tokenizer não é uma variável escondida.
+
+### 26.2 O modelo, e o que ele custou contra o alternativo
+
+| | `potion-multilingual-128M` | `static-similarity-mrl-multilingual-v1` @256 |
+| --- | --- | --- |
+| licença | MIT | Apache-2.0 |
+| publicado por | MinishLab, os autores do Model2Vec | sentence-transformers |
+| dimensão | 256 | 1024, truncável por MRL |
+| artefato | 489 MiB + 17,8 MiB de tokenizer | 414 MiB + 2,4 MiB |
+| **R@3 encadeado** | **0,900** | 0,867 |
+| R@1 / R@5 / MRR | 0,733 / 0,967 / 0,828 | 0,733 / 0,933 / 0,811 |
+| RSS do modelo | 1,01 GiB | 133 MiB |
+| carga (ler + verificar + construir) | 3,5 s | 1,0 s |
+
+**Escolhido o `potion`, e a razão é a régua e não a preferência.** O portão de
+qualidade desta fase é `R@3 ≥ 0,900` e só ele o atinge; o outro erra a consulta
+q28 ("açúcar alto no sangue" → a nota sobre diabetes). A diferença é *uma*
+consulta em trinta, que é exatamente o ruído que este corpus não separa — mas a
+resposta a isso é escrever mais casos, não baixar o portão depois de ver o
+número.
+
+**O custo está registrado e não é pequeno: 1,01 GiB de RSS**, dos quais 543 MiB
+são o tokenizer (Unigram, 500 353 entradas) e 489 MiB a tabela. É o preço de
+ligar a semântica, e é por isso que ligá-la é um ato do usuário.
+
+**Quantização avaliada e rejeitada.** Existe uma variante int8 de terceiros
+(`Tokenade/potion-multilingual-128M-i8-tokenade`, MIT, mesmo tokenizer byte a
+byte). Medida:
+
+```text
+RSS            671 MiB contra 1,01 GiB      (−35%)
+artefato       122 MiB contra 489 MiB       (−75%)
+R@1/R@3/R@5    idênticos no corpus congelado
+deriva         cosseno p50 0,9962   mínimo 0,9680
+concordância   31 de 32 consultas escolhem o mesmo chunk mais próximo
+```
+
+O ganho é real e a perda também: a quantização **move os vetores**, já troca uma
+escolha de topo-1 em trinta e duas, e o corpus de trinta consultas não tem
+resolução para precificar isso. Somado a uma publicação de terceiro em vez dos
+autores do modelo — e a ordem de prioridade da fase põe reprodutibilidade e
+manutenção antes de performance — a variante mais simples fica: os pesos `f32`
+publicados por quem treinou o modelo. A int8 permanece uma opção documentada,
+para uma decisão com um corpus maior.
+
+### 26.3 A receita, versão 1
+
+Documento e consulta continuam duas funções e são preparados de forma idêntica
+sob esta receita, porque um modelo estático não tem protocolo `passage:` /
+`query:` a honrar — inventar um moveria as duas metades para fora do espaço que
+os pesos descrevem. A versão é do **par**, e mudá-la muda a identidade:
+
+```text
+embedding_recipe_version = 1
+    texto do chunk (ou da consulta) exatamente como o chunker o produziu
+    tokenização, sem tokens especiais
+    identificadores iguais ao token desconhecido declarado são descartados
+    corte em 512 tokens
+    média das linhas correspondentes
+    normalização L2
+normalization_version = 1
+    nenhuma. `search::fold` NÃO é aplicado: ele minúsculiza e remove acentos
+    para o lado lexical, e perguntar a um modelo multilíngue sobre palavras sem
+    acento é perguntar sobre palavras que ninguém escreveu
+```
+
+Um texto do qual não sobra nenhuma linha da tabela **não vira vetor**: a origem
+não tem direção e portanto não tem cosseno com nada. O provider devolve
+`InvalidVector`, e o lote inteiro falha em vez de encurtar.
+
+### 26.4 O artefato e sua identidade
+
+```text
+modelo            minishlab/potion-multilingual-128M
+revisão           73908c3438cf03b6a01bcb9611d62b23d0726f08
+licença           MIT (destilado do BAAI/bge-m3, também MIT)
+dimensão          256          linhas da tabela  500 353
+pesos             model.safetensors   512 361 560 bytes   F32 [500353, 256]
+                  sha256 14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397
+tokenizer         tokenizer.json      18 616 131 bytes    Unigram, 500 353 entradas
+                  sha256 19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1
+artifact_identity c35e925384e8731d97d85371295989bf1354b9cf839a460efee3bbe0d96c398a
+                  = sha256("noteit.artifact.v1\n" ‖ canonical_json(ArtifactManifestV1))
+```
+
+**A identidade sai dos bytes que foram lidos, sempre.** Os digests acima também
+estão fixados no código, e servem como *segunda* verificação: um artefato que não
+confere é recusado, e um artefato que confere tem sua identidade recalculada a
+partir do que foi carregado. Um digest fixado nunca torna um artefato verificado.
+
+**Onde ele mora, e por que não no store.**
+
+```text
+$XDG_CACHE_HOME/note-it/embedding/<modelo>/<revisão>/{model.safetensors,tokenizer.json}
+```
+
+O cache e não o diretório de dados, e a razão não é estética: o diretório de
+dados **é** o store de notas, e meio gigabyte de modelo dentro dele seria varrido
+para os backups, contado por toda verificação de integridade e confundido com o
+que o usuário escreveu. O modelo é reobtenível; as notas não são.
+
+**Como ele chega.** `scripts/fetch-embedding-artifact`, rodado por uma pessoa.
+É o único lugar do repositório que fala com a rede, verifica os dois digests
+**antes** de publicar os arquivos, e nunca é disparado por uma atualização, por
+uma consulta ou por uma inicialização. `--from DIR` instala a partir de uma cópia
+local, para máquinas sem rede.
+
+### 26.5 O ciclo de vida, como foi implementado
+
+O provider e o índice vivem no processo que responde consultas, sob um `Mutex`
+que **é** a regra "uma indexação por processo por vez": duas perguntas
+concorrentes sobre um store não indexado não constroem dois índices — a segunda
+espera e encontra o trabalho da primeira.
+
+A sincronização do índice é uma frase: **indexar o que o índice não tem, esquecer
+o que o store não tem mais.** Tudo o mais decorre disso, inclusive a parte que
+parece faltar:
+
+* nota nova → não está no índice → é lida e indexada;
+* nota **editada** → ainda está no índice, então esta passagem não a toca. A
+  recuperação então a lê, descobre que `source_revision` não é mais a revisão
+  atual, descarta o candidato e **esquece** a nota. Ela deixa de estar no índice,
+  e uma segunda passagem — disparada na mesma consulta, ao notar que o índice
+  encolheu — a reindexa e a pergunta é refeita **uma** vez. A edição fica visível
+  para a própria pergunta que a revelou;
+* nota na lixeira → não está na varredura de vivas → é esquecida;
+* nota restaurada → está viva e não está no índice → é indexada de novo.
+
+O que isto deliberadamente **não** faz é perguntar de forma mais barata se uma
+nota mudou. `updated_at` move com o texto e fica parado quando muda uma tag, uma
+propriedade ou uma cor — um detector assim guardaria vetores obsoletos
+exatamente para as edições que a revisão existe para pegar. **A revisão canônica
+continua sendo o único detector de estado de nota**, que é o que §7 exige.
+
+Uma edição custa a reindexação de uma nota, nunca a do store.
+
+### 26.6 O que foi medido em Rust
+
+Release, nesta máquina (Intel i5-9300H, 8 threads, sem SHA-NI), store sintético
+em diretório temporário, duas passagens de chunk por nota:
+
+```text
+carga do artefato (ler + VERIFICAR + construir)   3 475 ms
+    dos quais: ler 314 ms   sha256 de 489 MiB 3 116 ms (157 MiB/s)
+RSS acrescido pelo modelo                     1 056 584 KiB  (1,007 GiB)
+RSS de um processo lexical-only, 1 000 notas        672 KiB
+
+escala   indexação a frio   vetores   consulta quente p50/p95   reindexar 1 nota
+   100            27 ms        200      0,143 / 0,193 ms          0,140 ms
+ 1 000           274 ms      2 000      1,761 / 2,689 ms          0,190 ms
+ 5 000         1 144 ms     10 000      8,732 / 10,508 ms         0,125 ms
+10 000         2 162 ms     20 000     19,602 / 23,278 ms         0,267 ms
+
+RSS após 200 consultas repetidas: delta 0 KiB em todas as escalas
+```
+
+Qualidade no corpus congelado, encadeada, através do motor real:
+
+```text
+R@1 0,733   R@3 0,900   R@5 0,967   MRR 0,828   (30 consultas com ground truth)
+regressões: NENHUMA — nenhum acerto que o lexical já tinha desceu de posição
+ganhos:     q07, q10, q11 e q28 passaram a ter resposta onde não havia
+ruído:      as duas consultas sem resposta ganharam 3 candidatos cada, o teto
+```
+
+### 26.7 O orçamento que não foi atendido, e por quê
+
+**`carga do artefato local ≤ 2 s` (§25) não é atendido: 3 475 ms.**
+
+O orçamento não foi movido. O que segue é a medição:
+
+```text
+ler 489 MiB do disco                     314 ms   (O_DIRECT nesta máquina: 1,2–1,9 GB/s)
+sha256 de 489 MiB                      3 116 ms   (157–200 MiB/s)
+construir o tokenizer (500 353 entradas)  ~1 100 ms, em paralelo com o acima
+```
+
+A carga já é paralela: os pesos são lidos e verificados numa thread enquanto o
+tokenizer é lido, verificado e construído noutra, então o total é o maior dos
+dois e não a soma. O caminho crítico é o SHA-256, que responde por 83% dele.
+
+**A origem do orçamento explica a diferença.** §25 o derivou de "medido 1,0–1,8 s"
+num protótipo Python que **não verificava o artefato** — §5.1, que torna a
+verificação obrigatória, foi escrita depois. Os dois números medem operações
+diferentes: sem a verificação, a carga aqui é ≈1,1 s e cabe no orçamento; com
+ela, não cabe.
+
+Otimizações aplicadas dentro do escopo, e o que ainda faltaria:
+
+* o SHA-256 do Core foi desenrolado e deixou de copiar a mensagem inteira só para
+  acrescentar o preenchimento — 13% mais rápido e meio gigabyte a menos de pico,
+  com o mesmo digest e os mesmos vetores publicados;
+* leitura e verificação foram paralelizadas com a construção do tokenizer;
+* **o que falta é hardware.** Esta máquina não tem SHA-NI, e o `sha256sum` do
+  sistema — SHA-256 com AVX2, altamente otimizado — chega a 370–390 MiB/s, o teto
+  prático aqui. Mesmo nele, 507 MiB custariam ≈1,3 s, e o orçamento só seria
+  atendido com folga de 0,3 s. Numa máquina com SHA-NI (≈2 GB/s) a carga inteira
+  cairia para ≈1,4 s.
+
+A conclusão honesta é que **o orçamento é função do tamanho do artefato e da
+vazão de SHA-256 da máquina**, e a especificação o fixou sem nenhuma das duas
+variáveis. Acima de ~350 MiB de artefato, verificar em menos de 2 s exige
+hardware que nem toda máquina tem. As saídas são três, e nenhuma é do
+implementador: aceitar o custo (uma vez por processo, num recurso opcional),
+adotar um artefato menor (a int8 de §26.2, ao custo de proveniência de terceiro),
+ou escrever um SHA-256 com SIMD no Core (mudança sensível a um primitivo que
+calcula revisões de nota, e que merece decisão própria).
+
+**Nenhum outro orçamento falha**, e a consulta quente foi medida na escala que
+§25 nomeia — dez mil **vetores**, que são cinco mil notas de dois parágrafos, e
+não dez mil notas.
+
+---
+
+## 27. O que a 4.3A não mediu
 
 * **Nada foi implementado em Rust.** As medições vêm de um protótipo Python com
   ONNX Runtime. Comparam candidatos entre si; não preveem o desempenho da
@@ -1210,7 +1464,7 @@ foi a última indexação, e o estado do índice.
   `non-standard`, o card do modelo diz MIT.
 * **`voyage-4-nano`, de pesos abertos, não foi avaliado** como provider local.
 
-## 27. Testes que a implementação deve trazer
+## 28. Testes que a implementação deve trazer
 
 Além do corpus como regressão de qualidade:
 

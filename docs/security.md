@@ -96,6 +96,48 @@ parcial que possa ser confundido com um inteiro, e não há token para gravar a
 partir dele. Não existe leitura paginada — seria protocolo novo, e um protocolo
 novo é onde essa propriedade voltaria a ser opcional.
 
+## O modelo de embeddings: local, verificado, e nunca baixado sozinho
+
+A recuperação semântica é **desligada de fábrica**. Uma instalação nova, e uma
+instalação que atualizou e nunca foi configurada, não carregam modelo, não leem
+artefato, não constroem índice e não falam com rede nenhuma. Ligar é um ato do
+usuário, em `config.toml`, e nenhuma leitura da configuração permite que uma
+versão nova passe a fazer isso sozinha.
+
+**Nada sai da máquina.** O provider local roda em processo: a tabela de
+embeddings e o tokenizer são dois arquivos lidos do disco, e não existe caminho
+de rede em `noteit-core`, `noteit-mcp` ou `noteit-embedding-local`.
+`scripts/check-embedding-boundary` reprova o build se uma crate HTTP, TLS ou de
+socket aparecer no grafo em qualquer profundidade — inclusive as que o ecossistema
+de modelos assume, `hf-hub` e `ureq`, que chegariam por uma única feature ligada
+sem querer.
+
+**Obter o artefato é um ato separado e explícito.** `scripts/fetch-embedding-artifact`
+é o único lugar do repositório que fala com a rede. Não é disparado por uma
+atualização, por uma consulta, por uma inicialização nem por um build.
+`check-embedding-boundary` recusa qualquer host de modelo que apareça em fonte
+Rust ou em manifesto.
+
+**Os bytes são verificados, e a identidade sai deles.** Na carga, cada arquivo é
+recusado se não for um arquivo regular — um symlink é recusado e não seguido,
+porque hashear bytes só significa algo se o caminho não puder apontar para outro
+lugar entre duas execuções —, é limitado em tamanho antes de ser lido, e tem o
+SHA-256 calculado. Os digests são comparados com os que o código fixa, e a
+identidade do espaço vetorial é derivada dos bytes que foram efetivamente
+carregados. Um nome de modelo mais uma string que alguém mandou nunca produz um
+artefato "verificado".
+
+**Um embedding é dado privado.** Ele é derivado de uma nota, e derivado não é "não
+sensível". O índice vive só em memória, não é persistido, e nenhum vetor chega ao
+agente: `noteit_context` devolve texto da nota atual e motivos, nunca números.
+O `Debug` do vetor e o do provider são redigidos de propósito, para que uma linha
+de log ou uma mensagem de pânico não publique o que a representação guarda.
+
+**O caminho do artefato não é o store.** O modelo vive em
+`$XDG_CACHE_HOME/note-it/embedding/`, nunca dentro de `notes/`, `trash/` ou
+`backups/` — e indexar é leitura: não altera arquivo, front matter, `updated_at`,
+`created_at`, revisão nem `mtime`.
+
 ## Uma mensagem pública é uma frase que o servidor escreveu
 
 Todo `message` que o MCP publica é uma constante escolhida pelo `code`, e isso é

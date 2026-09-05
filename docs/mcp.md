@@ -28,8 +28,10 @@ implementação do Note-it.
 > **Histórico e evolução.** Na Fase 4.1, o catálogo continha 15 tools e a recuperação de contexto
 > ainda não estava implementada. Desde a Fase 4.2, a arquitetura do Segundo Cérebro está implementada
 > via [`noteit_context`](#noteit_context), totalizando 16 tools (veja [`docs/second-brain.md`](second-brain.md)).
-> Desde a Fase 4.3B, a recuperação lexical conta com BM25 em produção e a infraestrutura semântica
-> está presente no Core; contudo, o provider real ainda está ausente e `semantic_match` permanece inalcançável pelo produto.
+> Desde a Fase 4.3B, a recuperação lexical conta com BM25 em produção. Desde a Fase 4.3C existe um
+> provider de embeddings **local**, e `semantic_match` é alcançável — mas só quando o usuário liga a
+> recuperação semântica na configuração. O padrão de fábrica continua `lexical_only`: nenhum modelo é
+> carregado, nada é baixado e nada sai da máquina.
 
 **Não implementado neste servidor, deliberadamente:** MCP Resources, MCP Prompts,
 sampling, elicitation, a extensão MCP Tasks, transporte HTTP/SSE/Streamable HTTP,
@@ -174,12 +176,30 @@ delas vira candidata com `shared_tag` ou `property_match` entre os motivos, e
 uma que não carregue nenhuma ainda pode entrar por outro sinal. Sem query, sem
 tags e sem properties, a resposta é por recência, e cada candidato diz `recent`.
 
-O esquema declara um sétimo motivo, `semantic_match`, que **este servidor não
-produz**: o motor sabe gerar candidatos por proximidade desde a 4.3B, e nenhum
-caminho do produto liga esse canal — não há provider, não há modelo e não há
-onde configurar um. Ele está declarado porque um motivo que o Core sabe produzir
-e o esquema não declara é um contrato de fio que mente. Ligar o canal é assunto
-da 4.3C.
+O sétimo motivo, `semantic_match`, diz que a nota foi admitida pelo canal
+semântico e validada por proveniência contra a revisão atual. Ele só aparece
+quando o usuário ligou a recuperação semântica; no padrão de fábrica o canal não
+existe, e o motivo nunca é produzido.
+
+#### `semantic_status` — o que o canal semântico fez
+
+Toda resposta de `noteit_context` traz este campo, e ele tem três valores:
+
+| valor | significa |
+| --- | --- |
+| `not_requested` | o canal não foi tentado: modo lexical, consulta vazia, requisição só com filtros, ou consulta que dobra para vazio. **Nunca é uma falha** |
+| `succeeded` | o canal foi tentado e respondeu |
+| `unavailable` | o canal foi tentado, falhou, e **esta resposta é a lexical** |
+
+Existe porque degradar em silêncio é mentir sobre o que foi feito: quem
+configurou o canal semântico e recebeu uma resposta lexical tem de conseguir
+saber. Ele diz o que foi **feito**, nunca como — não é um score, não é um vetor,
+não é um caminho e não é um digest.
+
+`not_requested` vale também quando o modelo está ausente e a requisição não tinha
+consulta nenhuma: não havia trabalho semântico a fazer, então não houve falha. É
+por isso que `fallback = "semantic_required"` responde normalmente a uma
+requisição sem pergunta.
 
 Cada candidato traz `note_id`, `label`, `snippet`, `updated_at`, `reason[]`,
 `matched_text?` e — quando `include_tasks` pede — até três tarefas casadas.
@@ -607,6 +627,7 @@ decidir o que fazer.
 | `store_unavailable` | `not_committed` | o store não pôde ser lido |
 | `read_failed` | — | uma nota ou uma listagem não pôde ser lida |
 | `response_too_large` | — | a nota existe e não cabe numa resposta; **sem corpo e sem revision** |
+| `semantic_unavailable` | — | a recuperação semântica era obrigatória e não rodou; **nada mais falhou** |
 | `indeterminate` | `unknown` | a resposta se perdeu — §7 |
 
 `message` é diagnóstico e **sempre uma frase que este servidor escreveu**: uma
@@ -616,6 +637,13 @@ de arquivos, a saída de um parser citando o front matter de uma nota, ou um
 argumento devolvido no tamanho em que chegou não têm como ser postos ali. Até
 a 4.2R eram a frase do Core, e o resultado era um `noteit_list` publicando o
 caminho absoluto do diretório de notas. Decidir pelo `code`, nunca pela frase.
+
+`semantic_unavailable` também merece uma: ele só existe sob
+`fallback = "semantic_required"`, e significa que a resposta lexical estava
+disponível e **não foi enviada de propósito** — quem escolheu aquele modo disse
+que uma resposta sem o canal semântico não é a resposta que pediu. As notas estão
+intactas. `fallback = "automatic"`, que é o padrão, devolve a resposta lexical com
+`semantic_status: "unavailable"` em vez de recusar.
 
 `authority_unavailable` merece uma frase: quando o store está seguro por outra
 instância que não responde, **nada é gravado**. Não existe caminho alternativo,

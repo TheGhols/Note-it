@@ -2663,3 +2663,139 @@ esquema e inalcançável pelo produto. Fundir com a 4.3C teria sido um commit a
 menos e teria custado a única coisa que importa depois: quando a recuperação
 semântica responder mal, distinguir bug do motor de bug do modelo. A separação
 vale o commit.
+
+## ADR-058: O provider local é uma tabela e uma média, e a identidade sai dos bytes
+
+**Contexto.** A 4.3A mediu em Python e escolheu a classe de modelo; a 4.3A.R1 fez
+da identidade verificável do artefato uma obrigação; a 4.3B escreveu o motor em
+Rust e parou antes do provider, deixando `semantic_match` no esquema e
+inalcançável. A 4.3C é a que liga o fio: um provider local real, um modelo real,
+um artefato real, e a configuração pela qual o usuário decide se algo disso
+acontece.
+
+**Problema.** Quatro perguntas, e nenhuma respondível por preferência.
+
+1. **Qual implementação Rust.** A 4.3A escreveu "classe model2vec" e não escolheu
+   crate. As opções reais trazem consequências muito diferentes para o grafo de
+   dependências de um servidor cuja fronteira de rede é um portão.
+2. **Qual modelo, e a que custo.** Dois candidatos estáticos multilíngues, com
+   qualidade parecida e RAM que difere em quase oito vezes.
+3. **Como o artefato chega, e como se prova que é ele.** §5.1 exige identidade
+   derivada dos bytes carregados; nada disso existia.
+4. **Como o índice vive.** Carregar o modelo por consulta, ou reindexar o store a
+   cada edição, seriam corretos e inutilizáveis.
+
+**Decisão 1: nenhuma crate de inferência, e a de referência vira oráculo.**
+
+`model2vec-rs` 0.2.1 é a implementação oficial e está correta — mas como
+dependência traz `clap` (um analisador de linha de comando, obrigatório),
+`ndarray 0.15`, `half` e `anyhow`; liga `onig` (uma biblioteca C) e
+`hf-hub` + `ureq` por padrão; entra em pânico com `expect` dentro de `encode`; e
+seus erros são `anyhow`, isto é, frases livres — exatamente o que a ADR-054
+proíbe de atravessar o contrato público. `fastembed` exige o ONNX Runtime, que ou
+é baixado em tempo de build — o vetor de risco que a ADR-056 já nomeara — ou vira
+um requisito de instalação.
+
+Note-it lê o `tokenizer.json` com `tokenizers` e a tabela com `safetensors`, e
+faz a média ele mesmo: um modelo estático é uma tabela e uma média. Isso não é
+reimplementar por estética, e não foi assumido: um projeto isolado carregou os
+mesmos bytes nas duas implementações e comparou os vetores de oito textos —
+português clínico, string vazia, um caractere, Unicode com marca de direção,
+prompt injection, frase longa — em dois modelos. **Cosseno 1,000000000000,
+diferença absoluta máxima 0,0e0**, com versões diferentes do `tokenizers` de cada
+lado. São os mesmos vetores, sem `clap`, sem pânico e sem uma feature de rede a
+desligar.
+
+**Decisão 2: `potion-multilingual-128M`, e o custo fica escrito.**
+
+| | `potion-multilingual-128M` | `static-similarity-mrl` @256 |
+| --- | --- | --- |
+| **R@3 encadeado** | **0,900** | 0,867 |
+| RSS | 1,01 GiB | 133 MiB |
+| licença | MIT | Apache-2.0 |
+
+O portão de qualidade da fase é `R@3 ≥ 0,900` e só um deles o atinge. A diferença
+é uma consulta em trinta — o ruído que este corpus não separa — e a resposta a
+isso é escrever mais casos, não baixar o portão depois de ver o número. O preço é
+**1,01 GiB de RSS**, dos quais 543 MiB são o tokenizer de 500 353 entradas. Está
+medido, está publicado, e é por isso que ligar a semântica é um ato do usuário.
+
+Uma variante int8 de terceiros custaria 671 MiB com as mesmas métricas no corpus
+— e move os vetores (cosseno p50 0,9962, mínimo 0,9680) e já troca uma escolha de
+topo-1 em trinta e duas. Trinta consultas não precificam isso. Com
+reprodutibilidade e manutenção antes de performance na ordem de prioridade, fica
+a variante mais simples publicada por quem treinou o modelo.
+
+**Decisão 3: a identidade é dos bytes, e o digest fixado é só a segunda linha.**
+
+Na carga: ler os dois arquivos, recusar o que não for arquivo regular — um
+symlink é recusado, não seguido, porque hashear bytes só significa algo se o
+caminho não puder apontar para outro lugar entre duas execuções —, calcular o
+SHA-256 de cada um, montar o `ArtifactManifestV1` e derivar
+`artifact_identity`. Os digests **também** estão fixados no código, e servem para
+dizer "este não é o artefato contra o qual este build foi escrito" — nunca para
+dizer "este está verificado". Um nome de modelo mais uma string que o chamador
+mandou não é verificação, e aqui não há caminho que produza isso.
+
+O artefato mora em `$XDG_CACHE_HOME/note-it/embedding/<modelo>/<revisão>/` e não
+no diretório de dados, porque o diretório de dados **é** o store: meio gigabyte
+de modelo dentro dele seria varrido para os backups e contado por toda
+verificação de integridade. Chega por `scripts/fetch-embedding-artifact`, rodado
+por uma pessoa, que é o único lugar do repositório que fala com a rede e verifica
+os digests antes de publicar os arquivos.
+
+**Decisão 4: o índice se sincroniza pelo que não tem, e a revisão continua o
+único detector.**
+
+Uma frase: **indexar o que o índice não tem, esquecer o que o store não tem
+mais.** Nota nova entra; nota na lixeira sai; nota restaurada volta. E nota
+**editada** sai sozinha — o motor descarta o registro cuja `source_revision` não
+é mais a atual e o esquece, então ela deixa de estar no índice e a passagem
+seguinte a reindexa. Ao notar que o índice encolheu, a mesma consulta faz uma
+segunda passagem e refaz a pergunta **uma** vez, de modo que a edição fica
+visível para a própria pergunta que a revelou.
+
+A tentação era um detector mais barato: comparar `updated_at`. Recusada, e a
+razão é a R1-002 outra vez — `updated_at` move com o texto e fica parado quando
+muda uma tag, uma propriedade ou uma cor, então guardaria vetores obsoletos
+exatamente para as edições que a revisão existe para pegar. Uma segunda definição
+de estado é o defeito, não a otimização.
+
+O `Mutex` que protege tudo isso **é** a regra "uma indexação por processo por
+vez": duas perguntas concorrentes sobre um store não indexado não constroem dois
+índices.
+
+**O orçamento que não foi atendido.** `carga do artefato local ≤ 2 s` mede
+3 475 ms, dos quais 3 116 ms são o SHA-256 de 489 MiB a 157 MiB/s. O orçamento
+não foi movido; a medição está em `docs/semantic-retrieval.md` §26.7. Ele veio de
+um protótipo Python que **não verificava o artefato** — §5.1, que torna a
+verificação obrigatória, foi escrita depois —, então os dois números medem
+operações diferentes. Dentro do escopo, o SHA-256 do Core foi desenrolado e
+deixou de copiar a mensagem inteira (13% e meio gigabyte de pico, mesmo digest), e
+a verificação passou a correr em paralelo com a construção do tokenizer. O que
+falta é hardware: esta máquina não tem SHA-NI e o `sha256sum` do sistema, com
+AVX2, chega a 390 MiB/s — o teto prático aqui. O orçamento é função do tamanho do
+artefato e da vazão de SHA-256 da máquina, e a especificação o fixou sem nenhuma
+das duas.
+
+**Alternativas rejeitadas.**
+
+* **`model2vec-rs` como dependência** — mesmos vetores, mais `clap`, `ndarray`,
+  um pânico e erros `anyhow`.
+* **`fastembed`/`ort`** — runtime de inferência, e um binário baixado em tempo de
+  build ou um requisito de instalação.
+* **A variante int8** — resolve o RSS e o orçamento de carga, e é justamente por
+  isso que adotá-la agora seria escolher o artefato que faz o número passar.
+* **Artefato dentro do diretório de dados** — meio gigabyte no store.
+* **Cache vetorial em disco** — continua não existindo, e continua com o gatilho
+  da ADR-056; a indexação a frio de 1 000 notas mede 274 ms.
+* **Baixar o modelo automaticamente** — nunca. O `check-embedding-boundary`
+  reprova qualquer host de modelo em fonte Rust ou manifesto.
+* **Uma tool MCP de diagnóstico** — `noteit status` já era a superfície certa, e
+  o esquema do `noteit_context` só ganhou `semantic_status`, que diz o que foi
+  *feito* e não como.
+
+**O que a 4.3C deliberadamente não fez.** Nenhum provider remoto, nenhuma
+credencial, nenhum `noteit-embed`, nenhum HTTP, nenhum cache vetorial em disco,
+nenhum ANN, nenhum score publicado. Tudo isso continua sendo 4.3D ou continua
+sendo não.

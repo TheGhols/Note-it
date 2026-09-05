@@ -96,14 +96,17 @@ Estágios, e o comando exato que cada um executa:
 | `core-boundary` | `scripts/check-core-boundary` |
 | `cli-boundary` | `scripts/check-cli-boundary` |
 | `mcp-boundary` | `scripts/check-mcp-boundary` |
+| `embedding-boundary` | `scripts/check-embedding-boundary` |
 | `core-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noteit-core` |
 | `cli-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-cli` |
 | `mcp-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-mcp` |
+| `embedding-tests` | `env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-embedding-local` |
 | `workspace-tests` | `cargo test --workspace` |
 | `frontend-install` | `pnpm install --frozen-lockfile`, em `ui/` |
 | `frontend-lint` | `pnpm run lint`, em `ui/` |
 | `frontend-test` | `pnpm run test`, em `ui/` |
 | `frontend-build` | `pnpm run build`, em `ui/` |
+| `offline` | `scripts/check-offline` — **fora de `all`**, ver abaixo |
 
 `core-tests`, `cli-tests` e `mcp-tests` não são redundantes com
 `workspace-tests`, embora repitam testes: eles provam uma propriedade diferente
@@ -111,6 +114,22 @@ Estágios, e o comando exato que cada um executa:
 compositor e sem barramento de sessão**. Rodá-los dentro da sessão ambiente não
 provaria nada, por isso as variáveis são removidas. Para o MCP isso não é um
 detalhe: é exatamente o ambiente em que um host o inicia.
+
+`embedding-tests` roda sem rede e sem artefato: a suíte do provider local
+constrói seus próprios artefatos sintéticos — um tokenizer minúsculo e uma tabela
+de dezessete linhas — e prova identidade, recusa e vetores sem os 489 MiB do
+modelo real. Uma máquina que nunca provisionou um modelo, e a CI, exercitam o
+contrato inteiro.
+
+`offline` **não** está em `all` de propósito. Ele executa as suítes dentro de um
+namespace de rede sem nenhuma interface ativa (`unshare -rn`), o que exige
+namespaces de usuário sem privilégio; um contêiner ou um kernel endurecido pode
+não os oferecer, e um estágio que passasse em silêncio onde não pode rodar seria
+pior do que um que precisa ser pedido. Peça-o por nome:
+
+```bash
+scripts/check offline
+```
 
 O frontend usa pnpm e só pnpm. Não há fallback para npm, yarn ou bun: um
 gerenciador diferente resolve uma árvore diferente, e um build que trocou de
@@ -273,6 +292,67 @@ A forma da tela — as três larguras, a escolha de frase, as duas cores — tam
 nenhum, direto sobre `OutputContext`, porque as capacidades são um valor. As duas metades se cobrem: a
 unitária percorre cada largura de 1 a 200, a de processo prova que o binário real chega às mesmas
 conclusões.
+
+### Ligar a recuperação semântica local
+
+O padrão de fábrica é lexical: nenhum modelo é carregado e nada é baixado. São
+dois passos, e nenhum deles acontece sozinho.
+
+**1. Obter o artefato.** É o único ponto do repositório que fala com a rede:
+
+```bash
+scripts/fetch-embedding-artifact            # baixa e verifica
+scripts/fetch-embedding-artifact --verify   # confere o que já está lá
+scripts/fetch-embedding-artifact --where    # imprime o diretório
+scripts/fetch-embedding-artifact --from DIR # instala de uma cópia local
+```
+
+São 531 MB, em `$XDG_CACHE_HOME/note-it/embedding/<modelo>/<revisão>/`. O script
+verifica os dois digests **antes** de publicar os arquivos, e um download parcial
+nunca chega ao diretório final.
+
+**2. Ligar na configuração**, em `config.toml`:
+
+```toml
+[semantic_retrieval]
+mode = "semantic"          # padrão: "lexical_only"
+provider = "local"         # o padrão dentro de mode = "semantic"
+fallback = "automatic"     # "semantic_required" | "lexical_only"
+```
+
+`noteit status` mostra o estado sem carregar nada:
+
+```text
+Semântica semantic
+Provider  local (em processo, nada sai desta máquina)
+Modelo    potion-multilingual-128M
+Fallback  automatic
+Artefato  presente
+```
+
+Custa **1,0 GiB de RSS** no processo que responde consultas, e a carga do
+artefato leva cerca de 3,5 s uma vez por processo — a maior parte é o SHA-256 que
+prova que os pesos são os pesos. Números completos em
+`docs/semantic-retrieval.md` §26.6.
+
+### Medir a recuperação semântica
+
+Duas suítes, ambas fora do laço normal porque uma lê meio gigabyte e a outra
+constrói dez mil notas. Precisam do artefato provisionado:
+
+```bash
+# qualidade no corpus congelado, com a tabela consulta por consulta
+cargo test -p noteit-embedding-local --release --test retrieval_quality -- --nocapture
+
+# tempo, memória e os orçamentos de docs/semantic-retrieval.md §25
+cargo test -p noteit-embedding-local --release --test semantic_performance -- --ignored --nocapture
+
+# o que um processo paga por NÃO usar a semântica (binário próprio, de propósito)
+cargo test -p noteit-embedding-local --release --test lexical_footprint -- --ignored --nocapture
+```
+
+Sem o artefato, `retrieval_quality` diz que ele falta e passa; é a mesma postura
+do padrão de fábrica, e é por isso que a CI não baixa 531 MB.
 
 ### Medir a pesquisa em vez de adivinhá-la
 
