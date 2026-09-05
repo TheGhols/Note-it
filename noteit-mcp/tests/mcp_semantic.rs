@@ -13,6 +13,7 @@
 
 mod support;
 
+use noteit_embedding_local::{artifact_directory, POTION_MULTILINGUAL_128M};
 use serde_json::json;
 use std::time::{Duration, Instant};
 use support::{McpClient, Sandbox, ANSWER_TIMEOUT};
@@ -287,14 +288,14 @@ fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 // ========================================================== responsiveness
 
-/// The 4.2R hostile-load proof, repeated with an index being built.
+/// The 4.2R hostile-load proof, repeated with the semantic channel switched on.
 ///
-/// Four clients, eight requests each, payloads near 300 KiB, and the semantic
-/// channel switched on over a store large enough that indexing is real work.
-/// The model is absent, which is the honest worst case for *this* property:
-/// every one of those requests takes the full path through the session, the
-/// lock, and the load attempt, and the reactor must keep answering `ping`
-/// throughout.
+/// Four clients, eight requests each, payloads near 300 KiB, over a store large
+/// enough that indexing would be real work. The model is absent here, which is
+/// the honest worst case for the *lock*: every one of those requests takes the
+/// full path through the session and the load attempt, and the reactor must
+/// keep answering `ping` throughout. The test below is the same shape with the
+/// artifact present, which is the worst case for the *reactor*.
 #[test]
 fn the_reactor_keeps_answering_under_hostile_load_with_the_channel_on() {
     let sandbox = Sandbox::new();
@@ -357,6 +358,143 @@ fn the_reactor_keeps_answering_under_hostile_load_with_the_channel_on() {
     );
     println!(
         "4 clients x 8 hostile requests with the semantic channel on: {:?} total, worst ping {worst:?}",
+        started.elapsed()
+    );
+}
+
+/// The same shape again, with the model actually there.
+///
+/// This is the case §7.4 names: a `ping` answered **while an index is being
+/// built**. Half a gigabyte is read, verified and turned into a table, three
+/// hundred notes are chunked and embedded, and the reactor has to stay free
+/// through all of it. A server that did that work on its reactor could not
+/// answer the ping at all — not late, never.
+///
+/// Without the artifact there is nothing to prove, and the test says so and
+/// passes. That is the same rule `real_artifact.rs` states and not a hidden
+/// skip: the factory default never has the artifact and CI never downloads
+/// half a gigabyte.
+///
+/// It is `#[ignore]` for the reason the three other heavy tests in this
+/// workspace are — and the reason is a build profile, not a failure. Four
+/// processes each verify 489 MiB, and an unoptimised SHA-256 is roughly ten
+/// times slower than the shipped one, which puts a debug run past the thirty
+/// seconds this harness treats as a hang. In release it takes four seconds.
+/// Run it with:
+///
+/// ```text
+/// cargo test -p noteit-mcp --release --test mcp_semantic \
+///     the_reactor_keeps_answering_while_a_real_index -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "four processes each verify half a gigabyte; run explicitly with --ignored in release"]
+fn the_reactor_keeps_answering_while_a_real_index_is_being_built() {
+    let Some(artifact) = artifact_directory(&POTION_MULTILINGUAL_128M) else {
+        println!("sem diretório de cache; este teste precisa do artefato local");
+        return;
+    };
+    if !artifact.join("model.safetensors").is_file() {
+        println!(
+            "artefato local ausente; rode scripts/fetch-embedding-artifact \
+             para exercitar este teste"
+        );
+        return;
+    }
+
+    let sandbox = Sandbox::new();
+    // The provisioned artifact, without copying half a gigabyte into a
+    // temporary directory: the *revision directory* is a symlink, and the two
+    // files inside it are still the real regular files the provider insists
+    // on — it refuses a symlinked file, and neither of these is one.
+    let family = sandbox
+        .root
+        .join("cache/note-it/embedding")
+        .join(POTION_MULTILINGUAL_128M.model);
+    std::fs::create_dir_all(&family).expect("cache tree");
+    std::os::unix::fs::symlink(&artifact, family.join(POTION_MULTILINGUAL_128M.revision))
+        .expect("point the sandbox cache at the provisioned artifact");
+
+    let config_dir = sandbox.root.join("config/note-it");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[semantic_retrieval]\nmode = \"semantic\"\n",
+    )
+    .expect("config");
+    for index in 0..300 {
+        sandbox.seed(&format!(
+            "nota {index} sobre hipertensão arterial\n\ninsônia depois do plantão\n\nreunião de equipe"
+        ));
+    }
+
+    let hostile = "á".repeat(150_000); // ~300 KiB of UTF-8 on the wire.
+    let started = Instant::now();
+    let outcomes: Vec<(Duration, bool)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let sandbox = &sandbox;
+                let hostile = hostile.clone();
+                scope.spawn(move || {
+                    let mut client = McpClient::start(sandbox);
+                    let mut worst = Duration::ZERO;
+                    let mut ran_the_channel = false;
+                    for _ in 0..8 {
+                        // A request the server must chew on, in flight.
+                        let heavy = client.send_request(
+                            "tools/call",
+                            json!({
+                                "name": "noteit_context",
+                                "arguments": { "query": hostile },
+                            }),
+                        );
+                        // And behind it a question the server can actually
+                        // answer, which is what makes it load the model and
+                        // build the index rather than refuse and go home.
+                        let real = client.send_request(
+                            "tools/call",
+                            json!({
+                                "name": "noteit_context",
+                                "arguments": { "query": "pressão alta" },
+                            }),
+                        );
+                        // The ping goes last and is timed. It is behind half a
+                        // gigabyte of verification and three hundred notes of
+                        // embedding, and it must still come back.
+                        let ping = Instant::now();
+                        client.request("ping", json!({})).expect("ping answered");
+                        worst = worst.max(ping.elapsed());
+                        client
+                            .await_response(heavy)
+                            .expect("the heavy call answered");
+                        let answered = client.await_response(real).expect("the question answered");
+                        let status = answered["structuredContent"]["semantic_status"].clone();
+                        ran_the_channel |= status == "succeeded";
+                    }
+                    (worst, ran_the_channel)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("no client thread panicked"))
+            .collect()
+    });
+
+    let worst = outcomes
+        .iter()
+        .map(|(worst, _)| *worst)
+        .max()
+        .expect("four clients");
+    assert!(
+        worst < ANSWER_TIMEOUT,
+        "a ping took {worst:?} while a real index was being built"
+    );
+    assert!(
+        outcomes.iter().all(|(_, ran)| *ran),
+        "the semantic channel never ran, so nothing was indexed and this test proved nothing"
+    );
+    println!(
+        "4 clients x 8 hostile requests while a real index was built: {:?} total, worst ping {worst:?}",
         started.elapsed()
     );
 }
