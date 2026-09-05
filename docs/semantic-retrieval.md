@@ -32,7 +32,7 @@ CHUNKS   chunk_id = note_id + revision + ordinal + hash do texto do chunk
 EmbeddingProvider   local  │  remoto (opt-in, fora do processo)
   │
   ▼
-EMBEDDING  + EmbeddingSpaceId (provider, modelo, dimensão, task, normalização)
+EMBEDDING  + EmbeddingSpaceId (provider, modelo, artefato, dimensão, receita)
   │
   ▼
 ÍNDICE DERIVADO  (cache; perder não perde nota nenhuma)
@@ -139,15 +139,57 @@ Responde uma pergunta e só ela: **estes dois vetores podem ser comparados?**
 EmbeddingSpaceId {
     provider            "local" | "openai" | "gemini" | "voyage" | …
     model               identificador do modelo, como o provider o nomeia
-    model_version       quando o provider publicar um; ausente é parte da chave
+    artifact_identity   §5.1 — o que prova que os pesos são os mesmos pesos
     dimension           a dimensão efetivamente usada, não a máxima do modelo
-    task                document/query, quando o provider distingue
+    embedding_recipe    versão do PAR de receitas (documento e consulta juntas)
     normalization       versão da normalização de texto do Note-it
 }
+
+EmbeddingRole { Document, Query }        ← papel da entrada, NÃO parte do espaço
 ```
 
 Dois vetores só entram na mesma busca se os `EmbeddingSpaceId` forem iguais.
 Não "compatíveis o suficiente": iguais.
+
+**O papel não entra na identidade do espaço, e essa é a correção da 4.3A.R1.**
+A 4.3A punha `task = document/query` dentro do `EmbeddingSpaceId` e ao mesmo
+tempo exigia igualdade exata para comparar — o que se contradizia, porque uma
+busca compara justamente o vetor de uma consulta com os vetores de documentos.
+Sob aquela regra, nenhuma busca seria válida.
+
+A separação correta tem três coisas em vez de duas:
+
+| conceito | o que é | onde vive |
+| --- | --- | --- |
+| espaço | onde os vetores são comparáveis | `EmbeddingSpaceId` |
+| papel | esta entrada é documento ou consulta | `EmbeddingRole` |
+| receita | como cada papel é preparado antes de embutir | `embedding_recipe`, uma versão para **o par** |
+
+`embed_document` e `embed_query` **podem** preparar a entrada de forma diferente
+— e devem, porque o `e5` exige `passage: ` e `query: `, a Voyage prepende
+instruções distintas por `input_type` e o `gemini-embedding-001` tem
+`RETRIEVAL_DOCUMENT` e `RETRIEVAL_QUERY`. É exatamente **para** produzirem
+vetores comparáveis que as receitas diferem: elas são as duas metades de um
+mesmo protocolo de recuperação. Por isso a versão é do par, e não de cada
+metade: mudar só a receita de consulta invalida a comparação com documentos já
+indexados tanto quanto mudar a de documento.
+
+Um provider é obrigado a declarar **o mesmo `EmbeddingSpaceId`** em
+`embed_document` e `embed_query` sempre que seus vetores forem validamente
+comparáveis. Um provider que não puder fazer isso não é um provider deste
+sistema.
+
+### Asserções de contrato que a implementação deve trazer
+
+1. `embed_document(x).space == embed_query(y).space` para o mesmo provider,
+   modelo e receita — e a busca entre eles é permitida.
+2. Espaços realmente diferentes — outro provider, outro modelo, outra receita,
+   outra identidade de artefato — são **recusados** na comparação, e o erro é
+   `DimensionMismatch` ou `SpaceMismatch`, nunca um número.
+3. **Igualdade de dimensão sozinha nunca basta.** A regressão é a medição da
+   4.3A: dois espaços truncados para a mesma dimensão produzem cosseno
+   perfeitamente calculável e R@3 de 0,133 contra 0,933. O teste deve falhar se
+   alguma versão futura aceitar a comparação só porque as formas batem.
 
 **Dimensão igual não é compatibilidade**, e isso foi medido em vez de suposto.
 Truncando os vetores de um modelo para a dimensão de outro — o que produz números
@@ -163,6 +205,47 @@ provider e modelo, e não apenas a dimensão.
 
 Mesmo provider com modelo novo é espaço novo até prova explícita em contrário.
 `model-v1` e `model-v2` não são o mesmo espaço porque o fornecedor é o mesmo.
+
+### 5.1 Identidade do artefato e da receita
+
+O nome do modelo não basta. A classe de defeito que a 4.3A mediu — números
+válidos, ranking inválido, nenhum erro estrutural — reaparece inteira se os pesos,
+o tokenizer, a normalização ou a receita mudarem mantendo o mesmo nome e a mesma
+dimensão. O `EmbeddingSpaceId` tem de tornar isso impossível de passar em
+silêncio.
+
+**Provider local — identidade verificável, e é obrigatória.**
+
+```text
+artifact_identity = sha256( pesos ‖ tokenizer ‖ embedding_recipe ‖ normalization )
+```
+
+Calculada na carga do artefato, sobre os bytes que foram efetivamente carregados,
+e gravada no cabeçalho do cache. Trocar o arquivo de pesos por outro do mesmo
+tamanho, atualizar o tokenizer, ou mudar a receita, muda o digest e invalida o
+índice. Não é uma promessa de que ninguém vai trocar: é uma verificação que
+falha.
+
+**Provider remoto — o que dá para garantir, e o que não dá.**
+
+| o provider oferece | o que o Note-it faz | garantia |
+| --- | --- | --- |
+| versão/snapshot imutável (`modelo-001`, `modelo@2026-01-15`) | grava o identificador no espaço | **forte**: o servidor não pode trocar o modelo sob o mesmo nome |
+| apenas alias mutável (`modelo-latest`) | grava o alias e **marca o espaço como não verificável** | **fraca** |
+
+Com alias mutável **não há como detectar** que o fornecedor trocou o modelo do
+outro lado: os vetores antigos continuam com a dimensão certa e o ranking passa a
+ser lixo, exatamente a falha medida. A resposta honesta não é fingir garantia, é:
+
+1. registrar no cabeçalho do cache que aquele espaço é **não verificável**;
+2. expor isso ao usuário junto do estado do índice;
+3. dar um caminho de reconstrução manual sempre disponível;
+4. **preferir**, na configuração padrão de cada provider, o identificador
+   versionado quando o provider publicar um.
+
+Nenhuma heurística de detecção é proposta — comparar amostras contra vetores
+guardados seria inventar um teste estatístico cujo falso negativo é justamente o
+caso perigoso.
 
 ## 6. Proveniência: `EmbeddingRecord`
 
@@ -211,10 +294,57 @@ com validação de proveniência (descarta source_revision != revisão atual):
     candidato n12 sim=0,5639   ← nX desapareceu, corretamente
 ```
 
-A comparação de revisão detecta o vetor obsoleto **sem ler a nota**, o que é
-barato. A nota só é lida depois, e **é a leitura que produz o snippet publicado**
-— nunca o cache. Um resultado obsoleto pode custar uma recuperação pior; ele
-nunca pode custar uma resposta com conteúdo velho apresentado como atual.
+### A validação exige a leitura — e isso foi verificado no código
+
+A 4.3A afirmava que a comparação detectava o vetor obsoleto "sem ler a nota".
+**Está errado**, e a 4.3A.R1 corrigiu depois de conferir a implementação em vez
+de supor:
+
+```text
+noteit-core/src/revision.rs
+    NoteRevision::for_document(&NoteDocument)  -> sha256(document.serialize())
+    NoteRevision::parse(&str)                  -> lê uma que o chamador mandou
+noteit-core/src/write.rs
+    revision_of(&NoteDocument)                 -> invólucro de for_document
+```
+
+São as **únicas** formas de obter uma `NoteRevision` no crate. A primeira serializa
+o documento canônico inteiro — front matter incluído. A segunda não calcula nada.
+E o que a varredura devolve não ajuda: `list_notes_by_recency_with_warnings` lê o
+front matter só para o horário de edição e cai no `mtime` do arquivo, e
+`NoteSummary` **não tem campo `revision`**.
+
+Portanto **não existe caminho autoritativo para a revisão atual sem carregar o
+`NoteDocument`**, e a 4.3A.R1 recusa-se a criar um: uma segunda definição de
+estado é exatamente o defeito que a 4.2A.R1 registrou, e um detector barato que
+discordasse do canônico seria pior que nenhum.
+
+Em particular, `updated_at` **não serve**: ele move com o texto e fica parado
+quando muda uma tag, uma propriedade, uma cor ou um tamanho de fonte — enquanto a
+revisão move. Usá-lo como pré-filtro deixaria passar exatamente as edições que a
+revisão existe para pegar.
+
+**O fluxo correto, e ele é compatível com D-27:**
+
+```text
+índice → note_id
+       → UMA leitura autoritativa do NoteDocument      (a que o motor já faz)
+       → NoteRevision::for_document(&documento)
+       → source_revision == revisão atual ?
+            não → descartar o candidato e marcar para reindexação
+            sim → snippet, motivos e tarefas saem DESSA MESMA leitura
+```
+
+**O custo real é zero em I/O**, e é aí que a afirmação corrigida fica melhor que
+a original: o Context Engine já faz exatamente uma leitura autoritativa por
+candidato, porque é disso que a coerência do candidato depende (D-27). A
+validação de proveniência pega carona nessa leitura. O que ela não é, é gratuita
+no sentido de dispensar a leitura — e a especificação não vai mais dizer que é.
+
+A ordem importa: valida-se **antes** de publicar qualquer coisa daquele
+candidato. Um resultado obsoleto pode custar uma recuperação pior; nunca pode
+custar uma resposta com conteúdo velho apresentado como atual. E o snippet nasce
+da leitura, nunca do cache.
 
 Um registro obsoleto é descartado da resposta e agendado para reindexação.
 
@@ -236,7 +366,7 @@ que já é coerente.
 
 ## 8. Local e remoto
 
-### Modo LOCAL — o padrão
+### Modo LOCAL
 
 Nenhum texto sai da máquina. Funciona offline. Sem chave, sem cobrança, sem
 conta. Custa CPU, RAM e disco locais. Em processo, porque um modelo estático é
@@ -403,10 +533,82 @@ consulta
                                        noteit_context
 ```
 
-### Encadeamento, não fusão
+### A etapa lexical, e os parâmetros congelados
 
-O lexical vem primeiro, na ordem que decidiu. O semântico **só preenche o que
-sobrou**.
+Casamento por **termo** e não por frase. Termos são as sequências de `[0-9a-z]`
+do texto dobrado pela dobra que o Note-it já tem (`search::fold`: minúscula
+Unicode, tabela de Latin-1 e Latin Extended-A, marcas combinantes descartadas).
+**Nenhuma normalização nova**: a dobra existente já resolve acento, e duplicá-la
+criaria duas verdades sobre a mesma palavra.
+
+Ranking por BM25 com **`k1 = 1.2` e `b = 0.75`, congelados**.
+
+São os valores canônicos da literatura, e a 4.3A.R1 os congela **antes** da
+medição final, em vez de mandar a 4.3B "confirmá-los contra o corpus", que era o
+que a 4.3A dizia. Ajustar parâmetros num conjunto e depois apresentar a métrica
+desse mesmo conjunto como validação é medir o próprio ajuste — e com 32 consultas
+o ajuste caberia inteiro dentro do ruído.
+
+A metodologia, explícita:
+
+* **os parâmetros são congelados antes** e não se movem para melhorar o número;
+* **o corpus é régua de regressão, não conjunto de validação independente.** Ele
+  responde "esta mudança piorou alguma coisa que funcionava?", que é a pergunta
+  para a qual foi construído. Ele não responde "este motor é bom", e nenhum
+  número dele deve ser citado como se respondesse;
+* se alguma subfase quiser de fato ajustar `k1`, `b` ou qualquer peso, precisa
+  **antes** de um conjunto de tuning separado e um de avaliação que não seja
+  usado no ajuste — e o corpus de hoje é pequeno demais para ser partido em dois
+  de forma útil, o que significa escrever mais casos primeiro;
+* qualquer ajuste feito sem isso é registrado como ajuste, nunca como melhoria.
+
+A limitação não é escondida: **30 notas e 32 consultas separam arquiteturas com
+folga e não separam dois parâmetros parecidos.**
+
+### Encadeamento em camadas, não fusão
+
+O resultado é montado em **três camadas estruturais**, e uma camada posterior
+nunca atravessa nem rebaixa um candidato admitido por uma anterior:
+
+```text
+camada 1   TextMatch       a consulta ocorre no texto, como frase
+camada 2   TermMatch       termos da consulta ocorrem; ranking BM25
+camada 3   SemanticMatch   admitido pelo canal semântico
+```
+
+A ordem final é a concatenação das três, cada uma internamente ordenada, sem
+reordenação entre elas. Um candidato admitido na camada 1 fica à frente de todo
+candidato que só apareceu na 2 ou na 3, **quaisquer que sejam as pontuações** —
+não é uma consequência dos pesos, é a forma da concatenação.
+
+**Isto vale para o BM25 tanto quanto para o semântico, e essa é a correção da
+4.3A.R1.** A 4.3A garantiu a propriedade só contra a camada semântica; mas a
+4.3B introduz o BM25, e um ranking BM25 aplicado sobre todos os candidatos
+poderia perfeitamente pôr um casamento por termo à frente de um casamento de
+frase exata. A propriedade tem de valer contra a etapa que vem primeiro no
+tempo, e não só contra a que veio por último no projeto.
+
+Um candidato aparece **uma vez**, na camada mais alta que o admitiu, e acumula os
+motivos de todas — um casamento de frase que também é semanticamente próximo é
+um `TextMatch` com `SemanticMatch` entre os motivos, e fica na camada 1.
+
+Desempates **dentro** de cada camada, deterministicamente e sempre nesta ordem:
+
+| camada | 1º | 2º | 3º | 4º |
+| --- | --- | --- | --- | --- |
+| 1 `TextMatch` | mais motivos distintos | `updated_at` mais recente | `note_id` | — |
+| 2 `TermMatch` | pontuação BM25 decrescente | mais motivos distintos | `updated_at` | `note_id` |
+| 3 `SemanticMatch` | similaridade decrescente | `updated_at` | `note_id` | — |
+
+`note_id` fecha as três, como já fecha a ordenação de hoje: sem ele, duas notas
+escritas no mesmo segundo cairiam na ordem que o sistema de arquivos entregou, e
+a mesma pergunta responderia diferente no mesmo store.
+
+A regressão que a 4.3B deve trazer: para **toda** consulta do corpus em que o
+motor de hoje devolve um acerto, esse acerto continua na mesma posição ou mais
+acima depois do BM25, e depois do semântico. Não "em média": para cada uma.
+
+O semântico **só preenche o que sobrou**.
 
 Medido contra Reciprocal Rank Fusion: a RRF pontua um pouco melhor em R@3 (1,000
 contra 0,900 no melhor caso) e **rebaixou um acerto exato** numa consulta. O
@@ -580,7 +782,7 @@ O que passa a existir é **o canal de recuperação**, como motivo:
 ```text
 Reason::TextMatch        a consulta ocorre no texto        (existe)
 Reason::TermMatch        termos da consulta ocorrem        (4.3B)
-Reason::SemanticMatch    semelhança, sem palavra em comum  (semântico)
+Reason::SemanticMatch    admitido pelo canal semântico     (semântico)
 Reason::SharedTag / PropertyMatch / TaskMatch / Recent      (existem)
 ```
 
@@ -729,10 +931,41 @@ MENOR CUSTO LOCAL    lexical
 REMOTO OPCIONAL      OpenAI / Gemini / Voyage, sempre opt-in
 ```
 
+### O padrão, sem ambiguidade
+
+A 4.3A dizia "LOCAL — o padrão" numa seção e "DEFAULT lexical" em outra. São
+coisas diferentes e as duas não podem ser o padrão. A 4.3A.R1 fixa **três
+níveis**, e só o primeiro é o padrão de fábrica:
+
+```text
+semantic_retrieval:
+    mode:     lexical_only          ← PADRÃO DE FÁBRICA
+              | semantic            ← o usuário liga explicitamente
+    provider: local                 ← o padrão QUANDO mode = semantic
+              | openai | gemini | voyage   ← sempre opt-in explícito
+    fallback: automatic | semantic_required | lexical_only
+```
+
+| nível | o que acontece | exige ação do usuário |
+| --- | --- | --- |
+| `lexical_only` | BM25 e mais nada. Sem download, sem modelo, sem credencial, sem rede | **nenhuma — é o padrão** |
+| `semantic` + `provider: local` | baixa/usa o artefato local; nada sai da máquina | ligar a recuperação semântica |
+| `semantic` + provider remoto | trechos das notas vão para o provider | escolher o provider **e** a credencial |
+
+**Nenhuma leitura desta configuração permite que uma atualização passe a enviar
+conteúdo ou a baixar modelo.** Uma instalação nova, e uma instalação atualizada
+que nunca foi configurada, ficam em `lexical_only`: o padrão de fábrica não muda
+por versão nova, e mudar `mode` é sempre um ato do usuário. Se o padrão de
+fábrica algum dia mudar, isso é decisão de produto com ADR própria e não efeito
+colateral de uma release.
+
+`provider: local` é o padrão **apenas dentro de `mode: semantic`** — quer dizer,
+quem liga a semântica sem dizer mais nada recebe a local e não a remota. Um
+provider remoto nunca é alcançado sem que o usuário o nomeie.
+
 **Nenhuma chave remota é requisito do primeiro uso**, e nem sequer o modelo local
 é: o padrão de fábrica é o lexical, que já leva R@3 de 0,367 a 0,767 e não baixa
-nada. A semântica local é a primeira opção que o usuário liga; o remoto é a
-segunda, com o aviso de privacidade na frente.
+nada.
 
 Isto é recomendação de padrão, não exclusividade: mesmo que o local ganhe, os
 remotos continuam; mesmo que um remoto ganhe em qualidade, o local continua.
@@ -801,7 +1034,12 @@ Além do corpus como regressão de qualidade:
 leitura` · `disco cheio` · `queda durante reconstrução` · `symlink no cache` ·
 `Unicode hostil` · `prompt injection no texto` · `consulta gigantesca` ·
 `consultas concorrentes` · `resposta remota hostil` · `429 e timeout` ·
-`chave inválida` · `credencial em log` · `orçamento de resposta MCP`
+`chave inválida` · `credencial em log` · `orçamento de resposta MCP` ·
+`query e document do mesmo espaço são comparáveis` · `espaços diferentes são
+recusados` · `dimensão igual não basta` · `artefato trocado com mesmo nome e
+dimensão` · `alias mutável marcado como não verificável` · `acerto exato nunca
+rebaixado pelo BM25` · `acerto exato nunca rebaixado pelo semântico` ·
+`padrão de fábrica não baixa nem envia nada`
 
 O corpus já carrega quatro deles como dados: `n17` (prompt injection), `n18`
 (Unicode hostil), `n19` e `n20` (nota vazia e mínima).

@@ -2137,10 +2137,18 @@ dependência. Os dois se justificam. A ordem não estava decidida e agora está:
    corpus, e — o que decide — **nenhum runtime de inferência**: um modelo
    estático é uma tabela e uma média. Sem ONNX Runtime, sem C++, sem binário
    baixado em tempo de build, sem risco à fronteira de rede fechada na 4.1R1.1.
-4. **Encadeamento, não fusão.** O lexical vem primeiro na ordem que decidiu; o
-   semântico preenche o resto. A RRF pontua um pouco melhor em R@3 e **rebaixou
-   um acerto exato** numa consulta. O encadeamento não pode rebaixar — não é uma
-   observação sobre este corpus, é a forma da operação.
+4. **Camadas estruturais, não fusão.** O resultado é a concatenação de três
+   camadas — `TextMatch` (frase), `TermMatch` (BM25), `SemanticMatch` — cada uma
+   ordenada internamente, sem reordenação entre elas. Um candidato admitido na
+   camada 1 fica à frente de todo candidato que só apareceu na 2 ou na 3,
+   quaisquer que sejam as pontuações: não é consequência de pesos, é a forma da
+   concatenação. A RRF pontua um pouco melhor em R@3 e **rebaixou um acerto
+   exato** numa consulta; a concatenação não pode rebaixar. A 4.3A.R1 estendeu a
+   propriedade ao **BM25** e não só ao semântico — a 4.3B é quem introduz o BM25,
+   e um ranking BM25 sobre todos os candidatos poria um casamento por termo à
+   frente de um casamento de frase exata. Desempates dentro de cada camada são
+   deterministas e terminam sempre em `note_id`, como a ordenação de hoje já
+   termina.
 5. **Chunk por parágrafo**, teto de 800 caracteres com corte em sentença, sem
    sobreposição. Identidade `note_id` + `revision` + ordinal: a revisão canônica
    já é o detector de staleness que existe, e não é preciso inventar outro.
@@ -2281,8 +2289,35 @@ aplicada antes do defeito existir: **o fornecedor não escreve a mensagem públi
 do Note-it**.
 
 **EmbeddingSpaceId.** Responde uma pergunta só: estes dois vetores podem ser
-comparados? `{provider, model, model_version, dimension, task, normalization}`,
-e só entram na mesma busca se forem **iguais** — não "compatíveis o suficiente".
+comparados? `{provider, model, artifact_identity, dimension, embedding_recipe,
+normalization}`, e só entram na mesma busca se forem **iguais** — não
+"compatíveis o suficiente".
+
+**O papel da entrada não faz parte do espaço** (corrigido na 4.3A.R1). A primeira
+redação punha `task = document/query` dentro do `EmbeddingSpaceId` e ao mesmo
+tempo exigia igualdade exata para comparar, o que se contradizia: uma busca
+compara o vetor de uma consulta com vetores de documentos, e sob aquela regra
+nenhuma busca seria válida. São três conceitos e não dois — o **espaço** onde os
+vetores são comparáveis, o **papel** (`EmbeddingRole::Document | Query`), e a
+**receita** de preparação de cada papel, versionada **em par**, porque mudar só a
+receita de consulta invalida a comparação tanto quanto mudar a de documento. Um
+provider declara o mesmo `EmbeddingSpaceId` em `embed_document` e `embed_query`
+sempre que seus vetores forem comparáveis; um que não possa não é provider deste
+sistema.
+
+**Identidade do artefato e da receita.** O nome do modelo não basta: a classe de
+defeito medida — números válidos, ranking inválido, nenhum erro estrutural —
+reaparece inteira se pesos, tokenizer, normalização ou receita mudarem mantendo
+nome e dimensão. No provider local a identidade é verificável e obrigatória,
+`sha256(pesos ‖ tokenizer ‖ receita ‖ normalização)`, calculada na carga sobre os
+bytes efetivamente carregados e gravada no cabeçalho do cache. No remoto, quando
+o provider publica versão ou snapshot imutável, o identificador entra no espaço e
+a garantia é forte; quando só oferece alias mutável, **não há como detectar** que
+o modelo mudou do outro lado, e a resposta honesta é marcar o espaço como **não
+verificável**, expor isso ao usuário, manter reconstrução manual sempre
+disponível e preferir o identificador versionado na configuração padrão. Nenhuma
+heurística de detecção é proposta: comparar amostras contra vetores guardados
+seria inventar um teste estatístico cujo falso negativo é o caso perigoso.
 
 Dimensão igual **não** é compatibilidade, e isso foi medido em vez de suposto.
 Truncando os vetores de um modelo para a dimensão de outro, o que produz números
@@ -2309,10 +2344,27 @@ sendo descobrir → `noteit_read` → revisão → decidir → `expected_revisio
 
 **Staleness.** Medido. Uma nota indexada com o texto A é editada para B; o índice
 ainda tem o vetor de A. Consultando o assunto de A: sem validação de proveniência
-o candidato obsoleto vem em primeiro (`sim=0,5954`); comparando
-`source_revision` com a revisão atual ele desaparece. A comparação detecta o
-vetor velho **sem ler a nota**, e a nota só é lida depois — **é a leitura que
-produz o snippet publicado, nunca o cache**. Um registro obsoleto é descartado da
+o candidato obsoleto vem em primeiro (`sim=0,5954`); comparando `source_revision`
+com a revisão atual ele desaparece.
+
+**A validação exige a leitura da nota, e a 4.3A errou ao dizer o contrário**
+(corrigido na 4.3A.R1, depois de conferir a implementação em vez de supor). As
+únicas formas de obter uma `NoteRevision` no crate são
+`NoteRevision::for_document(&NoteDocument)`, que faz `sha256` do documento
+canônico serializado inteiro, e `NoteRevision::parse`, que não calcula nada;
+`write::revision_of` é invólucro da primeira. A varredura
+`list_notes_by_recency_with_warnings` lê o front matter só para o horário de
+edição e cai no `mtime`, e `NoteSummary` **não tem campo `revision`**. Não existe
+caminho autoritativo para a revisão atual sem carregar o `NoteDocument`, e esta
+ADR recusa-se a criar um: uma segunda definição de estado é o defeito que a
+4.2A.R1 registrou. `updated_at` tampouco serve — ele move com o texto e fica
+parado quando muda uma tag, uma propriedade ou uma cor, enquanto a revisão move.
+
+O custo real, porém, **é zero em I/O**, e a afirmação corrigida é melhor que a
+original: o Context Engine já faz exatamente uma leitura autoritativa por
+candidato, porque é disso que a coerência depende (D-27), e a validação pega
+carona nela. Valida-se antes de publicar qualquer coisa daquele candidato, e
+**é a leitura que produz o snippet publicado, nunca o cache**. Um registro obsoleto é descartado da
 resposta e agendado para reindexação. Daí também a decisão de o índice guardar
 apenas vetor e metadados, e nenhum texto: guardar texto pouparia uma leitura que
 o motor já faz por candidato (D-27) e compraria um segundo lugar onde conteúdo de
@@ -2389,13 +2441,46 @@ de fornecedor não é benchmark interno. `voyage-4-nano` tem pesos abertos sob
 Apache-2.0 e é o único candidato que poderia um dia ser provider local e remoto
 no mesmo espaço vetorial — não avaliado.
 
-**Padrão recomendado.** `DEFAULT` lexical por termos — sem modelo, sem chave, sem
-download. `PRIVACIDADE/OFFLINE` local estático, quando o usuário ligar.
+**Padrão recomendado, em três níveis inequívocos** (desambiguado na 4.3A.R1, que
+encontrou "LOCAL — o padrão" numa seção e "DEFAULT lexical" em outra). O padrão de
+fábrica é `mode: lexical_only`: BM25 e mais nada, sem download, sem modelo, sem
+credencial, sem rede, e é o estado de uma instalação nova **e** de uma instalação
+atualizada que nunca foi configurada. `mode: semantic` é ato do usuário, e dentro
+dele `provider: local` é o padrão — quem liga a semântica sem dizer mais nada
+recebe a local. Um provider remoto nunca é alcançado sem ser nomeado. **Nenhuma
+leitura desta configuração permite que uma atualização passe a enviar conteúdo ou
+a baixar modelo**; se o padrão de fábrica um dia mudar, isso é decisão de produto
+com ADR própria e não efeito colateral de release.
+
+`PRIVACIDADE/OFFLINE` local estático, quando o usuário ligar.
 `MELHOR QUALIDADE` por medir, provavelmente remoto e **sem evidência ainda**.
 `REMOTO OPCIONAL` sempre opt-in. Nenhuma chave é requisito do primeiro uso, e nem
 o modelo local é: o padrão de fábrica leva R@3 de 0,367 a 0,767 e não baixa nada.
 Benchmark não é lock-in — mesmo que o local ganhe, os remotos continuam; mesmo
 que um remoto ganhe em qualidade, o local continua.
+
+**O motivo nomeia o canal, não o texto.** `Reason::SemanticMatch` significa
+"admitido pelo canal semântico" e nada além disso. A primeira redação dizia "sem
+palavra em comum", o que estava errado duas vezes: é falso, porque uma nota pode
+casar por semelhança *e* compartilhar termos; e transforma um motivo — que é um
+fato sobre o que o servidor fez — numa afirmação sobre o texto, que o servidor
+teria de calcular e provar. Todo motivo do catálogo é do mesmo tipo, o canal que
+admitiu o candidato, e um candidato carrega todos os que se aplicam. O que um
+agente ganha continua real: `SemanticMatch` **sozinho**, sem `TextMatch` nem
+`TermMatch` ao lado, diz que nenhuma palavra da consulta foi encontrada — e ele
+lê isso da ausência dos outros motivos, não de uma promessa embutida neste.
+
+**Metodologia do BM25, para não medir o próprio ajuste.** `k1 = 1.2` e
+`b = 0.75`, os valores canônicos, **congelados antes** da medição final — em vez
+de mandar a subfase seguinte "confirmá-los contra o corpus", que era o que a
+primeira redação dizia e que teria sido ajustar num conjunto e apresentar a
+métrica desse mesmo conjunto como validação. Com 32 consultas o ajuste caberia
+inteiro dentro do ruído. O corpus é **régua de regressão e não conjunto de
+validação independente**: responde "esta mudança piorou algo que funcionava?", que
+é a pergunta para a qual foi construído, e não responde "este motor é bom".
+Ajustar qualquer peso exige antes um conjunto de tuning separado e um de
+avaliação que não seja usado no ajuste — e o corpus de hoje é pequeno demais para
+ser partido em dois de forma útil, o que significa escrever mais casos primeiro.
 
 **Questões deixadas para a implementação.** Qualidade sob quantização int8 dos
 modelos estáticos; verificação da licença de `model2vec-rs`, que o `crates.io`

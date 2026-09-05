@@ -1160,6 +1160,54 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
 
         **Fechado junto:** DOC-01 e DOC-02, duas frases da 4.2R.R1 que descreviam comportamento que
         o código não tem mais.
+    - [x] **4.3A.R1 — Correção do contrato arquitetural.** Uma auditoria externa
+          encontrou sete contradições no contrato, e elas tinham de cair antes que a
+          4.3B materializasse os tipos em Rust. Documental: nenhum `.rs`, nenhuma
+          dependência, `Cargo.lock` byte-idêntico.
+
+          **O papel da entrada saiu da identidade do espaço.** A 4.3A punha
+          `task = document/query` dentro do `EmbeddingSpaceId` e ao mesmo tempo exigia
+          igualdade exata para comparar dois vetores — o que se contradizia, porque uma
+          busca compara justamente uma consulta com documentos: sob aquela regra,
+          nenhuma busca seria válida. Agora são três coisas: o espaço, o
+          `EmbeddingRole`, e a receita de preparação, versionada **em par**, porque
+          mudar só a receita de consulta invalida a comparação tanto quanto mudar a de
+          documento.
+
+          **A alegação de staleness sem leitura era falsa, e foi conferida no código.**
+          As únicas formas de obter uma `NoteRevision` são `for_document`, que faz
+          `sha256` do documento canônico serializado inteiro, e `parse`, que não calcula
+          nada; a varredura lê front matter e `mtime`, e `NoteSummary` não tem campo
+          `revision`. Não existe caminho autoritativo sem carregar o `NoteDocument`, e a
+          R1 recusou-se a criar um — uma segunda definição de estado é o defeito que a
+          4.2A.R1 registrou, e `updated_at` não serve porque fica parado quando uma tag
+          muda. O custo real, porém, é **zero em I/O**: o motor já faz exatamente uma
+          leitura autoritativa por candidato (D-27), e a validação pega carona nela.
+
+          **Identidade de artefato.** Nome de modelo não basta: pesos, tokenizer,
+          normalização ou receita podem mudar mantendo nome e dimensão, e a classe de
+          defeito medida na 4.3A volta inteira. No local, `sha256` dos bytes carregados,
+          obrigatório. No remoto, identificador versionado quando o provider publica um;
+          e quando só há alias mutável, o espaço é marcado **não verificável** e o
+          usuário vê isso — em vez de fingir uma garantia que não existe.
+
+          **"Não rebaixar acerto exato" virou invariável estrutural** e passou a valer
+          contra o BM25 e não só contra o semântico: três camadas concatenadas —
+          `TextMatch`, `TermMatch`, `SemanticMatch` — sem reordenação entre elas, com
+          desempates deterministas terminando em `note_id`.
+
+          **O padrão ficou inequívoco.** A 4.3A dizia "LOCAL — o padrão" numa seção e
+          "DEFAULT lexical" em outra. Agora: padrão de fábrica `lexical_only`; `local` é
+          o padrão apenas **dentro** de `mode: semantic`; remoto sempre nomeado. Nenhuma
+          leitura permite que uma atualização passe a enviar conteúdo ou baixar modelo.
+
+          **`SemanticMatch` é canal de admissão**, não "sem palavra em comum" — que era
+          falso e transformava um fato sobre o servidor numa afirmação sobre o texto.
+
+          **`k1` e `b` congelados antes da medição**, e o corpus declarado régua de
+          regressão e não conjunto de validação: ajustar num conjunto e apresentar a
+          métrica dele como validação seria medir o próprio ajuste, e com 32 consultas o
+          ajuste cabe dentro do ruído.
   - [ ] **4.3B — Motor de recuperação provider-neutral.** Planejada. Os tipos centrais e o motor,
         sem nenhum provider remoto e sem artefato de modelo. **Começa pelo lexical**, porque é o
         que a 4.3A mediu como maior ganho e menor custo, e porque é o piso para onde tudo o mais
