@@ -78,7 +78,13 @@ fi
 #    a feature that was left out — it is a thing this must never grow. An HTTP
 #    stack arriving here is how a "just for the inspector" server becomes a
 #    listening socket nobody meant to open.
-if grep -Eq '^(reqwest|hyper|hyper-util|axum|tower-http|actix-web|warp|rustls|rustls-pki-types|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite|socket2|mio|quinn|h2|h3|httparse|http|http-body|http-body-util|trust-dns-resolver|hickory-resolver)( |$)' <<<"$tree"; then
+#    The second group arrived with 4.3C. The local embedding provider's
+#    upstream world assumes a model is *fetched*: `tokenizers` has an `http`
+#    feature that pulls `hf-hub`, `hf-hub` pulls `ureq`, and `model2vec-rs`
+#    enables both by default. None of them is in this graph, and this is the
+#    line that keeps it that way — obtaining an artifact is
+#    `scripts/fetch-embedding-artifact`, run by a person, never by a build.
+if grep -Eq '^(reqwest|hyper|hyper-util|axum|tower-http|actix-web|warp|rustls|rustls-pki-types|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite|socket2|mio|quinn|h2|h3|httparse|http|http-body|http-body-util|trust-dns-resolver|hickory-resolver|ureq|hf-hub|attohttpc|isahc|curl|curl-sys|surf|minreq|ehttp|reqwest-middleware)( |$)' <<<"$tree"; then
   fail "noteit-mcp pulled in an HTTP, TLS, OAuth, SSE, WebSocket or socket stack; this server speaks stdio only."
 fi
 
@@ -171,6 +177,21 @@ core_offending '\b(std::net|tokio::net|socket2|mio::net)\b' \
 core_offending '\b(TcpListener|TcpStream|UdpSocket|ToSocketAddrs|SocketAddrV4|SocketAddrV6|IpAddr|Ipv4Addr|Ipv6Addr)\b' \
   && fail "noteit-core/src names an internet socket or address type; AF_UNIX is permitted here and AF_INET/AF_INET6 are not."
 
+#     And neither does the embedding provider, which since 4.3C is the third
+#     crate on the path from a tool call to a note. It has no Unix socket to
+#     permit either: it reads two files and does arithmetic, so the rule here is
+#     the flat one the Core's cannot be.
+embedding_sources="noteit-embedding-local/src"
+embedding_code() {
+  find "$embedding_sources" -name '*.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||'
+}
+if embedding_code | grep -Eq '\b(std::net|tokio::net|socket2|mio::net|UnixStream|UnixListener|TcpStream|TcpListener|UdpSocket|SocketAddr)\b'; then
+  embedding_code | grep -E '\b(std::net|tokio::net|socket2|mio::net|UnixStream|UnixListener|TcpStream|TcpListener|UdpSocket|SocketAddr)\b' >&2
+  fail "noteit-embedding-local/src reaches for a socket; the local provider reads files and computes, and has no network of any family."
+fi
+
 #     And the permitted mechanism must still exist. Without this, the two rules
 #     above would be satisfied perfectly by a Core that had lost the authority
 #     handover altogether — passing a network check by deleting the feature it
@@ -239,8 +260,14 @@ offending 'Option *< *NoteRevision|Option *< *RevisionArgument' \
 #     whatever the caller decides to call it afterwards.
 io_surface='(noteit_core *:: *(context|authority|storage)|\b(NoteItCore|StorageManager|open_read_only(_at)?|from_storage|authority::|perform_at|read_note|list_summaries|list_notes(_by_recency)?(_with_warnings)?|search_notes(_filtered)?|list_tasks|list_trash|metadata_catalog(_with_warnings)?|study_state|resolve_note_id|resolve_trash_id|save_note_atomic|move_note_to_trash|ensure_directories|context::retrieve|write::execute|commit_addressed)\b)'
 
+#     Since 4.3C the adapter is two files. `semantic.rs` holds the provider,
+#     the index and the lifecycle that outlives a request, and it necessarily
+#     names the Core: indexing *is* reading notes. It is inside the rule rather
+#     than exempt from it — the entry point takes the same `OffThread` witness
+#     every other Core call here takes, which is asserted below, so "Core I/O
+#     only where the offload is proven" is still what this rule enforces.
 outside_the_adapter() {
-  find "$sources" -name '*.rs' ! -name 'domain.rs' -print0 \
+  find "$sources" -name '*.rs' ! -name 'domain.rs' ! -name 'semantic.rs' -print0 \
     | xargs -0 grep -n '' \
     | sed -e 's|//[!/].*||' -e 's|//.*||'
 }
@@ -261,6 +288,8 @@ grep -q 'fn perform(_off: &OffThread' "$sources/domain.rs" \
   || fail "the write path no longer requires the OffThread witness; a write could run on the protocol thread again."
 grep -q 'pub struct OffThread(());' "$sources/domain.rs" \
   || fail "the OffThread witness no longer has a module-private field; anything could build one."
+grep -q '_off: &crate::domain::OffThread,' "$sources/semantic.rs" \
+  || fail "noteit-mcp/src/semantic.rs no longer requires the OffThread witness; indexing could run on the protocol thread."
 #     Two mentions of the empty-tuple form: the declaration above, and the one
 #     construction inside off_reactor. A third is a second way to mint the
 #     proof, which would make it prove nothing.

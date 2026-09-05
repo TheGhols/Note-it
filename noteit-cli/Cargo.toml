@@ -15,6 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 noteit-core = { path = "../noteit-core" }
+# For `noteit status` only: where the embedding artifact is expected, and
+# whether it is there. No model is loaded by the CLI and no vector is computed
+# in it — the constants and the path rule live in one crate so that the CLI and
+# the MCP server cannot come to disagree about which artifact is the artifact.
+noteit-embedding-local = { path = "../noteit-embedding-local" }
 clap = { version = "4.5", features = ["derive"] }
 # The machine interface is serialised, never assembled. Both are already in the
 # workspace's dependency graph through `noteit-core`; stated here because this

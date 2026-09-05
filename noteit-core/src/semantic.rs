@@ -21,7 +21,7 @@
 
 use crate::chunking::{chunk, ChunkId, CHUNKER_VERSION};
 use crate::context::MAX_CANDIDATES;
-use crate::embedding::{cosine, Embedding, EmbeddingRole, EmbeddingSpaceId, SemanticError};
+use crate::embedding::{Embedding, EmbeddingRole, EmbeddingSpaceId, SemanticError};
 use crate::model::NoteDocument;
 use crate::revision::NoteRevision;
 use crate::visible_text::visible_text;
@@ -166,6 +166,25 @@ impl InMemoryIndex {
     pub fn notes(&self) -> usize {
         self.by_note.len()
     }
+
+    /// Whether anything is held for this note.
+    ///
+    /// The whole of the incremental lifecycle rests on this question, and on
+    /// the fact that the answer becomes `false` on its own: a record whose
+    /// revision no longer matches is invalidated by the engine during a
+    /// retrieval, so "the index does not hold it" is also how "the note
+    /// changed" is discovered. That leaves the canonical revision as the only
+    /// detector of note state, which is the rule §7 of the specification
+    /// exists to protect — a second, cheaper detector would disagree with it
+    /// eventually, and disagree silently.
+    pub fn holds(&self, note_id: &Uuid) -> bool {
+        self.by_note.contains_key(note_id)
+    }
+
+    /// Every note the index holds something for, in a stable order.
+    pub fn note_ids(&self) -> Vec<Uuid> {
+        self.by_note.keys().copied().collect()
+    }
 }
 
 impl SemanticIndex for InMemoryIndex {
@@ -217,11 +236,26 @@ impl SemanticIndex for InMemoryIndex {
             return Err(SemanticError::SpaceMismatch);
         }
 
+        // The space was compared once, above, and every record in this index
+        // was refused on insert unless it declared exactly this space — see
+        // `replace_note`, which validates the whole batch before touching
+        // anything. So query and record are in the same space by construction,
+        // and the comparison below is between *vectors*, which still refuses a
+        // dimension it does not recognise.
+        //
+        // This is a measured difference and not a tidy-up. `embedding::cosine`
+        // compares two `EmbeddingSpaceId`s, and one of those holds a provider
+        // name, a model name and a sixty-four character digest: doing it per
+        // record turned a search over twenty thousand vectors into twenty
+        // thousand string comparisons, and cost 19.8 ms where the arithmetic
+        // costs 3. What is *not* skipped is the check that matters — the space
+        // is still compared, once, against the query.
+        let query_vector = query.vector();
         let mut best: Vec<SemanticHit> = Vec::with_capacity(self.by_note.len());
         for records in self.by_note.values() {
             let mut winner: Option<SemanticHit> = None;
             for record in records {
-                let similarity = cosine(query, &record.vector)?;
+                let similarity = query_vector.cosine(record.vector.vector())?;
                 let better = match &winner {
                     None => true,
                     // A note's own chunks tie by `chunk_id`, so which paragraph
@@ -412,6 +446,12 @@ impl<'a> SemanticRuntime<'a> {
 
     pub fn requiring_semantics(mut self) -> Self {
         self.fallback = SemanticFallback::Required;
+        self
+    }
+
+    /// The policy the caller resolved from configuration.
+    pub fn with_fallback(mut self, fallback: SemanticFallback) -> Self {
+        self.fallback = fallback;
         self
     }
 

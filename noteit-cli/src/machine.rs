@@ -35,14 +35,17 @@
 //! this one is between Note-it and its caller, and they are not the same
 //! boundary even though both happen to be JSON.
 
-use crate::outcome::{CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError};
+use crate::outcome::{
+    CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError, StatusReport,
+};
 use crate::output::OutputContext;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
 use noteit_core::revision::NoteRevision;
+use noteit_core::settings::{SemanticFallbackPolicy, SemanticMode, SemanticProvider};
 use noteit_core::write::{WriteError, WriteOutcome, WriteOutcomeKind};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadWarning, ReadWarningKind,
-    SearchResult, StorePaths, TaskEntry, TaskStateFilter, TrashEntry, Uuid,
+    SearchResult, TaskEntry, TaskStateFilter, TrashEntry, Uuid,
 };
 use serde::Serialize;
 
@@ -178,6 +181,25 @@ struct StatusData {
     data_path: String,
     config_path: String,
     state_path: String,
+    semantic: SemanticStatusData,
+}
+
+/// The retrieval configuration, as a machine reads it.
+///
+/// No vector, no digest and no note text. The artifact directory is here
+/// because a person provisioning a model needs to know where to put it, and
+/// this is a local diagnostic on the user's own machine — it is deliberately
+/// not something `noteit_context` publishes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SemanticStatusData {
+    mode: &'static str,
+    provider: &'static str,
+    fallback: &'static str,
+    enabled: bool,
+    local: bool,
+    model: &'static str,
+    artifact_present: bool,
+    artifact_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -628,7 +650,7 @@ fn data_of(outcome: &Outcome) -> MachineData {
         Outcome::Version => MachineData::Version(VersionData {
             version: env!("CARGO_PKG_VERSION"),
         }),
-        Outcome::Status(paths) => MachineData::Status(status_data(paths)),
+        Outcome::Status(report) => MachineData::Status(status_data(report)),
         Outcome::Notes(batch) => {
             let notes: Vec<NoteSummaryData> = batch.items.iter().map(note_summary).collect();
             MachineData::Notes(NotesData {
@@ -670,7 +692,9 @@ fn data_of(outcome: &Outcome) -> MachineData {
     }
 }
 
-fn status_data(paths: &StorePaths) -> StatusData {
+fn status_data(report: &StatusReport) -> StatusData {
+    let paths = &report.paths;
+    let semantic = &report.semantic;
     StatusData {
         version: env!("CARGO_PKG_VERSION"),
         cli_ready: true,
@@ -679,6 +703,29 @@ fn status_data(paths: &StorePaths) -> StatusData {
         data_path: paths.data_dir.display().to_string(),
         config_path: paths.config_dir.display().to_string(),
         state_path: paths.state_dir.display().to_string(),
+        semantic: SemanticStatusData {
+            mode: match semantic.mode {
+                SemanticMode::LexicalOnly => "lexical_only",
+                SemanticMode::Semantic => "semantic",
+            },
+            provider: match semantic.provider {
+                SemanticProvider::Local => "local",
+            },
+            fallback: match semantic.fallback {
+                SemanticFallbackPolicy::Automatic => "automatic",
+                SemanticFallbackPolicy::SemanticRequired => "semantic_required",
+                SemanticFallbackPolicy::LexicalOnly => "lexical_only",
+            },
+            enabled: semantic.enabled,
+            // One provider exists in this phase and it runs in this process.
+            local: true,
+            model: semantic.model,
+            artifact_present: semantic.artifact_present,
+            artifact_path: semantic
+                .artifact_directory
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        },
     }
 }
 

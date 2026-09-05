@@ -7,13 +7,15 @@
 //! Neither renderer is ever built from the other's output.
 
 use crate::outcome::{
-    CliResponse, CommandError, Executed, HelpText, Outcome, ReadError, UsageError,
+    CliResponse, CommandError, Executed, HelpText, Outcome, ReadError, SemanticStatusReport,
+    StatusReport, UsageError,
 };
 use noteit_core::chrono::{DateTime, Utc};
+use noteit_core::settings::{SemanticFallbackPolicy, SemanticMode, SemanticProvider};
 use noteit_core::write::{WriteError, WriteOutcome, WriteOutcomeKind};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadWarning, SearchResult,
-    StorePaths, TaskEntry, TaskStateFilter, TrashEntry, Uuid,
+    TaskEntry, TaskStateFilter, TrashEntry, Uuid,
 };
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
@@ -481,7 +483,8 @@ pub fn render_version(_ctx: &OutputContext) -> String {
     format!("Note-it {}\n", env!("CARGO_PKG_VERSION"))
 }
 
-pub fn render_status(ctx: &OutputContext, paths: &StorePaths) -> String {
+pub fn render_status(ctx: &OutputContext, report: &StatusReport) -> String {
+    let paths = &report.paths;
     let version_line = ctx.bold(&format!("Note-it {}", env!("CARGO_PKG_VERSION")));
     let cli_status = ctx.green("pronta");
     let core_status = ctx.green("disponível");
@@ -496,8 +499,70 @@ pub fn render_status(ctx: &OutputContext, paths: &StorePaths) -> String {
     let state_path = sanitize_for_terminal(&paths.state_dir.display().to_string());
 
     format!(
-        "{version_line}\n\nCLI       {cli_status}\nCore      {core_status}\nStore     {store_status}\nDados     {data_path}\nConfig    {config_path}\nEstado    {state_path}\n"
+        "{version_line}\n\nCLI       {cli_status}\nCore      {core_status}\nStore     {store_status}\nDados     {data_path}\nConfig    {config_path}\nEstado    {state_path}\n{}",
+        render_semantic_status(ctx, &report.semantic)
     )
+}
+
+/// The retrieval half of `noteit status`.
+///
+/// Says what the configuration says and what the filesystem shows, and stops
+/// there. No digest, no vector, no note text — and the artifact directory,
+/// which is here because somebody provisioning a model needs to know where it
+/// goes. That is a local diagnostic on the user's own machine; `noteit_context`
+/// publishes none of it.
+fn render_semantic_status(ctx: &OutputContext, semantic: &SemanticStatusReport) -> String {
+    let mode = match semantic.mode {
+        SemanticMode::LexicalOnly => ctx.dim("lexical_only (padrão de fábrica)"),
+        SemanticMode::Semantic => ctx.green("semantic"),
+    };
+    let mut out = format!("\nSemântica {mode}\n");
+    if !semantic.enabled {
+        // Nothing below would be true of a machine in this state: no provider
+        // is constructed, no artifact is read and no index exists.
+        out.push_str(&format!(
+            "          {}\n",
+            ctx.dim("nenhum modelo é carregado e nada é baixado")
+        ));
+        if semantic.mode == SemanticMode::Semantic {
+            out.push_str(&format!(
+                "          {}\n",
+                ctx.yellow("fallback = lexical_only mantém o canal desligado")
+            ));
+        }
+        return out;
+    }
+    let availability = if semantic.artifact_present {
+        ctx.green("presente")
+    } else {
+        ctx.yellow("ausente — rode scripts/fetch-embedding-artifact")
+    };
+    let fallback = match semantic.fallback {
+        SemanticFallbackPolicy::Automatic => "automatic",
+        SemanticFallbackPolicy::SemanticRequired => "semantic_required",
+        SemanticFallbackPolicy::LexicalOnly => "lexical_only",
+    };
+    let provider = match semantic.provider {
+        SemanticProvider::Local => "local (em processo, nada sai desta máquina)",
+    };
+    out.push_str(&format!("Provider  {provider}\n"));
+    out.push_str(&format!("Modelo    {}\n", semantic.model));
+    out.push_str(&format!("Fallback  {fallback}\n"));
+    out.push_str(&format!("Artefato  {availability}\n"));
+    if let Some(directory) = &semantic.artifact_directory {
+        out.push_str(&format!(
+            "          {}\n",
+            sanitize_for_terminal(&directory.display().to_string())
+        ));
+    }
+    // The index lives in the process that answers questions, which is the MCP
+    // server and never this one. Saying so is more useful than a number that
+    // would always be zero here.
+    out.push_str(&format!(
+        "Índice    {}\n",
+        ctx.dim("em memória, por processo — construído por quem responde consultas")
+    ));
+    out
 }
 
 pub fn render_notes_list(ctx: &OutputContext, summaries: &[NoteSummary]) -> String {
@@ -1007,7 +1072,7 @@ fn render_outcome(ctx: &OutputContext, outcome: &Outcome) -> String {
         Outcome::Help(HelpText::Own) => render_help(ctx),
         Outcome::Help(HelpText::Sub(text)) => text.clone(),
         Outcome::Version => render_version(ctx),
-        Outcome::Status(paths) => render_status(ctx, paths),
+        Outcome::Status(report) => render_status(ctx, report),
         Outcome::Notes(batch) => render_notes_list(ctx, &batch.items),
         Outcome::Note { document, .. } => render_note_read(ctx, document),
         Outcome::Search { query, batch } => render_search_results(ctx, query, &batch.items),

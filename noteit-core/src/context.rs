@@ -930,6 +930,22 @@ fn clip(text: &str, limit: usize) -> String {
 ///
 /// `None` is "no text signal", which is not an error: a request may carry only
 /// tags, or nothing at all.
+/// Whether this request carries a question the semantic channel could act on.
+///
+/// The same [`prepare`] the pipeline itself uses, asked ahead of time. It is a
+/// function and not a rule restated somewhere else on purpose: a caller that
+/// decided for itself whether a query counts would be a second definition of
+/// "empty", and the two would disagree the first time either moved.
+///
+/// It answers `false` for an absent query, a query that is only whitespace, a
+/// query that folds to nothing, and a query too long to be accepted at all —
+/// which is exactly the set for which embedding one would mean nothing. A
+/// caller uses it to avoid loading a provider that would never be asked
+/// anything, and to keep [`SemanticStatus::NotRequested`] meaning what it says.
+pub fn semantic_channel_applies(request: &ContextRequest) -> bool {
+    matches!(prepare(&request.query), Ok(Some(_)))
+}
+
 fn prepare(query: &str) -> Result<Option<Folded>, ContextError> {
     let actual = query.chars().count();
     if actual > MAX_QUERY_CHARS {

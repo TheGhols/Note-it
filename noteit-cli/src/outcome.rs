@@ -18,11 +18,13 @@
 //! escapes on its way to a terminal. JSON is data and gets the real value.
 
 use noteit_core::revision::NoteRevision;
+use noteit_core::settings::{SemanticFallbackPolicy, SemanticMode, SemanticProvider};
 use noteit_core::write::{WriteError, WriteOutcome};
 use noteit_core::{
     MetadataCatalog, NoteDocument, NoteSelectorError, NoteSummary, ReadBatch, ReadWarning,
     SearchResult, StorePaths, TaskEntry, TaskStateFilter, TrashEntry,
 };
+use std::path::PathBuf;
 
 /// Everything one execution of the CLI has to say, as data.
 ///
@@ -172,13 +174,37 @@ pub enum HelpText {
     Sub(String),
 }
 
+/// What `noteit status` has to say about this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusReport {
+    pub paths: StorePaths,
+    /// The retrieval configuration as it stands, and whether the artifact the
+    /// local provider needs is where it should be.
+    ///
+    /// Read, never loaded: answering "is the model there" by hashing half a
+    /// gigabyte would make `noteit status` a different command. The digests are
+    /// checked when a provider is actually built.
+    pub semantic: SemanticStatusReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticStatusReport {
+    pub mode: SemanticMode,
+    pub provider: SemanticProvider,
+    pub fallback: SemanticFallbackPolicy,
+    pub enabled: bool,
+    pub model: &'static str,
+    pub artifact_present: bool,
+    pub artifact_directory: Option<PathBuf>,
+}
+
 /// A command that produced a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Welcome,
     Help(HelpText),
     Version,
-    Status(Box<StorePaths>),
+    Status(Box<StatusReport>),
     Notes(ReadBatch<NoteSummary>),
     /// One note, and the exact version this answer describes.
     ///

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# Proves the two offline claims by running them with no network at all.
+#
+# "Offline" is not a property of a source tree that does not contain the word
+# `http`. `scripts/check-embedding-boundary` and `scripts/check-mcp-boundary`
+# prove no HTTP, TLS or socket crate is in the graph, which is the static half.
+# This is the other half: the same code, executed inside a network namespace
+# whose only interface is a loopback that is *down*. If anything needed a
+# network it would fail here, visibly, rather than be argued about.
+#
+# Two scenarios, because they are two different claims:
+#
+#   factory default      no artifact, no configuration — lexical retrieval works
+#                        end to end and nothing is downloaded
+#   semantic local       artifact already provisioned — indexing and querying
+#                        work, and still nothing is downloaded
+#
+# Requires unprivileged user namespaces (`unshare -rn`). Where they are
+# unavailable the script says so and exits non-zero rather than quietly
+# claiming a proof it did not obtain.
+#
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+fail() {
+  printf 'check-offline: %s\n' "$1" >&2
+  exit 1
+}
+
+command -v unshare >/dev/null 2>&1 || fail "unshare não encontrado; não há como provar o modo offline nesta máquina."
+unshare -rn true >/dev/null 2>&1 \
+  || fail "namespaces de rede sem privilégio não estão disponíveis; não há como provar o modo offline nesta máquina."
+
+printf 'Namespace de rede sem interfaces ativas:\n'
+unshare -rn sh -c 'ip -o link show 2>/dev/null || cat /proc/net/dev' | sed 's/^/  /'
+
+# The suites are compiled outside the namespace on purpose. Building is a
+# separate activity with its own network question, and this script is about
+# what the *program* needs at run time.
+printf '\nCompilando as suítes (fora do namespace)...\n'
+cargo test --no-run --release -p noteit-mcp --test mcp_semantic >/dev/null 2>&1 \
+  || fail "não foi possível compilar mcp_semantic."
+cargo test --no-run --release -p noteit-embedding-local --test retrieval_quality >/dev/null 2>&1 \
+  || fail "não foi possível compilar retrieval_quality."
+
+binary_for() {
+  # The most recently built binary for a given test target.
+  find target/release/deps -maxdepth 1 -type f -executable -name "$1-*" ! -name '*.d' \
+    -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+mcp_semantic="$(binary_for mcp_semantic)"
+retrieval_quality="$(binary_for retrieval_quality)"
+[ -x "$mcp_semantic" ] || fail "binário de mcp_semantic não encontrado."
+[ -x "$retrieval_quality" ] || fail "binário de retrieval_quality não encontrado."
+
+printf '\n=== 1. Padrão de fábrica, sem rede ===\n'
+printf 'Cada teste desta suíte cria seu próprio XDG vazio: nenhum artefato, nenhuma\n'
+printf 'configuração, nenhum modelo. O servidor MCP é iniciado de verdade.\n\n'
+unshare -rn "$mcp_semantic" --test-threads=1 \
+  || fail "o padrão de fábrica não funcionou sem rede."
+
+printf '\n=== 2. Semântica local provisionada, sem rede ===\n'
+artifact="${XDG_CACHE_HOME:-$HOME/.cache}/note-it/embedding"
+if [ ! -d "$artifact" ]; then
+  printf 'Artefato ausente em %s.\n' "$artifact"
+  printf 'Rode scripts/fetch-embedding-artifact e repita para provar este cenário.\n'
+  exit 1
+fi
+printf 'Artefato em %s\n\n' "$artifact"
+unshare -rn "$retrieval_quality" --test-threads=1 --nocapture \
+  || fail "a recuperação semântica local não funcionou sem rede."
+
+printf '\nOffline OK: o padrão de fábrica e a semântica local funcionam integralmente\n'
+printf 'dentro de um namespace de rede sem nenhuma interface ativa.\n'

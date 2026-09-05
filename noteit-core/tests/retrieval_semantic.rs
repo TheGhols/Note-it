@@ -1176,3 +1176,87 @@ fn fingerprint(root: &Path) -> Vec<String> {
     out.sort();
     out
 }
+
+/// The invariant the search's hot path rests on, asserted where it is made.
+///
+/// `InMemoryIndex::nearest_notes` compares the query's space against the
+/// index's once and then compares *vectors*, because every record in the index
+/// was refused unless it declared exactly that space. That shortcut is worth
+/// 19.8 ms against 3 ms over twenty thousand vectors — a search should not be
+/// twenty thousand string comparisons — and it is only sound while `replace_note`
+/// is the one door and it stays shut. These three assertions are that door.
+#[test]
+fn the_index_refuses_every_record_that_is_not_of_its_own_space() {
+    let mine = toy_space();
+    let mut index = InMemoryIndex::new(mine.clone());
+    let note = id(1);
+
+    let foreign = space_named("test-dictionary", "three-words", 9);
+    assert_eq!(
+        foreign.dimension, mine.dimension,
+        "the point of this test is that the shapes agree and the spaces do not"
+    );
+
+    let vector = EmbeddingVector::new(values_for("cardio")).expect("vector");
+    let honest = Embedding::new(mine.clone(), EmbeddingRole::Document, vector.clone())
+        .expect("an honest embedding");
+    let alien = Embedding::new(foreign.clone(), EmbeddingRole::Document, vector)
+        .expect("an embedding of another space");
+
+    let record = |space: EmbeddingSpaceId, vector: Embedding| EmbeddingRecord {
+        note_id: note,
+        source_revision: NoteRevision::parse(&digest(7)).expect("a revision"),
+        chunk_id: ChunkId::of(
+            &note,
+            &NoteRevision::parse(&digest(7)).expect("a revision"),
+            0,
+            CHUNKER_VERSION,
+            "cardio",
+        )
+        .expect("chunk id"),
+        chunker_version: CHUNKER_VERSION,
+        space,
+        vector,
+    };
+
+    // A record whose declared space is foreign.
+    assert_eq!(
+        index.replace_note(&note, vec![record(foreign.clone(), honest.clone())]),
+        Err(SemanticError::SpaceMismatch)
+    );
+    // A record whose *vector* is foreign, however the record labels itself.
+    assert_eq!(
+        index.replace_note(&note, vec![record(mine.clone(), alien.clone())]),
+        Err(SemanticError::SpaceMismatch)
+    );
+    // And a batch where only the last one lies still indexes nothing.
+    assert_eq!(
+        index.replace_note(
+            &note,
+            vec![record(mine.clone(), honest.clone()), record(foreign, alien),]
+        ),
+        Err(SemanticError::SpaceMismatch)
+    );
+    assert_eq!(
+        index.vector_count(),
+        0,
+        "a refused batch left something behind"
+    );
+
+    // And a question from another space is refused before any arithmetic, so
+    // the per-record shortcut is never reached with a mismatched query.
+    index
+        .replace_note(&note, vec![record(mine.clone(), honest)])
+        .expect("the honest record is accepted");
+    let stranger = Embedding::new(
+        space_named("test-dictionary", "three-words", 9),
+        EmbeddingRole::Query,
+        EmbeddingVector::new(values_for("cardio")).expect("vector"),
+    )
+    .expect("a query of another space");
+    assert_eq!(
+        index.nearest_notes(&stranger, 10),
+        Err(SemanticError::SpaceMismatch),
+        "equal dimension is never compatibility"
+    );
+}

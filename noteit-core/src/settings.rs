@@ -48,6 +48,89 @@ pub fn theme_name(value: &str) -> &'static str {
         .unwrap_or(DEFAULT_THEME)
 }
 
+/// Whether the semantic channel may run at all, and which one runs.
+///
+/// Three levels, and only the first is the factory default. A new install, and
+/// an install that upgraded and was never configured, are both
+/// [`SemanticMode::LexicalOnly`]: no model is loaded, nothing is downloaded, no
+/// index is built and nothing reaches a network. Turning it on is always an act
+/// of the user's — a release cannot do it, and this type has no state in which
+/// a missing field means "on".
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticMode {
+    /// BM25 and the declared signals. No provider, no artifact, no network.
+    #[default]
+    LexicalOnly,
+    /// The above plus the semantic channel, through the configured provider.
+    Semantic,
+}
+
+/// Which provider the semantic channel uses.
+///
+/// One variant in 4.3C, and that is the honest shape: a remote provider is
+/// 4.3D's, and an enum listing providers that do not exist would be an API
+/// nobody wrote. `local` is also the default *inside* `mode = "semantic"`, so
+/// turning semantics on without saying more never reaches a network.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticProvider {
+    /// In-process, offline, no key and no charge. Nothing leaves the machine.
+    #[default]
+    Local,
+}
+
+/// What the semantic channel does when it cannot answer.
+///
+/// `automatic` degrades and *says* it degraded; `semantic_required` refuses
+/// rather than pretending; `lexical_only` never tries. Masking the failure of
+/// somebody who asked for semantics on purpose is lying about what was done,
+/// which is why the second exists at all.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticFallbackPolicy {
+    /// Degrade to lexical retrieval, and report `unavailable`.
+    #[default]
+    Automatic,
+    /// Fail instead of degrading.
+    SemanticRequired,
+    /// Do not attempt the semantic channel even in `mode = "semantic"`.
+    LexicalOnly,
+}
+
+/// The semantic half of the configuration.
+///
+/// Absent from a `config.toml` written before 4.3C, and absent from one written
+/// after it while the defaults hold — [`AppConfig`] does not serialise this
+/// table unless something in it was changed, so enabling the feature is visible
+/// in the file and leaving it alone rewrites nothing.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SemanticRetrievalConfig {
+    #[serde(default)]
+    pub mode: SemanticMode,
+    #[serde(default)]
+    pub provider: SemanticProvider,
+    #[serde(default)]
+    pub fallback: SemanticFallbackPolicy,
+}
+
+impl SemanticRetrievalConfig {
+    /// Whether this is exactly the factory default.
+    pub fn is_factory_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether a provider should be loaded at all.
+    ///
+    /// Two ways to say no, and both are honoured: the mode, and a fallback
+    /// policy of `lexical_only` inside `mode = "semantic"`. The second exists so
+    /// that switching the channel off for a while does not require forgetting
+    /// which provider was configured.
+    pub fn semantic_is_enabled(&self) -> bool {
+        self.mode == SemanticMode::Semantic && self.fallback != SemanticFallbackPolicy::LexicalOnly
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppConfig {
     #[serde(default = "default_color")]
@@ -77,6 +160,14 @@ pub struct AppConfig {
     /// is deliberately not stored anywhere at all — see ADR-031.
     #[serde(default = "default_capture_delimiter")]
     pub capture_delimiter: String,
+    /// Retrieval configuration. **Last on purpose**: TOML puts a table after
+    /// every scalar of the same object, so a field declared above this one
+    /// would serialise inside the table and mean something else entirely.
+    #[serde(
+        default,
+        skip_serializing_if = "SemanticRetrievalConfig::is_factory_default"
+    )]
+    pub semantic_retrieval: SemanticRetrievalConfig,
 }
 
 fn default_color() -> String {
@@ -122,6 +213,7 @@ impl Default for AppConfig {
             theme: default_theme(),
             ui_scale_percent: default_ui_scale_percent(),
             capture_delimiter: default_capture_delimiter(),
+            semantic_retrieval: SemanticRetrievalConfig::default(),
         }
     }
 }
@@ -162,6 +254,29 @@ impl AppConfig {
     /// file, but callers should prefer [`Self::load_detailed`] to inspect and report errors.
     pub fn load_from_file(path: &Path) -> Self {
         Self::load_detailed(path).value()
+    }
+
+    /// Reads the configuration, and creates nothing.
+    ///
+    /// [`Self::load_from_file`] materialises a default file when none exists and
+    /// quarantines one that is corrupt. That is right for the application
+    /// starting up, and wrong for everything else: a surface that answers "what
+    /// is configured" by *writing* is a read that changed the machine. `noteit
+    /// status` and the MCP server both ask that question and neither may leave
+    /// a trace — the CLI's own suite proves a `status` over an empty XDG tree
+    /// creates zero files, and it is the test that caught this being used.
+    ///
+    /// A missing file is the factory default, and so is one that cannot be
+    /// parsed: recovering it is the application's job, on a path that is
+    /// allowed to write.
+    pub fn read_only(path: &Path) -> Self {
+        match fs::read(path) {
+            Ok(bytes) => std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| parse_config(text).ok())
+                .unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
     }
 
     /// The primary, safe configuration loader. Distinguishes between missing files,

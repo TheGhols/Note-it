@@ -16,10 +16,12 @@ use clap::error::ErrorKind;
 use clap::Parser;
 use cli::{CliArgs, CliCommand, PropertiesCommand, TagsCommand, TasksCommand, TrashCommand};
 use noteit_core::revision::NoteRevision;
+use noteit_core::settings::AppConfig;
 use noteit_core::write::{NoteDraft, NoteMutation, WriteOperation};
 use noteit_core::{NoteFilter, NoteItCore, NoteProperty, StorePaths};
 use outcome::{
-    CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError, UsageError,
+    CliResponse, Command, CommandError, Executed, HelpText, Outcome, ReadError,
+    SemanticStatusReport, StatusReport, UsageError,
 };
 use output::Channels;
 use std::io::Read;
@@ -161,6 +163,38 @@ fn significant_argument_count(args: &[std::ffi::OsString]) -> usize {
 ///
 /// Nothing here formats anything: every branch ends in an [`Outcome`] or a
 /// [`CommandError`], and the renderers decide what that looks like.
+/// What the machine looks like, for `noteit status`.
+///
+/// Reads the configuration and looks for the artifact's two files. Loads
+/// nothing: `status` is a question about the machine, and one that spent
+/// seconds verifying half a gigabyte of weights to answer it would be a
+/// different command. Whether those bytes are the *right* bytes is decided
+/// where a provider is actually built, from the bytes themselves.
+fn status() -> StatusReport {
+    let paths = StorePaths::resolve();
+    let semantic = AppConfig::read_only(&paths.config_file_path()).semantic_retrieval;
+    let directory = noteit_embedding_local::artifact_directory(
+        &noteit_embedding_local::POTION_MULTILINGUAL_128M,
+    );
+    let artifact_present = directory
+        .as_deref()
+        .map(noteit_embedding_local::artifact::artifact_files)
+        .map(|(weights, tokenizer)| weights.is_file() && tokenizer.is_file())
+        .unwrap_or(false);
+    StatusReport {
+        paths,
+        semantic: SemanticStatusReport {
+            mode: semantic.mode,
+            provider: semantic.provider,
+            fallback: semantic.fallback,
+            enabled: semantic.semantic_is_enabled(),
+            model: noteit_embedding_local::POTION_MULTILINGUAL_128M.model,
+            artifact_present,
+            artifact_directory: directory,
+        },
+    }
+}
+
 fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
     let Some(command) = parsed.command else {
         return Executed::ok(Command::Welcome, Outcome::Welcome);
@@ -169,10 +203,7 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
     match command {
         CliCommand::Ajuda => Executed::ok(Command::Help, Outcome::Help(HelpText::Own)),
         CliCommand::Versao => Executed::ok(Command::Version, Outcome::Version),
-        CliCommand::Status => Executed::ok(
-            Command::Status,
-            Outcome::Status(Box::new(StorePaths::resolve())),
-        ),
+        CliCommand::Status => Executed::ok(Command::Status, Outcome::Status(Box::new(status()))),
 
         CliCommand::Listar {
             limite,

@@ -35,13 +35,16 @@ use crate::budget;
 use crate::contract::{
     CommitState, ContextCandidateView, ContextInput, ContextReason, ContextResult, ContextTaskView,
     ContextWarningView, ErrorCode, ListResult, NoteSummaryView, NoteView, Property, ReadResult,
-    SearchHitView, SearchResult, Status, TaskState, TaskView, TasksResult, TrashEntryView,
-    TrashResult, Warning, WarningCode, WriteResult, MAX_TRASH_ENTRIES, MAX_WARNINGS,
+    SearchHitView, SearchResult, SemanticStatusView, Status, TaskState, TaskView, TasksResult,
+    TrashEntryView, TrashResult, Warning, WarningCode, WriteResult, MAX_TRASH_ENTRIES,
+    MAX_WARNINGS,
 };
+use crate::semantic::{Retrieved, SemanticSession};
 use noteit_core::authority;
 use noteit_core::chrono::{DateTime, SecondsFormat, Utc};
 use noteit_core::context as engine;
 use noteit_core::revision::NoteRevision;
+use noteit_core::settings::{AppConfig, SemanticRetrievalConfig};
 use noteit_core::write::{NoteDraft, NoteMutation, WriteError, WriteOperation, WriteOutcome};
 use noteit_core::{
     NoteDocument, NoteFilter, NoteItCore, NoteProperty, NoteSelectorError, NoteSummary,
@@ -54,27 +57,75 @@ use noteit_core::{
 /// tool argument. A client cannot name a store, a directory or a path: there
 /// is no field for one anywhere in the contract, so there is nothing to
 /// validate and nothing to escape.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Store {
     paths: StorePaths,
+    /// The semantic channel's lifetime, which is the process's rather than a
+    /// request's. Cloned into every offloaded call and shared by all of them,
+    /// so the model is loaded once and the index is built once — see
+    /// [`crate::semantic`].
+    semantic: SemanticSession,
+}
+
+/// Redacted, because a derived one would print the index.
+impl std::fmt::Debug for Store {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Store")
+            .field("paths", &self.paths)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Store {
-    /// The store the ambient environment resolves to. No directory is created.
+    /// The store the ambient environment resolves to.
+    ///
+    /// No directory is created and no model is loaded. The retrieval
+    /// configuration *is* read, because whether the semantic channel exists at
+    /// all is the user's decision and there is nowhere else it could come from;
+    /// a configuration that is missing, unreadable or corrupt yields the
+    /// factory default, which is lexical retrieval.
     pub fn resolve() -> Self {
-        Self {
-            paths: StorePaths::resolve(),
-        }
+        let paths = StorePaths::resolve();
+        let semantic = AppConfig::read_only(&paths.config_file_path()).semantic_retrieval;
+        Self::with_settings(paths, semantic)
     }
 
     /// An explicitly named store. Used by the tests, which never point at a
     /// real one.
     pub fn at(paths: StorePaths) -> Self {
-        Self { paths }
+        Self::with_settings(paths, SemanticRetrievalConfig::default())
+    }
+
+    /// A store whose retrieval configuration came from somewhere.
+    ///
+    /// The default is the factory default in every constructor above, which is
+    /// what makes "a release cannot turn semantics on" true of this type and
+    /// not only of the file format.
+    pub fn with_settings(paths: StorePaths, semantic: SemanticRetrievalConfig) -> Self {
+        Self {
+            paths,
+            semantic: SemanticSession::new(semantic),
+        }
+    }
+
+    /// A store whose semantic channel was assembled by the caller.
+    ///
+    /// The suites use it to point the provider at a table they built
+    /// themselves, so every contract of the lifecycle is provable without the
+    /// shipped artifact — the same posture a machine that never provisioned one
+    /// is in.
+    pub fn with_semantic_session(paths: StorePaths, semantic: SemanticSession) -> Self {
+        Self { paths, semantic }
     }
 
     pub fn paths(&self) -> &StorePaths {
         &self.paths
+    }
+
+    /// What a diagnostic surface may say about the semantic channel.
+    pub fn semantic_report(&self) -> crate::semantic::SemanticReport {
+        self.semantic.report()
     }
 
     /// The read-only view. Creates no directory, no state file and no backup.
@@ -702,23 +753,40 @@ pub fn context(off: &OffThread, store: &Store, input: ContextInput) -> ContextRe
         limit: input.limit.map(|limit| limit as usize),
     };
 
-    match engine::retrieve(&store.reader(off), &request) {
-        Ok(answer) => context_answer(answer),
-        Err(error) => ContextResult::refusal(match error {
+    // One call, and which channels it uses is the configuration's decision
+    // rather than this function's. In the factory default the session's own
+    // first line takes the lexical path, where there is no field a provider
+    // could go in.
+    match store.semantic.retrieve(off, &store.reader(off), &request) {
+        Retrieved::Answer(answer, status) => context_answer(answer, status),
+        Retrieved::Refused(error) => ContextResult::refusal(match error {
             // The query is the caller's mistake and worth fixing.
             engine::ContextError::QueryTooLong { .. } => ErrorCode::InvalidInput,
             // And this one carries nothing to pass on — see ADR-049.2.
             engine::ContextError::StoreUnavailable => ErrorCode::StoreUnavailable,
         }),
+        // The caller configured `semantic_required` and the channel did not
+        // run. Refused rather than answered, because degrading in silence is
+        // what that setting exists to forbid — and the code is the Note-it's
+        // own, never a sentence from a library.
+        Retrieved::SemanticRequired => ContextResult::refusal(ErrorCode::SemanticUnavailable),
     }
 }
 
 /// One answer, copied. Every count comes from the Core, never from `len()`
 /// after a cut: a number recomputed here could only ever be a guess about what
 /// was already thrown away.
-fn context_answer(answer: engine::ContextResult) -> ContextResult {
+fn context_answer(
+    answer: engine::ContextResult,
+    semantic: engine::SemanticStatus,
+) -> ContextResult {
     ContextResult {
         status: Status::Ok,
+        semantic_status: match semantic {
+            engine::SemanticStatus::NotRequested => SemanticStatusView::NotRequested,
+            engine::SemanticStatus::Succeeded => SemanticStatusView::Succeeded,
+            engine::SemanticStatus::Unavailable => SemanticStatusView::Unavailable,
+        },
         candidates: answer.candidates.iter().map(candidate_view).collect(),
         truncated: answer.truncated,
         omitted_count: answer.omitted_count,

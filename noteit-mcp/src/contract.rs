@@ -151,6 +151,13 @@ pub enum ErrorCode {
     /// holding a revision for content it has not seen is exactly the
     /// unconditional write this server exists to refuse.
     ResponseTooLarge,
+    /// The semantic channel was configured as required, and it did not run.
+    ///
+    /// **Nothing else failed.** The notes are intact, the lexical answer was
+    /// available, and it was deliberately not sent: `semantic_required` says
+    /// that an answer without the semantic channel is not the answer that was
+    /// asked for. Configure `fallback = "automatic"` to receive it anyway.
+    SemanticUnavailable,
 }
 
 /// The sentence that goes with a code, for a person reading a log.
@@ -194,6 +201,9 @@ pub const fn message_for(code: ErrorCode) -> &'static str {
         }
         ErrorCode::ResponseTooLarge => {
             "reading this note in full would exceed the answer size this server publishes"
+        }
+        ErrorCode::SemanticUnavailable => {
+            "semantic retrieval was required and could not run; nothing else failed"
         }
     }
 }
@@ -847,6 +857,15 @@ pub struct ContextWarningView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ContextResult {
     pub status: Status,
+    /// What the semantic channel did for this answer.
+    ///
+    /// Published because §12 of `docs/semantic-retrieval.md` requires it: a
+    /// caller who configured the semantic channel and got a lexical answer has
+    /// to be able to tell. Degrading in silence is the one behaviour the
+    /// fallback policy exists to forbid, and a field is the only place that
+    /// fact can live — it is not a score, not a vector and not a path, and it
+    /// says what was *done*, never how.
+    pub semantic_status: SemanticStatusView,
     pub candidates: Vec<ContextCandidateView>,
     /// Whether the candidate ceiling cut the answer.
     pub truncated: bool,
@@ -862,11 +881,28 @@ pub struct ContextResult {
     pub code: Option<ErrorCode>,
 }
 
+/// What the semantic channel did for one retrieval.
+///
+/// Three states and no fourth. The missing one — "tried, failed, said
+/// nothing" — is the one that lies to whoever asked for semantics on purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticStatusView {
+    /// It was not attempted: the channel is off, or the request carried no
+    /// question to embed. Never a failure.
+    NotRequested,
+    /// It was attempted and it answered.
+    Succeeded,
+    /// It was attempted, it failed, and this answer is the lexical one.
+    Unavailable,
+}
+
 impl ContextResult {
     /// A refusal, with every collection empty and every counter at rest.
     pub fn refusal(code: ErrorCode) -> Self {
         Self {
             status: Status::Error,
+            semantic_status: SemanticStatusView::NotRequested,
             candidates: Vec::new(),
             truncated: false,
             omitted_count: 0,

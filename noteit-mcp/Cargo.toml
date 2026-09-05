@@ -15,6 +15,12 @@ path = "src/main.rs"
 
 [dependencies]
 noteit-core = { path = "../noteit-core" }
+# The local embedding provider. Present in every build and loaded in none of
+# them by default: the factory configuration never asks for a provider, so the
+# artifact is never read and the model never occupies memory. Linking it is what
+# makes turning the feature on a matter of configuration rather than of which
+# binary somebody happened to install.
+noteit-embedding-local = { path = "../noteit-embedding-local" }
 # The official Rust SDK for the Model Context Protocol. Nothing here
 # implements JSON-RPC, framing or version negotiation: that is the SDK's job
 # and a second implementation of a protocol is a second set of bugs.

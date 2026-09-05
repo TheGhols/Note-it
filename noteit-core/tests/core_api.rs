@@ -858,3 +858,114 @@ fn test_36_search_scans_full_eligible_universe_before_applying_limit() {
         assert!(rare_ids.contains(&item.note_id));
     }
 }
+
+// ------------------------------------------------- semantic configuration
+
+/// The factory default, and what a `config.toml` written before 4.3C means.
+///
+/// The property is not "the field has a default". It is that **every** way of
+/// arriving at a configuration without saying the word — a new install, an
+/// upgrade, a file written by an older version, a file with the table present
+/// but empty — lands on lexical retrieval with no provider, no artifact and no
+/// network. A release cannot turn the semantic channel on.
+#[test]
+fn semantic_retrieval_is_off_unless_a_person_turned_it_on() {
+    use noteit_core::settings::{
+        AppConfig, SemanticFallbackPolicy, SemanticMode, SemanticProvider,
+    };
+
+    let fresh = AppConfig::default();
+    assert_eq!(fresh.semantic_retrieval.mode, SemanticMode::LexicalOnly);
+    assert_eq!(fresh.semantic_retrieval.provider, SemanticProvider::Local);
+    assert_eq!(
+        fresh.semantic_retrieval.fallback,
+        SemanticFallbackPolicy::Automatic
+    );
+    assert!(!fresh.semantic_retrieval.semantic_is_enabled());
+    assert!(fresh.semantic_retrieval.is_factory_default());
+
+    // A file from before 4.3C: every scalar it knew about, and no table.
+    let old: AppConfig = toml::from_str(
+        r#"
+default_color = "yellow"
+default_font_size = 15
+default_width = 360
+default_height = 300
+autosave_interval_ms = 300
+theme = "dark"
+ui_scale_percent = 130
+capture_delimiter = "blankLine"
+"#,
+    )
+    .expect("a configuration written before 4.3C still loads");
+    assert_eq!(
+        old.theme, "dark",
+        "the old fields still mean what they meant"
+    );
+    assert_eq!(old.ui_scale_percent, 130);
+    assert!(!old.semantic_retrieval.semantic_is_enabled());
+
+    // The table present and empty is still the default.
+    let empty: AppConfig = toml::from_str("[semantic_retrieval]\n").expect("an empty table loads");
+    assert!(!empty.semantic_retrieval.semantic_is_enabled());
+
+    // And only the word turns it on.
+    let asked: AppConfig =
+        toml::from_str("[semantic_retrieval]\nmode = \"semantic\"\n").expect("loads");
+    assert!(asked.semantic_retrieval.semantic_is_enabled());
+    assert_eq!(
+        asked.semantic_retrieval.provider,
+        SemanticProvider::Local,
+        "turning semantics on without naming a provider must never reach a network"
+    );
+}
+
+/// Leaving the defaults alone does not rewrite anybody's file.
+#[test]
+fn the_semantic_table_is_only_written_when_it_says_something() {
+    use noteit_core::settings::{AppConfig, SemanticMode};
+
+    let untouched = toml::to_string(&AppConfig::default()).expect("serialise");
+    assert!(
+        !untouched.contains("semantic_retrieval"),
+        "the default configuration grew a table nobody asked for:\n{untouched}"
+    );
+
+    let mut enabled = AppConfig::default();
+    enabled.semantic_retrieval.mode = SemanticMode::Semantic;
+    let written = toml::to_string(&enabled).expect("serialise");
+    assert!(written.contains("[semantic_retrieval]"));
+    assert!(written.contains("mode = \"semantic\""));
+    // And it round-trips.
+    let back: AppConfig = toml::from_str(&written).expect("round trip");
+    assert_eq!(back, enabled);
+}
+
+/// `lexical_only` as a fallback policy switches the channel off without
+/// forgetting which provider was configured.
+#[test]
+fn the_fallback_policy_can_switch_the_channel_off_on_its_own() {
+    use noteit_core::settings::{AppConfig, SemanticFallbackPolicy};
+
+    let config: AppConfig =
+        toml::from_str("[semantic_retrieval]\nmode = \"semantic\"\nfallback = \"lexical_only\"\n")
+            .expect("loads");
+    assert_eq!(
+        config.semantic_retrieval.fallback,
+        SemanticFallbackPolicy::LexicalOnly
+    );
+    assert!(
+        !config.semantic_retrieval.semantic_is_enabled(),
+        "a policy of lexical_only must not load a provider"
+    );
+
+    let required: AppConfig = toml::from_str(
+        "[semantic_retrieval]\nmode = \"semantic\"\nfallback = \"semantic_required\"\n",
+    )
+    .expect("loads");
+    assert_eq!(
+        required.semantic_retrieval.fallback,
+        SemanticFallbackPolicy::SemanticRequired
+    );
+    assert!(required.semantic_retrieval.semantic_is_enabled());
+}

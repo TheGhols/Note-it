@@ -43,6 +43,7 @@ pub mod contract;
 pub mod domain;
 pub mod params;
 pub mod schema;
+pub mod semantic;
 pub mod server;
 
 pub use domain::Store;

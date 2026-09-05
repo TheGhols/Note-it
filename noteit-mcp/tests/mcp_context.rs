@@ -151,6 +151,10 @@ fn the_output_schema_publishes_the_agreed_shape() {
     let top = schema["properties"].as_object().expect("properties");
     for expected in [
         "status",
+        // 4.3C: a caller who configured the semantic channel and received a
+        // lexical answer has to be able to tell. It says what was *done* and
+        // never how — not a score, not a vector, not a path.
+        "semantic_status",
         "candidates",
         "truncated",
         "omitted_count",
@@ -161,8 +165,21 @@ fn the_output_schema_publishes_the_agreed_shape() {
     ] {
         assert!(top.contains_key(expected), "output lost {expected}");
     }
+    assert_eq!(top.len(), 9, "the output grew a field: {top:?}");
 
-    let defs = schema["$defs"].as_object().expect("definitions");
+    // And the status is a closed set of three, still meaning what 4.3B.R1.1
+    // froze. A fourth — "tried, failed, said nothing" — is the one that lies.
+    let status = defs_of(schema)["SemanticStatusView"]["oneOf"]
+        .as_array()
+        .expect("the semantic status is an enumeration");
+    let mut names: Vec<&str> = status
+        .iter()
+        .map(|variant| variant["const"].as_str().expect("a constant variant"))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["not_requested", "succeeded", "unavailable"]);
+
+    let defs = defs_of(schema);
     let candidate = defs["ContextCandidateView"]["properties"]
         .as_object()
         .expect("candidate");
@@ -220,6 +237,10 @@ fn the_output_schema_publishes_the_agreed_shape() {
         recency.contains("not a version"),
         "updated_at does not say it is not a version: {recency}"
     );
+}
+
+fn defs_of(schema: &serde_json::Value) -> &serde_json::Map<String, serde_json::Value> {
+    schema["$defs"].as_object().expect("definitions")
 }
 
 #[test]
