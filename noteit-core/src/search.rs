@@ -91,7 +91,7 @@ impl Folded {
 ///
 /// Walks the source once, folding as it goes, which is the same work `fold`
 /// did — but only for a note that matched, and only up to the match.
-fn source_offset_of(source: &str, folded_offset: usize) -> usize {
+pub(crate) fn source_offset_of(source: &str, folded_offset: usize) -> usize {
     if folded_offset == 0 {
         return 0;
     }
@@ -201,7 +201,7 @@ pub fn label_for(content: &str) -> String {
 }
 
 /// The same, for a caller that has already projected the note.
-fn label_of_visible(visible: &str) -> String {
+pub(crate) fn label_of_visible(visible: &str) -> String {
     match visible.lines().map(str::trim).find(|line| !line.is_empty()) {
         None => EMPTY_LABEL.to_string(),
         Some(line) => truncate_chars(line, MAX_LABEL_CHARS),
@@ -220,7 +220,7 @@ fn truncate_chars(text: &str, limit: usize) -> String {
 /// A third of the budget goes in front of the match and the rest follows it,
 /// and the whole window is measured from where it starts — so a match longer
 /// than the budget is cut rather than pushing the snippet past it.
-fn snippet_around(content: &str, from: usize) -> String {
+pub(crate) fn snippet_around(content: &str, from: usize) -> String {
     let lead = MAX_SNIPPET_CHARS / 3;
 
     let mut start = from;
@@ -296,14 +296,31 @@ pub fn search_note(query: &Folded, note_id: Uuid, content: &str) -> Option<Searc
     // document rather than the file.
     let visible = visible_text(content);
     let folded = fold(&visible);
-    let (start, count) = locate(&folded, &query.text)?;
-    let from = source_offset_of(&visible, start);
-    let to = source_offset_of(&visible, start + query.text.len());
+    search_visible(query, note_id, &visible, &folded)
+}
+
+/// The same search, for a caller that has already projected and folded the
+/// note.
+///
+/// Extracted from [`search_note`] rather than written a second time, and it is
+/// the same code: the Context Engine needs the folded text for its own term
+/// counting, and folding a note twice per query is work nobody asked for. The
+/// global search still calls this through [`search_note`], so there is one
+/// definition of what "the query occurs in this note" means.
+pub(crate) fn search_visible(
+    query: &Folded,
+    note_id: Uuid,
+    visible: &str,
+    folded: &Folded,
+) -> Option<SearchResult> {
+    let (start, count) = locate(folded, &query.text)?;
+    let from = source_offset_of(visible, start);
+    let to = source_offset_of(visible, start + query.text.len());
 
     Some(SearchResult {
         note_id,
-        label: label_of_visible(&visible),
-        snippet: snippet_around(&visible, from),
+        label: label_of_visible(visible),
+        snippet: snippet_around(visible, from),
         match_count: count,
         matched_text: visible[from..to.max(from)].to_string(),
     })

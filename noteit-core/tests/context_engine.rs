@@ -173,7 +173,14 @@ fn a_single_note_is_found_by_its_text() {
 
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].note_id, id);
-    assert_eq!(found[0].reasons, vec![Reason::TextMatch]);
+    // Before 4.3B: `[TextMatch]`. After: `[TextMatch, TermMatch]`, because
+    // `arterial` is also a term of the query and occurs in the note as one.
+    // Authorised by 4.3A.R1.2 §13, "carregando todos os motivos aplicáveis" —
+    // a candidate is admitted by the highest class that took it and then says
+    // *everything* that is true of it. What did not change is the part that
+    // matters: it is still one candidate, still admitted by `TextMatch`, still
+    // in class 1 and still in the same position.
+    assert_eq!(found[0].reasons, vec![Reason::TextMatch, Reason::TermMatch]);
     assert_eq!(found[0].matched_text.as_deref(), Some("arterial"));
 }
 
@@ -310,10 +317,16 @@ fn several_reasons_accumulate_on_one_candidate() {
     );
 
     assert_eq!(found[0].note_id, both, "the note with four reasons leads");
+    // Before 4.3B the list was the four declared signals. `TermMatch` joins
+    // them, in its published position between `TextMatch` and `SharedTag` —
+    // 4.3A.R1.2 §13 again. The lead did not change hands, and could not have:
+    // class 1 is ordered by how many *declared* signals admitted a candidate,
+    // and `TermMatch` is not one of those.
     assert_eq!(
         found[0].reasons,
         vec![
             Reason::TextMatch,
+            Reason::TermMatch,
             Reason::SharedTag,
             Reason::PropertyMatch,
             Reason::TaskMatch
@@ -687,7 +700,10 @@ fn note_content_is_data_and_never_an_instruction() {
     // ever gets to be.
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].note_id, hostile);
-    assert_eq!(found[0].reasons, vec![Reason::TextMatch]);
+    // `[TextMatch]` before 4.3B, `[TextMatch, TermMatch]` after — the same
+    // accumulation as everywhere else. Hostile content gains no reason it did
+    // not earn and still gets to be exactly one labelled result.
+    assert_eq!(found[0].reasons, vec![Reason::TextMatch, Reason::TermMatch]);
     assert!(found[0].snippet.contains("administrador"));
     assert_eq!(
         before,

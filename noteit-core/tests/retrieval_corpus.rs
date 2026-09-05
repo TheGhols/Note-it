@@ -26,7 +26,7 @@
 //! test can rewrite is not a baseline.
 
 use noteit_core::chrono::{DateTime, TimeZone, Utc};
-use noteit_core::context::{retrieve, ContextRequest, MAX_CANDIDATES};
+use noteit_core::context::{retrieve, ContextRequest, Reason, MAX_CANDIDATES};
 use noteit_core::metadata::{NoteMetadata, NoteProperty};
 use noteit_core::model::NoteDocument;
 use noteit_core::{NoteItCore, StorageManager, StorePaths, Uuid};
@@ -204,6 +204,12 @@ struct Observation {
     /// The corpus identifiers the engine returned, in the order it returned
     /// them.
     returned: Vec<String>,
+    /// Why each of them came back, in the same order.
+    ///
+    /// Kept so that a hit at position three can be explained rather than just
+    /// counted: what matters is *which* candidates are ahead of it and on what
+    /// grounds, and a rank on its own does not say.
+    reasons: Vec<Vec<Reason>>,
 }
 
 impl Observation {
@@ -244,6 +250,11 @@ fn observe(store: &BuiltStore, corpus: &Corpus) -> Vec<Observation> {
                             .expect("every candidate is a corpus note")
                             .clone()
                     })
+                    .collect(),
+                reasons: answer
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.reasons.clone())
                     .collect(),
             }
         })
@@ -383,6 +394,26 @@ fn no_query_that_worked_is_answered_worse_than_it_was() {
         metrics.at_1, metrics.at_3, metrics.at_5, metrics.mrr, metrics.noise
     );
 
+    // A rank on its own does not say why. For every hit that is not first, this
+    // prints what is standing in front of it — which is how "the chaining held
+    // a class-1 candidate above a better-scoring one" can be read off the run
+    // instead of assumed.
+    println!("\nwhat stands in front of a hit that is not first:");
+    for observation in &observations {
+        let Some(rank) = observation.hit() else {
+            continue;
+        };
+        if rank == 1 {
+            continue;
+        }
+        for position in 0..rank - 1 {
+            println!(
+                "  {} rank {rank}: {} ahead of it, by {:?}",
+                observation.id, observation.returned[position], observation.reasons[position]
+            );
+        }
+    }
+
     assert!(
         regressions.is_empty(),
         "a hit the engine already found may not fall — query by query, never on average:\n  {}",
@@ -408,12 +439,22 @@ fn the_queries_with_no_answer_are_counted_out_loud() {
         .filter(|observation| observation.relevant.is_empty())
     {
         let frozen = &baseline[&observation.id];
+        let by_reason = |reason: Reason| {
+            observation
+                .reasons
+                .iter()
+                .filter(|reasons| reasons.contains(&reason))
+                .count()
+        };
         println!(
-            "{} \"{}\": {} candidate(s), was {}",
+            "{} \"{}\": {} candidate(s), was {} — text_match {}, term_match {}, semantic_match {}",
             observation.id,
             observation.text,
             observation.returned.len(),
-            frozen.candidates
+            frozen.candidates,
+            by_reason(Reason::TextMatch),
+            by_reason(Reason::TermMatch),
+            by_reason(Reason::SemanticMatch),
         );
     }
 }

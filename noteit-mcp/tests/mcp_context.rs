@@ -272,13 +272,22 @@ fn the_published_reasons_are_the_closed_set() {
         .iter()
         .map(|variant| variant["const"].as_str().expect("const"))
         .collect();
+    // The set grew in 4.3B, and the schema is where that has to be visible: a
+    // reason the Core can produce and the schema does not declare is a wire
+    // contract that lies. `term_match` is reachable today, because BM25 is
+    // production; `semantic_match` is declared and unreachable, because the
+    // engine can produce it and no shipped caller turns the channel on.
+    //
+    // The order is the Core's published order, not this file's opinion of one.
     assert_eq!(
         reasons,
         vec![
             "text_match",
+            "term_match",
             "shared_tag",
             "property_match",
             "task_match",
+            "semantic_match",
             "recent"
         ]
     );
@@ -368,11 +377,25 @@ fn a_note_matching_more_signals_leads_and_says_why() {
     );
 
     let leader = &answer["candidates"][0];
+    // `term_match` joined the list in 4.3B — the query's one word is also a
+    // term of it — and sits in the published position between `text_match` and
+    // `shared_tag`. The order of the two candidates is the same as before:
+    // class 1 is ordered by how many *declared* signals admitted a note, and a
+    // term is not one of those.
     assert_eq!(
         leader["reasons"],
-        json!(["text_match", "shared_tag", "property_match", "task_match"])
+        json!([
+            "text_match",
+            "term_match",
+            "shared_tag",
+            "property_match",
+            "task_match"
+        ])
     );
-    assert_eq!(answer["candidates"][1]["reasons"], json!(["text_match"]));
+    assert_eq!(
+        answer["candidates"][1]["reasons"],
+        json!(["text_match", "term_match"])
+    );
     assert_eq!(leader["matched_text"], "arritmia");
     assert!(leader["snippet"]
         .as_str()
@@ -403,7 +426,10 @@ fn asking_nothing_answers_by_recency_and_labels_it() {
 
     // And recency never pads a candidate that matched for a real reason.
     let matched = context(&mut client, json!({ "query": "primeira" }));
-    assert_eq!(matched["candidates"][0]["reasons"], json!(["text_match"]));
+    assert_eq!(
+        matched["candidates"][0]["reasons"],
+        json!(["text_match", "term_match"])
+    );
 }
 
 #[test]
@@ -863,4 +889,149 @@ fn the_protocol_stays_clean_around_the_new_tool() {
         "note content reached standard error: {}",
         finished.stderr
     );
+}
+
+/// The worst answer this tool can be made to produce, measured.
+///
+/// Phase 4.2R put a real ceiling on a serialised response, and 4.3B is exactly
+/// the kind of change that quietly eats one: a reason added to every candidate
+/// is fifty extra strings on a full answer, and a channel that can admit notes
+/// nothing lexical matched is more candidates than there used to be. So the
+/// ceiling is measured again, against a store built to make the answer as large
+/// as the contract permits — fifty candidates, every reason on each of them,
+/// the snippet and the matched occurrence at their limits, the task list
+/// truncated at its own, and more damaged files than the warning list can hold.
+///
+/// What the numbers are for: the first assertion is the published budget, and
+/// the second is a much tighter line drawn at roughly four times today's
+/// answer. A change that doubles the size of a candidate passes the first and
+/// fails the second, which is the point of having both. Measured today: 171 390
+/// bytes, against a published budget of four mebibytes.
+#[test]
+fn the_largest_answer_this_tool_can_give_is_still_a_small_one() {
+    let sandbox = Sandbox::new();
+    let core = sandbox.core();
+    core.storage().ensure_directories().expect("directories");
+
+    // Long enough that the snippet, the matched occurrence and every task text
+    // all hit their ceilings, and multibyte throughout so a ceiling counted in
+    // bytes rather than characters would show up as a bigger answer.
+    let filler = "ção ".repeat(120);
+    let task_text = "ção ".repeat(80);
+    let candidates_wanted = 60;
+    // Each task carries the phrase too, so `task_match` is on every candidate
+    // and the reason list is as long as a lexical answer can make it.
+    macro_rules! task_line {
+        () => {
+            format!("- [ ] arritmia ventricular {task_text}")
+        };
+    }
+    for index in 0..candidates_wanted {
+        let mut document = noteit_core::model::NoteDocument::new_empty();
+        let line = task_line!();
+        let tasks = format!("{line}\n{line}\n{line}\n{line}\n");
+        document.content = format!("arritmia ventricular {filler}\n\n{tasks}");
+        document.user_metadata = noteit_core::metadata::NoteMetadata::try_new(
+            vec!["cardio".to_string()],
+            vec![noteit_core::metadata::NoteProperty {
+                key: "fonte".to_string(),
+                value: "diretriz".to_string(),
+            }],
+        )
+        .expect("metadata");
+        core.storage()
+            .save_note_atomic(&document)
+            .expect("seed a candidate");
+        let _ = index;
+    }
+
+    // More unreadable files than the warning list can carry.
+    let notes = sandbox.store_paths().notes_dir;
+    let outside = sandbox.root.join("alvo");
+    std::fs::write(&outside, "x").expect("write");
+    for _ in 0..30 {
+        std::os::unix::fs::symlink(
+            &outside,
+            notes.join(format!("{}.md", noteit_core::Uuid::new_v4())),
+        )
+        .expect("symlink");
+    }
+
+    let mut client = McpClient::start(&sandbox);
+    let (answer, wire) = client.call_on_the_wire(
+        "noteit_context",
+        json!({
+            "query": "arritmia ventricular",
+            "tags": ["cardio"],
+            "properties": [{ "key": "fonte", "value": "diretriz" }],
+            "include_tasks": true,
+            "limit": 50,
+        }),
+    );
+    let structured = answer.structured();
+
+    let candidates = structured["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 50, "the ceiling is the ceiling");
+    assert_eq!(structured["truncated"], true);
+    assert_eq!(structured["omitted_count"], json!(candidates_wanted - 50));
+    assert_eq!(
+        structured["warnings"].as_array().expect("warnings").len(),
+        20
+    );
+    assert_eq!(structured["warnings_truncated"], true);
+
+    for candidate in candidates {
+        assert_eq!(
+            candidate["reasons"],
+            json!([
+                "text_match",
+                "term_match",
+                "shared_tag",
+                "property_match",
+                "task_match"
+            ]),
+            "every reason a lexical answer can carry"
+        );
+        assert_eq!(candidate["tasks"].as_array().expect("tasks").len(), 3);
+        assert_eq!(candidate["tasks_truncated"], true);
+        assert!(
+            candidate["snippet"]
+                .as_str()
+                .expect("snippet")
+                .chars()
+                .count()
+                <= 242
+        );
+    }
+
+    println!("the worst context answer measured {wire} bytes on the wire");
+    assert!(
+        wire < noteit_mcp::budget::MAX_READ_RESPONSE_BYTES,
+        "the published budget was broken: {wire} bytes"
+    );
+    assert!(
+        wire < 512 * 1024,
+        "the worst context answer grew to {wire} bytes; today it is about 167 KiB, \
+         and a change that doubles a candidate should be looked at rather than absorbed"
+    );
+
+    // And none of the arithmetic came with it.
+    let rendered = structured.to_string();
+    for forbidden in [
+        "score",
+        "similarity",
+        "confidence",
+        "relevance",
+        "revision",
+        "vector",
+        "embedding",
+        "chunk",
+        "bm25",
+        "source_revision",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "`{forbidden}` reached the wire"
+        );
+    }
 }

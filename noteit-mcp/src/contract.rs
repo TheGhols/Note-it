@@ -758,14 +758,24 @@ pub struct ContextInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextReason {
-    /// The query text occurs in the note's visible text.
+    /// The query text, whole, occurs in the note's visible text.
     TextMatch,
+    /// Words of the query occur in the note, though the phrase does not.
+    TermMatch,
     /// The note carries one of the tags asked about.
     SharedTag,
     /// The note carries one of the properties asked about.
     PropertyMatch,
     /// A task in the note matches the query.
     TaskMatch,
+    /// The note was found by meaning rather than by words: it is close to the
+    /// question without containing it.
+    ///
+    /// Worth publishing precisely because it is the weakest claim on this list.
+    /// A caller that sees it knows the note does **not** use its words, and can
+    /// decide whether the note is worth a `noteit_read`. That is what a reason
+    /// gives and a similarity number does not.
+    SemanticMatch,
     /// Nothing above applied and the note is recent. Only ever produced when
     /// the request carried no query, tag or property at all.
     Recent,

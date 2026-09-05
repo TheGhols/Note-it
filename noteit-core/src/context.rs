@@ -45,15 +45,56 @@
 //! It is coherence *per note*, not across the store. Two candidates may come
 //! from two different instants, and that costs nothing: no lease is taken, no
 //! snapshot is held, no lock is acquired, and nothing here writes.
+//!
+//! ## Three channels, one engine
+//!
+//! Phase 4.3B added term-level retrieval and the frame for a semantic one. It
+//! added them *here*, and that was the point: a second engine beside this one
+//! would be a second place that reads the store, applies the filters, builds
+//! the snippets, counts the tasks, enforces the ceilings and decides the order —
+//! and two of those disagree the first week. There is one authority for
+//! contextual retrieval.
+//!
+//! ```text
+//! Context Engine
+//!   ├── the declared signals   text, tag, property, task   (since 4.2)
+//!   ├── lexical by term        BM25                        (4.3B)
+//!   └── the semantic channel   optional, off by default    (4.3B frame)
+//! ```
+//!
+//! The three do not compete for position. They are **chained**, in the
+//! precedence classes 4.3A.R1.2 froze: the declared signals first, exactly as
+//! they were ordered before any of this existed, then term matches, then
+//! semantic ones, then recency. Classes two and three are strictly additive —
+//! they add candidates below everything that already existed and move nothing.
+//! That is what makes "an exact hit is never demoted" a property of the shape
+//! rather than a hope about numeric scales, and it is why chaining was chosen
+//! over score fusion, which 4.3A measured demoting one.
+//!
+//! ## The scores stay inside
+//!
+//! BM25 and cosine decide order and are never published. `0.873` is not
+//! provenance — nobody can audit it and nobody can act on it — and a score on
+//! the wire would also couple the protocol to whichever vendor produced the
+//! scale. What travels is `term_match` and `semantic_match`: facts a person can
+//! check by opening the note.
 
+use crate::chunking::{chunk, ChunkId, CHUNKER_VERSION};
+use crate::embedding::SemanticError;
 use crate::filter::NoteFilter;
+use crate::lexical::{CorpusStatistics, DocumentTerms, QueryTerms};
 use crate::metadata::semantic_identity;
 use crate::model::NoteDocument;
+use crate::revision::NoteRevision;
 use crate::search::{self, Folded, MAX_LABEL_CHARS, MAX_QUERY_CHARS, MAX_SNIPPET_CHARS};
+use crate::semantic::{SemanticFallback, SemanticHit, SemanticRuntime};
 use crate::task::{self, TaskEntry};
+use crate::visible_text::visible_text;
 use crate::warning::{ReadWarning, ReadWarningKind};
 use crate::NoteItCore;
 use chrono::{DateTime, Utc};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// Candidates returned when the caller does not say. Half the reading API's
@@ -152,34 +193,101 @@ impl ContextRequest {
 /// is decoration: nobody can audit it and nobody can act on it. Each variant
 /// below is a fact about the note that a person can check by opening it.
 ///
-/// The declared order is also the published order — see [`Candidate::reasons`]
-/// — so the same note always explains itself the same way.
+/// The order is a contract, and [`Reason::PUBLISHED_ORDER`] is where it is
+/// written down. The variants are declared in that same order so that `Ord`
+/// agrees with it, but a test pins the sequence rather than trusting that
+/// nobody will ever insert a variant in the middle: the shape of a published
+/// answer must not be decided by where a hand happened to type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Reason {
-    /// The query text occurs in the note's visible text.
+    /// The query text, whole, occurs in the note's visible text.
+    ///
+    /// Still the strongest lexical fact there is, and BM25 did not replace it:
+    /// a note that contains the phrase somebody typed is a different kind of
+    /// answer from one that contains its words scattered about.
     TextMatch,
+    /// Terms of the query occur in the note, though the phrase does not.
+    TermMatch,
     /// The note carries one of the tags asked about.
     SharedTag,
     /// The note carries one of the properties asked about.
     PropertyMatch,
     /// A task in the note matches the query.
     TaskMatch,
+    /// The semantic channel found the note close to the question, though its
+    /// words are not in it.
+    ///
+    /// Worth saying out loud precisely because it is the weakest claim: an
+    /// agent that reads this knows the note does **not** use its words and can
+    /// decide whether to spend a read on it. That is what a reason gives and a
+    /// number does not.
+    SemanticMatch,
     /// Nothing above could apply, and the note is recent. Only ever produced
     /// when the request had no discriminating signal at all.
     Recent,
 }
 
 impl Reason {
+    /// Every reason, in the order a candidate publishes them.
+    ///
+    /// One list, used by the builder, by the tests and by the documentation, so
+    /// that "the published order" is a thing that exists rather than an
+    /// emergent property of the order the signal functions happen to run in.
+    pub const PUBLISHED_ORDER: [Reason; 7] = [
+        Self::TextMatch,
+        Self::TermMatch,
+        Self::SharedTag,
+        Self::PropertyMatch,
+        Self::TaskMatch,
+        Self::SemanticMatch,
+        Self::Recent,
+    ];
+
     /// The stable wire name. An adapter publishes this, never the `Debug` form.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::TextMatch => "text_match",
+            Self::TermMatch => "term_match",
             Self::SharedTag => "shared_tag",
             Self::PropertyMatch => "property_match",
             Self::TaskMatch => "task_match",
+            Self::SemanticMatch => "semantic_match",
             Self::Recent => "recent",
         }
     }
+}
+
+/// Which precedence class a candidate belongs to.
+///
+/// The whole ranking policy 4.3A.R1.2 froze, in one type. It is **explicit**,
+/// and that is the requirement: neither `reasons.len()` nor the ordinal of a
+/// [`Reason`] variant decides where a candidate sits, because both would move
+/// the day a reason is added, silently and everywhere.
+///
+/// ```text
+/// 1  declared signals   TextMatch · SharedTag · PropertyMatch · TaskMatch
+/// 2  terms              TermMatch
+/// 3  semantics          SemanticMatch
+/// 4  recency            Recent — exclusive: it only ever exists alone
+/// ```
+///
+/// The answer is the classes concatenated, each ordered inside itself, with no
+/// reordering between them. A candidate belongs to the **highest** class that
+/// admitted it, appears once, and carries every applicable reason — so a note
+/// that matched the phrase, carries the tag and is also semantically close is
+/// one class-1 candidate with three reasons.
+///
+/// Why the four signals of 4.2 share a class instead of forming a queue: it was
+/// measured against the real binary, and today `TextMatch` has no precedence
+/// over `SharedTag` or `PropertyMatch` — a note with two of those outranks one
+/// with `text_match` alone. Putting `TextMatch` above them would have changed
+/// that, silently, and no audit asked for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CandidateClass {
+    Declared,
+    Terms,
+    Semantic,
+    Recency,
 }
 
 /// A note the answer could not read, as the answer publishes it.
@@ -318,6 +426,66 @@ impl std::fmt::Display for ContextError {
 
 impl std::error::Error for ContextError {}
 
+/// How a retrieval may fail when the semantic channel is in play.
+///
+/// A second error type rather than a new variant on [`ContextError`], and the
+/// reason is structural: the lexical path has nowhere to put a provider, so a
+/// semantic failure cannot happen on it. Folding the two together would put a
+/// case on `retrieve`'s signature that `retrieve` cannot produce, and every
+/// caller — the MCP adapter included — would have to write an arm for something
+/// that never arrives. The surface stays exactly as small as what can occur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetrievalError {
+    Context(ContextError),
+    /// The semantic channel failed and the caller had asked for
+    /// [`SemanticFallback::Required`].
+    Semantic(SemanticError),
+}
+
+impl std::fmt::Display for RetrievalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Context(error) => error.fmt(formatter),
+            Self::Semantic(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RetrievalError {}
+
+impl From<ContextError> for RetrievalError {
+    fn from(error: ContextError) -> Self {
+        Self::Context(error)
+    }
+}
+
+/// Which channels one retrieval may use.
+///
+/// Two states, and the first carries nothing. That is the whole design: the
+/// default is not "semantic, with the provider left unset" or "semantic, unless
+/// a flag says otherwise" — it is a variant with no field a provider could go
+/// in. The lexical default cannot accidentally reach a provider, because in
+/// that state there is no provider to reach, and no configuration mistake, no
+/// missing file and no failed initialisation can change that.
+pub enum RetrievalMode<'a> {
+    /// The declared signals and BM25. What production runs, and what
+    /// [`retrieve`] uses.
+    LexicalOnly,
+    /// The above, plus the semantic channel. No caller in the shipped product
+    /// constructs this: 4.3B builds the engine, and 4.3C decides how a real
+    /// provider is configured and offered.
+    Semantic(SemanticRuntime<'a>),
+}
+
+impl<'a> RetrievalMode<'a> {
+    fn semantic(&self) -> Option<&SemanticRuntime<'a>> {
+        match self {
+            Self::LexicalOnly => None,
+            Self::Semantic(runtime) => Some(runtime),
+        }
+    }
+}
+
 /// One note, as every signal about it will see it.
 ///
 /// This is D-27 in a type. It is built from one authoritative read of a
@@ -331,6 +499,11 @@ struct Projection {
     note_id: Uuid,
     label: String,
     content: String,
+    /// The note as the reader sees it. Computed once here because six things
+    /// need it — the label, the opening, the phrase search, the terms, the
+    /// chunks and the evidence — and projecting the same note six times is work
+    /// nobody asked for.
+    visible: String,
     updated_at: Option<DateTime<Utc>>,
     tags: Vec<String>,
     properties: Vec<(String, String)>,
@@ -338,7 +511,8 @@ struct Projection {
 
 impl Projection {
     fn of(document: &NoteDocument) -> Self {
-        let label = search::label_for(&document.content);
+        let visible = visible_text(&document.content);
+        let label = search::label_of_visible(&visible);
         Self {
             note_id: document.metadata.id,
             content: document.content.clone(),
@@ -358,6 +532,7 @@ impl Projection {
                 .map(|property| (property.key.clone(), property.value.clone()))
                 .collect(),
             label,
+            visible,
         }
     }
 
@@ -371,6 +546,59 @@ impl Projection {
     }
 }
 
+/// A candidate before the corpus is closed and the order is known.
+///
+/// BM25 needs statistics over every readable note, and those are not final
+/// until the last one has been read — so the score cannot be computed while the
+/// candidate is being built. Everything that *can* be settled from one note's
+/// own reading is settled there and then, and what is carried forward is the
+/// small remainder: the counts, the class, and the two numbers the sort needs.
+struct Prepared {
+    candidate: Candidate,
+    class: CandidateClass,
+    /// How many **class-1** signals admitted it.
+    ///
+    /// Not `reasons.len()`, and the difference is the whole guarantee. Class 1
+    /// is ordered by the rule the engine has always used — the number of
+    /// declared signals — and if `TermMatch` were counted here, adding BM25
+    /// would reshuffle candidates that existed before it. Classes 2 and 3 are
+    /// additive precisely because this number cannot see them.
+    declared: usize,
+    /// What the note contributes to BM25, kept until the corpus is closed.
+    terms: Option<DocumentTerms>,
+    /// Filled in once the statistics are final. Internal, never published.
+    score: f64,
+    /// Cosine against the question, for class 3. Internal, never published.
+    similarity: f64,
+}
+
+/// What the semantic channel established about one note, after its record was
+/// checked against the note as it is now.
+struct SemanticEvidence {
+    similarity: f64,
+    /// Where the winning chunk begins **in the current reading** — so the
+    /// snippet is cut out of the note that exists, never out of the index.
+    at: usize,
+}
+
+/// One note's reading, and everything derived from it.
+struct Reading<'a> {
+    projection: &'a Projection,
+    /// The visible text folded, when there is a query to compare against.
+    folded: Option<Folded>,
+    /// The query's terms counted in this note, when there is a query.
+    counted: Option<DocumentTerms>,
+    semantic: Option<SemanticEvidence>,
+}
+
+/// One answer, plus whether the semantic channel had something to admit to.
+struct Outcome {
+    result: ContextResult,
+    /// `None` on the lexical path, always: there is nothing there that can
+    /// fail semantically.
+    semantic_failure: Option<SemanticError>,
+}
+
 /// Retrieves context over the live notes.
 ///
 /// Reads. Never writes: no file is created, no note is moved, no timestamp is
@@ -382,13 +610,95 @@ impl Projection {
 /// ceiling that stopped the scan could not say how many candidates it did not
 /// mention. That is the honest cost of having no index (D-04), and
 /// `docs/second-brain.md` publishes what it measures.
+///
+/// This is the production path, and since 4.3B it means **the declared signals
+/// plus BM25, with the semantic channel switched off by construction**. No
+/// provider is consulted, because [`RetrievalMode::LexicalOnly`] has no field
+/// one could be put in. Callers that want the semantic channel say so with
+/// [`retrieve_with`].
 pub fn retrieve(
     core: &NoteItCore,
     request: &ContextRequest,
 ) -> Result<ContextResult, ContextError> {
+    // The second half of the outcome is `None` here by construction rather
+    // than by luck, so it is dropped without a case to handle.
+    Ok(run(core, request, RetrievalMode::LexicalOnly)?.result)
+}
+
+/// The same retrieval, with the channels the caller chose.
+///
+/// The semantic channel is not exposed to anybody in the shipped product: no
+/// tool constructs one, no setting turns one on, and nothing downloads a model.
+/// This exists so the engine can be tested against a provider that is not real,
+/// which is the only way to tell an engine bug from a model bug later.
+pub fn retrieve_with(
+    core: &NoteItCore,
+    request: &ContextRequest,
+    mode: RetrievalMode<'_>,
+) -> Result<ContextResult, RetrievalError> {
+    let required = mode
+        .semantic()
+        .is_some_and(|runtime| runtime.fallback == SemanticFallback::Required);
+    let outcome = run(core, request, mode)?;
+    match outcome.semantic_failure {
+        // Somebody asked for semantics on purpose. Answering with the lexical
+        // result and saying nothing would be a lie about what was done.
+        Some(error) if required => Err(RetrievalError::Semantic(error)),
+        // `Automatic`: the lexical answer stands, and it is a real answer.
+        _ => Ok(outcome.result),
+    }
+}
+
+/// The pipeline, in the order 4.3A.R1.1 fixed.
+///
+/// ```text
+///  1  validate the request
+///  2  if the semantic channel is on and there is a question: embed it and ask
+///     the index for PRELIMINARY hits — nothing from them is trusted yet
+///  3  enumerate the live notes
+///  4  read each one ONCE
+///  5  from that same reading: the current revision, the projection, the
+///     visible text, the exact signal, the structured signals, the tasks, the
+///     terms, this note's BM25 contribution, and the verdict on whatever the
+///     index claimed about this note
+///  6  close the corpus statistics
+///  7  score
+///  8  build the reasons
+///  9  assign the class
+/// 10  order inside each class, then concatenate
+/// 11  apply the ceilings
+/// ```
+///
+/// Step 5 is the one with teeth. A vector is checked against the note as it is
+/// **now**, from the reading the engine was going to do anyway, and a record
+/// whose `source_revision` no longer matches is discarded and forgotten rather
+/// than published. A stale result can cost a worse answer; it must never cost
+/// an answer that presents old content as current.
+fn run(
+    core: &NoteItCore,
+    request: &ContextRequest,
+    mut mode: RetrievalMode<'_>,
+) -> Result<Outcome, ContextError> {
     let query = prepare(&request.query)?;
     let ceiling = request.ceiling();
     let recency_only = !request.has_discriminating_signal();
+    let terms = query.as_ref().map(QueryTerms::of).unwrap_or_default();
+
+    // Step 2. Before any note is read, and only when there is something to
+    // embed: an empty query has no meaning to look for, and a query that folds
+    // away has no query. Neither is worth a provider call.
+    let mut semantic_failure = None;
+    let mut claimed: BTreeMap<Uuid, SemanticHit> = BTreeMap::new();
+    if let Some(runtime) = mode.semantic() {
+        if query.is_some() {
+            match runtime.preliminary_hits(request.query.trim()) {
+                Ok(hits) => {
+                    claimed = hits.into_iter().map(|hit| (hit.note_id, hit)).collect();
+                }
+                Err(error) => semantic_failure = Some(error),
+            }
+        }
+    }
 
     let (ids, mut warnings) = core
         .storage()
@@ -397,8 +707,13 @@ pub fn retrieve(
         // it could have entered the answer.
         .map_err(|_| ContextError::StoreUnavailable)?;
 
-    let mut candidates = Vec::new();
+    let mut statistics = CorpusStatistics::for_query(&terms);
+    let mut prepared: Vec<Prepared> = Vec::new();
+    let mut enumerated: BTreeSet<Uuid> = BTreeSet::new();
+    let mut forget: Vec<Uuid> = Vec::new();
+
     for id in ids {
+        enumerated.insert(id);
         // The authoritative read. The scan above already looked at each note's
         // header to order the identifiers, and deliberately none of what it saw
         // is used below: everything about this candidate comes from what this
@@ -408,7 +723,9 @@ pub fn retrieve(
             Err(message) => {
                 // A note that could not be read coherently produces a warning
                 // and never a half-filled candidate: partial provenance is
-                // worse than an acknowledged gap.
+                // worse than an acknowledged gap. It is not a BM25 document
+                // either — counting it as an empty one would quietly shorten
+                // every other note's length normalisation.
                 warnings.push(ReadWarning {
                     note_id: Some(id),
                     kind: ReadWarningKind::UnreadableNote,
@@ -418,15 +735,82 @@ pub fn retrieve(
             }
         };
         let projection = Projection::of(&document);
-        if let Some(candidate) = consider(&projection, request, query.as_ref(), recency_only) {
-            candidates.push(candidate);
+
+        let folded = query.as_ref().map(|_| search::fold(&projection.visible));
+        let counted = folded.as_ref().map(|folded| terms.count_in(&folded.text));
+        if let Some(counted) = &counted {
+            // Every readable live note is a document of the corpus, candidate
+            // or not: `N`, `df` and `avgdl` describe the store, not the answer.
+            statistics.observe(counted);
+        }
+
+        // Provenance, from this same reading, before anything of this note is
+        // published.
+        let semantic = match claimed.get(&id) {
+            None => None,
+            Some(hit) => match verify(&document, &projection, hit) {
+                Some(evidence) => Some(evidence),
+                None => {
+                    forget.push(id);
+                    None
+                }
+            },
+        };
+
+        let reading = Reading {
+            projection: &projection,
+            folded,
+            counted,
+            semantic,
+        };
+        if let Some(candidate) = consider(&reading, request, query.as_ref(), &terms, recency_only) {
+            prepared.push(candidate);
         }
     }
 
-    candidates.sort_by(order);
+    // A record naming a note the live scan never mentioned: deleted, trashed,
+    // or never there. It must not resurrect anything, and it must not survive
+    // to be asked again.
+    for note_id in claimed.keys() {
+        if !enumerated.contains(note_id) {
+            forget.push(*note_id);
+        }
+    }
+    if let RetrievalMode::Semantic(runtime) = &mut mode {
+        for note_id in &forget {
+            runtime.index.invalidate_note(note_id);
+        }
+    }
 
-    let omitted_count = candidates.len().saturating_sub(ceiling);
-    candidates.truncate(ceiling);
+    // Steps 6 and 7. The corpus is only complete now, so this is the earliest
+    // moment a BM25 score can exist.
+    for candidate in &mut prepared {
+        if let Some(terms) = &candidate.terms {
+            candidate.score = statistics.score(terms);
+        }
+    }
+
+    prepared.sort_by(order);
+
+    // The semantic ceiling is **admission policy**, not truncation: a
+    // nearest-neighbour search always has a nearest neighbour, and a fourth
+    // stranger was never a candidate. It is applied before the answer's own
+    // ceiling so that `omitted_count` keeps meaning exactly one thing — how
+    // many eligible candidates the caller's limit left out.
+    let max_semantic_only = mode
+        .semantic()
+        .map_or(0, |runtime| runtime.policy.max_semantic_only);
+    let mut semantic_only = 0;
+    prepared.retain(|candidate| {
+        if candidate.class != CandidateClass::Semantic {
+            return true;
+        }
+        semantic_only += 1;
+        semantic_only <= max_semantic_only
+    });
+
+    let omitted_count = prepared.len().saturating_sub(ceiling);
+    prepared.truncate(ceiling);
 
     // The warnings keep the order the scan produced — notes by recency, then
     // whatever the scan itself reported — which is already deterministic, so
@@ -435,14 +819,67 @@ pub fn retrieve(
     let omitted_warning_count = warnings.len().saturating_sub(MAX_CONTEXT_WARNINGS);
     warnings.truncate(MAX_CONTEXT_WARNINGS);
 
-    Ok(ContextResult {
-        candidates,
-        truncated: omitted_count > 0,
-        omitted_count,
-        warnings: warnings.iter().map(ContextWarning::from).collect(),
-        warnings_truncated: omitted_warning_count > 0,
-        omitted_warning_count,
+    Ok(Outcome {
+        result: ContextResult {
+            candidates: prepared
+                .into_iter()
+                .map(|candidate| candidate.candidate)
+                .collect(),
+            truncated: omitted_count > 0,
+            omitted_count,
+            warnings: warnings.iter().map(ContextWarning::from).collect(),
+            warnings_truncated: omitted_warning_count > 0,
+            omitted_warning_count,
+        },
+        semantic_failure,
     })
+}
+
+/// Whether what the index claimed about a note is still true of the note.
+///
+/// The check needs the document, and 4.3A.R1 corrected the specification after
+/// reading the code rather than assuming: `NoteRevision::for_document` is the
+/// only authoritative way to a revision in this crate, and it serialises the
+/// whole canonical document. The scan's `NoteSummary` has no revision, and
+/// `updated_at` is no substitute — it moves with the text and stays put when a
+/// tag, a property or a colour changes, which is exactly the class of edit the
+/// revision exists to catch.
+///
+/// The read costs nothing extra, because the engine already does exactly one
+/// per candidate for D-27. What it is not, is free of the read — and this
+/// comment will not claim otherwise.
+fn verify(
+    document: &NoteDocument,
+    projection: &Projection,
+    hit: &SemanticHit,
+) -> Option<SemanticEvidence> {
+    if hit.chunker_version != CHUNKER_VERSION {
+        return None;
+    }
+    let current = NoteRevision::for_document(document).ok()?;
+    if current != hit.source_revision {
+        return None;
+    }
+    // The revision matched, so cutting the note again gives back the very
+    // chunks the record was made from — which is how the winning one is found
+    // without the index ever having stored a line of the note's text.
+    for piece in chunk(&projection.visible) {
+        let id = ChunkId::of(
+            &projection.note_id,
+            &current,
+            piece.ordinal,
+            CHUNKER_VERSION,
+            &piece.text,
+        )
+        .ok()?;
+        if id == hit.chunk_id {
+            return Some(SemanticEvidence {
+                similarity: hit.similarity,
+                at: piece.at,
+            });
+        }
+    }
+    None
 }
 
 /// Cuts text to a character ceiling, and says so where it cut.
@@ -473,40 +910,64 @@ fn prepare(query: &str) -> Result<Option<Folded>, ContextError> {
     Ok(search::prepare_query(query))
 }
 
-/// Decides whether one note is a candidate, using only its projection.
+/// Decides whether one note is a candidate, using only its own reading.
 ///
-/// Takes `&Projection` and nothing else that could reach the store. Every
-/// field of the candidate it returns comes from that one projection, which is
-/// what makes D-27 structural rather than a comment asking for care.
+/// Takes a [`Reading`] and nothing else that could reach the store. Every field
+/// of the candidate it returns comes from that one reading, which is what makes
+/// D-27 structural rather than a comment asking for care.
+///
+/// The reasons are pushed in [`Reason::PUBLISHED_ORDER`] by walking the signals
+/// in that order, so the published sequence is a consequence of the code's
+/// shape rather than of a sort at the end.
 fn consider(
-    projection: &Projection,
+    reading: &Reading<'_>,
     request: &ContextRequest,
     query: Option<&Folded>,
+    terms: &QueryTerms,
     recency_only: bool,
-) -> Option<Candidate> {
+) -> Option<Prepared> {
+    let projection = reading.projection;
     let mut reasons = Vec::new();
+    let mut declared = 0;
     let mut snippet = None;
     let mut matched_text = None;
     let mut tasks = Vec::new();
     let mut omitted_task_count = 0;
 
-    if let Some(query) = query {
-        if let Some(hit) = search::search_note(query, projection.note_id, &projection.content) {
-            reasons.push(Reason::TextMatch);
-            matched_text = Some(clip(&hit.matched_text, MAX_CONTEXT_MATCHED_TEXT_CHARS));
-            snippet = Some(hit.snippet);
+    // 1. The phrase, whole. BM25 did not replace this and must not: a note that
+    //    contains what somebody typed, spelled as they typed it, is a stronger
+    //    answer than one that contains the same words apart.
+    let exact = match (query, reading.folded.as_ref()) {
+        (Some(query), Some(folded)) => {
+            search::search_visible(query, projection.note_id, &projection.visible, folded)
         }
+        _ => None,
+    };
+    if let Some(hit) = &exact {
+        reasons.push(Reason::TextMatch);
+        declared += 1;
+        matched_text = Some(clip(&hit.matched_text, MAX_CONTEXT_MATCHED_TEXT_CHARS));
+        snippet = Some(hit.snippet.clone());
     }
 
+    // 2. The terms. A reason on its own, never a stronger `TextMatch`.
+    let term_match = reading.counted.as_ref().is_some_and(DocumentTerms::matched);
+    if term_match {
+        reasons.push(Reason::TermMatch);
+    }
+
+    // 3 and 4. The structured signals, which admit with or without a query.
     if shares_tag(projection, &request.filter) {
         reasons.push(Reason::SharedTag);
+        declared += 1;
     }
     if shares_property(projection, &request.filter) {
         reasons.push(Reason::PropertyMatch);
+        declared += 1;
     }
 
-    // Tasks are read from the same projection, so a task can never describe a
-    // version of the note the snippet beside it does not.
+    // 5. Tasks are read from the same projection, so a task can never describe
+    //    a version of the note the snippet beside it does not.
     if let Some(query) = query {
         let matching: Vec<TaskEntry> = projection
             .tasks()
@@ -515,6 +976,7 @@ fn consider(
             .collect();
         if !matching.is_empty() {
             reasons.push(Reason::TaskMatch);
+            declared += 1;
             if request.include_tasks {
                 // Counted from the set already derived from this projection,
                 // never by reading the note again: the number of tasks left out
@@ -539,27 +1001,111 @@ fn consider(
         }
     }
 
+    // 6. The semantic channel, already checked against this reading.
+    if reading.semantic.is_some() {
+        reasons.push(Reason::SemanticMatch);
+    }
+
+    // 7. Recency is a last resort and is labelled as one. It is never mixed
+    //    with a factual signal, because "this note is recent" adds nothing to
+    //    "this note contains what you asked for".
     if reasons.is_empty() {
-        // Recency is a last resort and is labelled as one. It is never mixed
-        // with a factual signal, because "this note is recent" adds nothing to
-        // "this note contains what you asked for".
         if !recency_only {
             return None;
         }
         reasons.push(Reason::Recent);
     }
 
-    Some(Candidate {
-        note_id: projection.note_id,
-        label: projection.label.clone(),
-        snippet: snippet.unwrap_or_else(|| search::opening_of(&projection.content)),
-        updated_at: projection.updated_at,
-        reasons,
-        matched_text,
-        tasks,
-        tasks_truncated: omitted_task_count > 0,
-        omitted_task_count,
+    // The class is the highest channel that admitted it, decided from the
+    // signals themselves. Every possible candidate lands in exactly one: the
+    // four branches are exhaustive because `reasons` is not empty by here.
+    let class = if declared > 0 {
+        CandidateClass::Declared
+    } else if term_match {
+        CandidateClass::Terms
+    } else if reading.semantic.is_some() {
+        CandidateClass::Semantic
+    } else {
+        CandidateClass::Recency
+    };
+
+    // The evidence, in the order the specification fixes. A phrase match brings
+    // its own; failing that, the first query term that occurs, at its first
+    // occurrence; failing that, and only for a candidate the semantic channel
+    // admitted on its own, the winning chunk — rebuilt from the reading, never
+    // taken from the index; failing all of it, the note's opening, which is
+    // what a candidate admitted by a tag or by recency has always shown.
+    if snippet.is_none() && term_match {
+        if let (Some(folded), Some(counted)) = (reading.folded.as_ref(), reading.counted.as_ref()) {
+            if let Some((at, occurrence)) =
+                first_term_occurrence(terms, counted, folded, &projection.visible)
+            {
+                snippet = Some(search::snippet_around(&projection.visible, at));
+                matched_text = Some(clip(&occurrence, MAX_CONTEXT_MATCHED_TEXT_CHARS));
+            }
+        }
+    }
+    if snippet.is_none() && class == CandidateClass::Semantic {
+        if let Some(evidence) = &reading.semantic {
+            snippet = Some(search::snippet_around(&projection.visible, evidence.at));
+        }
+    }
+
+    Some(Prepared {
+        candidate: Candidate {
+            note_id: projection.note_id,
+            label: projection.label.clone(),
+            snippet: snippet.unwrap_or_else(|| search::snippet_around(&projection.visible, 0)),
+            updated_at: projection.updated_at,
+            reasons,
+            // Left as `None` for a candidate nothing lexical matched — a purely
+            // semantic one included. There is no substring of that note anybody
+            // could honestly call the matched text, and inventing one would be
+            // the first small lie in a chain that ends with an agent editing a
+            // passage it was told matched.
+            matched_text,
+            tasks,
+            tasks_truncated: omitted_task_count > 0,
+            omitted_task_count,
+        },
+        class,
+        declared,
+        terms: reading.counted.clone(),
+        score: 0.0,
+        similarity: reading
+            .semantic
+            .as_ref()
+            .map_or(0.0, |evidence| evidence.similarity),
     })
+}
+
+/// Where to point a snippet when the phrase did not match but a term did.
+///
+/// Deterministic twice over: the **first query term that occurs**, in the order
+/// the query was typed rather than in the order the note happens to mention
+/// them, and then its **first occurrence** in the note. Neither half depends on
+/// a score, so the same question always shows the same evidence.
+///
+/// The returned span is in the note's own spelling — the fold is only how the
+/// occurrence was found, never what is published.
+fn first_term_occurrence(
+    terms: &QueryTerms,
+    counted: &DocumentTerms,
+    folded: &Folded,
+    visible: &str,
+) -> Option<(usize, String)> {
+    let wanted = terms
+        .as_slice()
+        .iter()
+        .enumerate()
+        .find(|(index, _)| counted.frequency(*index) > 0)
+        .map(|(_, term)| term)?;
+    let token = crate::lexical::terms(&folded.text)
+        .into_iter()
+        .find(|term| term.text == wanted)?;
+    let from = search::source_offset_of(visible, token.at);
+    let to = search::source_offset_of(visible, token.at + token.text.len());
+    Some((from, visible[from..to.max(from)].to_string()))
 }
 
 /// Whether the note carries any tag the request asked about.
@@ -598,27 +1144,115 @@ fn shares_property(projection: &Projection, filter: &NoteFilter) -> bool {
 
 /// The published order, and it is total.
 ///
-/// 1. more distinct reasons first — a note that matched the text *and* carries
-///    the tag is a better answer than one that only did either;
-/// 2. then more recently written first, and a note with no `updated_at` after
-///    every note that has one;
-/// 3. then by `note_id`.
+/// The class comes first and nothing crosses it. Inside a class:
 ///
-/// The third rule is not a tie-break nobody will hit: two notes written in the
-/// same second, or two notes with no timestamp at all, would otherwise fall
-/// back on the order the filesystem happened to hand them, and the same
+/// | class | 1st | 2nd | 3rd | 4th |
+/// | --- | --- | --- | --- | --- |
+/// | declared | more declared signals | more recent, absent last | `note_id` | — |
+/// | terms | BM25 descending | more reasons | more recent | `note_id` |
+/// | semantic | similarity descending | more recent | `note_id` | — |
+/// | recency | more recent | `note_id` | — | — |
+///
+/// Class 1 and class 4 are the rule this function has always had, unchanged, so
+/// a candidate that existed before BM25 sits exactly where it sat. `note_id`
+/// closes all four: without it two notes written in the same second would fall
+/// back on the order the filesystem happened to hand over, and the same
 /// question would answer differently on the same store. It is stability, not a
 /// hidden score.
-fn order(left: &Candidate, right: &Candidate) -> std::cmp::Ordering {
-    right
-        .reasons
-        .len()
-        .cmp(&left.reasons.len())
-        .then_with(|| match (left.updated_at, right.updated_at) {
-            (Some(left), Some(right)) => right.cmp(&left),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
+///
+/// The floats are compared with `total_cmp` rather than
+/// `partial_cmp().unwrap()`. The second panics on a `NaN` that the types here
+/// make impossible — which is exactly the kind of guarantee that stops being
+/// true one refactor later, at which point a retrieval would abort a process.
+fn order(left: &Prepared, right: &Prepared) -> Ordering {
+    left.class
+        .cmp(&right.class)
+        .then_with(|| match left.class {
+            CandidateClass::Declared => right.declared.cmp(&left.declared),
+            CandidateClass::Terms => right.score.total_cmp(&left.score).then_with(|| {
+                right
+                    .candidate
+                    .reasons
+                    .len()
+                    .cmp(&left.candidate.reasons.len())
+            }),
+            CandidateClass::Semantic => right.similarity.total_cmp(&left.similarity),
+            CandidateClass::Recency => Ordering::Equal,
         })
-        .then_with(|| left.note_id.cmp(&right.note_id))
+        .then_with(|| by_recency(left, right))
+        .then_with(|| left.candidate.note_id.cmp(&right.candidate.note_id))
+}
+
+/// More recently written first, and a note with no `updated_at` after every
+/// note that has one.
+fn by_recency(left: &Prepared, right: &Prepared) -> Ordering {
+    match (left.candidate.updated_at, right.candidate.updated_at) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The published order is a list, and the list is the contract.
+    ///
+    /// Checked against `Ord` as well, because the rest of the engine relies on
+    /// the two agreeing — the "no repeats, in order" assertion the integration
+    /// tests make on every candidate is a comparison, not a lookup.
+    #[test]
+    fn the_published_order_is_declared_and_not_inferred() {
+        assert_eq!(
+            Reason::PUBLISHED_ORDER,
+            [
+                Reason::TextMatch,
+                Reason::TermMatch,
+                Reason::SharedTag,
+                Reason::PropertyMatch,
+                Reason::TaskMatch,
+                Reason::SemanticMatch,
+                Reason::Recent,
+            ]
+        );
+        assert!(Reason::PUBLISHED_ORDER
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+    }
+
+    /// Every variant is in the list, and every variant has a wire name.
+    ///
+    /// The `match` is what does the work: adding a reason without deciding
+    /// where it is published stops compiling here.
+    #[test]
+    fn no_reason_is_left_out_of_the_published_order() {
+        for reason in Reason::PUBLISHED_ORDER {
+            let expected = match reason {
+                Reason::TextMatch => "text_match",
+                Reason::TermMatch => "term_match",
+                Reason::SharedTag => "shared_tag",
+                Reason::PropertyMatch => "property_match",
+                Reason::TaskMatch => "task_match",
+                Reason::SemanticMatch => "semantic_match",
+                Reason::Recent => "recent",
+            };
+            assert_eq!(reason.as_str(), expected);
+        }
+        assert_eq!(
+            Reason::PUBLISHED_ORDER.len(),
+            7,
+            "a new reason needs a place in the published order, not just a name"
+        );
+    }
+
+    /// Every class is ordered by something, and the classes are ordered against
+    /// each other in the sequence 4.3A.R1.2 froze.
+    #[test]
+    fn the_classes_are_a_queue_and_nothing_crosses_it() {
+        assert!(CandidateClass::Declared < CandidateClass::Terms);
+        assert!(CandidateClass::Terms < CandidateClass::Semantic);
+        assert!(CandidateClass::Semantic < CandidateClass::Recency);
+    }
 }

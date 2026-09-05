@@ -764,9 +764,11 @@ fn candidate_view(candidate: &engine::Candidate) -> ContextCandidateView {
 fn reason(reason: engine::Reason) -> ContextReason {
     match reason {
         engine::Reason::TextMatch => ContextReason::TextMatch,
+        engine::Reason::TermMatch => ContextReason::TermMatch,
         engine::Reason::SharedTag => ContextReason::SharedTag,
         engine::Reason::PropertyMatch => ContextReason::PropertyMatch,
         engine::Reason::TaskMatch => ContextReason::TaskMatch,
+        engine::Reason::SemanticMatch => ContextReason::SemanticMatch,
         engine::Reason::Recent => ContextReason::Recent,
     }
 }
