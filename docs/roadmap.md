@@ -1131,9 +1131,12 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         **Proveniência, medida.** `EmbeddingRecord` carrega `source_revision`, que é a revisão
         canônica que o Core já calcula — não se inventa um segundo detector de estado. Uma nota
         indexada com o texto A e editada para B devolve o candidato obsoleto em primeiro lugar sem
-        validação; comparando `source_revision` com a revisão atual ele desaparece, e a comparação
-        custa nada porque não precisa ler a nota. A nota é lida depois, e **é a leitura que produz
-        o snippet publicado, nunca o cache**. `source_revision` é chave de cache e mais nada: nunca
+        validação; comparando `source_revision` com a revisão atual ele desaparece. A ordem é
+        **ler primeiro e validar depois** — a revisão atual é `sha256` do `NoteDocument`
+        serializado, e não existe o que comparar antes de carregá-lo (corrigido na 4.3A.R1 e o
+        diagrama na 4.3A.R1.1). O custo é zero em I/O, porque o motor já faz exatamente uma leitura
+        autoritativa por candidato (D-27) e a validação pega carona nela; **é essa leitura que
+        produz o snippet publicado, nunca o cache**. `source_revision` é chave de cache e mais nada: nunca
         é publicada, nunca chega ao agente, nunca autoriza escrita — o atalho
         `embedding → revision → write` é proibido.
 
@@ -1208,6 +1211,22 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           regressão e não conjunto de validação: ajustar num conjunto e apresentar a
           métrica dele como validação seria medir o próprio ajuste, e com 32 consultas o
           ajuste cabe dentro do ruído.
+    - [x] **4.3A.R1.1 — Fechamento da consistência documental.** Resíduo que a R1 deixou e um
+          endurecimento. A R1 corrigiu o texto do fluxo de proveniência e **não corrigiu os
+          diagramas**: o da seção 1 e o do pipeline ainda mostravam candidato → validação →
+          leitura, ordem impossível pelo próprio contrato corrigido, já que a revisão canônica
+          atual é `sha256` do `NoteDocument` serializado e não há o que comparar antes de
+          carregá-lo. Havia três versões do fluxo em circulação — a correta em prosa, e duas
+          invertidas em diagrama, uma delas na própria entrada da 4.3A aqui. Agora há **uma só**:
+          candidato preliminar → uma leitura autoritativa → `NoteRevision::for_document` →
+          validar → snippet, motivos e tarefas da mesma leitura.
+
+          E `artifact_identity` deixou de ser `sha256` de componentes concatenados para ser o
+          `sha256` de um manifesto — `ArtifactManifestV1` em JSON canônico sob separador de
+          domínio versionado. Concatenar componentes de comprimento variável é ambíguo: duas
+          decomposições diferentes podem dar a mesma cadeia de bytes, e portanto a mesma
+          identidade para artefatos distintos, que é exatamente a classe de defeito que a
+          identidade existe para fechar.
   - [ ] **4.3B — Motor de recuperação provider-neutral.** Planejada. Os tipos centrais e o motor,
         sem nenhum provider remoto e sem artefato de modelo. **Começa pelo lexical**, porque é o
         que a 4.3A mediu como maior ganho e menor custo, e porque é o piso para onde tudo o mais

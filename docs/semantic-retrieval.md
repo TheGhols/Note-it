@@ -38,17 +38,33 @@ EMBEDDING  + EmbeddingSpaceId (provider, modelo, artefato, dimensão, receita)
 ÍNDICE DERIVADO  (cache; perder não perde nota nenhuma)
   │
   ▼
-CANDIDATO  (note_id + motivo)
+CANDIDATO PRELIMINAR   note_id + o canal que o admitiu; nada publicável ainda
   │
   ▼
-VALIDAÇÃO DE PROVENIÊNCIA   source_revision == revisão atual?
+UMA LEITURA AUTORITATIVA DO NoteDocument   ← a que o motor já faz por candidato
   │
   ▼
-LEITURA DO ESTADO ATUAL DA NOTA  ← o snippet publicado nasce AQUI, nunca do cache
+NoteRevision::for_document(&documento)     ← a revisão atual só nasce daqui
   │
   ▼
-Context Engine → MCP / CLI → o agente
+source_revision == revisão atual ?
+  │
+  ├── não → DESCARTAR o candidato e marcar para reindexação
+  │
+  └── sim
+        │
+        ▼
+   snippet, motivos e tarefas — TODOS desta mesma leitura, nunca do cache
+        │
+        ▼
+   Context Engine → MCP / CLI → o agente
 ```
+
+**A leitura vem antes da validação, e não depois.** É a única ordem possível: a
+revisão canônica atual é `sha256` do `NoteDocument` serializado, então não há o
+que comparar antes de carregá-lo. A 4.3A desenhava o contrário e a 4.3A.R1.1
+corrigiu — esta é a **única** ordem oficial, e §7 a repete com a evidência de
+código.
 
 **A cadeia nunca se inverte.** O vetor serve para *encontrar* a nota. O vetor não
 substitui a nota. Um candidato é sempre um `note_id` que se volta a ler pelos
@@ -216,9 +232,43 @@ silêncio.
 
 **Provider local — identidade verificável, e é obrigatória.**
 
+A identidade é o hash de um **manifesto**, e não de componentes concatenados:
+
 ```text
-artifact_identity = sha256( pesos ‖ tokenizer ‖ embedding_recipe ‖ normalization )
+ArtifactManifestV1 {
+    weights_sha256              hex, 64 caracteres
+    tokenizer_sha256            hex, 64 caracteres
+    embedding_recipe_version    inteiro
+    normalization_version       inteiro
+}
+
+artifact_identity = sha256( "noteit.artifact.v1\n" ‖ canonical_json(ArtifactManifestV1) )
 ```
+
+onde `canonical_json` é JSON com chaves em ordem lexicográfica, sem espaços
+supérfluos e em UTF-8 — a mesma disciplina de "uma grafia canônica" que o
+`NoteDocument` já segue para que uma nota comparada consigo mesma não pareça
+diferente.
+
+**Por que um manifesto e não `sha256(a ‖ b ‖ c ‖ d)`.** A concatenação simples de
+componentes de comprimento variável é ambígua: duas decomposições diferentes
+podem produzir a mesma cadeia de bytes, e então dois artefatos distintos recebem
+a mesma identidade. É a mesma classe de defeito que o resto desta especificação
+existe para evitar — números válidos, garantia inválida, nenhum erro estrutural.
+O manifesto resolve por construção, porque tem:
+
+* **separador de domínio com versão** (`noteit.artifact.v1\n`), para que este
+  hash nunca colida com outro hash deste projeto e para que o próprio formato
+  possa mudar sem ambiguidade;
+* **campos nomeados**, em vez de posições — não há concatenação a desambiguar;
+* **comprimentos fixos** nos dois componentes variáveis, porque cada um entra
+  como um digest hexadecimal de 64 caracteres e não como os bytes do arquivo;
+* **ordem fixa e representação canônica**, para que o mesmo artefato produza a
+  mesma identidade em qualquer máquina e em qualquer execução.
+
+A propriedade exigida é a que segue disso: **trocar qualquer componente muda a
+identidade, e nenhuma ambiguidade de codificação pode fazer dois conjuntos
+diferentes de componentes produzirem a mesma entrada para o hash.**
 
 Calculada na carga do artefato, sobre os bytes que foram efetivamente carregados,
 e gravada no cabeçalho do cache. Trocar o arquivo de pesos por outro do mesmo
@@ -522,13 +572,18 @@ consulta
   ├── lexical: termos + BM25 ────────────────┐
   └── semântico: embed_query → cosseno ──────┤
                                              ↓
-                              encadeamento (lexical primeiro)
+                            camadas concatenadas (§13.1)
                                              ↓
-                              validação de proveniência
+                            candidatos preliminares: note_id + canal
                                              ↓
-                              leitura do estado atual da nota
+                            UMA leitura autoritativa por candidato
                                              ↓
-                              snippets limitados, motivos, sem revision
+                            NoteRevision::for_document → validar
+                                             ↓
+                            stale → descartar e reindexar
+                            válido → snippet, motivos e tarefas DESSA leitura
+                                             ↓
+                            tetos aplicados, sem revision publicada
                                              ↓
                                        noteit_context
 ```

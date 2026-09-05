@@ -2308,9 +2308,16 @@ sistema.
 **Identidade do artefato e da receita.** O nome do modelo não basta: a classe de
 defeito medida — números válidos, ranking inválido, nenhum erro estrutural —
 reaparece inteira se pesos, tokenizer, normalização ou receita mudarem mantendo
-nome e dimensão. No provider local a identidade é verificável e obrigatória,
-`sha256(pesos ‖ tokenizer ‖ receita ‖ normalização)`, calculada na carga sobre os
-bytes efetivamente carregados e gravada no cabeçalho do cache. No remoto, quando
+nome e dimensão. No provider local a identidade é verificável e obrigatória: o `sha256` de um
+**manifesto** — `ArtifactManifestV1 {weights_sha256, tokenizer_sha256,
+embedding_recipe_version, normalization_version}`, codificado como JSON canônico
+sob o separador de domínio `noteit.artifact.v1` —, calculado na carga sobre os
+bytes efetivamente carregados e gravado no cabeçalho do cache. O manifesto, e não
+uma concatenação (endurecido na 4.3A.R1.1): concatenar componentes de comprimento
+variável é ambíguo, e duas decomposições diferentes podem produzir a mesma cadeia
+de bytes e portanto a mesma identidade para artefatos distintos — exatamente a
+classe de defeito que esta ADR existe para fechar. Campos nomeados, comprimentos
+fixos, ordem fixa e separador versionado resolvem por construção. No remoto, quando
 o provider publica versão ou snapshot imutável, o identificador entra no espaço e
 a garantia é forte; quando só oferece alias mutável, **não há como detectar** que
 o modelo mudou do outro lado, e a resposta honesta é marcar o espaço como **não
@@ -2363,8 +2370,21 @@ parado quando muda uma tag, uma propriedade ou uma cor, enquanto a revisão move
 O custo real, porém, **é zero em I/O**, e a afirmação corrigida é melhor que a
 original: o Context Engine já faz exatamente uma leitura autoritativa por
 candidato, porque é disso que a coerência depende (D-27), e a validação pega
-carona nela. Valida-se antes de publicar qualquer coisa daquele candidato, e
-**é a leitura que produz o snippet publicado, nunca o cache**. Um registro obsoleto é descartado da
+carona nela.
+
+A ordem oficial é uma só, e é esta:
+
+```text
+índice → candidato preliminar (note_id + canal)
+       → UMA leitura autoritativa do NoteDocument
+       → NoteRevision::for_document(&documento)
+       → source_revision == revisão atual ?
+            não → descartar e marcar para reindexação
+            sim → snippet, motivos e tarefas DESSA MESMA leitura
+```
+
+Ler primeiro, validar depois: não há o que comparar antes de carregar o
+documento. **É a leitura que produz o snippet publicado, nunca o cache**. Um registro obsoleto é descartado da
 resposta e agendado para reindexação. Daí também a decisão de o índice guardar
 apenas vetor e metadados, e nenhum texto: guardar texto pouparia uma leitura que
 o motor já faz por candidato (D-27) e compraria um segundo lugar onde conteúdo de
