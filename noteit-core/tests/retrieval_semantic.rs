@@ -18,6 +18,7 @@ use noteit_core::chrono::{TimeZone, Utc};
 use noteit_core::chunking::{ChunkId, CHUNKER_VERSION};
 use noteit_core::context::{
     retrieve, retrieve_with, Candidate, ContextRequest, Reason, RetrievalError, RetrievalMode,
+    RetrievalOutcome, SemanticStatus,
 };
 use noteit_core::embedding::{
     ArtifactManifestV1, Embedding, EmbeddingRole, EmbeddingSpaceId, EmbeddingVector, SemanticError,
@@ -270,6 +271,7 @@ fn ask(
         RetrievalMode::Semantic(SemanticRuntime::new(provider, index)),
     )
     .expect("the request must be answered")
+    .result
     .candidates
 }
 
@@ -436,6 +438,7 @@ fn the_semantic_channel_may_only_add_so_many_strangers() {
         RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index).with_policy(policy)),
     )
     .expect("answers")
+    .result
     .candidates;
 
     assert_eq!(
@@ -749,24 +752,67 @@ fn an_empty_note_holds_no_vectors_and_says_so() {
 // ------------------------------------------------------------- fallback
 
 #[test]
-fn automatic_degrades_to_the_lexical_answer_and_that_answer_is_real() {
+fn automatic_degrades_to_the_lexical_answer_and_records_unavailable_status() {
     let store = Store::new();
     let note = store.put(id(1), "cardio e sono", &[], &[]);
     let broken = Dictionary::misbehaving(Misbehaviour::Unavailable);
     let mut index = InMemoryIndex::new(toy_space());
 
-    let answer = retrieve_with(
+    let outcome: RetrievalOutcome = retrieve_with(
         &store.core,
         &ContextRequest::with_query("cardio"),
         RetrievalMode::Semantic(SemanticRuntime::new(&broken, &mut index)),
     )
     .expect("automatic degrades rather than failing");
 
-    assert_eq!(ids(&answer.candidates), vec![note]);
-    assert!(answer.candidates[0].reasons.contains(&Reason::TermMatch));
-    assert!(!answer.candidates[0]
+    assert_eq!(
+        outcome.semantic_status,
+        SemanticStatus::Unavailable,
+        "the automatic fallback must record that the semantic channel failed"
+    );
+    assert_eq!(ids(&outcome.result.candidates), vec![note]);
+    assert!(outcome.result.candidates[0]
+        .reasons
+        .contains(&Reason::TermMatch));
+    assert!(!outcome.result.candidates[0]
         .reasons
         .contains(&Reason::SemanticMatch));
+}
+
+#[test]
+fn healthy_provider_answers_with_succeeded_status() {
+    let store = Store::new();
+    let note = store.put(id(1), "cardio e sono", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&note), &provider, &mut index).expect("index");
+
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("cardio"),
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("retrieval succeeds");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::Succeeded);
+    assert_eq!(ids(&outcome.result.candidates), vec![note]);
+    assert_eq!(provider.query_calls.get(), 1);
+}
+
+#[test]
+fn lexical_only_mode_records_not_requested_and_never_calls_provider() {
+    let store = Store::new();
+    store.put(id(1), "cardio e sono", &[], &[]);
+
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("cardio"),
+        RetrievalMode::LexicalOnly,
+    )
+    .expect("lexical retrieval succeeds");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::NotRequested);
+    assert_eq!(outcome.result.candidates.len(), 1);
 }
 
 #[test]
@@ -784,6 +830,42 @@ fn required_refuses_rather_than_pretending() {
     .expect_err("somebody who asked for semantics has to be told they did not get it");
 
     assert_eq!(error, RetrievalError::Semantic(SemanticError::Unavailable));
+}
+
+// ------------------------------------------------ Reason coexistence (R1-001)
+
+#[test]
+fn text_match_and_term_match_and_semantic_match_coexist_without_false_exclusivity() {
+    let store = Store::new();
+    let note = store.put(id(1), "cardio e sono", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&note), &provider, &mut index).expect("index");
+
+    // The query is an exact phrase "cardio e sono".
+    // 1. TextMatch is produced because the full phrase occurs.
+    // 2. TermMatch is produced because normalized terms occur in visible text.
+    // 3. SemanticMatch is produced because the semantic channel admitted the note.
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("cardio e sono"),
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("retrieval succeeds");
+
+    let candidate = &outcome.result.candidates[0];
+    assert!(
+        candidate.reasons.contains(&Reason::TextMatch),
+        "TextMatch must be present"
+    );
+    assert!(
+        candidate.reasons.contains(&Reason::TermMatch),
+        "TermMatch can and must coexist with TextMatch: a phrase also contains its terms"
+    );
+    assert!(
+        candidate.reasons.contains(&Reason::SemanticMatch),
+        "SemanticMatch can and must coexist with lexical matches when admitted"
+    );
 }
 
 // ------------------------------------------------- when there is no query

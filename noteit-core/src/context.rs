@@ -206,7 +206,11 @@ pub enum Reason {
     /// a note that contains the phrase somebody typed is a different kind of
     /// answer from one that contains its words scattered about.
     TextMatch,
-    /// Terms of the query occur in the note, though the phrase does not.
+    /// At least one normalized lexical query term occurs in the note's visible text.
+    ///
+    /// Can coexist with [`Reason::TextMatch`], [`Reason::SharedTag`],
+    /// [`Reason::PropertyMatch`], [`Reason::TaskMatch`], and [`Reason::SemanticMatch`].
+    /// Does not assert that the exact phrase does not occur.
     TermMatch,
     /// The note carries one of the tags asked about.
     SharedTag,
@@ -214,13 +218,10 @@ pub enum Reason {
     PropertyMatch,
     /// A task in the note matches the query.
     TaskMatch,
-    /// The semantic channel found the note close to the question, though its
-    /// words are not in it.
+    /// The note was admitted by the semantic channel and passed provenance validation.
     ///
-    /// Worth saying out loud precisely because it is the weakest claim: an
-    /// agent that reads this knows the note does **not** use its words and can
-    /// decide whether to spend a read on it. That is what a reason gives and a
-    /// number does not.
+    /// Can coexist with [`Reason::TextMatch`], [`Reason::TermMatch`], and structured
+    /// signals. Does not assert that query words are absent from the note.
     SemanticMatch,
     /// Nothing above could apply, and the note is recent. Only ever produced
     /// when the request had no discriminating signal at all.
@@ -383,6 +384,24 @@ pub struct ContextResult {
     /// A damaged store still says how damaged it is: the ceiling limits what
     /// travels, never what is admitted to.
     pub omitted_warning_count: usize,
+}
+
+/// The status of the semantic channel for a retrieval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticStatus {
+    /// Semantic retrieval was not requested (e.g. on [`RetrievalMode::LexicalOnly`]).
+    NotRequested,
+    /// Semantic retrieval was requested and succeeded.
+    Succeeded,
+    /// Semantic retrieval was requested, failed, and fell back to lexical retrieval.
+    Unavailable,
+}
+
+/// The outcome of a retrieval where channel status is tracked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalOutcome {
+    pub result: ContextResult,
+    pub semantic_status: SemanticStatus,
 }
 
 /// Why a request produced no answer at all.
@@ -635,17 +654,28 @@ pub fn retrieve_with(
     core: &NoteItCore,
     request: &ContextRequest,
     mode: RetrievalMode<'_>,
-) -> Result<ContextResult, RetrievalError> {
+) -> Result<RetrievalOutcome, RetrievalError> {
     let required = mode
         .semantic()
         .is_some_and(|runtime| runtime.fallback == SemanticFallback::Required);
+    let is_semantic = mode.semantic().is_some();
     let outcome = run(core, request, mode)?;
     match outcome.semantic_failure {
-        // Somebody asked for semantics on purpose. Answering with the lexical
-        // result and saying nothing would be a lie about what was done.
+        // Somebody asked for semantics on purpose. Refuse rather than pretending.
         Some(error) if required => Err(RetrievalError::Semantic(error)),
-        // `Automatic`: the lexical answer stands, and it is a real answer.
-        _ => Ok(outcome.result),
+        // `Automatic`: the lexical answer stands, and we record that semantics became unavailable.
+        Some(_) => Ok(RetrievalOutcome {
+            result: outcome.result,
+            semantic_status: SemanticStatus::Unavailable,
+        }),
+        None => Ok(RetrievalOutcome {
+            result: outcome.result,
+            semantic_status: if is_semantic {
+                SemanticStatus::Succeeded
+            } else {
+                SemanticStatus::NotRequested
+            },
+        }),
     }
 }
 

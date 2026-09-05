@@ -310,6 +310,46 @@ fn the_published_reasons_are_the_closed_set() {
 }
 
 #[test]
+fn context_reasons_in_output_schema_do_not_assert_false_exclusivity() {
+    let sandbox = Sandbox::new();
+    let mut client = McpClient::start(&sandbox);
+    let tools = client.list_tools();
+    let defs = &tool(&tools, "noteit_context")["outputSchema"]["$defs"];
+
+    let variants = defs["ContextReason"]["oneOf"]
+        .as_array()
+        .expect("oneOf variants");
+
+    let find_variant = |name: &str| {
+        variants
+            .iter()
+            .find(|v| v["const"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("variant `{name}` not found in ContextReason schema"))
+    };
+
+    let term_match = find_variant("term_match");
+    let term_desc = term_match["description"]
+        .as_str()
+        .expect("term_match description");
+    assert!(
+        !term_desc.contains("phrase does not") && !term_desc.contains("frase não"),
+        "term_match must not assert that the phrase does not occur: {term_desc}"
+    );
+
+    let semantic_match = find_variant("semantic_match");
+    let semantic_desc = semantic_match["description"]
+        .as_str()
+        .expect("semantic_match description");
+    assert!(
+        !semantic_desc.contains("not use its words")
+            && !semantic_desc.contains("words are not")
+            && !semantic_desc.contains("without containing")
+            && !semantic_desc.contains("não usa suas palavras"),
+        "semantic_match must not assert absence of query words: {semantic_desc}"
+    );
+}
+
+#[test]
 fn publishing_the_catalogue_opens_no_store() {
     // A bare sandbox: not even the XDG directories exist.
     let sandbox = Sandbox::bare();

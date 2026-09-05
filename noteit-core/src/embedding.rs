@@ -200,26 +200,85 @@ impl ArtifactManifestV1 {
         let mut input = String::with_capacity(ARTIFACT_DOMAIN.len() + encoded.len());
         input.push_str(ARTIFACT_DOMAIN);
         input.push_str(&encoded);
-        Ok(ArtifactIdentity::Verified(sha256_hex(input.as_bytes())))
+        Ok(ArtifactIdentity::LocalVerified(LocalArtifactDigest(
+            sha256_hex(input.as_bytes()),
+        )))
+    }
+}
+
+/// The digest of an [`ArtifactManifestV1`].
+///
+/// Can only be constructed through [`ArtifactManifestV1::identity`], guaranteeing
+/// that a local verified artifact identity was derived from a valid manifest
+/// over actually loaded component digests.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LocalArtifactDigest(String);
+
+impl LocalArtifactDigest {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for LocalArtifactDigest {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for LocalArtifactDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
 /// What is known about the artifact behind a space.
 ///
-/// Two answers, and the difference between them is the difference between a
-/// guarantee and a hope. A provider that names an immutable version can be
-/// held to it; one that offers only a moving alias cannot, and the honest
-/// response is to record that rather than to invent a digest that would look
-/// like proof.
+/// Three answers, representing three distinct trust and reproducibility guarantees:
+///
+/// 1. A local artifact whose weights and tokenizer were loaded and hashed
+///    into a canonical manifest digest ([`ArtifactIdentity::LocalVerified`]).
+/// 2. A remote provider offering an immutable version or snapshot identifier
+///    ([`ArtifactIdentity::ProviderPinned`]). We do not hold the bytes, but the
+///    provider promises immutability under that identifier.
+/// 3. A remote provider with a mutable alias like `model-latest`
+///    ([`ArtifactIdentity::UnverifiableAlias`]). The weights can change on the
+///    remote side without detection, and this is recorded explicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArtifactIdentity {
     /// The digest of an [`ArtifactManifestV1`] over bytes that were loaded.
-    Verified(String),
+    LocalVerified(LocalArtifactDigest),
+    /// An immutable identifier or snapshot provided by a remote provider.
+    /// Does not pretend to be a local byte hash.
+    ProviderPinned { provider: String, pinned_id: String },
     /// The provider names its model with a mutable alias. Nothing here can
     /// detect that the weights changed on the other side, and no heuristic is
     /// offered: a statistical test whose false negative is exactly the
     /// dangerous case is worse than an admission.
-    Unverifiable { alias: String },
+    UnverifiableAlias { alias: String },
+}
+
+impl ArtifactIdentity {
+    pub fn provider_pinned(provider: impl Into<String>, pinned_id: impl Into<String>) -> Self {
+        Self::ProviderPinned {
+            provider: provider.into(),
+            pinned_id: pinned_id.into(),
+        }
+    }
+
+    pub fn unverifiable_alias(alias: impl Into<String>) -> Self {
+        Self::UnverifiableAlias {
+            alias: alias.into(),
+        }
+    }
+
+    /// Whether this identity carries an explicit immutability guarantee.
+    pub fn is_verifiable(&self) -> bool {
+        match self {
+            Self::LocalVerified(_) | Self::ProviderPinned { .. } => true,
+            Self::UnverifiableAlias { .. } => false,
+        }
+    }
 }
 
 // --------------------------------------------------------------- the space
@@ -572,12 +631,13 @@ mod tests {
         assert_eq!(manifest().identity(), manifest().identity());
         // And it is pinned, so a change to the encoding is a failing test
         // rather than an index that silently stops matching.
-        let ArtifactIdentity::Verified(digest) = manifest().identity().expect("identity") else {
-            panic!("a manifest produces a verified identity");
+        let ArtifactIdentity::LocalVerified(digest) = manifest().identity().expect("identity")
+        else {
+            panic!("a manifest produces a local verified identity");
         };
-        assert!(is_digest(&digest));
+        assert!(is_digest(digest.as_str()));
         assert_eq!(
-            digest,
+            digest.as_str(),
             sha256_hex(
                 format!(
                     "{ARTIFACT_DOMAIN}{}",
@@ -641,11 +701,36 @@ mod tests {
     }
 
     #[test]
-    fn an_unverifiable_alias_is_never_equal_to_a_verified_artifact() {
-        let alias = ArtifactIdentity::Unverifiable {
-            alias: "model-latest".to_string(),
-        };
-        assert_ne!(alias, manifest().identity().expect("identity"));
+    fn remote_pinned_identities_follow_provider_and_pinned_id() {
+        let one = ArtifactIdentity::provider_pinned("remote-vendor", "snapshot-2026-09-01");
+        let same = ArtifactIdentity::provider_pinned("remote-vendor", "snapshot-2026-09-01");
+        let different_snapshot =
+            ArtifactIdentity::provider_pinned("remote-vendor", "snapshot-2026-09-02");
+        let different_vendor =
+            ArtifactIdentity::provider_pinned("other-vendor", "snapshot-2026-09-01");
+
+        assert_eq!(one, same);
+        assert_ne!(one, different_snapshot);
+        assert_ne!(one, different_vendor);
+        assert!(one.is_verifiable());
+    }
+
+    #[test]
+    fn remote_pinned_and_unverifiable_alias_and_local_verified_are_all_distinct() {
+        let local = manifest().identity().expect("identity");
+        let pinned = ArtifactIdentity::provider_pinned("vendor", "v1.0.0");
+        let alias = ArtifactIdentity::unverifiable_alias("model-latest");
+
+        assert_ne!(local, pinned);
+        assert_ne!(local, alias);
+        assert_ne!(pinned, alias);
+
+        assert!(local.is_verifiable());
+        assert!(pinned.is_verifiable());
+        assert!(
+            !alias.is_verifiable(),
+            "a mutable alias is explicitly unverifiable"
+        );
     }
 
     // -------------------------------------------------------- the vector
@@ -738,10 +823,11 @@ mod tests {
         let mut other_normalization = base.clone();
         other_normalization.normalization = 2;
 
+        let mut pinned = base.clone();
+        pinned.artifact = ArtifactIdentity::provider_pinned("remote-vendor", "snapshot-1");
+
         let mut alias = base.clone();
-        alias.artifact = ArtifactIdentity::Unverifiable {
-            alias: "model-latest".to_string(),
-        };
+        alias.artifact = ArtifactIdentity::unverifiable_alias("model-latest");
 
         for space in [
             other_provider,
@@ -749,6 +835,7 @@ mod tests {
             other_artifact,
             other_recipe,
             other_normalization,
+            pinned,
             alias,
         ] {
             assert_eq!(space.dimension, base.dimension, "same shape, on purpose");

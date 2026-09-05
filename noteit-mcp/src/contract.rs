@@ -760,7 +760,7 @@ pub struct ContextInput {
 pub enum ContextReason {
     /// The query text, whole, occurs in the note's visible text.
     TextMatch,
-    /// Words of the query occur in the note, though the phrase does not.
+    /// Normalized lexical terms of the query occur in the note's visible text.
     TermMatch,
     /// The note carries one of the tags asked about.
     SharedTag,
@@ -768,13 +768,7 @@ pub enum ContextReason {
     PropertyMatch,
     /// A task in the note matches the query.
     TaskMatch,
-    /// The note was found by meaning rather than by words: it is close to the
-    /// question without containing it.
-    ///
-    /// Worth publishing precisely because it is the weakest claim on this list.
-    /// A caller that sees it knows the note does **not** use its words, and can
-    /// decide whether the note is worth a `noteit_read`. That is what a reason
-    /// gives and a similarity number does not.
+    /// The note was admitted by the semantic channel and verified against the note's current revision.
     SemanticMatch,
     /// Nothing above applied and the note is recent. Only ever produced when
     /// the request carried no query, tag or property at all.

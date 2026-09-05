@@ -513,3 +513,54 @@ fn a_query_that_folds_to_nothing_answers_nothing_and_does_not_fall_back() {
 
     assert!(candidates.is_empty());
 }
+
+#[test]
+fn class_1_orders_by_declared_signals_not_reasons_len() {
+    let store = Store::new();
+    // Candidate A: TextMatch + TermMatch (1 declared signal, 2 reasons total).
+    // Given a more recent timestamp to prove declared signals decide before recency.
+    let note_a = store.put(
+        id(1),
+        "Hipertensão resistente ao tratamento.",
+        &[],
+        &[],
+        at(10),
+    );
+
+    // Candidate B: SharedTag + PropertyMatch (2 declared signals, 2 reasons total).
+    // Given an older timestamp.
+    let note_b = store.put(
+        id(2),
+        "Tratamento clínico geral.",
+        &["cardio"],
+        &[("fonte", "diretriz")],
+        at(0),
+    );
+
+    let request = ContextRequest {
+        query: "hipertensão".to_string(),
+        filter: NoteFilter::new(
+            vec!["cardio".to_string()],
+            vec![("fonte".to_string(), "diretriz".to_string())],
+        ),
+        include_tasks: false,
+        limit: None,
+    };
+
+    let candidates = ask(&store, &request);
+    assert_eq!(
+        ids(&candidates),
+        vec![note_b, note_a],
+        "Candidate B (2 declared signals) must outrank Candidate A (1 declared signal), \
+         even though both carry 2 reasons and A is more recent"
+    );
+
+    let cand_a = only(&candidates, note_a);
+    assert_eq!(cand_a.reasons, vec![Reason::TextMatch, Reason::TermMatch]);
+
+    let cand_b = only(&candidates, note_b);
+    assert_eq!(
+        cand_b.reasons,
+        vec![Reason::SharedTag, Reason::PropertyMatch]
+    );
+}
