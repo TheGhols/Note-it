@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+#
+# Fails if the local embedding provider ever gains a network, a way to write, or
+# a reason to download something.
+#
+# The crate exists to keep one promise: **the content of a note never leaves the
+# machine, and the model is never fetched behind anybody's back.** Three things
+# make that true rather than intended, and each is checked here because each can
+# be undone by a single line somebody meant well by:
+#
+#   the dependency graph   no HTTP, TLS or socket crate, at any depth
+#   the resolved features  `tokenizers` without `http`, so `hf-hub` cannot arrive
+#   this crate's own code  it reads two files, and writes nothing anywhere
+#
+# The second is the one with history. Every upstream in this space assumes the
+# model is *downloaded*: `tokenizers` has an `http` feature that pulls `hf-hub`,
+# `hf-hub` pulls `ureq`, and `model2vec-rs` — the reference implementation this
+# crate was measured against — turns both on by default. Note-it obtains the
+# artifact with `scripts/fetch-embedding-artifact`, run by a person, once.
+#
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+readonly CRATE="noteit-embedding-local"
+readonly SOURCES="$CRATE/src"
+readonly MANIFEST="$CRATE/Cargo.toml"
+readonly PROVISIONER="scripts/fetch-embedding-artifact"
+
+fail() {
+  printf '%s\n' "check-embedding-boundary: $1" >&2
+  exit 1
+}
+
+# The crate's own code, with its comments taken off: the documentation here
+# necessarily talks about the very things the rules forbid.
+code() {
+  find "$SOURCES" -name '*.rs' -print0 \
+    | xargs -0 grep -n '' \
+    | sed -e 's|//[!/].*||' -e 's|//.*||'
+}
+
+offending() {
+  local pattern="$1" found
+  found="$(code | grep -E "$pattern" || true)"
+  [ -n "$found" ] && printf '%s\n' "$found" >&2 && return 0
+  return 1
+}
+
+tree="$(cargo tree -p "$CRATE" --edges normal --prefix none)"
+
+# 1. No network, at any depth of the graph the shipped binary is built from.
+if grep -Eq '^(reqwest|hyper|hyper-util|ureq|hf-hub|attohttpc|isahc|curl|curl-sys|surf|minreq|ehttp|axum|actix-web|warp|rustls|native-tls|openssl|openssl-sys|oauth2|tungstenite|tokio-tungstenite|socket2|mio|quinn|h2|h3|httparse|http|http-body|trust-dns-resolver|hickory-resolver)( |$)' <<<"$tree"; then
+  grep -E '^(reqwest|hyper|ureq|hf-hub|attohttpc|isahc|curl|surf|minreq|rustls|native-tls|openssl|socket2|mio|http)( |$)' <<<"$tree" >&2
+  fail "$CRATE pulled in an HTTP, TLS or socket crate. The local provider reads two files; obtaining them is $PROVISIONER's job and nobody else's."
+fi
+
+# 2. No inference runtime dragged in sideways. A static model is a table and a
+#    mean (ADR-056), and the moment an ONNX or a C++ runtime appears the build,
+#    the binary and the network surface are all different questions.
+if grep -Eq '^(ort|ort-sys|onnxruntime|onnxruntime-sys|tract-onnx|candle-core|torch-sys|tch)( |$)' <<<"$tree"; then
+  fail "$CRATE pulled in an inference runtime; the model class chosen in ADR-056 needs none."
+fi
+
+# 3. No toolkit, no compositor. The provider runs headless wherever the Core does.
+if grep -Eq '^(gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-))( |$)' <<<"$tree"; then
+  fail "$CRATE depends on a desktop toolkit."
+fi
+
+# 4. The features, stated in one place and checked here, because a convenient
+#    `default-features = true` on the tokenizer would bring back `onig` (a C
+#    regex library), `esaxx_fast` (C++) and — with one more word — `hf-hub`.
+grep -q 'tokenizers = { version = "0.23", default-features = false, features = \["fancy-regex"\] }' "$MANIFEST" \
+  || fail "$CRATE's tokenizer dependency is no longer pinned to the pure-Rust, no-network feature set."
+# The manifest is read with its comments off, for the same reason the source is:
+# the comment above the tokenizer dependency explains which features are refused
+# and must not be the thing that fails the rule.
+manifest_body() { sed -e 's|#.*||' "$MANIFEST"; }
+for forbidden in '"http"' '"onig"' '"esaxx_fast"' 'hf-hub' 'ureq' 'reqwest'; do
+  if manifest_body | grep -q -- "$forbidden"; then
+    fail "$CRATE's manifest names \`$forbidden\`."
+  fi
+done
+
+# 5. No socket of any family, in this crate's own code. A dependency graph
+#    cannot answer this one: `std::net` is in the standard library and appears
+#    in no `cargo tree` that ever was.
+offending '\b(std::net|tokio::net|os::unix::net|socket2|mio::net)\b' \
+  && fail "$SOURCES reaches for a network or socket API."
+offending '\b(TcpListener|TcpStream|UdpSocket|UnixListener|UnixStream|UnixDatagram|ToSocketAddrs|SocketAddr)\b' \
+  && fail "$SOURCES names a socket type."
+
+# 6. It reads, and it does not write. Anywhere.
+#
+#    "Indexing is reading" is a rule about the note store, and the narrowest way
+#    to keep it is a provider with no way to write at all: not to a note, not to
+#    a cache, not to a temporary file. Every write API is refused here rather
+#    than only the ones that point at `notes/`, because a rule that listed
+#    directories would be a rule about paths and this one is about capability.
+offending '\b(fs::write|fs::create_dir|fs::create_dir_all|fs::remove_file|fs::remove_dir|fs::remove_dir_all|fs::rename|fs::copy|fs::set_permissions|fs::hard_link|OpenOptions|File::create|BufWriter)\b' \
+  && fail "$SOURCES writes to the filesystem; the provider reads its artifact and computes, and indexing must never look like editing."
+
+# 7. And it has no handle on the store, so there is nothing for it to write to.
+offending '\b(NoteItCore|StorageManager|StorePaths|save_note_atomic|read_note|list_notes|write::execute|authority::)\b' \
+  && fail "$SOURCES names the note store; the provider is handed text to embed and nothing else."
+
+# 8. No process spawning, which is the other way to get a network.
+offending '\b(Command::new|std::process::Command)\b' \
+  && fail "$SOURCES starts a process."
+
+# 9. The pin is in two files and they must agree.
+#
+#    The code refuses an artifact whose bytes are not the expected bytes, and
+#    the provisioner refuses to install one. Two copies of four constants is a
+#    drift waiting to happen: one of them edited alone would leave a script that
+#    installs an artifact the code then rejects, which is a confusing way to
+#    learn that somebody changed the model.
+for constant in \
+  'potion-multilingual-128M' \
+  '73908c3438cf03b6a01bcb9611d62b23d0726f08' \
+  '14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397' \
+  '19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1'
+do
+  grep -q -- "$constant" "$SOURCES/lib.rs" \
+    || fail "$SOURCES/lib.rs no longer pins \`$constant\`."
+  grep -q -- "$constant" "$PROVISIONER" \
+    || fail "$PROVISIONER no longer names \`$constant\`; the code and the installer would disagree about which artifact is the artifact."
+done
+
+# 10. And the provisioner must still verify what it installed. Without this, the
+#     rule above is satisfied by a script that names the digests in a comment.
+grep -q 'sha256sum' "$PROVISIONER" \
+  || fail "$PROVISIONER no longer computes a digest."
+
+# 11. Nothing in the workspace may download the artifact on its own. The
+#     provisioner is the only place a model URL is allowed to appear.
+if grep -rEl 'huggingface\.co' --include='*.rs' --include='*.toml' . \
+    --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | grep -q .; then
+  grep -rEln 'huggingface\.co' --include='*.rs' --include='*.toml' . \
+    --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules >&2
+  fail "a model host appears in Rust or manifest sources; obtaining an artifact is $PROVISIONER's, and it is run by a person."
+fi
+
+printf '%s\n' "Embedding boundary OK: $CRATE has no HTTP, TLS or socket crate, no inference runtime, no socket, no way to write a file and no handle on the store; the artifact pin agrees with $PROVISIONER, which is the only place that downloads anything."

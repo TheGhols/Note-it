@@ -3,6 +3,7 @@ members = [
     "noteit-core",
     "noteit-cli",
     "noteit-mcp",
+    "noteit-embedding-local",
 ]
 resolver = "2"
 

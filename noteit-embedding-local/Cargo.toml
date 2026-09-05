@@ -1,0 +1,38 @@
+[package]
+name = "noteit-embedding-local"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Local, offline embedding provider for Note-it's semantic retrieval"
+publish = false
+
+[dependencies]
+# The contracts, and nothing about them is specific to this implementation.
+# The dependency points this way on purpose: the Core defines
+# `EmbeddingProvider` and must never learn what runs behind it.
+noteit-core = { path = "../noteit-core" }
+# The tokenizer, read from a file and never fetched. `default-features = false`
+# turns off `onig` (a C regex library), `esaxx_fast` (C++) and the progress
+# bar; `fancy-regex` puts a pure-Rust backend in their place. The `http`
+# feature — which is what would pull `hf-hub` and `ureq` — is off, and
+# `scripts/check-embedding-boundary` fails the build if it ever arrives.
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+# The weights, as a described byte layout rather than a pickle. Pure Rust, no
+# runtime, no network.
+# `default-features = false` drops safetensors' `std` feature, whose only effect
+# here would be to pull `tempfile` — and with it `rustix` and `fastrand` — into
+# the shipped graph of a server that writes no temporary file. The header is
+# parsed from a byte slice either way.
+safetensors = { version = "0.8", default-features = false, features = ["alloc"] }
+# Reading the one field this crate needs out of `tokenizer.json` without
+# materialising the other eighteen megabytes of it as a `Value`.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Where the artifact lives, by the same XDG rules the rest of Note-it follows.
+dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3.10"

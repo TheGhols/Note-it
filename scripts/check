@@ -34,10 +34,17 @@ readonly RUST_STAGES=(
   core-boundary
   cli-boundary
   mcp-boundary
+  embedding-boundary
   core-tests
   cli-tests
   mcp-tests
+  embedding-tests
   workspace-tests
+)
+
+# Asked for by name rather than run by `all`: see stage_offline.
+readonly EXTRA_STAGES=(
+  offline
 )
 
 readonly FRONTEND_STAGES=(
@@ -63,9 +70,12 @@ Estágios Rust:
   core-boundary    scripts/check-core-boundary
   cli-boundary     scripts/check-cli-boundary
   mcp-boundary     scripts/check-mcp-boundary
+  embedding-boundary  scripts/check-embedding-boundary
+  offline          scripts/check-offline (exige namespaces de rede sem privilégio)
   core-tests       cargo test -p noteit-core, sem display
   cli-tests        cargo test -p noteit-cli, sem display e sem barramento
   mcp-tests        cargo test -p noteit-mcp, sem display e sem barramento
+  embedding-tests  cargo test -p noteit-embedding-local, sem display e sem rede
   workspace-tests  cargo test --workspace (inclui o harness de isolamento)
 
 Estágios do frontend, todos executados em ui/:
@@ -92,6 +102,12 @@ stage_rust_clippy() { cargo clippy --workspace --all-targets --all-features -- -
 stage_core_boundary() { "$REPO_ROOT/scripts/check-core-boundary"; }
 stage_cli_boundary() { "$REPO_ROOT/scripts/check-cli-boundary"; }
 stage_mcp_boundary() { "$REPO_ROOT/scripts/check-mcp-boundary"; }
+stage_embedding_boundary() { "$REPO_ROOT/scripts/check-embedding-boundary"; }
+# Deliberately *not* in the `rust` aggregate. It needs unprivileged user
+# namespaces, which a container or a hardened kernel may not give, and a stage
+# that quietly passes where it cannot run would be worse than one that has to be
+# asked for. `scripts/check offline` runs it.
+stage_offline() { "$REPO_ROOT/scripts/check-offline"; }
 
 # The three headless suites are not made redundant by `workspace-tests`. They
 # prove a different property: that the Core, the CLI and the MCP server still
@@ -108,6 +124,14 @@ stage_cli_tests() {
 # where a host will start it.
 stage_mcp_tests() {
   env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS cargo test -p noteit-mcp
+}
+# The local embedding provider, headless like the rest. Its suite builds its own
+# synthetic artifacts, so it proves every contract on a machine that has never
+# provisioned a model and has no network to do it with — which is the posture
+# the factory default is in.
+stage_embedding_tests() {
+  env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+    cargo test -p noteit-embedding-local
 }
 stage_workspace_tests() { cargo test --workspace; }
 
@@ -163,7 +187,7 @@ stage_function() {
 
 is_stage() {
   local candidate="$1" known
-  for known in "${RUST_STAGES[@]}" "${FRONTEND_STAGES[@]}"; do
+  for known in "${RUST_STAGES[@]}" "${FRONTEND_STAGES[@]}" "${EXTRA_STAGES[@]}"; do
     [[ "$candidate" == "$known" ]] && return 0
   done
   return 1

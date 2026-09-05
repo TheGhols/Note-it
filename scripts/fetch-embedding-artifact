@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#
+# Obtains the local embedding artifact. The only thing in this repository that
+# talks to a network for the semantic feature, and it is never run for you.
+#
+# Nothing in `noteit-core`, `noteit-mcp`, `noteit-cli` or
+# `noteit-embedding-local` can reach the network or start this script. A
+# machine that never runs it stays on lexical retrieval for ever, which is the
+# factory default: `scripts/check-embedding-boundary` is what makes that a
+# property of the build rather than a promise.
+#
+# The two files are verified against the digests the code is pinned to. A
+# mismatch is a hard failure and the partial download is removed — an artifact
+# that half-arrived is the one state that could look provisioned and not be.
+#
+# Usage:
+#   scripts/fetch-embedding-artifact              download and verify
+#   scripts/fetch-embedding-artifact --verify     verify what is already there
+#   scripts/fetch-embedding-artifact --where      print the directory and exit
+#   scripts/fetch-embedding-artifact --from DIR   copy from a local directory
+#
+set -euo pipefail
+
+# Kept in step with `noteit-embedding-local/src/lib.rs`; the boundary gate
+# fails if the two ever disagree, so neither can be edited alone.
+readonly MODEL="potion-multilingual-128M"
+readonly REVISION="73908c3438cf03b6a01bcb9611d62b23d0726f08"
+readonly REPO="minishlab/potion-multilingual-128M"
+readonly WEIGHTS_SHA256="14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397"
+readonly TOKENIZER_SHA256="19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1"
+
+readonly CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}"
+readonly TARGET="$CACHE_ROOT/note-it/embedding/$MODEL/$REVISION"
+
+fail() {
+  printf 'fetch-embedding-artifact: %s\n' "$1" >&2
+  exit 1
+}
+
+digest_of() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+
+verify() {
+  local ok=0
+  for pair in "model.safetensors:$WEIGHTS_SHA256" "tokenizer.json:$TOKENIZER_SHA256"; do
+    local name expected path
+    name="${pair%%:*}"
+    expected="${pair##*:}"
+    path="$TARGET/$name"
+    if [ ! -f "$path" ]; then
+      printf '  %-20s ausente\n' "$name"
+      ok=1
+      continue
+    fi
+    local actual
+    actual="$(digest_of "$path")"
+    if [ "$actual" = "$expected" ]; then
+      printf '  %-20s ok    %s\n' "$name" "$actual"
+    else
+      printf '  %-20s DIFERE\n    esperado %s\n    obtido   %s\n' "$name" "$expected" "$actual"
+      ok=1
+    fi
+  done
+  return "$ok"
+}
+
+case "${1:-}" in
+  --where)
+    printf '%s\n' "$TARGET"
+    exit 0
+    ;;
+  --verify)
+    printf 'Artefato em %s\n' "$TARGET"
+    verify || fail "o artefato não confere com os digests fixados no código."
+    printf 'Artefato verificado.\n'
+    exit 0
+    ;;
+esac
+
+source_dir=""
+if [ "${1:-}" = "--from" ]; then
+  source_dir="${2:-}"
+  [ -n "$source_dir" ] || fail "--from exige um diretório."
+  [ -d "$source_dir" ] || fail "o diretório de origem não existe."
+fi
+
+if [ -z "$source_dir" ]; then
+  command -v curl >/dev/null 2>&1 || fail "curl não encontrado."
+fi
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum não encontrado."
+
+mkdir -p "$TARGET"
+staging="$(mktemp -d "$TARGET/.incoming.XXXXXX")"
+# The staging directory is removed on every exit, so a failed run never leaves
+# something that a later run could mistake for the artifact.
+trap 'rm -rf "$staging"' EXIT
+
+for name in model.safetensors tokenizer.json; do
+  if [ -n "$source_dir" ]; then
+    [ -f "$source_dir/$name" ] || fail "$source_dir/$name não existe."
+    printf 'Copiando %s\n' "$name"
+    cp "$source_dir/$name" "$staging/$name"
+  else
+    printf 'Baixando %s de huggingface.co/%s@%s\n' "$name" "$REPO" "$REVISION"
+    curl --fail --location --retry 3 --show-error --silent \
+      --output "$staging/$name" \
+      "https://huggingface.co/$REPO/resolve/$REVISION/$name" \
+      || fail "falha ao obter $name."
+  fi
+done
+
+# Verified in the staging directory, before anything is published. A file only
+# reaches the artifact directory after its bytes have been checked.
+for pair in "model.safetensors:$WEIGHTS_SHA256" "tokenizer.json:$TOKENIZER_SHA256"; do
+  staged_name="${pair%%:*}"
+  staged_expected="${pair##*:}"
+  staged_actual="$(digest_of "$staging/$staged_name")"
+  [ "$staged_actual" = "$staged_expected" ] \
+    || fail "$staged_name não confere: esperado $staged_expected, obtido $staged_actual."
+done
+
+for name in model.safetensors tokenizer.json; do
+  mv "$staging/$name" "$TARGET/$name"
+done
+
+printf '\nArtefato instalado em %s\n' "$TARGET"
+verify
+printf '\nA recuperação semântica ainda está desligada. Para ligar, em config.toml:\n\n'
+printf '    [semantic_retrieval]\n    mode = "semantic"\n\n'
