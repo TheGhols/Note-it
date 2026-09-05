@@ -389,11 +389,14 @@ pub struct ContextResult {
 /// The status of the semantic channel for a retrieval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticStatus {
-    /// Semantic retrieval was not requested (e.g. on [`RetrievalMode::LexicalOnly`]).
+    /// The semantic channel was not attempted for this retrieval (e.g. on
+    /// [`RetrievalMode::LexicalOnly`], an empty query, a request with only
+    /// structured filters, or a query that folds to empty).
     NotRequested,
-    /// Semantic retrieval was requested and succeeded.
+    /// The semantic channel was attempted and completed successfully.
     Succeeded,
-    /// Semantic retrieval was requested, failed, and fell back to lexical retrieval.
+    /// The semantic channel was attempted, failed, and the engine degraded
+    /// to lexical retrieval under [`SemanticFallback::Automatic`].
     Unavailable,
 }
 
@@ -613,6 +616,7 @@ struct Reading<'a> {
 /// One answer, plus whether the semantic channel had something to admit to.
 struct Outcome {
     result: ContextResult,
+    semantic_status: SemanticStatus,
     /// `None` on the lexical path, always: there is nothing there that can
     /// fail semantically.
     semantic_failure: Option<SemanticError>,
@@ -658,25 +662,16 @@ pub fn retrieve_with(
     let required = mode
         .semantic()
         .is_some_and(|runtime| runtime.fallback == SemanticFallback::Required);
-    let is_semantic = mode.semantic().is_some();
     let outcome = run(core, request, mode)?;
-    match outcome.semantic_failure {
-        // Somebody asked for semantics on purpose. Refuse rather than pretending.
-        Some(error) if required => Err(RetrievalError::Semantic(error)),
-        // `Automatic`: the lexical answer stands, and we record that semantics became unavailable.
-        Some(_) => Ok(RetrievalOutcome {
-            result: outcome.result,
-            semantic_status: SemanticStatus::Unavailable,
-        }),
-        None => Ok(RetrievalOutcome {
-            result: outcome.result,
-            semantic_status: if is_semantic {
-                SemanticStatus::Succeeded
-            } else {
-                SemanticStatus::NotRequested
-            },
-        }),
+    if let Some(error) = outcome.semantic_failure {
+        if required {
+            return Err(RetrievalError::Semantic(error));
+        }
     }
+    Ok(RetrievalOutcome {
+        result: outcome.result,
+        semantic_status: outcome.semantic_status,
+    })
 }
 
 /// The pipeline, in the order 4.3A.R1.1 fixed.
@@ -717,6 +712,7 @@ fn run(
     // Step 2. Before any note is read, and only when there is something to
     // embed: an empty query has no meaning to look for, and a query that folds
     // away has no query. Neither is worth a provider call.
+    let mut semantic_status = SemanticStatus::NotRequested;
     let mut semantic_failure = None;
     let mut claimed: BTreeMap<Uuid, SemanticHit> = BTreeMap::new();
     if let Some(runtime) = mode.semantic() {
@@ -724,8 +720,12 @@ fn run(
             match runtime.preliminary_hits(request.query.trim()) {
                 Ok(hits) => {
                     claimed = hits.into_iter().map(|hit| (hit.note_id, hit)).collect();
+                    semantic_status = SemanticStatus::Succeeded;
                 }
-                Err(error) => semantic_failure = Some(error),
+                Err(error) => {
+                    semantic_failure = Some(error);
+                    semantic_status = SemanticStatus::Unavailable;
+                }
             }
         }
     }
@@ -861,6 +861,7 @@ fn run(
             warnings_truncated: omitted_warning_count > 0,
             omitted_warning_count,
         },
+        semantic_status,
         semantic_failure,
     })
 }

@@ -832,6 +832,182 @@ fn required_refuses_rather_than_pretending() {
     assert_eq!(error, RetrievalError::Semantic(SemanticError::Unavailable));
 }
 
+#[test]
+fn semantic_mode_with_empty_query_records_not_requested_and_does_not_call_provider() {
+    let store = Store::new();
+    let note = store.put(id(1), "cardio e sono", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&note), &provider, &mut index).expect("index");
+
+    let doc_calls_before = provider.document_calls.get();
+    let query_calls_before = provider.query_calls.get();
+
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query(""),
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("retrieval succeeds");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::NotRequested);
+    assert_eq!(
+        provider.query_calls.get(),
+        query_calls_before,
+        "empty query must not query the provider"
+    );
+    assert_eq!(
+        provider.document_calls.get(),
+        doc_calls_before,
+        "retrieval must not embed documents"
+    );
+    // An empty request produces recency-only candidates
+    assert_eq!(ids(&outcome.result.candidates), vec![note]);
+    assert_eq!(outcome.result.candidates[0].reasons, vec![Reason::Recent]);
+}
+
+#[test]
+fn semantic_mode_with_filter_only_records_not_requested_and_does_not_call_provider() {
+    let store = Store::new();
+    let tagged = store.put(id(1), "Hipertensão.", &["cardio"], &[]);
+    let other = store.put(id(2), "Outra nota.", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&tagged), &provider, &mut index).expect("index");
+    index_document(&store.document(&other), &provider, &mut index).expect("index");
+
+    let query_calls_before = provider.query_calls.get();
+
+    let request = ContextRequest {
+        query: String::new(),
+        filter: NoteFilter::new(vec!["cardio".to_string()], Vec::new()),
+        include_tasks: false,
+        limit: None,
+    };
+
+    let outcome = retrieve_with(
+        &store.core,
+        &request,
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("filter retrieval succeeds");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::NotRequested);
+    assert_eq!(provider.query_calls.get(), query_calls_before);
+    assert_eq!(ids(&outcome.result.candidates), vec![tagged]);
+    assert_eq!(
+        outcome.result.candidates[0].reasons,
+        vec![Reason::SharedTag]
+    );
+    assert!(
+        !outcome.result.candidates[0]
+            .reasons
+            .contains(&Reason::SemanticMatch),
+        "no semantic match reason can be produced without a query"
+    );
+}
+
+#[test]
+fn semantic_mode_with_query_folding_to_empty_records_not_requested_and_does_not_call_provider() {
+    let store = Store::new();
+    let note = store.put(id(1), "Hipertensão arterial.", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&note), &provider, &mut index).expect("index");
+
+    let query_calls_before = provider.query_calls.get();
+
+    // Combining marks alone fold to empty
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("\u{0301}\u{0302}"),
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("retrieval succeeds");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::NotRequested);
+    assert_eq!(provider.query_calls.get(), query_calls_before);
+    // Preserves existing behavior: does not fall back to Recent, returns no candidates
+    assert!(outcome.result.candidates.is_empty());
+}
+
+#[test]
+fn required_fallback_without_applicable_query_does_not_error_and_records_not_requested() {
+    let store = Store::new();
+    let note = store.put(id(1), "cardio e sono", &[], &[]);
+    // Broken provider that would fail if called
+    let broken = Dictionary::misbehaving(Misbehaviour::Unavailable);
+    let mut index = InMemoryIndex::new(toy_space());
+
+    let outcome = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query(""),
+        RetrievalMode::Semantic(SemanticRuntime::new(&broken, &mut index).requiring_semantics()),
+    )
+    .expect("no query means semantic was not attempted, so Required does not trigger an error");
+
+    assert_eq!(outcome.semantic_status, SemanticStatus::NotRequested);
+    assert_eq!(broken.query_calls.get(), 0);
+    assert_eq!(ids(&outcome.result.candidates), vec![note]);
+}
+
+#[test]
+fn semantic_status_invariants_hold_across_all_retrieval_outcomes() {
+    let store = Store::new();
+    let note = store.put(id(1), "cardio e sono", &[], &[]);
+    let provider = Dictionary::new();
+    let mut index = InMemoryIndex::new(toy_space());
+    index_document(&store.document(&note), &provider, &mut index).expect("index");
+
+    // Invariant 1: Succeeded implies provider query_calls > 0
+    let outcome_succeeded = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("cardio"),
+        RetrievalMode::Semantic(SemanticRuntime::new(&provider, &mut index)),
+    )
+    .expect("retrieval succeeds");
+    assert_eq!(outcome_succeeded.semantic_status, SemanticStatus::Succeeded);
+    assert!(provider.query_calls.get() > 0);
+
+    // Invariant 2: Unavailable implies provider was attempted and failed
+    let broken = Dictionary::misbehaving(Misbehaviour::Unavailable);
+    let mut broken_index = InMemoryIndex::new(toy_space());
+    let outcome_unavailable = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query("cardio"),
+        RetrievalMode::Semantic(SemanticRuntime::new(&broken, &mut broken_index)),
+    )
+    .expect("automatic fallback succeeds");
+    assert_eq!(
+        outcome_unavailable.semantic_status,
+        SemanticStatus::Unavailable
+    );
+    assert!(broken.query_calls.get() > 0);
+
+    // Invariant 3: provider query_calls == 0 implies status == NotRequested
+    let fresh_provider = Dictionary::new();
+    let mut fresh_index = InMemoryIndex::new(toy_space());
+    let outcome_not_requested = retrieve_with(
+        &store.core,
+        &ContextRequest::with_query(""),
+        RetrievalMode::Semantic(SemanticRuntime::new(&fresh_provider, &mut fresh_index)),
+    )
+    .expect("empty query retrieval succeeds");
+    assert_eq!(fresh_provider.query_calls.get(), 0);
+    assert_eq!(
+        outcome_not_requested.semantic_status,
+        SemanticStatus::NotRequested
+    );
+    assert_ne!(
+        outcome_not_requested.semantic_status,
+        SemanticStatus::Succeeded
+    );
+    assert_ne!(
+        outcome_not_requested.semantic_status,
+        SemanticStatus::Unavailable
+    );
+}
+
 // ------------------------------------------------ Reason coexistence (R1-001)
 
 #[test]

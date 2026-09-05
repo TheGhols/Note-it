@@ -608,6 +608,14 @@ Modos de configuração:
 `automatic` é o padrão. `semantic_required` existe porque mascarar a falha de
 quem pediu explicitamente semântica é mentir sobre o que foi feito.
 
+O status do canal semântico no resultado da recuperação (`SemanticStatus`):
+
+* `NotRequested`: o canal semântico não foi tentado nesta recuperação (modo léxico,
+  consulta vazia, requisição apenas com filtros ou consulta que dobra para vazio);
+* `Succeeded`: o canal semântico foi efetivamente tentado e respondeu com sucesso;
+* `Unavailable`: o canal semântico foi efetivamente tentado, falhou e a recuperação
+  degradou para recuperação lexical sob a política `automatic`.
+
 Nada disto afeta ler, escrever, listar, buscar, a CLI, o MCP ou as notas.
 
 ## 13. Pipeline de recuperação
@@ -747,7 +755,7 @@ em vez de dependente de escala numérica.
 #### Ordenação dentro de cada classe
 
 | classe | 1º | 2º | 3º | 4º |
-| --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | 1 sinais declarados | mais sinais declarados | `updated_at` mais recente, ausente por último | `note_id` | — |
 | 2 termos | BM25 decrescente | mais motivos distintos | `updated_at` | `note_id` |
 | 3 semântica | similaridade decrescente | `updated_at` | `note_id` | — |
