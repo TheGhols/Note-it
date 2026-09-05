@@ -257,9 +257,13 @@ a mesma identidade. É a mesma classe de defeito que o resto desta especificaç�
 existe para evitar — números válidos, garantia inválida, nenhum erro estrutural.
 O manifesto resolve por construção, porque tem:
 
-* **separador de domínio com versão** (`noteit.artifact.v1\n`), para que este
-  hash nunca colida com outro hash deste projeto e para que o próprio formato
-  possa mudar sem ambiguidade;
+* **separador de domínio com versão** (`noteit.artifact.v1\n`), para que a mesma
+  cadeia de bytes não possa ser lida como identidade de outro domínio ou de outra
+  versão deste formato, e para que o formato possa mudar sem ambiguidade. Ele
+  **não promete ausência de colisão** — isso continua apoiado na resistência a
+  colisão e a pré-imagem do SHA-256, e nenhum prefixo altera essa propriedade. O
+  que o separador dá é separação **semântica** entre domínios, que é o que estava
+  faltando;
 * **campos nomeados**, em vez de posições — não há concatenação a desambiguar;
 * **comprimentos fixos** nos dois componentes variáveis, porque cada um entra
   como um digest hexadecimal de 64 caracteres e não como os bytes do arquivo;
@@ -620,48 +624,127 @@ A metodologia, explícita:
 A limitação não é escondida: **30 notas e 32 consultas separam arquiteturas com
 folga e não separam dois parâmetros parecidos.**
 
-### Encadeamento em camadas, não fusão
+### Admissão e ranking: a política completa
 
-O resultado é montado em **três camadas estruturais**, e uma camada posterior
-nunca atravessa nem rebaixa um candidato admitido por uma anterior:
+Esta é a política inteira do motor, e não só a parte nova. Ela foi derivada do
+comportamento **medido** de `noteit-core/src/context.rs` contra o binário real, e
+não do que seria conveniente implementar — porque o motor de hoje já admite
+candidatos por quatro sinais que a primeira redação desta especificação deixou de
+fora, e a 4.3B não pode inventar em Rust onde eles entram.
+
+#### Quais sinais admitem, e quais só acrescentam motivo
+
+| sinal | admite? | condição, exatamente como hoje |
+| --- | --- | --- |
+| `TextMatch` | **sim** | há consulta **e** ela ocorre no texto visível |
+| `SharedTag` | **sim** | a nota carrega uma tag pedida — **com ou sem consulta** |
+| `PropertyMatch` | **sim** | a nota carrega a propriedade pedida — **com ou sem consulta** |
+| `TaskMatch` | **sim** | há consulta **e** uma tarefa da nota casa com ela |
+| `TermMatch` | **sim** (4.3B) | há consulta e um termo dela ocorre na nota |
+| `SemanticMatch` | **sim** (4.3C) | há consulta e a nota está entre as mais próximas |
+| `Recent` | **sim**, e só ele | a requisição **não tem consulta nem filtro** |
+
+`include_tasks` **não admite e não deixa de admitir**: `TaskMatch` vira motivo de
+qualquer jeito, e a bandeira decide apenas se as tarefas viajam junto do
+candidato. Medido: com `include_tasks` verdadeiro ou falso, os motivos e a ordem
+são os mesmos.
+
+Nada mais admite. Uma nota sem nenhum motivo **não é candidata**, e nesse caso
+`Recent` não a resgata — `Recent` só existe quando a requisição inteira não tinha
+sinal nenhum.
+
+#### As quatro classes de precedência
 
 ```text
-camada 1   TextMatch       a consulta ocorre no texto, como frase
-camada 2   TermMatch       termos da consulta ocorrem; ranking BM25
-camada 3   SemanticMatch   admitido pelo canal semântico
+classe 1  SINAIS DECLARADOS   TextMatch · SharedTag · PropertyMatch · TaskMatch
+classe 2  TERMOS              TermMatch                                  (4.3B)
+classe 3  SEMÂNTICA           SemanticMatch                              (4.3C)
+classe 4  RECÊNCIA            Recent   — exclusiva: só existe sozinha
 ```
 
-A ordem final é a concatenação das três, cada uma internamente ordenada, sem
-reordenação entre elas. Um candidato admitido na camada 1 fica à frente de todo
-candidato que só apareceu na 2 ou na 3, **quaisquer que sejam as pontuações** —
-não é uma consequência dos pesos, é a forma da concatenação.
+A ordem final é a concatenação das classes, cada uma ordenada internamente, **sem
+reordenação entre elas**.
 
-**Isto vale para o BM25 tanto quanto para o semântico, e essa é a correção da
-4.3A.R1.** A 4.3A garantiu a propriedade só contra a camada semântica; mas a
-4.3B introduz o BM25, e um ranking BM25 aplicado sobre todos os candidatos
-poderia perfeitamente pôr um casamento por termo à frente de um casamento de
-frase exata. A propriedade tem de valer contra a etapa que vem primeiro no
-tempo, e não só contra a que veio por último no projeto.
+**Por que os quatro sinais de hoje ficam na mesma classe, e não em fila.** Foi
+medido, contra o binário real: hoje `TextMatch` **não** tem precedência sobre
+`SharedTag` nem `PropertyMatch`. A ordenação é por contagem de motivos, e uma
+nota com `shared_tag` + `property_match` fica **acima** de uma nota com
+`text_match` sozinho:
 
-Um candidato aparece **uma vez**, na camada mais alta que o admitiu, e acumula os
-motivos de todas — um casamento de frase que também é semanticamente próximo é
-um `TextMatch` com `SemanticMatch` entre os motivos, e fica na camada 1.
+```text
+consulta "hipertensao", tags=[cardio], fonte=diretriz
+   A (tag + propriedade, 2 motivos)   ← primeira
+   B (text_match, 1 motivo)           ← segunda
+```
 
-Desempates **dentro** de cada camada, deterministicamente e sempre nesta ordem:
+Pôr `TextMatch` numa camada acima das outras três seria mudar esse
+comportamento — silenciosamente, e sem que nenhuma auditoria tivesse pedido.
+Então a classe 1 é o **conjunto de admissão que o motor já tem**, ordenado pela
+regra que ele já usa, e as classes 2 e 3 são **estritamente aditivas**: elas
+acrescentam candidatos abaixo de tudo o que já existia e não movem nada.
 
-| camada | 1º | 2º | 3º | 4º |
+A consequência é a propriedade que a 4.3A.R1 pediu, na forma exata em que ela é
+verdadeira: **um candidato admitido por `TextMatch` nunca é rebaixado por
+`TermMatch` nem por `SemanticMatch`** — porque estes vivem em classes inferiores.
+Ele continua podendo ficar atrás de um candidato de `SharedTag` com mais motivos,
+exatamente como hoje, e isso é preservação e não regressão.
+
+#### Como um candidato com vários sinais escolhe a classe
+
+Pela **classe mais alta** entre os canais que o admitiram, e ele aparece **uma
+única vez**, carregando **todos** os motivos aplicáveis. Uma nota que casa a
+frase, carrega a tag e também é semanticamente próxima é um candidato de classe 1
+com `text_match`, `shared_tag` e `semantic_match` nos motivos.
+
+Corolário: assim que um candidato entra na classe 1, o BM25 e a similaridade
+dele deixam de influenciar sua posição — dentro da classe 1 a ordenação é a de
+hoje. É isso que torna a proteção estrutural em vez de dependente de escala
+numérica.
+
+#### Ordenação dentro de cada classe
+
+| classe | 1º | 2º | 3º | 4º |
 | --- | --- | --- | --- | --- |
-| 1 `TextMatch` | mais motivos distintos | `updated_at` mais recente | `note_id` | — |
-| 2 `TermMatch` | pontuação BM25 decrescente | mais motivos distintos | `updated_at` | `note_id` |
-| 3 `SemanticMatch` | similaridade decrescente | `updated_at` | `note_id` | — |
+| 1 sinais declarados | mais motivos distintos | `updated_at` mais recente, ausente por último | `note_id` | — |
+| 2 termos | BM25 decrescente | mais motivos distintos | `updated_at` | `note_id` |
+| 3 semântica | similaridade decrescente | `updated_at` | `note_id` | — |
+| 4 recência | `updated_at` mais recente | `note_id` | — | — |
 
-`note_id` fecha as três, como já fecha a ordenação de hoje: sem ele, duas notas
-escritas no mesmo segundo cairiam na ordem que o sistema de arquivos entregou, e
-a mesma pergunta responderia diferente no mesmo store.
+A classe 1 e a classe 4 reproduzem `context.rs::order` sem alteração. `note_id`
+fecha as quatro: sem ele, duas notas escritas no mesmo segundo cairiam na ordem
+que o sistema de arquivos entregou, e a mesma pergunta responderia diferente no
+mesmo store. **Não existe candidato sem classe**, e a ordenação é total.
 
-A regressão que a 4.3B deve trazer: para **toda** consulta do corpus em que o
-motor de hoje devolve um acerto, esse acerto continua na mesma posição ou mais
-acima depois do BM25, e depois do semântico. Não "em média": para cada uma.
+#### O que cada forma de requisição produz
+
+Medido contra o binário real, e é o comportamento a preservar:
+
+| requisição | hoje | depois da 4.3B/4.3C |
+| --- | --- | --- |
+| só consulta textual | classe 1 por `TextMatch`/`TaskMatch` | igual, **mais** classes 2 e 3 abaixo |
+| consulta + tags | classe 1, tag e texto como pares | igual, mais classes 2 e 3 |
+| consulta + propriedades | idem | idem |
+| **só filtro, sem consulta** | classe 1 por `SharedTag`/`PropertyMatch` | **igual — e sem classes 2 e 3**, porque não há consulta para casar termo nem para embutir |
+| **requisição vazia** | classe 4, todas as notas com `Recent` | **igual**, e só classe 4 |
+| consulta que não casa nada | vazio, **sem** `Recent` | classes 2 e 3 podem agora trazer candidatos, rotulados |
+| consulta que dobra para nada | vazio | vazio — ver abaixo |
+
+**Sem consulta não há classe 2 nem classe 3.** Não é uma economia: não há termo
+para pontuar e embutir uma consulta vazia não significa nada. Filtro sozinho
+continua sendo classe 1 e só.
+
+**A consulta que dobra para vazio.** Uma consulta feita só de marcas
+combinantes tem `trim()` não vazio — então a requisição *conta* como tendo sinal
+e `Recent` não é oferecido — mas dobra para a cadeia vazia, então nada casa. O
+resultado é vazio, e foi medido. É o comportamento atual, fica registrado como
+tal, e a 4.3B não deve alterá-lo por acidente; mudá-lo é decisão própria com
+justificativa.
+
+#### A regressão obrigatória da 4.3B
+
+Para **toda** consulta do corpus em que o motor de hoje devolve um acerto, esse
+acerto continua na mesma posição ou mais acima depois do BM25, e depois do
+semântico. Consulta por consulta, não em média.
 
 O semântico **só preenche o que sobrou**.
 
@@ -1095,6 +1178,41 @@ recusados` · `dimensão igual não basta` · `artefato trocado com mesmo nome e
 dimensão` · `alias mutável marcado como não verificável` · `acerto exato nunca
 rebaixado pelo BM25` · `acerto exato nunca rebaixado pelo semântico` ·
 `padrão de fábrica não baixa nem envia nada`
+
+### A matriz que a 4.3B congela ANTES de escrever o BM25
+
+Estes testes descrevem o motor **de hoje** e devem passar antes de qualquer
+mudança de ranking, para que a mudança seja medida contra eles e não contra a
+memória de ninguém:
+
+| # | cenário | o que fica congelado |
+| --- | --- | --- |
+| 1 | casamento de frase exata | admitido, `text_match` nos motivos |
+| 2 | tag sem consulta | admitido, `shared_tag`, **sem** consulta nenhuma |
+| 3 | propriedade sem consulta | admitido, `property_match` |
+| 4 | consulta + tag | ambos admitidos; ordem por contagem de motivos |
+| 5 | consulta + propriedade | idem |
+| 6 | tarefa com `include_tasks = false` | `task_match` presente, `tasks` vazio |
+| 7 | tarefa com `include_tasks = true` | `task_match` presente, `tasks` preenchido, mesma ordem |
+| 8 | requisição vazia | todas as notas com `recent`, ordem por recência |
+| 9 | vários motivos na mesma nota | um único candidato, motivos acumulados |
+| 10 | empate final | resolvido por `note_id`, estável entre execuções |
+
+E, sobre o corpus: **para cada consulta** em que o motor de hoje encontra o
+ground truth, registrar a posição do acerto; depois do BM25, nenhum desses
+acertos pode estar abaixo da posição registrada. Consulta por consulta, nunca
+por média.
+
+Testes sintéticos de ranking, com valores construídos para atacar a fronteira:
+
+* pontuação BM25 arbitrariamente alta **não** atravessa candidato de classe
+  superior;
+* similaridade arbitrariamente alta **não** atravessa um `TextMatch`;
+* candidato com vários motivos aparece **uma vez**;
+* candidato admitido só por sinal não textual tem posição definida — não fica
+  "sem classe";
+* nenhuma ordenação depende da ordem em que o sistema de arquivos entregou as
+  notas.
 
 O corpus já carrega quatro deles como dados: `n17` (prompt injection), `n18`
 (Unicode hostil), `n19` e `n20` (nota vazia e mínima).

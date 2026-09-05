@@ -1227,6 +1227,34 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           decomposições diferentes podem dar a mesma cadeia de bytes, e portanto a mesma
           identidade para artefatos distintos, que é exatamente a classe de defeito que a
           identidade existe para fechar.
+    - [x] **4.3A.R1.2 — Política de admissão e ranking, fechada.** As três camadas que a R1
+          definiu cobriam `TextMatch`, `TermMatch` e `SemanticMatch` — e o motor também admite
+          por `SharedTag`, `PropertyMatch`, `TaskMatch` e `Recent`, que ficaram sem lugar. A
+          4.3B teria de inventar em Rust onde eles entram.
+
+          **A política foi derivada do comportamento medido, não do conveniente.** Contra o
+          binário real: hoje `TextMatch` **não** tem precedência sobre `SharedTag` nem
+          `PropertyMatch` — a ordem é por contagem de motivos, e uma nota com `shared_tag` +
+          `property_match` fica **acima** de uma com `text_match` sozinho. Uma fila de cinco
+          camadas com `TextMatch` no topo teria mudado isso em silêncio.
+
+          Então são quatro classes: a 1 é o conjunto de admissão que o motor já tem — os quatro
+          sinais declarados, com a regra de ordenação que ele já usa; a 2 e a 3 são
+          **estritamente aditivas**, acrescentando candidatos abaixo de tudo o que já existia; e
+          a 4 é a recência, exclusiva, que só existe quando a requisição não tem consulta nem
+          filtro. A proteção do acerto exato fica na forma em que é verdadeira: `TextMatch` nunca
+          é rebaixado **por `TermMatch` nem por `SemanticMatch`**, e continua podendo ficar atrás
+          de um `SharedTag` com mais motivos, como hoje.
+
+          Registrado também o que cada forma de requisição produz — filtro sozinho não tem classe
+          2 nem 3, porque não há termo a pontuar nem consulta a embutir; requisição vazia continua
+          sendo só recência; e uma consulta feita de marcas combinantes dobra para vazio e devolve
+          nada, sem cair em `Recent`, que é o comportamento atual e fica registrado como tal.
+
+          Fechados junto: `k1` e `b` deixaram de aparecer como questão aberta da 4.3C, e a
+          garantia atribuída ao separador de domínio passou a ser a correta — separação semântica
+          entre domínios, e não impossibilidade de colisão, que é propriedade do SHA-256 e não de
+          um prefixo. Dez cenários de regressão congelados para a 4.3B rodar **antes** do BM25.
   - [ ] **4.3B — Motor de recuperação provider-neutral.** Planejada. Os tipos centrais e o motor,
         sem nenhum provider remoto e sem artefato de modelo. **Começa pelo lexical**, porque é o
         que a 4.3A mediu como maior ganho e menor custo, e porque é o piso para onde tudo o mais
@@ -1239,8 +1267,12 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         4.3A — embeddings estáticos de token, sem runtime de inferência —, distribuição do
         artefato, ciclo de vida, custo de CPU e memória medidos em Rust, operação offline e
         indexação incremental. As questões que a 4.3A deixou abertas são pré-requisito: qualidade
-        sob quantização, licença de `model2vec-rs`, `k1`/`b` do BM25 confirmados contra o corpus e
-        RSS real. Pode ser fundida com a 4.3B se a implementação mostrar que é mais simples.
+        sob quantização, licença de `model2vec-rs` e RSS real. **`k1` e `b` não estão entre
+        elas**: foram congelados em 1.2 e 0.75 e a 4.3B os usa exatamente assim. Reabri-los exige
+        três coisas e não duas — um conjunto de tuning novo, um conjunto de avaliação separado que
+        não seja usado no ajuste, e a decisão explícita de reabrir os parâmetros. O corpus da 4.3A
+        continua sendo régua de regressão e não serve para nenhuma das duas primeiras. Pode ser
+        fundida com a 4.3B se a implementação mostrar que é mais simples.
   - [ ] **4.3D — Providers remotos opcionais.** Planejada. OpenAI, Gemini, Voyage ou outros
         aprovados, sempre opt-in: o processo `noteit-embed` separado, que é o único com cliente
         HTTP e o único que vê a credencial, falando com o Core por AF_UNIX — de modo que a

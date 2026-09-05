@@ -2137,12 +2137,40 @@ dependência. Os dois se justificam. A ordem não estava decidida e agora está:
    corpus, e — o que decide — **nenhum runtime de inferência**: um modelo
    estático é uma tabela e uma média. Sem ONNX Runtime, sem C++, sem binário
    baixado em tempo de build, sem risco à fronteira de rede fechada na 4.1R1.1.
-4. **Camadas estruturais, não fusão.** O resultado é a concatenação de três
-   camadas — `TextMatch` (frase), `TermMatch` (BM25), `SemanticMatch` — cada uma
-   ordenada internamente, sem reordenação entre elas. Um candidato admitido na
-   camada 1 fica à frente de todo candidato que só apareceu na 2 ou na 3,
-   quaisquer que sejam as pontuações: não é consequência de pesos, é a forma da
-   concatenação. A RRF pontua um pouco melhor em R@3 e **rebaixou um acerto
+4. **Classes de precedência, não fusão.** O resultado é a concatenação de quatro
+   classes, cada uma ordenada internamente, sem reordenação entre elas:
+
+   ```text
+   classe 1  SINAIS DECLARADOS  TextMatch · SharedTag · PropertyMatch · TaskMatch
+   classe 2  TERMOS             TermMatch                              (4.3B)
+   classe 3  SEMÂNTICA          SemanticMatch                          (4.3C)
+   classe 4  RECÊNCIA           Recent — exclusiva, só existe sozinha
+   ```
+
+   **Os quatro sinais de hoje ficam na mesma classe, e isso foi medido**
+   (4.3A.R1.2). Hoje `TextMatch` não tem precedência sobre `SharedTag` nem
+   `PropertyMatch`: a ordem é por contagem de motivos, e uma nota com
+   `shared_tag` + `property_match` fica acima de uma com `text_match` sozinho —
+   verificado contra o binário real. Pôr `TextMatch` numa camada acima das outras
+   três mudaria esse comportamento em silêncio, sem que nenhuma auditoria
+   tivesse pedido. Então a classe 1 é o conjunto de admissão que o motor já tem,
+   com a regra de ordenação que ele já usa, e as classes 2 e 3 são
+   **estritamente aditivas**: acrescentam candidatos abaixo de tudo o que já
+   existia e não movem nada.
+
+   Daí a propriedade na forma exata em que ela é verdadeira: um candidato
+   admitido por `TextMatch` nunca é rebaixado **por `TermMatch` nem por
+   `SemanticMatch`**, porque estes vivem em classes inferiores. Ele continua
+   podendo ficar atrás de um `SharedTag` com mais motivos, como hoje — isso é
+   preservação, não regressão.
+
+   Um candidato aparece uma vez, na classe mais alta que o admitiu, e carrega
+   todos os motivos aplicáveis; assim que entra na classe 1, BM25 e similaridade
+   deixam de influenciar sua posição. Sem consulta não há classe 2 nem 3 — não há
+   termo a pontuar e embutir uma consulta vazia não significa nada —, então
+   filtro sozinho continua sendo classe 1, e requisição vazia continua sendo
+   classe 4 e só. Nenhum candidato fica sem classe, e cada classe termina em
+   `note_id`. A RRF pontua um pouco melhor em R@3 e **rebaixou um acerto
    exato** numa consulta; a concatenação não pode rebaixar. A 4.3A.R1 estendeu a
    propriedade ao **BM25** e não só ao semântico — a 4.3B é quem introduz o BM25,
    e um ranking BM25 sobre todos os candidatos poria um casamento por termo à
@@ -2312,7 +2340,11 @@ nome e dimensão. No provider local a identidade é verificável e obrigatória:
 **manifesto** — `ArtifactManifestV1 {weights_sha256, tokenizer_sha256,
 embedding_recipe_version, normalization_version}`, codificado como JSON canônico
 sob o separador de domínio `noteit.artifact.v1` —, calculado na carga sobre os
-bytes efetivamente carregados e gravado no cabeçalho do cache. O manifesto, e não
+bytes efetivamente carregados e gravado no cabeçalho do cache. O separador dá
+separação **semântica**: a mesma cadeia de bytes não pode ser lida como
+identidade de outro domínio ou de outra versão do formato. Ele não promete
+ausência de colisão, que continua sendo propriedade do SHA-256 e não de um
+prefixo. O manifesto, e não
 uma concatenação (endurecido na 4.3A.R1.1): concatenar componentes de comprimento
 variável é ambíguo, e duas decomposições diferentes podem produzir a mesma cadeia
 de bytes e portanto a mesma identidade para artefatos distintos — exatamente a
@@ -2504,8 +2536,13 @@ ser partido em dois de forma útil, o que significa escrever mais casos primeiro
 
 **Questões deixadas para a implementação.** Qualidade sob quantização int8 dos
 modelos estáticos; verificação da licença de `model2vec-rs`, que o `crates.io`
-publica como `non-standard` enquanto o card do modelo diz MIT; confirmação de
-`k1` e `b` do BM25 contra o corpus; RSS real em Rust, já que os números desta
-fase vêm de um processo Python e não são representativos; e um corpus maior, já
-que 32 consultas separam arquiteturas com folga e não separam dois modelos
-parecidos.
+publica como `non-standard` enquanto o card do modelo diz MIT; RSS real em Rust,
+já que os números desta fase vêm de um processo Python e não são representativos;
+e um corpus maior, já que 32 consultas separam arquiteturas com folga e não
+separam dois modelos parecidos.
+
+**`k1` e `b` não são uma dessas questões, e deixaram de ser listadas como tal.**
+Estão congelados em 1.2 e 0.75, e a implementação os usa exatamente assim.
+Reabri-los exige um conjunto de tuning novo, um conjunto de avaliação separado que
+não seja usado no ajuste, e a decisão explícita de reabrir — nesta ordem. O corpus
+desta fase é régua de regressão e não serve para nenhum dos dois primeiros.
