@@ -809,6 +809,8 @@ o servidor MCP **não** mudou `schema_version`.
 | O protocolo MCP em si | `noteit-mcp/tests/mcp_protocol.rs` |
 | Nenhum socket aberto pelo processo real | `noteit-mcp/tests/mcp_no_network.rs` |
 | Decisões do contrato, presas por `match` exaustivo | `noteit-mcp/tests/mcp_contract_decisions.rs` |
+| Canal semântico sobre o fio: padrão de fábrica, degradação, recusa, privacidade, `ping` durante uma indexação real | `noteit-mcp/tests/mcp_semantic.rs` |
+| Ciclo de vida do índice: carga única, incremental, stale, lixeira, concorrência | `noteit-mcp/tests/semantic_lifecycle.rs` |
 | Limite headless, sem rede, sem shell | `scripts/check-mcp-boundary` |
 
 Todas usam o binário real, processos reais, soquetes reais e stores descartáveis
