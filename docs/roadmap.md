@@ -1480,3 +1480,24 @@ Saiu da Fase 4 em vez de ser abandonada: vem depois do trabalho de Core, CLI, MC
 - [ ] **Fase 5.0E — Empacotamento Completo e Distribuição.** Atualização de `packaging/arch/PKGBUILD` contemplando os 5 binários executáveis (`note-it`, `noteit`, `noteit-mcp`, `noteit-embed`, `noteit-tui`), arquivos desktop, ícones e licença; criação de `PKGBUILD-git` para trunk; atualização de `scripts/build.sh`; e validação de integridade em chroot limpo.
 - [ ] **Fase 5.0R — Auditoria de Segurança, Regressão e Fechamento.** Prova de zero violações em todos os gates de fronteira, zero regressões em Core, CLI, MCP e GUI, e verificação integral do CI remoto.
 - [ ] Versão v0.1.0 e publicação no AUR.
+
+## Integração futura com o GholsOS
+
+O repositório `TheGhols/GholsOS` foi iniciado como uma camada de integração pessoal que, no futuro, conectará Note-it, Diamond, Sodiz e outros aplicativos. O GholsOS Core ainda não existe. O Note-it foi identificado como o primeiro e mais preparado candidato para essa integração externa, graças ao seu Core bem definido, CLI madura, servidor MCP com 16 ferramentas, contratos internos estritos e suíte abrangente de testes. Nenhuma integração prática ou código foi iniciado nesta fase.
+
+### Pré-requisitos (o que precisa existir ANTES de qualquer trabalho de integração real)
+1. **GholsOS Core:** Registry unificado, arquitetura de identidade de objetos e barramento de eventos.
+2. **Contrato mínimo de objetos:** Definição formal dos tipos `Note`, `Document` e `Link` no repositório `TheGhols/GholsOS`.
+
+### Candidatos a Mapeamento (registro conceitual preliminar, sem implementação)
+- **Note-it Note → Objeto `Note` do GholsOS:**
+  - Mapeamento de campos: `id`, `source = "note-it"`, `title`, `text` (corpo Markdown), `created_at`, `updated_at`, `links`.
+- **Eventos candidatos:**
+  - `note.created`
+  - `note.updated`
+
+### Restrição Arquitetural Explícita
+O Note-it permanece o único dono e autoridade sobre os seus arquivos Markdown no disco local (`StorePaths`). O GholsOS nunca duplica o conteúdo em armazenamento secundário ou proprietário, limitando-se a referenciar as entidades via identificador e fonte (`id`, `source`).
+
+- [ ] **não iniciado — aguardando Fase G2 do GholsOS (contrato mínimo)**
+
