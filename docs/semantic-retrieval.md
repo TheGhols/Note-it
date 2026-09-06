@@ -1783,12 +1783,19 @@ fronteira do processo.
 | edição de uma nota, reabertura | a nota editada e a consulta; as outras três não são reenviadas |
 | `ping` equivalente durante indexação remota com 40 ms de atraso por requisição | responde em < 120 ms, com `semantic_status == succeeded` na outra thread |
 | quatro consultas concorrentes num store sem índice | uma indexação; ≤ 4 textos de documento embutidos |
+| spawn do worker até "pronto", binário real, 10 execuções | 1–10 ms, mediana 2 ms |
+| round trip AF_UNIX, worker real, 30 execuções | p50 0,156–0,186 ms, p95 ≤ 0,222 ms — e **igual para 1, 16 e 64 textos** |
+| cache: 1 000 notas × 2 chunks, dim 1 536 | 2 000 vetores, 12,1 MiB, save 69 ms, load p50 68 ms |
+| cache: 10 000 notas × 2 chunks, dim 1 536 | 20 000 vetores, 121,3 MiB, save 665 ms, load p50 726 ms |
 | binário `noteit-embed`, release | 3 447 320 bytes |
 | binário `noteit-mcp`, release | 12 571 680 bytes, **sem crescer** — ele não linka nada de HTTP |
 | crates novas | 11 |
 
 O atraso de 40 ms é **latência simulada do provider** e está nomeado como tal: a
-parcela medida é a da outra thread, não a dele.
+parcela medida é a da outra thread, não a dele. As linhas de spawn, round trip e
+cache não têm parcela simulada nenhuma: são o custo interno do Note-it, e o
+round trip ser insensível ao tamanho do lote é o resultado que importa — o
+protocolo não acrescenta nada mensurável ao lado da latência de rede.
 
 **Nenhum orçamento novo foi inventado.** A §25 tem uma linha "consulta com
 provider remoto — a medir; latência de rede domina", e ela continua a medir:

@@ -1408,7 +1408,11 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         digest SHA-256 sobre o arquivo inteiro, escrita atômica pela mesma `write_atomic` das notas,
         `0600`, sem texto de nota. Medido: indexação a frio de 4 notas custa **5 requisições**; a
         **segunda sessão com cache válido custa 1** — só a consulta. Uma edição reenvia a nota
-        editada e mais nada.
+        editada e mais nada. Em release, com dim 1 536 e dois chunks por nota: mil notas são
+        12,1 MiB com `save` de 69 ms e `load` de 68 ms; dez mil são 121,3 MiB com 665 ms e 726 ms.
+        Spawn do worker até "pronto": mediana de 2 ms. Round trip AF_UNIX: p50 0,16–0,19 ms, e
+        **igual para 1, 16 e 64 textos** — o protocolo não acrescenta nada mensurável ao lado da
+        latência de rede.
 
         **Um defeito real foi encontrado por um teste, não por revisão.** O worker recusava
         corretamente ligar sobre um arquivo regular no caminho do socket, e então o *spawner*

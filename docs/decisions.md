@@ -3180,6 +3180,24 @@ parágrafos a 1 536 dimensões são ~12 MB por espaço, então o teto de dois é
 A limpeza nunca remove um diretório que este módulo não criou — um nome que não
 é um digest não é nosso — e nunca toca numa nota.
 
+**Medido**, em release, com vetores de 1 536 dimensões e dois chunks por nota:
+
+```text
+  1 000 notas    2 000 vetores    12,1 MiB    save  69 ms    load p50  68 ms
+ 10 000 notas   20 000 vetores   121,3 MiB    save 665 ms    load p50 726 ms
+```
+
+Com o teto de dois espaços, o pior caso realista é **~243 MiB** para um store de
+dez mil notas — que é a consequência que essa escolha compra, e está aqui em vez
+de na descoberta de alguém. É aceitável porque é cache: apagar recupera o disco
+e custa o dinheiro de refazer. O gatilho para rediscutir a política é o mesmo
+formato dessa conta: **acima de ~250 MiB por espaço, o teto de dois precisa de
+um argumento novo em vez de ser mantido por inércia.**
+
+O custo de reconstruir é o outro lado, e é o que justifica guardar qualquer
+coisa: um store de mil notas com dois chunks cada são 2 000 embeddings pagos, e
+`load` os devolve em 68 ms.
+
 ### O que esta decisão deliberadamente não fez
 
 * **Não afrouxou nenhum gate existente.** Os quatro anteriores estão
