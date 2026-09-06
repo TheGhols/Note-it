@@ -28,6 +28,7 @@ readonly EXIT_USAGE=2
 readonly EXIT_MISSING_TOOL=1
 
 readonly RUST_STAGES=(
+  ci-parity
   rust-format
   rust-check
   rust-clippy
@@ -64,6 +65,7 @@ Agregados:
   frontend   ${FRONTEND_STAGES[*]}
 
 Estágios Rust:
+  ci-parity        todo estágio desta lista aparece no workflow do CI
   rust-format      cargo fmt --all -- --check
   rust-check       cargo check --workspace
   rust-clippy      cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -95,6 +97,36 @@ USAGE
 }
 
 # --- the stages ------------------------------------------------------------
+
+# Every gate in this file has to run on the remote CI too.
+#
+# This exists because the drift already happened: `embedding-boundary` and
+# `embedding-tests` were added here and the workflow was not updated, so two
+# gates were green locally and never ran remotely. A list in two places stays
+# in agreement only if something checks, so this is the something.
+#
+# `offline` is exempt by name and not by omission: it needs unprivileged user
+# namespaces, which the CI container does not grant, and stage_offline says so.
+stage_ci_parity() {
+  local workflow="$REPO_ROOT/.github/workflows/ci.yml"
+  if [ ! -f "$workflow" ]; then
+    echo "check ci-parity: $workflow não existe" >&2
+    return 1
+  fi
+  local missing=()
+  local stage
+  for stage in "${RUST_STAGES[@]}" "${FRONTEND_STAGES[@]}"; do
+    grep -qE "^[[:space:]]*run:[[:space:]]*(\./)?scripts/check $stage[[:space:]]*$" \
+      "$workflow" || missing+=("$stage")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "check ci-parity: estes estágios não são executados por .github/workflows/ci.yml:" >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "acrescente um passo 'run: scripts/check <estágio>' para cada um." >&2
+    return 1
+  fi
+  echo "ci-parity OK: os ${#RUST_STAGES[@]} estágios Rust e os ${#FRONTEND_STAGES[@]} do frontend aparecem no workflow."
+}
 
 stage_rust_format() { cargo fmt --all -- --check; }
 stage_rust_check() { cargo check --workspace; }

@@ -11,6 +11,16 @@ on:
 # gate so a red run names the gate that failed; it does not restate the
 # commands. Installing the runner's system packages stays here, because that
 # is the runner's business and not the repository's.
+#
+# The list of steps is not maintained by hand against that script: the first
+# gate below is `ci-parity`, which fails the build if any stage of
+# `scripts/check` has no step here. It exists because the drift already
+# happened once.
+#
+# `gcc` is named explicitly rather than left to arrive as somebody's transitive
+# dependency: since 4.3C.R1 the artifact is verified with `ring`, whose build
+# compiles BoringSSL's assembly, so a C toolchain is a stated requirement of
+# this build and not an accident of the image.
 jobs:
   rust-check:
     name: Rust Checks & Tests
@@ -22,12 +32,15 @@ jobs:
         run: |
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git pkgconf gtk4 gtk4-layer-shell webkitgtk-6.0 rust dbus python-gobject
+          pacman -S --noconfirm git pkgconf gcc gtk4 gtk4-layer-shell webkitgtk-6.0 rust dbus python-gobject
 
       - uses: actions/checkout@v4
 
       - name: Environment Diagnosis
         run: scripts/doctor rust
+
+      - name: Gate Parity With scripts/check
+        run: scripts/check ci-parity
 
       - name: Rust Format Check
         run: scripts/check rust-format
@@ -47,6 +60,9 @@ jobs:
       - name: MCP Dependency Boundary
         run: scripts/check mcp-boundary
 
+      - name: Embedding Dependency Boundary
+        run: scripts/check embedding-boundary
+
       - name: Headless Core Tests
         run: scripts/check core-tests
 
@@ -55,6 +71,9 @@ jobs:
 
       - name: Headless MCP Tests
         run: scripts/check mcp-tests
+
+      - name: Headless Embedding Tests
+        run: scripts/check embedding-tests
 
       - name: Run Rust Unit Tests
         run: scripts/check workspace-tests
