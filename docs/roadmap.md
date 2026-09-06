@@ -1371,14 +1371,59 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           4 em 6.**
 
           **Gate para Fase 4.3D: LIBERADO.**
-  - [ ] **4.3D — Providers remotos opcionais.** Planejada. OpenAI, Gemini, Voyage ou outros
-        aprovados, sempre opt-in: o processo `noteit-embed` separado, que é o único com cliente
-        HTTP e o único que vê a credencial, falando com o Core por AF_UNIX — de modo que a
-        fronteira de rede do MCP e do Core seja **estendida e não afrouxada**. Credenciais, lote,
-        limites de taxa, timeouts, erros tipados, aviso de privacidade, troca de provider e reuso
-        ou reconstrução de índice. Cache persistente é obrigatório aqui, porque no modo remoto
-        reindexar custa dinheiro. Nenhum `AnthropicEmbeddingProvider`: a documentação oficial diz
-        que a Anthropic não tem modelo próprio de embeddings.
+  - [x] **4.3D — Providers remotos opcionais.** OpenAI, Gemini e Voyage, sempre opt-in e sempre
+        nomeados pelo usuário, atendidos pelo processo separado `noteit-embed` — o único componente
+        do produto com cliente HTTP e o único que vê uma credencial. Decisão, medições e o que
+        deliberadamente não foi feito na ADR-060 e em `docs/semantic-retrieval.md` §29.
+
+        **A fronteira foi estendida e não afrouxada, e isso é verificável.** `check-mcp-boundary`,
+        `check-core-boundary`, `check-cli-boundary` e `check-embedding-boundary` **não tiveram uma
+        linha editada** nesta fase e continuam passando; `check-embed-boundary` é novo e diz a outra
+        metade — que o único crate autorizado a ter rede não pode ter store, nota, shell nem forma
+        de escrever arquivo. Medido: HTTP/TLS são **5 crates** no grafo do `noteit-embed` e **0** nos
+        do `noteit-mcp` (158), `noteit-core` (40), `noteit-embedding-local` (117),
+        `noteit-embedding-remote` (44) e `noteit-embed-protocol` (14). O binário do servidor MCP
+        **não cresceu**: ele não linka nada disso.
+
+        **O gate foi testado quebrando o produto.** Dezessete violações injetadas uma a uma; três
+        passaram e viraram correções no gate. A mais instrutiva: tirar comentários com `s|//.*||`
+        transformava `"https://api.openai.com"` em `"https:`, deixando a regra de endpoint solto
+        cega para exatamente o que ela procura.
+
+        **A credencial nunca entra no processo que fala com o agente.** Quem lança o worker monta o
+        ambiente do filho com `env_clear()` e uma allowlist de nove variáveis onde nenhum nome de
+        credencial aparece; o worker lê a própria chave de `credentials.toml` em modo `0600`.
+        Provado lendo `/proc/<pid>/environ` do worker **real**, com `OPENAI_API_KEY`,
+        `GEMINI_API_KEY` e `VOYAGE_API_KEY` setadas no processo que o lançou. Nada de chave em
+        `argv`. ADR-060 registra também por que o Secret Service **não** foi implementado, em vez de
+        omitir a escolha.
+
+        **SSRF fechado por construção.** O protocolo carrega um enum de três variantes e nunca uma
+        URL; os três endpoints são constantes `https` num único arquivo. O caminho que sobrava — o
+        Gemini põe o modelo na URL — está fechado por um alfabeto estreito verificado duas vezes.
+        Zero redirects, com o teste exigindo que o destino de um `Location` receba **zero**
+        requisições; nenhum proxy, e `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` não são consultadas.
+
+        **Cache remoto obrigatório, porque reindexar remoto custa dinheiro.** Formato versionado com
+        digest SHA-256 sobre o arquivo inteiro, escrita atômica pela mesma `write_atomic` das notas,
+        `0600`, sem texto de nota. Medido: indexação a frio de 4 notas custa **5 requisições**; a
+        **segunda sessão com cache válido custa 1** — só a consulta. Uma edição reenvia a nota
+        editada e mais nada.
+
+        **Um defeito real foi encontrado por um teste, não por revisão.** O worker recusava
+        corretamente ligar sobre um arquivo regular no caminho do socket, e então o *spawner*
+        apagava o arquivo na limpeza. Corrigido: este processo não remove o que não criou.
+
+        **O MCP não mudou de papel.** As 16 tools continuam 16, `semantic_match` continua motivo e
+        não número, e a resposta continua sem vetor, sem `source_revision`, sem caminho de cache,
+        sem caminho de socket, sem request ID e sem corpo de erro do fornecedor. `NoteRevision` e
+        `hashing.rs` são byte-idênticos à baseline.
+
+        **O que não foi medido, e é dito:** latência real de rede. Nenhum teste obrigatório fala com
+        um fornecedor, e a linha "consulta com provider remoto — a medir" da §25 continua a medir.
+        Propor um teto a partir de um mock seria derivar um limite do resultado obtido.
+
+        **Gate para Fase 4.3E: LIBERADO.**
   - [ ] **4.3E — Integração do Segundo Cérebro.** Planejada. `noteit_context` publicando o canal de
         recuperação como motivo, superfície de CLI, configuração, estado do índice, ranking
         híbrido, explicabilidade, fallback e comportamento na troca de provider. As 16 tools são

@@ -30,14 +30,24 @@ implementação do Note-it.
 > via [`noteit_context`](#noteit_context), totalizando 16 tools (veja [`docs/second-brain.md`](second-brain.md)).
 > Desde a Fase 4.3B, a recuperação lexical conta com BM25 em produção. Desde a Fase 4.3C existe um
 > provider de embeddings **local**, e `semantic_match` é alcançável — mas só quando o usuário liga a
-> recuperação semântica na configuração. O padrão de fábrica continua `lexical_only`: nenhum modelo é
-> carregado, nada é baixado e nada sai da máquina.
+> recuperação semântica na configuração. Desde a Fase 4.3D existem também providers **remotos**,
+> sempre opt-in e sempre nomeados pelo usuário, atendidos por um processo separado com o qual este
+> servidor fala por AF_UNIX. O padrão de fábrica continua `lexical_only`: nenhum modelo é carregado,
+> nada é baixado, nenhum worker é iniciado e nada sai da máquina.
+>
+> **O catálogo não cresceu.** As 16 tools da 4.2 continuam sendo as 16, e nenhuma delas expõe
+> detalhe interno do provider remoto: não há `http_request`, `embed_raw`, `provider_request`,
+> `get_api_key` nem `dump_vector`. `semantic_match` continua sendo **motivo e não número**, e uma
+> resposta continua sem vetor, sem `source_revision`, sem caminho de cache, sem caminho de socket,
+> sem request ID do fornecedor e sem corpo de erro dele.
 
 **Não implementado neste servidor, deliberadamente:** MCP Resources, MCP Prompts,
 sampling, elicitation, a extensão MCP Tasks, transporte HTTP/SSE/Streamable HTTP,
 OAuth, servidor remoto e IA interna. Banco vetorial externo permanece fora do produto por decisão
-(ADR-056). O provider de embeddings **local** existe desde a 4.3C, fechado pela 4.3C.R1; os providers
-**remotos** permanecem fora do produto até a Fase 4.3D.
+(ADR-056). Providers de embeddings existem: o **local** desde a 4.3C, e os **remotos** desde a 4.3D
+— estes últimos num processo separado, `noteit-embed`, que é o único componente do produto com
+cliente HTTP. **Este servidor continua sem nenhuma pilha de rede**, e `scripts/check-mcp-boundary`
+continua reprovando qualquer uma, sem uma linha editada nesta fase.
 
 ### Duas fronteiras, dois protocolos
 

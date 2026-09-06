@@ -2897,3 +2897,305 @@ pelo nome.
   razão certa: trocaria proveniência e moveria vetores para ganhar segundos.
 * **Não tocou em `NoteRevision`.** Nem no valor, nem na implementação, nem no
   arquivo.
+
+## ADR-060: O provider remoto é um processo, e a credencial nunca entra no que fala com o agente
+
+**Contexto.** A 4.3D acrescenta providers remotos de embeddings. O pedido é
+simples de dizer e caro de fazer direito: gerar embeddings na OpenAI, no Gemini
+ou na Voyage exige um cliente HTTP, uma pilha TLS e uma chave de API — e os três
+teriam que existir em algum processo do Note-it.
+
+O processo óbvio é o que já está lá. `noteit-mcp` fala com o agente, chama o
+`noteit-core`, e acrescentar `reqwest` a ele seria uma linha de manifesto.
+
+Essa linha é exatamente o que a ADR-047 e o `check-mcp-boundary` existem para
+impedir, e o motivo não é estético. O `noteit-mcp` é o processo que um host de
+IA inicia, que fala um protocolo com um agente, e que tem autoridade para
+gravar notas. Dar a ele um cliente HTTP genérico é dar ao agente, por
+transitividade, uma capacidade de requisição arbitrária; e pôr a credencial ali
+é pô-la no mesmo espaço de endereçamento que o texto das notas e que a
+superfície que responde ao agente.
+
+**Decisão.** Um processo separado, `noteit-embed`, que é **o único componente
+do produto com cliente HTTP e o único que vê uma credencial**. O `noteit-core`
+o alcança por AF_UNIX — a mesma família que a autoridade de escrita já usa e
+que a ADR-047 já permite por nome.
+
+```text
+noteit-mcp ─────► noteit-core ─────► EmbeddingProvider
+  sem HTTP          sem HTTP            │
+                                        ├── noteit-embedding-local
+                                        │     em processo, sem socket nenhum
+                                        │
+                                        └── noteit-embedding-remote
+                                                 │  AF_UNIX, sem HTTP
+                                                 ▼
+                                          noteit-embed
+                                                 │  HTTPS
+                                                 ▼
+                                          api do fornecedor
+```
+
+A fronteira foi **estendida e não afrouxada**, e isso é verificável em vez de
+afirmado: `check-mcp-boundary`, `check-core-boundary`, `check-cli-boundary` e
+`check-embedding-boundary` não tiveram uma linha editada nesta fase e continuam
+passando. O `check-embed-boundary` é novo e diz a outra metade — que o único
+crate autorizado a ter rede não pode ter mais nada.
+
+Medido: HTTP/TLS são **5 crates** no grafo do `noteit-embed` e **0** no do
+`noteit-mcp` (158 crates), do `noteit-core` (40), do `noteit-embedding-local`
+(117), do `noteit-embedding-remote` (44) e do `noteit-embed-protocol` (14).
+
+### A biblioteca HTTP, e cada feature desligada com motivo
+
+`ureq` 3.4 com `default-features = false, features = ["rustls"]`.
+
+| ligado | por quê |
+| --- | --- |
+| `rustls` sobre `ring` | TLS em Rust, e `ring` **já está no grafo** desde a 4.3C.R1 para verificar o artefato. Nenhuma segunda pilha criptográfica, nenhum OpenSSL, nenhum `native-tls`, nenhuma dependência de biblioteca TLS do sistema |
+
+| desligado | por quê |
+| --- | --- |
+| `gzip` (ligado por padrão upstream) | o tamanho **descomprimido** não é o número a que o teto de leitura se aplica. Uma resposta de embeddings é uma lista de floats: não há o que economizar e há um limite a borrar |
+| `cookies` | uma API de embeddings não tem sessão. Um cookie jar é estado que o fornecedor escreve neste processo |
+| `socks-proxy` | nenhum proxy é usado — veja abaixo |
+| `json` | as respostas são lidas com `serde_json` a partir de um corpo lido sob teto explícito, nunca por um método de conveniência cujo limite é o padrão de outra pessoa |
+| `charset` | um corpo JSON é UTF-8 por definição; transcodificação é um parser que este processo não precisa |
+| `native-tls`, `platform-verifier`, `brotli`, `vendored` | idem |
+
+`ureq` não implementa HTTP/2 nem HTTP/3, então `h2`, `h3` e `quinn` estão
+**ausentes do grafo** e não meramente sem uso. Onze crates novas ao todo:
+`ureq`, `ureq-proto`, `rustls`, `rustls-webpki`, `rustls-pki-types`,
+`webpki-roots`, `http`, `httparse`, `percent-encoding`, `subtle`, `utf8-zero`,
+`zeroize`. Custo de binário: `noteit-embed` tem 3 447 320 bytes em release, e o
+`noteit-mcp` **não cresceu** — ele não linka nada disso.
+
+### Endurecimento de HTTP, item a item
+
+| decisão | valor | por quê |
+| --- | --- | --- |
+| redirects | **zero** | um endpoint de embeddings que responde 302 é um endpoint tomado, e segui-lo manda o `Authorization` e o texto da nota para o que o `Location` disser. Testado com 301, 302, 303, 307 e 308, e a asserção que importa não é qual erro volta: é que o destino do `Location` recebeu **zero** requisições |
+| proxy | **nenhum**, e o ambiente não é consultado | `ureq` lê `ALL_PROXY`, `HTTPS_PROXY` e `HTTP_PROXY` ao montar um agente padrão. Um proxy escolhido por variável ambiental veria o texto das notas e terminaria o TLS que este módulo existe para validar. `.proxy(None)` é explícito, e o gate reprova se sumir |
+| TLS | validado | não existe `danger_accept_invalid_certs` em lugar nenhum do workspace, e o gate procura por ele e por cinco outras construções equivalentes em todo `*.rs` |
+| raízes de certificado | `webpki-roots` | o conjunto da Mozilla compilado junto, em vez do armazém do sistema. Determinístico entre máquinas, e coerente com não usar proxy: uma CA corporativa de interceptação não funcionaria, e não deveria |
+| timeouts | 10 s conexão, 60 s chamada, 120 s operação | separados porque são perguntas diferentes. O prazo total é o que impede um `Retry-After` de esticar uma requisição indefinidamente |
+| teto de corpo | 8 MiB, explícito | o padrão do `ureq` é 10 MiB; declarar o nosso põe o número no arquivo que depende dele |
+| status | tratado por nós | `http_status_as_error(false)`, porque um 429 é decisão de política e não uma string de erro a recusar depois |
+
+### SSRF: fechado por construção, não por filtro
+
+O protocolo AF_UNIX carrega um **enum de três variantes** e nunca uma URL, um
+host, uma porta ou um header. Não existe campo onde `http://169.254.169.254/`
+caiba. Onde cada provider fica é uma constante compilada no worker.
+
+Sobra um caminho, e ele é real: **o Gemini põe o nome do modelo na URL**
+(`/v1beta/models/{model}:embedContent`). Um nome com `/`, `..`, `?`, `#`, `@`
+ou um escape percentual sairia do endpoint fixado enquanto toda a frase "o host
+é uma constante" continuasse tecnicamente verdadeira. Daí `is_model_token`:
+alfabeto `[A-Za-z0-9._-]`, no máximo 64 caracteres, `.` inicial e `..`
+recusados. Aplicado no protocolo **e de novo** no adaptador, imediatamente
+antes de a rota ser montada, para que aquele arquivo esteja correto sozinho.
+
+### Credenciais: a decisão que a §10 deixou "a confirmar"
+
+**Ordem de resolução, dentro do `noteit-embed` e só dele:**
+
+1. o ambiente **do próprio worker** (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
+   `VOYAGE_API_KEY` — os nomes que os próprios fornecedores documentam);
+2. `$XDG_CONFIG_HOME/note-it/credentials.toml`, que precisa ser arquivo
+   regular deste usuário em modo `0600`.
+
+E uma que está deliberadamente ausente: **quem lança o worker não repassa
+chave nenhuma.** O spawner monta o ambiente do filho com `env_clear()` e devolve
+uma allowlist de nove variáveis — `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, os
+três `XDG_*` e `SSL_CERT_FILE` — em que nenhum nome de credencial aparece. Logo
+a fonte 1 está **vazia** no caminho normal do produto, e o arquivo é o que
+responde.
+
+É isso que torna *"o `noteit-mcp` não recebe `OPENAI_API_KEY`"* um fato sobre o
+código: aquele processo nunca lê uma credencial, então não tem o que repassar; e
+mesmo que o ambiente **dele** carregue uma — porque alguém exportou no shell que
+iniciou o host — o clear-and-allowlist impede que chegue ao filho por herança. A
+prova é dinâmica: o teste seta as três variáveis neste processo, lança o worker
+real e lê `/proc/<pid>/environ`.
+
+A fonte 1 sobrevive porque uma pessoa rodando `noteit-embed` à mão — um smoke
+test opt-in contra uma API real — precisa de alguma entrada, e a variável do
+próprio fornecedor é a menos surpreendente.
+
+**Por que não o Secret Service.** A especificação prefere keyring a arquivo, e
+esta build não implementa keyring. O motivo é a forma deste processo em
+particular: ele é o único componente com pilha TLS e rota para a internet, e sua
+justificativa inteira é ter superfície de ataque pequena o bastante para ser
+lida. Um cliente de keyring acrescenta uma conexão D-Bus, uma superfície de IPC
+e uma subárvore de dependências exatamente a esse processo. O arquivo restrito
+tem cerca de sessenta linhas e cada uma das suas recusas é testável sem
+barramento de sessão. Fica registrado como troca deliberada e revisitável, não
+como omissão: uma fonte de keyring entra como **terceira** entrada sem mudar
+mais nada.
+
+**O tipo.** `Credential` não tem `Debug` derivado, nem `Display`, nem
+`Serialize`, e tem um único acessor de nome deliberadamente desconfortável
+(`expose`), de modo que uma revisão encontra todo uso com um grep. O `Debug`
+manual imprime uma constante. Nada de chave em `argv`.
+
+**As recusas do arquivo**, cada uma testada: symlink recusado e **não seguido**
+(o modo de um symlink não é o modo do que ele aponta); diretório recusado; dono
+diferente recusado; qualquer bit fora de `0600` recusado — `chmod 644` numa
+chave não é um aviso a imprimir e seguir em frente, é uma chave que as outras
+contas da máquina leem; arquivo acima de 64 KiB recusado antes de ser lido;
+valor vazio é ausência; e valor com byte de controle recusado, porque é assim
+que se escreve um segundo header controlando só um.
+
+### O protocolo, e o que ele deliberadamente não carrega
+
+Um pedido por conexão. Sem multiplexação não existe a classe de bug "resposta
+entregue ao pedido errado" — que anexaria o sentido de um parágrafo à
+identidade de outro — e "quantos pedidos em voo" vira "quantas conexões", que é
+um contador.
+
+Enquadramento: quatro bytes de comprimento big-endian, depois o JSON. **O
+comprimento é comparado com o teto antes de qualquer buffer ser reservado**, que
+é a razão inteira de um protocolo com prefixo de tamanho precisar de um limite
+em vez de um comentário.
+
+Tetos: quadro 8 MiB, 64 textos por pedido, 32 KiB por texto, 512 KiB no total,
+dimensão máxima 4096. Verificados **nas duas pontas**: o cliente antes de
+enviar, para que um bug vire recusa e não cobrança, e o worker ao receber,
+porque um cliente é entrada como qualquer outra.
+
+O pedido carrega `protocol_version`, `provider`, `model`, `role`, `dimension` e
+`texts`. **Não existe campo** onde caiba caminho de nota, `NoteDocument`, front
+matter, `note_id`, `source_revision`, token, URL ou header — a minimização da
+§19 é propriedade da forma da mensagem e não de uma verificação em tempo de
+execução.
+
+Assimetria deliberada de rigor: **`deny_unknown_fields` no nosso fio, tolerância
+no do fornecedor.** As duas pontas do nosso são este repositório, e um campo que
+um lado não conhece é divergência de versão para falhar; a resposta do
+fornecedor é o esquema *dele*, ele acrescenta campos sem perguntar, e recusar
+uma resposta por ela ter ganhado `usage.prompt_tokens_details` seria um cliente
+que quebra numa terça-feira. O rigor fica onde pertence: em validar cada valor
+que saiu.
+
+### Providers, contra a documentação oficial lida em 2026-09-06
+
+| | OpenAI | Gemini | Voyage |
+| --- | --- | --- | --- |
+| endpoint | `POST /v1/embeddings` | `POST /v1beta/models/{model}:batchEmbedContents` | `POST /v1/embeddings` |
+| auth | `authorization: Bearer` | `x-goog-api-key` | `authorization: Bearer` |
+| documento/consulta | **não documentado** | `taskType`, só no `-001` | `input_type` |
+| dimensão | `dimensions` | `outputDimensionality` | `output_dimension` |
+| índice na resposta | `data[].index` | **nenhum** — posicional | `data[].index` |
+| lote documentado | nenhum declarado | nenhum declarado | 1 000 |
+
+Três fatos que a implementação registra em vez de compensar:
+
+* **a OpenAI não documenta distinção documento/consulta**, então a receita 1
+  prepara os dois papéis identicamente para esse fornecedor — em vez de inventar
+  um prefixo `passage: ` com que o modelo não foi treinado;
+* **o `gemini-embedding-2` não aceita `taskType`** (a documentação diz que o
+  contexto de tarefa vai no prompt), então ele não recebe o parâmetro. Enviá-lo
+  seria um 400 em toda requisição;
+* **a resposta do Gemini não tem índice**, então a ordem é posicional. Isso não
+  é garantia mais fraca se for dita: a contagem é comparada com o número de
+  pedidos e uma resposta de outro tamanho é recusada inteira. O que não se faz é
+  fingir que um índice foi validado onde não havia nenhum.
+
+Onde há índice, uma resposta embaralhada é **remontada com validação**, e índice
+duplicado, ausente ou fora de faixa **rejeita a resposta inteira** — escolher a
+primeira de duas linhas dizendo índice 3 é precisamente a falha que o lote
+atômico existe para impedir.
+
+### Rate limit e timeouts
+
+429, 500, 502, 503 e 504 são repetidos; **400, 401, 403, 404, 408 e todo o resto
+do 4xx não são**. Repetir uma requisição ruim é fazer uma pergunta já
+respondida, e repetir uma chave errada três vezes é como uma conta é bloqueada.
+
+Teto de três tentativas, nunca laço infinito. Backoff exponencial a partir de
+500 ms, teto de 8 s, com jitter derivado do PID e da tentativa — determinístico
+o bastante para um teste prever a faixa, e diferente o bastante para dois
+processos do Note-it não repetirem em uníssono.
+
+`Retry-After` é obedecido **só na forma numérica** e até o teto. A forma de data
+exige concordar com o fornecedor sobre a hora atual, e um relógio errado
+transforma "espere três segundos" em "espere até terça". Um `Retry-After: 3600`
+numa consulta de um aplicativo de notas não é coisa a fazer: é coisa a
+interromper.
+
+A suíte **não dorme**: a política calcula uma duração e entrega a um relógio
+injetado, que num teste registra em vez de esperar.
+
+### Cache remoto: o formato, e por que ele é obrigatório
+
+A §15 mediu os dois modos e recusou fingir que são a mesma pergunta.
+Reconstruir um índice local custa CPU que ninguém cobra; reconstruir um remoto
+custa tokens e latência. Então o provider local não tem cache e este é
+**obrigatório**: o usuário não pode pagar para embutir o store inteiro a cada
+início.
+
+```text
+[8]  magic          b"NTIRVEC\0"
+[4]  format_version big-endian u32
+[4]  header_len     big-endian u32
+[N]  header         JSON canônico: espaço, chunker, dimensão, contagem, registros
+[M]  corpo          contagem × dimensão floats little-endian
+[32] digest         SHA-256 de todos os bytes acima
+```
+
+**Digest e não só tamanho.** Uma verificação de tamanho pega truncamento e lixo
+no fim e não diz nada sobre um bit trocado no meio. Testado com um byte
+invertido na metade do arquivo.
+
+Escrita atômica por `noteit_core::atomic_file::write_atomic`, que passou a ser
+público **em vez de reimplementado**: uma segunda resposta para "quando um
+arquivo é substituído" discordaria da primeira na primeira edição de uma delas.
+O ponto de commit continua sendo o rename.
+
+Permissões `0600` no arquivo e `0700` no diretório: um vetor é derivado de nota
+privada, e derivado não é "não sensível".
+
+Conteúdo permitido: vetor, `note_id`, `source_revision`, `chunk_id`,
+`chunker_version` e o `EmbeddingSpaceId` inteiro. Proibido: texto da nota,
+snippet, front matter, credencial, requisição ou resposta HTTP. Verificado por
+busca de sentinel **nos bytes do arquivo**, não por revisão da struct.
+
+`source_revision` está lá porque é **chave de cache** — o que diz que um vetor é
+sobre a nota como ela está agora. Nunca é publicado, nunca chega a um agente e
+nunca autoriza uma gravação.
+
+### Retenção: dois espaços, e o número é uma decisão
+
+`$XDG_CACHE_HOME/note-it/semantic/<digest do espaço>/index.bin`, um diretório
+por `EmbeddingSpaceId`, nunca dentro de `notes/`.
+
+**Guardar no máximo dois espaços.** O caso realista para guardar mais que o
+ativo é alguém experimentando um provider contra outro e voltando, o que precisa
+de exatamente um outro. Guardar todos cresce sem limite; apagar todos na troca é
+a *outra* maneira de cobrar duas vezes de alguém, porque no modo remoto cada
+espaço foi pago uma vez. Ordem de grandeza para dimensionar: mil notas de dois
+parágrafos a 1 536 dimensões são ~12 MB por espaço, então o teto de dois é ~24 MB.
+
+A limpeza nunca remove um diretório que este módulo não criou — um nome que não
+é um digest não é nosso — e nunca toca numa nota.
+
+### O que esta decisão deliberadamente não fez
+
+* **Não afrouxou nenhum gate existente.** Os quatro anteriores estão
+  byte-idênticos aos do commit anterior e continuam passando.
+* **Não criou `AnthropicProvider`.** A documentação oficial diz, verbatim,
+  *"Anthropic does not offer its own embedding model"*.
+* **Não implementou Secret Service**, e diz acima por quê.
+* **Não expôs base URL configurável ao usuário.** O redirecionamento existe
+  atrás da feature `test-endpoints`, que é compilada para fora de toda build
+  entregue, e o gate reprova se ela virar feature padrão.
+* **Não publicou score, vetor, `source_revision`, caminho de cache, caminho de
+  socket, request ID do fornecedor nem corpo de erro** na resposta MCP. O
+  catálogo continua com 16 tools e `semantic_match` continua sendo motivo e não
+  número.
+* **Não tocou em `NoteRevision` nem em `hashing.rs`.** `git diff` contra a
+  baseline nesses dois arquivos é vazio.
+* **Não fez tuning de BM25.** `k1` e `b` continuam 1.2 e 0.75.
+* **Não normaliza vetores.** Eles são usados com a norma que vieram, que é o
+  correto tanto para um fornecedor que normaliza quanto para um que não.

@@ -138,6 +138,93 @@ de log ou uma mensagem de pânico não publique o que a representação guarda.
 `backups/` — e indexar é leitura: não altera arquivo, front matter, `updated_at`,
 `created_at`, revisão nem `mtime`.
 
+## O provider remoto: um processo, e a credencial nunca entra no que fala com o agente
+
+**Continua desligado de fábrica, e agora há duas coisas que ele não faz.** Uma
+instalação nova, e uma que atualizou e nunca foi configurada, continuam em
+`lexical_only`: nenhum modelo, nenhum artefato, nenhum índice, **nenhum processo
+worker e nenhuma busca por credencial**. Ligar a semântica sem dizer mais nada
+dá o provider **local**; um provider remoto exige que o usuário o **nomeie**.
+Nenhuma leitura da configuração permite que uma versão nova comece a enviar
+notas para fora.
+
+**O texto sai da máquina no modo remoto, e o produto diz isso antes de qualquer
+outra coisa.** `noteit status` com um provider remoto imprime, acima do resto:
+*"trechos das suas notas são enviados para \<provider\> para gerar
+embeddings"*, e logo abaixo *"um índice local não torna privado um embedding
+gerado remotamente"*. A superfície de máquina carrega o mesmo campo. Chamar de
+privado um índice que está em disco local mas cujos vetores foram gerados fora
+seria criar falsa sensação de localidade, e é a coisa que esta seção existe para
+não deixar acontecer.
+
+**Um processo, e só ele tem rede.** `noteit-embed` é o único componente do
+produto com cliente HTTP e o único que vê uma credencial. O `noteit-mcp` — o
+processo que um host de IA inicia, que fala com um agente e que tem autoridade
+para gravar — continua sem nenhuma pilha de rede: HTTP/TLS são 5 crates no grafo
+do worker e **0** nos grafos do `noteit-mcp`, do `noteit-core`, do
+`noteit-embedding-local`, do `noteit-embedding-remote` e do
+`noteit-embed-protocol`. `scripts/check-embed-boundary` **estende** os quatro
+gates anteriores, que não foram editados nesta fase e continuam reprovando
+exatamente o que sempre reprovaram.
+
+**Nenhuma URL atravessa a fronteira.** O protocolo AF_UNIX carrega um enum de
+três variantes — `openai`, `gemini`, `voyage` — e nunca uma URL, host, porta ou
+header, então não existe campo onde `http://169.254.169.254/` caiba. Onde cada
+provider fica é constante compilada no worker, e todas as três são `https`.
+Sobrava um caminho, e ele está fechado: o endpoint do Gemini põe o **modelo na
+URL**, então um nome de modelo com `/`, `..`, `?`, `#`, `@` ou escape percentual
+é recusado por um alfabeto estreito, verificado no protocolo e de novo
+imediatamente antes de a rota ser montada.
+
+**TLS validado, zero redirects, nenhum proxy.** Não existe
+`danger_accept_invalid_certs` em lugar nenhum do workspace, e o gate procura por
+ele e por cinco construções equivalentes. Redirects são **zero**: um endpoint de
+embeddings que responde 302 é um endpoint tomado, e segui-lo mandaria o header
+`Authorization` e o texto da nota para o que o `Location` dissesse — testado com
+301, 302, 303, 307 e 308, exigindo que o destino do `Location` receba **zero**
+requisições. Nenhum proxy é usado e as variáveis `ALL_PROXY`, `HTTPS_PROXY` e
+`HTTP_PROXY` **não são consultadas**, porque um proxy escolhido pelo ambiente
+veria o texto das notas e terminaria o TLS.
+
+**A credencial nunca entra no processo que fala com o agente.** Quem lança o
+worker monta o ambiente do filho com `env_clear()` e devolve uma allowlist de
+nove variáveis em que nenhum nome de credencial aparece; o worker resolve a
+própria chave de `credentials.toml` em modo `0600`, que ele mesmo lê. Provado
+lendo `/proc/<pid>/environ` do worker real, com as três variáveis setadas no
+processo que o lançou. Nada de chave em `argv`, verificado em
+`/proc/<pid>/cmdline`. O tipo `Credential` não tem `Debug` derivado, nem
+`Display`, nem `Serialize`.
+
+**O arquivo de credenciais é recusado em vez de tolerado.** Symlink recusado e
+**não seguido**; diretório recusado; dono diferente recusado; qualquer bit fora
+de `0600` recusado — `chmod 644` numa chave não é um aviso a imprimir e seguir
+adiante, é uma chave que as outras contas da máquina leem; acima de 64 KiB
+recusado antes de ser lido; valor com byte de controle recusado, porque é assim
+que se escreve um segundo header controlando só um.
+
+**O fornecedor não escreve a mensagem pública do Note-it.** Todo status HTTP,
+corpo de erro, request ID e frase de biblioteca vira uma palavra de um conjunto
+fechado antes de atravessar a fronteira do processo, e o MCP publica um `code` e
+nunca uma frase. Verificado por varredura: 42 saídas de caminhos de falha —
+nove status × três providers, corpo não-JSON, JSON truncado, vetor nulo, corpo
+hostil, resposta truncada, hangup, worker sem credencial, o quadro serializado
+que iria no fio — buscando dois sentinels e o request ID do fornecedor.
+
+**Um vetor remoto continua sendo dado privado.** O cache vive em
+`$XDG_CACHE_HOME/note-it/semantic/`, nunca dentro de `notes/`, `trash/` ou
+`backups/`; arquivo em `0600` e diretório em `0700`; e guarda vetor, `note_id`,
+`source_revision`, `chunk_id`, `chunker_version` e o espaço — **nunca** texto da
+nota, snippet, front matter, credencial ou corpo HTTP, verificado por busca de
+sentinel nos bytes do arquivo. Perdê-lo custa o dinheiro de refazê-lo e nunca
+uma nota, e limpá-lo nunca apaga uma.
+
+**O worker não alcança o store.** Ele não depende do `noteit-core`, não tem
+campo onde caiba um caminho de nota, não nomeia nota nem revisão, não escreve
+arquivo e não inicia processo — cada um reprovado separadamente pelo gate.
+Provado dinamicamente: com oito notas ao lado dele, `mtime`, `ctime` e tamanho
+de todas são idênticos antes e depois, e nenhum descritor aberto aponta para
+dentro de `notes/`.
+
 ## Uma mensagem pública é uma frase que o servidor escreveu
 
 Todo `message` que o MCP publica é uma constante escolhida pelo `code`, e isso é

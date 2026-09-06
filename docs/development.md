@@ -115,6 +115,22 @@ compositor e sem barramento de sessão**. Rodá-los dentro da sessão ambiente n
 provaria nada, por isso as variáveis são removidas. Para o MCP isso não é um
 detalhe: é exatamente o ambiente em que um host o inicia.
 
+`embed-boundary`, `embed-tests` e `remote-tests` chegaram com a 4.3D.
+`embed-boundary` é o gate que diz a outra metade da fronteira de rede: os quatro
+anteriores continuam recusando HTTP, TLS e socket em `noteit-mcp`,
+`noteit-core` e `noteit-embedding-local` — **sem uma linha editada** —, e este
+acrescenta que o único crate autorizado a ter rede, `noteit-embed`, não pode ter
+store, nota, shell nem forma de escrever arquivo.
+
+`embed-tests` roda com `--features test-endpoints`, que redireciona os três
+endpoints fixados para um servidor HTTP local. A feature é compilada para fora
+de toda build entregue, então a suíte que precisa dela pede por nome; sem a
+flag, o arquivo imprime um **skip explícito** em vez de rodar zero testes em
+silêncio. **Nenhum teste obrigatório fala com um fornecedor**, e o CI passa numa
+máquina sem chave e sem rede — isso é o ponto, não uma limitação. O smoke real
+contra uma API paga é `#[ignore]`, exige `NOTEIT_REMOTE_SMOKE=1` e uma chave no
+ambiente, e manda um único texto sintético declarado no próprio teste.
+
 `embedding-tests` roda sem rede e sem artefato: a suíte do provider local
 constrói seus próprios artefatos sintéticos — um tokenizer minúsculo e uma tabela
 de dezessete linhas — e prova identidade, recusa e vetores sem os 489 MiB do

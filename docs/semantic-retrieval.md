@@ -1,10 +1,11 @@
 # Recuperação semântica — especificação
 
 Decidido na Fase 4.3A, corrigido nas R1, R1.1 e R1.2, implementado no lexical
-pela 4.3B e **no provider local pela 4.3C, fechado pela 4.3C.R1**. Este documento
-é a especificação que as subfases de implementação consomem, e a régua contra a
-qual elas são medidas. Justificativa e medições nas ADR-056, ADR-057 e ADR-058; a
-ADR-059 registra a decisão corretiva da 4.3C.R1.
+pela 4.3B, **no provider local pela 4.3C, fechado pela 4.3C.R1**, e **nos
+providers remotos opcionais pela 4.3D**. Este documento é a especificação que as
+subfases de implementação consomem, e a régua contra a qual elas são medidas.
+Justificativa e medições nas ADR-056, ADR-057 e ADR-058; a ADR-059 registra a
+decisão corretiva da 4.3C.R1, e a ADR-060 a arquitetura remota da 4.3D.
 
 O corpus de avaliação está em [`retrieval-corpus.json`](retrieval-corpus.json), e
 a posição, consulta por consulta, do motor de antes do BM25 está congelada em
@@ -13,7 +14,7 @@ a posição, consulta por consulta, do motor de antes do BM25 está congelada em
 ## Estado: o que existe em código, e o que ainda é especificação
 
 A distinção importa, porque um documento que descreve tudo no presente vira uma
-promessa que ninguém fez. Em 2026-09-06, depois da 4.3C.R1:
+promessa que ninguém fez. Em 2026-09-06, depois da 4.3D:
 
 | | estado | onde |
 | --- | --- | --- |
@@ -30,15 +31,22 @@ promessa que ninguém fez. Em 2026-09-06, depois da 4.3C.R1:
 | **ciclo de vida do índice: carga única, reuso, incremental (§15, §16)** | **implementado (4.3C)** | `noteit-mcp/src/semantic.rs` |
 | **`Reason::SemanticMatch`, alcançável quando o usuário liga** | **implementado (4.3C)** | `context.rs`, `noteit-mcp/src/contract.rs` |
 | **`SemanticStatus` publicado no `noteit_context`** | **implementado (4.3C)** | `noteit-mcp/src/contract.rs` |
-| providers remotos, credenciais, `noteit-embed` (§8, §9, §10) | **especificação** | 4.3D |
-| cache vetorial em disco (§15.1) | **especificação**, e continua sem existir | 4.3D |
+| **`noteit-embed`, o único processo com cliente HTTP (§9)** | **implementado (4.3D)** | `noteit-embed/` |
+| **adaptadores OpenAI, Gemini e Voyage (§19)** | **implementado (4.3D)** | `noteit-embed/src/provider/` |
+| **`RemoteProvider` sobre AF_UNIX, e o protocolo (§4, §8)** | **implementado (4.3D)** | `noteit-embedding-remote/`, `noteit-embed-protocol/` |
+| **credenciais fora do `noteit-mcp` (§10)** | **implementado (4.3D)** | `noteit-embed/src/credential.rs`, ADR-060 |
+| **erros tipados de provider (§11)** | **implementado (4.3D)** | `noteit-core/src/embedding.rs` |
+| **cache vetorial em disco, versionado e atômico (§15.1)** | **implementado (4.3D)** | `noteit-embedding-remote/src/cache.rs` |
 | ANN, banco vetorial, score publicado | **não implementado, por decisão** | ADR-056 |
 
 **O padrão de fábrica não mudou e não muda por versão.** Uma instalação nova, e
 uma instalação que atualizou e nunca foi configurada, continuam em
 `lexical_only`: nenhum modelo é carregado, nenhum artefato é lido, nenhum índice
-é construído e nada é baixado. O que a 4.3C acrescentou foi **o que acontece
-quando o usuário liga**, e ligar continua sendo um ato dele.
+é construído, nada é baixado, **nenhum processo worker é iniciado e nenhuma
+credencial é procurada**. O que a 4.3C acrescentou foi *o que acontece quando o
+usuário liga*, e a 4.3D acrescentou *que ele pode ligar para fora* — as duas
+continuam sendo atos dele. Um provider remoto exige que ele o **nomeie**:
+`provider: local` continua sendo o padrão dentro de `mode = "semantic"`.
 
 O que o Note-it está construindo não é uma IA local, nem um cliente da OpenAI,
 nem um cliente do Gemini. É **uma memória semântica independente de fornecedor,
@@ -569,6 +577,16 @@ Ordem de resolução proposta, a confirmar na subfase que implementar:
 
 Nunca implementar armazenamento inseguro "só para o protótipo".
 
+> **Confirmado pela 4.3D — ADR-060 e §29.4.** A ordem implementada é (1) o
+> ambiente **do próprio worker** e (2) `credentials.toml` em modo `0600`; o
+> keyring **não** foi implementado, e a ADR diz por quê em vez de omitir. O que
+> a implementação acrescentou à proposta acima é a parte que a torna verificável:
+> **quem lança o worker não repassa credencial nenhuma.** O ambiente do filho é
+> montado com `env_clear()` e uma allowlist de nove variáveis onde nenhum nome
+> de credencial aparece, então (1) está vazia no caminho normal do produto e o
+> arquivo é o que responde. É isso que faz de "a credencial nunca entra no
+> `noteit-mcp`" um fato lido de `/proc/<pid>/environ` e não uma intenção.
+
 **O cliente MCP não precisa saber qual credencial o Note-it usa**, e não há tool
 que a devolva.
 
@@ -581,6 +599,15 @@ ProviderError::Unavailable        ProviderError::InvalidResponse
 ProviderError::Authentication     ProviderError::ModelUnavailable
 ProviderError::RateLimited        ProviderError::DimensionMismatch
 ```
+
+> **Implementado pela 4.3D** como variantes de `SemanticError` em
+> `noteit-core/src/embedding.rs`: `Unavailable`, `InvalidResponse`,
+> `DimensionMismatch`, `SpaceMismatch`, `InvalidVector`, `ChunkerMismatch`,
+> `Unindexable`, e as cinco novas `Authentication`, `ModelUnavailable`,
+> `RateLimited`, `Timeout` e `Cancelled`. **Nenhuma carrega payload**: a frase do
+> fornecedor, o request ID e o corpo HTTP são exatamente o que não pode viajar, e
+> uma variante sem campo não carrega um por mais que seja formatada. A matriz
+> completa de "erro externo → interno → público" está na §29.6.
 
 Nunca `format!("{external_error}")` numa resposta MCP. É a lição da 4.2R.R1
 aplicada antes do defeito existir: **a biblioteca ou o fornecedor não escreve a
@@ -884,6 +911,10 @@ decisão não é a mesma para os dois modos, e a especificação não finge que 
 | persistência em v1 | não | **sim** |
 
 ### Quando houver cache em disco
+
+> **Implementado pela 4.3D**, e só para o modo remoto — o local continua sem
+> cache, pela medição desta mesma seção. Formato, atomicidade, permissões e
+> validação estão na §29.5.
 
 * Em `$XDG_CACHE_HOME/note-it/`, **nunca** dentro de `notes/`.
 * Cabeçalho de validade que se autoidentifica: versão do formato,
@@ -1606,3 +1637,170 @@ Testes sintéticos de ranking, com valores construídos para atacar a fronteira:
 
 O corpus já carrega quatro deles como dados: `n17` (prompt injection), `n18`
 (Unicode hostil), `n19` e `n20` (nota vazia e mínima).
+
+---
+
+## 29. Os providers remotos, como foram implementados (4.3D)
+
+Tudo nesta seção é **código**. Onde um número diverge de um orçamento, o número
+está aqui e o orçamento não foi movido. A decisão inteira está na ADR-060.
+
+### 29.1 A arquitetura, e os quatro gates que não foram tocados
+
+```text
+noteit-mcp ─────► noteit-core ─────► EmbeddingProvider
+  sem HTTP          sem HTTP            │
+  158 crates        40 crates           ├── noteit-embedding-local   117 crates
+  0 HTTP/TLS        0 HTTP/TLS          │     em processo, sem socket nenhum
+                                        │
+                                        └── noteit-embedding-remote   44 crates
+                                                 │  AF_UNIX, 0 HTTP/TLS
+                                                 ▼
+                                          noteit-embed                40 crates
+                                                 │  5 crates de HTTP/TLS
+                                                 ▼
+                                          api do fornecedor
+```
+
+A frase que justifica o processo separado é *"a fronteira foi estendida e não
+afrouxada"*, e ela é verificável em vez de afirmada: `check-mcp-boundary`,
+`check-core-boundary`, `check-cli-boundary` e `check-embedding-boundary` **não
+tiveram uma linha editada nesta fase** e continuam passando. O
+`check-embed-boundary` é novo e diz a outra metade — que o único crate
+autorizado a ter rede não pode ter mais nada.
+
+**O gate foi testado quebrando o produto.** Dezessete violações injetadas uma a
+uma; três passaram e viraram correções no próprio gate. A mais instrutiva: a
+remoção de comentários por `s|//.*||` transformava `"https://api.openai.com"` em
+`"https:`, deixando a regra de endpoint solto cega para exatamente o que ela
+procura.
+
+### 29.2 O protocolo AF_UNIX
+
+Um pedido por conexão. Sem multiplexação não existe a classe de bug "resposta
+entregue ao pedido errado" — que anexaria o sentido de um parágrafo à identidade
+de outro —, e "quantos pedidos em voo" vira "quantas conexões", que é um
+contador.
+
+```text
+[4] comprimento big-endian   ← comparado com o teto ANTES de alocar
+[N] JSON
+```
+
+| teto | valor |
+| --- | --- |
+| quadro | 8 MiB |
+| textos por pedido | 64 |
+| bytes por texto | 32 KiB |
+| bytes de texto no total | 512 KiB |
+| dimensão | 4096 |
+| requisições em voo no worker | 4 |
+
+Verificados **nas duas pontas**: o cliente antes de enviar, para que um bug vire
+recusa e não cobrança, e o worker ao receber, porque um cliente é entrada como
+qualquer outra.
+
+O pedido carrega `protocol_version`, `provider`, `model`, `role`, `dimension` e
+`texts`. **Não existe campo** onde caiba caminho de nota, `NoteDocument`, front
+matter, `note_id`, `source_revision`, token, URL ou header.
+
+### 29.3 SSRF, e o único caminho que sobrava
+
+O protocolo carrega um enum de três variantes e nunca uma URL. Onde cada
+provider fica é constante compilada no worker, e todas as três são `https`.
+
+Sobra um caminho real: **o Gemini põe o modelo na URL**
+(`/v1beta/models/{model}:embedContent`). Um nome com `/`, `..`, `?`, `#`, `@`
+ou escape percentual sairia do endpoint fixado enquanto a frase "o host é uma
+constante" continuasse tecnicamente verdadeira. `is_model_token` recusa tudo
+isso, e é aplicado no protocolo **e de novo** no adaptador, imediatamente antes
+de a rota ser montada.
+
+### 29.4 Credenciais
+
+Resolução, dentro do `noteit-embed` e só dele: (1) o ambiente do próprio worker;
+(2) `$XDG_CONFIG_HOME/note-it/credentials.toml`, arquivo regular deste usuário
+em modo `0600`. Keyring **não** implementado — ADR-060 diz por quê.
+
+**Quem lança não repassa.** `env_clear()` mais uma allowlist de nove variáveis:
+`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+`XDG_RUNTIME_DIR`, `SSL_CERT_FILE`. Provado dinamicamente: o teste seta as três
+variáveis de credencial **neste** processo, lança o worker real e lê
+`/proc/<pid>/environ` — nenhuma chega, o sentinel não aparece sob nenhum nome, e
+tudo que está lá está na allowlist.
+
+`Credential` não tem `Debug` derivado, nem `Display`, nem `Serialize`. Nada de
+chave em `argv`, verificado em `/proc/<pid>/cmdline`.
+
+### 29.5 O cache remoto
+
+```text
+[8]  magic  b"NTIRVEC\0"   [4] format_version   [4] header_len
+[N]  header JSON canônico: espaço, chunker, dimensão, contagem, registros
+[M]  corpo: contagem × dimensão floats little-endian
+[32] SHA-256 de todos os bytes acima
+```
+
+Digest e não só tamanho: uma verificação de tamanho pega truncamento e lixo no
+fim e não diz nada sobre um bit trocado no meio. Escrita atômica por
+`noteit_core::atomic_file::write_atomic` — a mesma da 3.4R.2, tornada pública
+em vez de reimplementada. Arquivo `0600`, diretório `0700`.
+
+Guarda vetor, `note_id`, `source_revision`, `chunk_id`, `chunker_version` e o
+`EmbeddingSpaceId`. **Não** guarda texto, snippet, front matter, credencial nem
+corpo HTTP — verificado por busca de sentinel nos bytes do arquivo.
+
+Retenção: **dois espaços**, e o número é uma decisão registrada. Um diretório
+por `EmbeddingSpaceId`. A limpeza nunca remove diretório que este módulo não
+criou, e nunca toca numa nota.
+
+### 29.6 A matriz de erros: externo → interno → público
+
+| o que aconteceu | `WireError` | `SemanticError` | o que o MCP publica |
+| --- | --- | --- | --- |
+| DNS, connect, TLS, conexão morta | `Unavailable` | `Unavailable` | `semantic_status: unavailable` |
+| connect/read/deadline | `Timeout` | `Timeout` | idem |
+| 401, 403 | `Authentication` | `Authentication` | idem |
+| sem credencial | `CredentialMissing` | `Authentication` | idem |
+| 404, modelo removido | `ModelUnavailable` | `ModelUnavailable` | idem |
+| 429, 500/502/503/504 após retry | `RateLimited` | `RateLimited` | idem |
+| 400, não-JSON, JSON truncado, esquema errado, vetor ausente, NaN/±Inf, contagem errada, índice duplicado/ausente/fora de faixa | `InvalidResponse` | `InvalidResponse` | idem |
+| dimensão errada | `DimensionMismatch` | `DimensionMismatch` | idem |
+| cancelado | `Cancelled` | `Cancelled` | idem |
+| quadro inválido | `Protocol` | `InvalidResponse` | idem |
+
+Sob `semantic_required`, a coluna pública vira `ErrorCode::SemanticUnavailable`
+— **um código, não uma frase**, e o mesmo para toda a coluna. O fornecedor não
+escolhe a mensagem pública do Note-it, e nada da coluna esquerda atravessa a
+fronteira do processo.
+
+### 29.7 O que foi medido
+
+| grandeza | medido |
+| --- | --- |
+| indexação a frio de 4 notas, worker mock sem atraso | 5 requisições (4 documentos + 1 consulta) |
+| **segunda sessão com cache válido** | **1 requisição** — só a consulta |
+| edição de uma nota, reabertura | a nota editada e a consulta; as outras três não são reenviadas |
+| `ping` equivalente durante indexação remota com 40 ms de atraso por requisição | responde em < 120 ms, com `semantic_status == succeeded` na outra thread |
+| quatro consultas concorrentes num store sem índice | uma indexação; ≤ 4 textos de documento embutidos |
+| binário `noteit-embed`, release | 3 447 320 bytes |
+| binário `noteit-mcp`, release | 12 571 680 bytes, **sem crescer** — ele não linka nada de HTTP |
+| crates novas | 11 |
+
+O atraso de 40 ms é **latência simulada do provider** e está nomeado como tal: a
+parcela medida é a da outra thread, não a dele.
+
+**Nenhum orçamento novo foi inventado.** A §25 tem uma linha "consulta com
+provider remoto — a medir; latência de rede domina", e ela continua a medir:
+esta fase não mediu latência de rede real, porque nenhum teste obrigatório fala
+com um fornecedor. Propor um teto a partir de um mock seria derivar um limite do
+resultado obtido, que é o que a §89 proíbe.
+
+### 29.8 O que a 4.3D deliberadamente não fez
+
+Não afrouxou gate nenhum. Não criou `AnthropicProvider`. Não implementou Secret
+Service. Não expôs base URL ao usuário. Não publicou vetor, score,
+`source_revision`, caminho de cache, caminho de socket, request ID nem corpo de
+erro. Não tocou em `NoteRevision` nem em `hashing.rs` — `git diff` contra a
+baseline nesses dois arquivos é vazio. Não fez tuning de BM25. Não normaliza
+vetores: eles são usados com a norma que vieram.

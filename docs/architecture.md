@@ -29,6 +29,35 @@ Note-it tem uma autoridade de domínio/persistência headless e adaptadores em t
                                             └───────────────────────────────┘
 ```
 
+Desde a 4.3D existe um segundo provider e, com ele, o **único processo do
+produto que fala com a internet**:
+
+```text
+noteit-mcp ─────► noteit-core ─────► EmbeddingProvider
+  sem HTTP          sem HTTP            │
+                                        ├── noteit-embedding-local
+                                        │     em processo, sem socket nenhum
+                                        │
+                                        └── noteit-embedding-remote
+                                                 │  cliente AF_UNIX, sem HTTP
+                                                 ▼
+                                          noteit-embed      ← processo separado
+                                                 │  o ÚNICO com cliente HTTP
+                                                 │  o ÚNICO que vê a credencial
+                                                 ▼
+                                          OpenAI / Gemini / Voyage
+```
+
+A separação não é elegância: é a única forma de ter provider remoto **sem** pôr
+uma pilha HTTP no grafo do `noteit-mcp`, **sem** pôr a credencial no processo
+que fala com o agente, e **sem** dar ao MCP a capacidade genérica de fazer uma
+requisição. Medido: HTTP/TLS são 5 crates no grafo do `noteit-embed` e **0** nos
+grafos do `noteit-mcp` (158 crates), `noteit-core` (40),
+`noteit-embedding-local` (117), `noteit-embedding-remote` (44) e
+`noteit-embed-protocol` (14). `scripts/check-embed-boundary` **estende** os
+quatro gates anteriores, que não foram editados nesta fase e continuam passando.
+ADR-060.
+
 A direção da dependência é imposta por Cargo: o pacote desktop (`note-it`), o pacote CLI (`noteit-cli`) e o pacote MCP (`noteit-mcp`) dependem de `noteit-core`, enquanto `noteit-core` tem zero dependências de desktop, de CLI ou de MCP.
 
 Desde a 4.3C há um quinto crate, `noteit-embedding-local`, e a seta aponta na direção que importa: **ele depende do Core, e o Core não sabe que ele existe.** `noteit-core` define o contrato `EmbeddingProvider` e raciocina nos termos dele; o tokenizer, o formato dos pesos e a média que produz um vetor vivem do outro lado de uma fronteira de crate, que um tipo não atravessa por acidente. `noteit-mcp` e `noteit-cli` dependem dos dois — o servidor para construir o provider quando a configuração pede, a CLI só para saber onde o artefato deveria estar. Estar ligado ao binário não é estar carregado: no padrão de fábrica nenhum artefato é lido e nenhum modelo ocupa memória, e é isso que torna ligar a semântica uma questão de configuração e não de qual binário alguém instalou. `scripts/check-embedding-boundary` prova que esse crate não tem HTTP, TLS, socket, runtime de inferência, nenhuma forma de escrever um arquivo e nenhum identificador do store. `scripts/check-core-boundary`, `scripts/check-cli-boundary` e `scripts/check-mcp-boundary` evitam que bibliotecas GUI (GTK, GDK, WebKitGTK, layer-shell, Wayland, Niri) entrem em qualquer componente headless; o do MCP verifica ainda que nenhuma pilha de rede, nenhum acesso direto ao sistema de arquivos e nenhuma escrita em stdout apareçam ali — e, desde a 4.1R1.1, cobre também o `noteit-core`, para onde o adaptador MCP delega quase tudo: nenhuma API de Internet nos dois crates, e o socket Unix da autoridade permitido apenas no Core. Consulte `docs/mcp.md` e a ADR-047.
@@ -40,6 +69,12 @@ Desde a 4.3C há um quinto crate, `noteit-embedding-local`, e a seta aponta na d
 - `noteit-embedding-local/src/artifact.rs`: os dois arquivos do artefato, lidos e recusados por todos os motivos pelos quais podem ser recusados — ausente, não regular (um symlink é recusado, não seguido), ilegível, vazio, grande demais — e depois hasheados. `identity_of` monta o `ArtifactManifestV1` e deriva a identidade **dos bytes que foram lidos**, nunca de um nome nem de um digest que alguém informou.
 - `noteit-embedding-local/src/table.rs`: a tabela de embeddings, lida em posição dentro do mesmo buffer cujo SHA-256 virou a identidade — nada é convertido ou copiado entre o hash e a aritmética. `pool` é a média das linhas, normalizada em L2; um texto do qual não sobra linha nenhuma devolve `None`, porque a origem não tem direção.
 - `noteit-embedding-local/src/lib.rs`: `LocalProvider`, a receita versionada (§26.3 de `docs/semantic-retrieval.md`), o artefato fixado e o diretório XDG onde ele mora. Não tem campo onde um caminho de store ou uma autoridade de escrita caiba, e é por isso que "o provider não pode gravar uma nota" não precisa de verificação em tempo de execução.
+
+## Componentes do provider remoto (4.3D, Rust)
+
+- `noteit-embed-protocol/`: as duas mensagens que atravessam a fronteira de processo, os tetos delas e o enquadramento. Está nos **dois** lados, então é um serializador e nada mais: sem I/O, sem socket, sem HTTP, sem relógio. Um pedido nomeia um *provider* — três variantes de enum — e nunca uma URL, host, porta ou header; e não tem campo onde caiba caminho de nota, `NoteDocument`, front matter ou revisão. `is_model_token` recusa nome de modelo que pudesse desviar uma URL, porque o endpoint do Gemini põe o modelo no caminho.
+- `noteit-embedding-remote/`: implementa `EmbeddingProvider` falando AF_UNIX com o worker. **Sem crate de HTTP e sem TLS** — é cliente do worker, não de um fornecedor. Também segura o ciclo de vida do worker, que monta o ambiente do filho com `env_clear()` e uma allowlist onde nenhum nome de credencial aparece, e o cache vetorial versionado, atômico e restrito ao dono.
+- `noteit-embed/`: o worker. O único componente com cliente HTTP e o único que vê uma credencial. Endpoints fixados como constantes `https`, zero redirects, nenhum proxy ambiental, três timeouts, teto de corpo de leitura, e um adaptador por fornecedor onde toda regra específica de vendor mora. Não depende do `noteit-core`, não nomeia nota nem revisão, não escreve arquivo e não inicia processo.
 
 ## Componentes do Core (`noteit-core`, Rust)
 
