@@ -5,6 +5,7 @@ members = [
     "noteit-mcp",
     "noteit-embedding-local",
     "noteit-embed-protocol",
+    "noteit-embed",
 ]
 resolver = "2"
 

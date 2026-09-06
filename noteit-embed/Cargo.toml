@@ -1,0 +1,56 @@
+[package]
+name = "noteit-embed"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Note-it's isolated remote embedding worker: the only component with an HTTP client"
+publish = false
+
+[[bin]]
+name = "noteit-embed"
+path = "src/main.rs"
+
+[dependencies]
+# The two messages and their limits. Shared with the client half, which links
+# into the process that holds the note store — which is exactly why this crate
+# is a serialiser and nothing else.
+noteit-embed-protocol = { path = "../noteit-embed-protocol" }
+# The HTTP client, and the only one in this workspace.
+#
+# `default-features = false, features = ["rustls"]` is the whole audit, and
+# every word of it was chosen against `scripts/check-embed-boundary`:
+#
+#   rustls          TLS in Rust, with `ring` as the provider — the same crate
+#                   `noteit-embedding-local` already verifies the artifact
+#                   with, so the graph gains no second cryptographic stack and
+#                   no OpenSSL, no `native-tls` and no system TLS library.
+#   (no) gzip       on by default upstream, off here. A compressed body's
+#                   decompressed size is not the number the read ceiling is
+#                   applied to, and an embeddings response is floats: there is
+#                   nothing to save and a limit to blur.
+#   (no) cookies    an embeddings API has no session. A cookie jar is state
+#                   the vendor writes into this process.
+#   (no) socks-proxy  and no proxy of any kind is configured — see `http.rs`.
+#   (no) json       responses are parsed with `serde_json` from a body read
+#                   under an explicit byte ceiling, never by a convenience
+#                   method whose limit is somebody else's default.
+#   (no) charset    a JSON body is UTF-8 by definition; transcoding is a
+#                   parser this process does not need.
+#   (no) native-tls, platform-verifier, brotli, vendored
+#
+# HTTP/1.1 only: `ureq` implements no HTTP/2 and no HTTP/3, so `h2`, `h3` and
+# `quinn` are absent from the graph rather than merely unused.
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+# The provider request and response bodies. Already in the workspace graph.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+# A base URL that is not the pinned one, for the mock HTTP server the suite
+# runs against. Off in every shipped build, and `scripts/check-embed-boundary`
+# fails if the binary target ever asks for it: the endpoints a *released*
+# `noteit-embed` can reach are the constants in `endpoint.rs` and nothing else.
+test-endpoints = []
