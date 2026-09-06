@@ -201,6 +201,45 @@ fn weights_swapped_under_the_same_name_are_refused() {
 }
 
 #[test]
+fn weights_with_flipped_bytes_in_the_middle_are_refused() {
+    let home = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+    LocalProvider::load(home.path(), &expectation).expect("the honest artifact loads");
+
+    let mut original = fs::read(home.path().join("model.safetensors")).expect("read");
+    let mid = original.len() / 2;
+    original[mid] ^= 0x55;
+    fs::write(home.path().join("model.safetensors"), &original).expect("write");
+
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::Unexpected
+    );
+}
+
+#[test]
+fn concurrent_threads_loading_the_same_artifact_simultaneously() {
+    let home = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+
+    let p1 = home.path().to_path_buf();
+    let e1 = expectation.clone();
+    let h1 = std::thread::spawn(move || LocalProvider::load(&p1, &e1).expect("thread 1 load"));
+
+    let p2 = home.path().to_path_buf();
+    let e2 = expectation;
+    let h2 = std::thread::spawn(move || LocalProvider::load(&p2, &e2).expect("thread 2 load"));
+
+    let provider1 = h1.join().expect("join 1");
+    let provider2 = h2.join().expect("join 2");
+
+    assert_eq!(provider1.space(), provider2.space());
+    let v1 = provider1.embed_query("chuva").expect("embed 1");
+    let v2 = provider2.embed_query("chuva").expect("embed 2");
+    assert_eq!(v1.vector().components(), v2.vector().components());
+}
+
+#[test]
 fn a_tokenizer_swapped_under_the_same_name_is_refused() {
     let home = tempdir().expect("tempdir");
     let expectation = simple(home.path());

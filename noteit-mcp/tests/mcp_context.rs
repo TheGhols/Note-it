@@ -1150,3 +1150,227 @@ fn parity_between_cli_json_and_mcp_context() {
         assert_eq!(cli_c["matched_text"], mcp_c["matched_text"]);
     }
 }
+
+#[test]
+fn adversarial_parity_between_cli_json_and_mcp_context() {
+    let sandbox = Sandbox::new();
+    let core = sandbox.core();
+
+    // 1. Seed note with 50,000 repetitions (keyword stuffing) and tasks
+    let mut stuffed = noteit_core::model::NoteDocument::new_empty();
+    let repeated_body = "termoexcesso ".repeat(50_000);
+    stuffed.content = format!("Título Recheado\n\n{repeated_body}\n\n- [ ] tarefa recheada\n");
+    stuffed.user_metadata = noteit_core::metadata::NoteMetadata::try_new(
+        vec!["pesquisa".to_string()],
+        vec![noteit_core::NoteProperty {
+            key: "tipo".to_string(),
+            value: "adversarial".to_string(),
+        }],
+    )
+    .expect("metadata");
+    core.storage()
+        .save_note_atomic(&stuffed)
+        .expect("save stuffed");
+
+    // 2. Seed note with hostile Unicode (RTL, ZWJ, combining accents)
+    let mut unicode_doc = noteit_core::model::NoteDocument::new_empty();
+    unicode_doc.content = "# Nota Unic\u{0301}ode\n\n\u{202E}Texto Invertido\u{202C} com emoji 👩\u{200D}\u{1F4BB} e acento ac\u{0327}\u{0303}ao.\n\n- [ ] tarefa unicode\n".to_string();
+    unicode_doc.user_metadata = noteit_core::metadata::NoteMetadata::try_new(
+        vec!["pesquisa".to_string()],
+        vec![noteit_core::NoteProperty {
+            key: "tipo".to_string(),
+            value: "unicode".to_string(),
+        }],
+    )
+    .expect("metadata");
+    core.storage()
+        .save_note_atomic(&unicode_doc)
+        .expect("save unicode");
+
+    // 3. Seed note with SSRF URLs
+    let mut ssrf_doc = noteit_core::model::NoteDocument::new_empty();
+    ssrf_doc.content = "# Documento SSRF\n\nEndpoint: http://169.254.169.254/latest/meta-data/ e http://metadata.google.internal\n".to_string();
+    core.storage()
+        .save_note_atomic(&ssrf_doc)
+        .expect("save ssrf");
+
+    // 4. Seed note with exact phrase match
+    let mut normal_doc = noteit_core::model::NoteDocument::new_empty();
+    normal_doc.content =
+        "# Documento Normal\n\ntermoexcesso frase exata aqui para teste.\n".to_string();
+    core.storage()
+        .save_note_atomic(&normal_doc)
+        .expect("save normal");
+
+    // 5. Seed damaged symlinks to generate warnings
+    let outside = sandbox.root.join("alvo_fora.md");
+    std::fs::write(&outside, "corpo fora").expect("write");
+    for _ in 0..5 {
+        let _ = std::os::unix::fs::symlink(
+            &outside,
+            sandbox
+                .store_paths()
+                .notes_dir
+                .join(format!("{}.md", noteit_core::Uuid::new_v4())),
+        );
+    }
+
+    let cli_bin = support::mcp_bin()
+        .parent()
+        .expect("parent dir")
+        .join("noteit");
+
+    // Case 1: Query matching stuffed and exact with tag, property, tasks, and extreme limit
+    {
+        let mut client = McpClient::start(&sandbox);
+        let mcp_res = context(
+            &mut client,
+            json!({
+                "query": "termoexcesso",
+                "tags": ["pesquisa"],
+                "properties": [{ "key": "tipo", "value": "adversarial" }],
+                "include_tasks": true,
+                "limit": 99999999
+            }),
+        );
+        client.finish();
+
+        let mut cli_cmd = std::process::Command::new(&cli_bin);
+        sandbox.apply_env(&mut cli_cmd);
+        cli_cmd.args([
+            "--json",
+            "contexto",
+            "termoexcesso",
+            "--tag",
+            "pesquisa",
+            "--propriedade",
+            "tipo=adversarial",
+            "--tarefas",
+            "--limite",
+            "99999999",
+        ]);
+        let output = cli_cmd.output().expect("cli output");
+        assert!(
+            output.status.success(),
+            "CLI stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cli_json: Value = serde_json::from_slice(&output.stdout).expect("valid cli json");
+        assert_eq!(cli_json["status"], "ok");
+        let cli_data = &cli_json["data"];
+
+        assert_eq!(cli_data["semantic_status"], mcp_res["semantic_status"]);
+        assert_eq!(cli_data["truncated"], mcp_res["truncated"]);
+        assert_eq!(cli_data["omitted_count"], mcp_res["omitted_count"]);
+        assert_eq!(
+            cli_data["warnings_truncated"],
+            mcp_res["warnings_truncated"]
+        );
+        assert_eq!(
+            cli_data["omitted_warning_count"],
+            mcp_res["omitted_warning_count"]
+        );
+
+        let mcp_c = mcp_res["candidates"].as_array().expect("mcp candidates");
+        let cli_c = cli_data["candidates"].as_array().expect("cli candidates");
+        assert_eq!(cli_c.len(), mcp_c.len());
+        assert!(!cli_c.is_empty());
+
+        for (c, m) in cli_c.iter().zip(mcp_c.iter()) {
+            assert_eq!(c["note_id"], m["note_id"]);
+            assert_eq!(c["label"], m["label"]);
+            assert_eq!(c["snippet"], m["snippet"]);
+            assert_eq!(c["reasons"], m["reasons"]);
+            assert_eq!(c["matched_text"], m["matched_text"]);
+            assert_eq!(c["tasks"], m["tasks"]);
+        }
+
+        // Warnings count parity
+        let mcp_w = mcp_res["warnings"].as_array().expect("mcp warnings");
+        let cli_w = cli_data["warnings"].as_array().expect("cli warnings");
+        assert_eq!(cli_w.len(), mcp_w.len());
+
+        // Scan forbidden fields
+        for res in [cli_data, &mcp_res] {
+            let serialized = res.to_string();
+            for forbidden in [
+                "revision",
+                "expected_revision",
+                "current_revision",
+                "etag",
+                "score",
+                "similarity",
+                "confidence",
+                "vector",
+                "embedding",
+                "path",
+                "filename",
+                "alvo_fora",
+            ] {
+                assert!(
+                    !serialized.contains(forbidden),
+                    "leak of {forbidden}: {serialized}"
+                );
+            }
+        }
+    }
+
+    // Case 2: Query matching Unicode & combining characters
+    {
+        let mut client = McpClient::start(&sandbox);
+        let mcp_res = context(
+            &mut client,
+            json!({
+                "query": "Invertido emoji acao",
+                "include_tasks": true,
+                "limit": 10
+            }),
+        );
+        client.finish();
+
+        let mut cli_cmd = std::process::Command::new(&cli_bin);
+        sandbox.apply_env(&mut cli_cmd);
+        cli_cmd.args([
+            "--json",
+            "contexto",
+            "Invertido emoji acao",
+            "--tarefas",
+            "--limite",
+            "10",
+        ]);
+        let output = cli_cmd.output().expect("cli output");
+        assert!(output.status.success());
+        let cli_json: Value = serde_json::from_slice(&output.stdout).expect("valid cli json");
+        assert_eq!(cli_json["status"], "ok");
+        let cli_data = &cli_json["data"];
+
+        let mcp_c = mcp_res["candidates"].as_array().expect("mcp candidates");
+        let cli_c = cli_data["candidates"].as_array().expect("cli candidates");
+        assert_eq!(cli_c.len(), mcp_c.len());
+        for (c, m) in cli_c.iter().zip(mcp_c.iter()) {
+            assert_eq!(c["note_id"], m["note_id"]);
+            assert_eq!(c["snippet"], m["snippet"]);
+            assert_eq!(c["reasons"], m["reasons"]);
+        }
+    }
+
+    // Case 3: Overlong query > 512 chars: both refuse without leaking query
+    {
+        let long_query = "X".repeat(600);
+        let mut client = McpClient::start(&sandbox);
+        let refused_mcp = client.call("noteit_context", json!({ "query": &long_query }));
+        client.finish();
+        assert!(refused_mcp.is_error());
+        assert_eq!(refused_mcp.status(), "error");
+        assert_eq!(refused_mcp.code(), Some("invalid_input"));
+        assert!(!refused_mcp.raw.to_string().contains(&long_query));
+
+        let mut cli_cmd = std::process::Command::new(&cli_bin);
+        sandbox.apply_env(&mut cli_cmd);
+        cli_cmd.args(["--json", "contexto", &long_query]);
+        let output = cli_cmd.output().expect("cli output");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains(&long_query));
+    }
+}

@@ -72,6 +72,8 @@ struct FakeWorker {
     delay: Duration,
     /// What to answer instead of vectors, when a test wants a failure.
     refuse: Arc<Mutex<Option<WireError>>>,
+    /// An optional dimension override to simulate a lying or mismatched worker.
+    override_dimension: Arc<Mutex<Option<usize>>>,
     /// The value every component of a returned vector is offset by, so two
     /// configurations can be told apart by their numbers.
     flavour: f32,
@@ -92,6 +94,7 @@ impl FakeWorker {
             stop: Arc::new(AtomicBool::new(false)),
             delay,
             refuse: Arc::new(Mutex::new(None)),
+            override_dimension: Arc::new(Mutex::new(None)),
             flavour,
         });
         let serving = Arc::clone(&worker);
@@ -129,9 +132,22 @@ impl FakeWorker {
             let _ = write_frame(&mut stream, &EmbedResponseV1::error(error));
             return;
         }
-        let vectors: Vec<Vec<f32>> = request.texts.iter().map(|text| self.embed(text)).collect();
-        let response = EmbedResponseV1::answer(DIMENSION as u32, vectors)
-            .unwrap_or_else(EmbedResponseV1::error);
+        let dim = self
+            .override_dimension
+            .lock()
+            .expect("dim")
+            .unwrap_or(DIMENSION);
+        let vectors: Vec<Vec<f32>> = request
+            .texts
+            .iter()
+            .map(|text| {
+                let mut v = self.embed(text);
+                v.resize(dim, self.flavour + 0.5);
+                v
+            })
+            .collect();
+        let response =
+            EmbedResponseV1::answer(dim as u32, vectors).unwrap_or_else(EmbedResponseV1::error);
         let _ = write_frame(&mut stream, &response);
         let _ = stream.shutdown(std::net::Shutdown::Write);
     }
@@ -168,6 +184,10 @@ impl FakeWorker {
 
     fn refuse_with(&self, error: Option<WireError>) {
         *self.refuse.lock().expect("refuse") = error;
+    }
+
+    fn override_dimension(&self, dim: Option<usize>) {
+        *self.override_dimension.lock().expect("override_dimension") = dim;
     }
 
     fn stop(&self) {
@@ -945,5 +965,83 @@ fn no_vector_and_no_provenance_reaches_the_answer() {
             !published.to_lowercase().contains(forbidden),
             "the answer publishes `{forbidden}`: {published}"
         );
+    }
+}
+
+// ============================================================ surface 2 audit
+
+#[test]
+fn a_worker_returning_wrong_dimension_is_handled_cleanly() {
+    let world = World::new(Duration::ZERO, 0.0);
+    world.worker.override_dimension(Some(16)); // Expected DIMENSION is 8
+    let store_auto = world.store(world.session(SemanticFallbackPolicy::Automatic));
+    let (status, semantic, candidates) = world.ask(&store_auto, "pressao alta");
+    assert_eq!(status, Status::Ok);
+    assert_eq!(
+        semantic,
+        SemanticStatusView::Unavailable,
+        "wrong dimension must degrade to unavailable under Automatic"
+    );
+    assert!(candidates > 0, "lexical candidates must still be returned");
+
+    // Under SemanticRequired, wrong dimension must result in an error
+    let store_req = world.store(world.session(SemanticFallbackPolicy::SemanticRequired));
+    let answer_req = answer_for(&store_req, "pressao alta");
+    assert_eq!(answer_req.status, Status::Error);
+    assert_eq!(answer_req.semantic_status, SemanticStatusView::NotRequested);
+    assert!(answer_req.candidates.is_empty());
+}
+
+#[test]
+fn a_worker_returning_nan_or_invalid_response_is_handled_cleanly() {
+    let world = World::new(Duration::ZERO, 0.0);
+    world.worker.refuse_with(Some(WireError::InvalidResponse));
+    let store_auto = world.store(world.session(SemanticFallbackPolicy::Automatic));
+    let (status, semantic, candidates) = world.ask(&store_auto, "pressao alta");
+    assert_eq!(status, Status::Ok);
+    assert_eq!(semantic, SemanticStatusView::Unavailable);
+    assert!(candidates > 0);
+
+    let store_req = world.store(world.session(SemanticFallbackPolicy::SemanticRequired));
+    let answer_req = answer_for(&store_req, "pressao alta");
+    assert_eq!(answer_req.status, Status::Error);
+}
+
+#[test]
+fn hostile_ssrf_and_credential_payloads_in_note_content_remain_inert() {
+    let world = World::with_notes(
+        Duration::ZERO,
+        0.0,
+        vec![
+            (
+                "SSRF-AWS",
+                "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/\nHost: 169.254.169.254\nAuthorization: Bearer sk-live-1234567890",
+            ),
+            (
+                "SSRF-GCP",
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/\nMetadata-Flavor: Google",
+            ),
+            (
+                "SSRF-Local",
+                "http://127.0.0.1:8080/admin/delete\nhttp://localhost:6379/flushall",
+            ),
+        ],
+    );
+    let store = world.store(world.session(SemanticFallbackPolicy::Automatic));
+    let (status, semantic, candidates) = world.ask(&store, "security-credentials metadata");
+    assert_eq!(status, Status::Ok);
+    assert_eq!(semantic, SemanticStatusView::Succeeded);
+    assert!(candidates > 0);
+
+    // Verify worker received plain text chunks over AF_UNIX socket without any out-of-band request
+    let sent = world.worker.texts();
+    assert!(sent.iter().any(|t| t.contains("169.254.169.254")));
+    assert!(sent.iter().any(|t| t.contains("metadata.google.internal")));
+
+    // Verify response envelope contains no leaked paths or internal socket details
+    let answer = answer_for(&store, "security-credentials");
+    let json = serde_json::to_string(&answer).expect("json");
+    for forbidden in ["/proc/", "/etc/passwd", ".sock", "socket"] {
+        assert!(!json.contains(forbidden), "leak of {forbidden}: {json}");
     }
 }
