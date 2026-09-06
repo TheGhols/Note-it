@@ -1,9 +1,10 @@
 # Recuperação semântica — especificação
 
 Decidido na Fase 4.3A, corrigido nas R1, R1.1 e R1.2, implementado no lexical
-pela 4.3B e **no provider local pela 4.3C**. Este documento é a especificação que
-as subfases de implementação consomem, e a régua contra a qual elas são medidas.
-Justificativa e medições nas ADR-056, ADR-057 e ADR-058.
+pela 4.3B e **no provider local pela 4.3C, fechado pela 4.3C.R1**. Este documento
+é a especificação que as subfases de implementação consomem, e a régua contra a
+qual elas são medidas. Justificativa e medições nas ADR-056, ADR-057 e ADR-058; a
+ADR-059 registra a decisão corretiva da 4.3C.R1.
 
 O corpus de avaliação está em [`retrieval-corpus.json`](retrieval-corpus.json), e
 a posição, consulta por consulta, do motor de antes do BM25 está congelada em
@@ -12,7 +13,7 @@ a posição, consulta por consulta, do motor de antes do BM25 está congelada em
 ## Estado: o que existe em código, e o que ainda é especificação
 
 A distinção importa, porque um documento que descreve tudo no presente vira uma
-promessa que ninguém fez. Em 2026-09-05, depois da 4.3C:
+promessa que ninguém fez. Em 2026-09-06, depois da 4.3C.R1:
 
 | | estado | onde |
 | --- | --- | --- |

@@ -35,8 +35,9 @@ implementação do Note-it.
 
 **Não implementado neste servidor, deliberadamente:** MCP Resources, MCP Prompts,
 sampling, elicitation, a extensão MCP Tasks, transporte HTTP/SSE/Streamable HTTP,
-OAuth, servidor remoto e IA interna. Banco vetorial externo, provedores de embeddings reais (locais ou remotos)
-e modelos permanecem fora do produto até as Fases 4.3C e 4.3D.
+OAuth, servidor remoto e IA interna. Banco vetorial externo permanece fora do produto por decisão
+(ADR-056). O provider de embeddings **local** existe desde a 4.3C, fechado pela 4.3C.R1; os providers
+**remotos** permanecem fora do produto até a Fase 4.3D.
 
 ### Duas fronteiras, dois protocolos
 
