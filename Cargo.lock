@@ -1273,6 +1273,7 @@ name = "noteit-mcp"
 version = "0.1.0"
 dependencies = [
  "noteit-core",
+ "noteit-embed-protocol",
  "noteit-embedding-local",
  "noteit-embedding-remote",
  "rmcp",

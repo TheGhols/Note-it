@@ -62,4 +62,7 @@ schemars = "1"
 
 [dev-dependencies]
 noteit-core = { path = "../noteit-core", features = ["test-support"] }
+# The wire, so the suite's fake worker speaks the protocol byte for byte rather
+# than a convenient approximation of it.
+noteit-embed-protocol = { path = "../noteit-embed-protocol" }
 tempfile = "3.10"

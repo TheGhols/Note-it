@@ -20,7 +20,13 @@ on:
 # `gcc` is named explicitly rather than left to arrive as somebody's transitive
 # dependency: since 4.3C.R1 the artifact is verified with `ring`, whose build
 # compiles BoringSSL's assembly, so a C toolchain is a stated requirement of
-# this build and not an accident of the image.
+# this build and not an accident of the image. Since 4.3D the same `ring` is
+# also rustls' cryptographic provider inside `noteit-embed`, so the requirement
+# is now load-bearing in two places rather than one.
+#
+# The remote worker's suite runs here and needs **no network and no key**: it
+# drives a mock HTTP server on loopback. `embed-tests` passing on a runner with
+# no credentials is the point, not a limitation.
 jobs:
   rust-check:
     name: Rust Checks & Tests
@@ -63,6 +69,9 @@ jobs:
       - name: Embedding Dependency Boundary
         run: scripts/check embedding-boundary
 
+      - name: Remote Embedding Worker Boundary
+        run: scripts/check embed-boundary
+
       - name: Headless Core Tests
         run: scripts/check core-tests
 
@@ -74,6 +83,12 @@ jobs:
 
       - name: Headless Embedding Tests
         run: scripts/check embedding-tests
+
+      - name: Remote Worker Tests
+        run: scripts/check embed-tests
+
+      - name: Remote Provider And Protocol Tests
+        run: scripts/check remote-tests
 
       - name: Run Rust Unit Tests
         run: scripts/check workspace-tests

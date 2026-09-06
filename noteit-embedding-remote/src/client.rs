@@ -10,7 +10,6 @@ use noteit_embed_protocol::{
     read_frame, write_frame, EmbedRequestV1, EmbedResponseV1, ProtocolError, ProviderId, Role,
     WireError, MAX_TEXTS, PROTOCOL_VERSION,
 };
-use std::io;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
@@ -125,17 +124,19 @@ pub fn batches(count: usize) -> Vec<std::ops::Range<usize>> {
 /// starting one and without sending a request that could cost money
 /// (§53).
 pub fn socket_is_live(socket: &Path) -> bool {
+    // Connect and hang up. It is the only question a Unix socket answers
+    // cheaply, and the only one worth asking: a path that *exists* says
+    // nothing — a crashed worker leaves exactly that — and a real request
+    // would cost money.
     match UnixStream::connect(socket) {
         Ok(stream) => {
             let _ = stream.shutdown(std::net::Shutdown::Both);
             true
         }
-        Err(error) => {
-            !matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) && false
-        }
+        // Anything else is not live: no such path, nothing listening, or a
+        // permission this process does not have. All three mean "start one",
+        // and none of them means "ask anyway".
+        Err(_) => false,
     }
 }
 

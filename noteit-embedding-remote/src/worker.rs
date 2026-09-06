@@ -33,6 +33,7 @@
 use crate::client::ClientError;
 use noteit_embed_protocol::ProviderId;
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -60,6 +61,21 @@ pub const INHERITED_VARIABLES: [&str; 9] = [
 
 /// How long to wait for the worker to say it is listening.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The worker's socket, inside the runtime directory.
+///
+/// **One name per user session, not one per process.** A name carrying a
+/// process id would give every Note-it process its own worker, which is a
+/// second HTTPS client, a second credential read and a second set of requests
+/// against the same rate limit — for a component whose entire justification is
+/// that there is one of it. The runtime directory is already per-user, mode
+/// `0700` and cleared when the session ends, so the name does not have to
+/// carry the isolation.
+///
+/// [`WorkerHandle::ensure`] therefore *adopts* a live worker rather than
+/// starting a second one beside it, and only a socket with nothing behind it
+/// is replaced (§44, §45).
+pub const SOCKET_NAME: &str = "embed.sock";
 
 /// Why a worker is not available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,10 +113,7 @@ impl WorkerPaths {
             .unwrap_or_else(|| PathBuf::from("noteit-embed"));
         Self {
             binary,
-            // Named by the process so two Note-it instances on one machine do
-            // not fight over one path, and inside the runtime directory, which
-            // is per-user, mode 0700 and cleared with the session.
-            socket: runtime_dir.join(format!("embed-{}.sock", std::process::id())),
+            socket: runtime_dir.join(SOCKET_NAME),
             config_dir,
         }
     }
@@ -151,7 +164,7 @@ impl WorkerHandle {
                 // reported as an available one and its socket does not stay
                 // behind confusing the next question (§45).
                 Ok(Some(_)) => {
-                    let _ = std::fs::remove_file(&running.socket);
+                    remove_if_socket(&running.socket);
                     *guard = None;
                     false
                 }
@@ -161,7 +174,17 @@ impl WorkerHandle {
         }
     }
 
-    /// Makes sure a worker is running, starting one if not.
+    /// Makes sure a worker is reachable, starting one if there is not.
+    ///
+    /// Three answers, in order, and the middle one is the reason this is not
+    /// simply "spawn if we have not":
+    ///
+    /// 1. our own child is alive → use it;
+    /// 2. **somebody's** worker is alive at the path → adopt it. A second
+    ///    Note-it process, or a person running `noteit-embed` by hand, has
+    ///    already paid for the process; starting another would mean two HTTPS
+    ///    clients, two credential reads and two shares of the same rate limit;
+    /// 3. nothing is listening → spawn one.
     pub fn ensure(&self) -> Result<PathBuf, WorkerError> {
         let mut guard = match self.running.lock() {
             Ok(guard) => guard,
@@ -174,15 +197,26 @@ impl WorkerHandle {
                     // Crashed. The socket it left behind is stale, and a stale
                     // socket that looks like a live one is exactly what §46
                     // asks to be impossible.
-                    let _ = std::fs::remove_file(&running.socket);
+                    remove_if_socket(&running.socket);
                     *guard = None;
                 }
             }
+        }
+        if crate::client::socket_is_live(&self.paths.socket) {
+            return Ok(self.paths.socket.clone());
         }
         let running = spawn(&self.paths)?;
         let socket = running.socket.clone();
         *guard = Some(running);
         Ok(socket)
+    }
+
+    /// Whether a worker is reachable at all — ours, or somebody else's.
+    ///
+    /// What a diagnostic should say, as distinct from [`Self::is_running`],
+    /// which is about the child this handle owns.
+    pub fn is_reachable(&self) -> bool {
+        self.is_running() || crate::client::socket_is_live(&self.paths.socket)
     }
 
     /// Stops the worker and leaves nothing behind.
@@ -191,10 +225,14 @@ impl WorkerHandle {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        // Only ever the child this handle started. A worker adopted at step 2
+        // of `ensure` belongs to whoever started it, and killing somebody
+        // else's process on the way out would be this handle deciding the
+        // lifetime of something it does not own.
         if let Some(mut running) = guard.take() {
             let _ = running.child.kill();
             let _ = running.child.wait();
-            let _ = std::fs::remove_file(&running.socket);
+            remove_if_socket(&running.socket);
         }
     }
 
@@ -250,7 +288,7 @@ fn spawn(paths: &WorkerPaths) -> Result<Running, WorkerError> {
     if !ready {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = std::fs::remove_file(&paths.socket);
+        remove_if_socket(&paths.socket);
         return Err(WorkerError::NotReady);
     }
     Ok(Running {
@@ -285,6 +323,26 @@ fn wait_for_ready(child: &mut Child) -> bool {
     receiver
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .unwrap_or(false)
+}
+
+/// Removes a socket this process left behind, and nothing else.
+///
+/// **Never a plain `remove_file`, and the difference is a defect this suite
+/// found.** The worker refuses to bind over a regular file, a directory or a
+/// symlink — §46, and `noteit-embed`'s own tests cover each — but the
+/// spawner used to clean up after a failed start by removing the path
+/// unconditionally. So the worker correctly declined to take somebody else's
+/// object, and then the spawner deleted it anyway.
+///
+/// The check is `symlink_metadata`, so a symlink is judged as a symlink rather
+/// than as whatever it points at.
+fn remove_if_socket(path: &Path) {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_socket() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// The credential variables that must never be forwarded.
@@ -374,13 +432,15 @@ mod tests {
     }
 
     #[test]
-    fn a_socket_path_is_per_process_and_in_the_runtime_directory() {
+    fn the_socket_is_one_per_session_and_lives_in_the_runtime_directory() {
         let paths = WorkerPaths::resolve(
             PathBuf::from("/tmp/config"),
             Path::new("/run/user/1000/note-it"),
         );
-        assert!(paths.socket.starts_with("/run/user/1000/note-it"));
-        assert!(paths
+        assert_eq!(paths.socket, Path::new("/run/user/1000/note-it/embed.sock"));
+        // One name per session and not per process: a name carrying a process
+        // id would give every Note-it process its own HTTPS client.
+        assert!(!paths
             .socket
             .to_string_lossy()
             .contains(&std::process::id().to_string()));

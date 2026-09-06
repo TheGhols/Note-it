@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+#
+# The 4.3D boundary: HTTP and TLS exist in exactly one crate of this workspace,
+# and that crate can do nothing else.
+#
+# This gate **extends** the network boundary rather than relaxing it, which is
+# the whole architectural bet of Phase 4.3D. `check-mcp-boundary` and
+# `check-embedding-boundary` are not edited to permit anything: they still
+# refuse every HTTP, TLS and socket crate in `noteit-mcp`, `noteit-core` and
+# `noteit-embedding-local`, and they still pass unchanged. What this adds is
+# the other half of the sentence — that the one crate which *is* allowed a
+# network is allowed nothing else.
+#
+# Six claims, each of which can be undone by one line somebody meant well by:
+#
+#   1. only noteit-embed has HTTP/TLS      every other crate is checked by name
+#   2. noteit-embed cannot reach the store no noteit-core, no note API, no shell
+#   3. the endpoints are constants          three hosts, one file, https only
+#   4. TLS is validated                     no danger_accept_invalid_certs, anywhere
+#   5. no credential is hardcoded           and none is forwarded to the worker
+#   6. the test redirection is test-only    never a default feature
+#
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+readonly WORKER="noteit-embed"
+readonly WORKER_SRC="noteit-embed/src"
+readonly WORKER_MANIFEST="noteit-embed/Cargo.toml"
+readonly CLIENT="noteit-embedding-remote"
+readonly CLIENT_SRC="noteit-embedding-remote/src"
+readonly PROTOCOL="noteit-embed-protocol"
+readonly PROTOCOL_SRC="noteit-embed-protocol/src"
+
+# Every crate that must NOT have a network stack. `noteit-embed` is deliberately
+# absent, and it is the only absence.
+readonly NO_NETWORK_CRATES=(
+  noteit-core
+  noteit-cli
+  noteit-mcp
+  noteit-embedding-local
+  noteit-embedding-remote
+  noteit-embed-protocol
+)
+
+# The crates that may not appear in a no-network graph, at any depth. The same
+# list `check-mcp-boundary` uses, plus what a TLS stack brings.
+readonly NETWORK_CRATES='^(reqwest|hyper|hyper-util|axum|tower-http|actix-web|warp|rustls|rustls-webpki|rustls-pki-types|webpki-roots|native-tls|openssl|openssl-sys|oauth2|sse-stream|tungstenite|tokio-tungstenite|socket2|mio|quinn|h2|h3|httparse|http|http-body|http-body-util|trust-dns-resolver|hickory-resolver|ureq|ureq-proto|hf-hub|attohttpc|isahc|curl|curl-sys|surf|minreq|ehttp|reqwest-middleware)( |$)'
+
+fail() {
+  printf 'check-embed-boundary: %s\n' "$*" >&2
+  exit 1
+}
+
+# Comments off, URLs intact.
+#
+# The obvious `s|//.*||` is wrong here and was caught by a probe: it turns
+# `"https://api.openai.com"` into `"https:` and so hides the very thing the
+# stray-endpoint rule below is looking for. A `//` that starts a comment is
+# either at the start of a line or preceded by whitespace; the `//` inside a
+# scheme is preceded by a colon.
+strip_comments() {
+  sed -e 's|^[[:space:]]*//.*||' -e 's|[[:space:]]\+//.*||'
+}
+
+# The code the binary is built from: comments off, and `#[cfg(test)]` modules
+# cut away.
+#
+# Comments go because every rule below is about what the program *does*, and
+# the documentation in these crates necessarily discusses the very things the
+# rules forbid — the module comment on `credential.rs` explains why a key must
+# never be written to a file, and that sentence must not be what fails the
+# gate.
+#
+# Test modules go for the reason `check-mcp-boundary` already excludes
+# development dependencies: a suite that drives a process is allowed things the
+# process itself is not. `credential.rs`'s tests legitimately write a
+# credentials file with six different modes to prove five of them are refused,
+# and `socket.rs`'s legitimately put a regular file where a socket should be.
+# None of that is in the shipped binary.
+#
+# `shipped_only` is the cut, and `assert_tests_are_last` is why the cut is safe:
+# without it, a second `#[cfg(test)]` — or shipped code written after the test
+# module — would be a way to put anything at all past every rule here.
+shipped_only() {
+  awk '/^#\[cfg\(test\)\]/ { exit } { print }' "$1"
+}
+
+assert_tests_are_last() {
+  local file="$1" markers
+  markers="$(grep -c '^#\[cfg(test)\]' "$file" || true)"
+  if [ "$markers" -gt 1 ]; then
+    fail "$file has $markers top-level #[cfg(test)] markers; the gate cuts at the first, so a second is a way to hide shipped code behind it."
+  fi
+  [ "$markers" -eq 0 ] && return 0
+  # After the marker, every line must be the test module's: its own header, its
+  # closing brace, a blank line, or indented content. A top-level item at
+  # column zero after it would be shipped code the cut above skipped.
+  local stray
+  stray="$(awk '
+    /^#\[cfg\(test\)\]/ { inside = 1; next }
+    inside && /^[[:space:]]*$/ { next }
+    inside && /^(mod tests \{|\})/ { next }
+    inside && /^[[:space:]]/ { next }
+    inside { print FILENAME ":" FNR ": " $0 }
+  ' "$file")"
+  if [ -n "$stray" ]; then
+    printf '%s\n' "$stray" >&2
+    fail "$file has code at top level after its test module; the gate cuts at #[cfg(test)] and would not have seen it."
+  fi
+}
+
+# Source with its comments taken off and its tests cut away.
+code_of() {
+  local file
+  while IFS= read -r file; do
+    assert_tests_are_last "$file"
+    shipped_only "$file" | strip_comments | sed "s|^|$file: |"
+  done < <(find "$1" -name '*.rs' | sort)
+}
+
+# ---------------------------------------------------------------------------
+# 1. HTTP and TLS live in one crate, and it is not any of the others.
+# ---------------------------------------------------------------------------
+for crate in "${NO_NETWORK_CRATES[@]}"; do
+  tree="$(cargo tree -p "$crate" --edges normal --prefix none)"
+  if grep -Eq "$NETWORK_CRATES" <<<"$tree"; then
+    grep -E "$NETWORK_CRATES" <<<"$tree" >&2
+    fail "$crate pulled in an HTTP or TLS stack. Only $WORKER may have one — that is what the separate process is for."
+  fi
+done
+
+# And the worker must actually still have one. Without this, every rule above
+# is satisfied perfectly by a workspace that deleted the remote provider —
+# passing a boundary check by removing the feature it was written to contain.
+worker_tree="$(cargo tree -p "$WORKER" --edges normal --prefix none)"
+grep -Eq '^ureq( |$)' <<<"$worker_tree" \
+  || fail "$WORKER has no HTTP client; the rules above permit exactly one and this is it."
+grep -Eq '^rustls( |$)' <<<"$worker_tree" \
+  || fail "$WORKER has no TLS stack; a remote provider without TLS is a credential in the clear."
+
+# ---------------------------------------------------------------------------
+# 2. The worker cannot reach the store, spawn anything, or draw a window.
+# ---------------------------------------------------------------------------
+if grep -Eq '^noteit-core( |$)' <<<"$worker_tree"; then
+  fail "$WORKER depends on noteit-core. The worker embeds text; it must not be able to name a note, a revision or a store."
+fi
+if grep -Eq '^(noteit-cli|noteit-mcp|noteit-embedding-local|noteit-embedding-remote)( |$)' <<<"$worker_tree"; then
+  fail "$WORKER depends on another Note-it crate. Its only shared code is $PROTOCOL, which is a serialiser."
+fi
+if grep -Eq '^(rmcp|gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-))( |$)' <<<"$worker_tree"; then
+  fail "$WORKER pulled in an MCP server or a desktop toolkit."
+fi
+if grep -Eq '^(rusqlite|sqlx|sled|redb|notify|inotify)( |$)' <<<"$worker_tree"; then
+  fail "$WORKER pulled in a database or a filesystem watcher."
+fi
+
+worker_code="$(code_of "$WORKER_SRC")"
+
+# No process spawning. It is the other way to get a network, and the other way
+# to get a filesystem.
+if grep -Eq '\b(Command::new|std::process::Command)\b' <<<"$worker_code"; then
+  grep -En '\b(Command::new|std::process::Command)\b' <<<"$worker_code" >&2
+  fail "$WORKER_SRC starts a process."
+fi
+
+# It knows nothing about notes. Checked as words rather than as types, because
+# the point is that these concepts have no way in.
+if grep -Eq '\b(NoteDocument|NoteRevision|NoteItCore|StorageManager|StorePaths|note_id|source_revision|front_matter|visible_text|save_note_atomic|read_note|list_notes)\b' <<<"$worker_code"; then
+  grep -En '\b(NoteDocument|NoteRevision|NoteItCore|StorageManager|StorePaths|note_id|source_revision|front_matter|visible_text|save_note_atomic|read_note|list_notes)\b' <<<"$worker_code" >&2
+  fail "$WORKER_SRC names the note store or a note's identity. It receives text to embed and nothing else."
+fi
+
+# It writes nothing. The credential file and the socket are read and bound; a
+# worker that could create a file could create one in the store.
+if grep -Eq '\b(fs::write|fs::copy|fs::hard_link|File::create|OpenOptions|BufWriter)\b' <<<"$worker_code"; then
+  grep -En '\b(fs::write|fs::copy|fs::hard_link|File::create|OpenOptions|BufWriter)\b' <<<"$worker_code" >&2
+  fail "$WORKER_SRC writes to the filesystem outside its socket."
+fi
+
+# ---------------------------------------------------------------------------
+# 3. The endpoints are constants, in one file, and all three are https.
+# ---------------------------------------------------------------------------
+readonly ENDPOINT_FILE="$WORKER_SRC/endpoint.rs"
+for host in 'api\.openai\.com' 'generativelanguage\.googleapis\.com' 'api\.voyageai\.com'; do
+  grep -Eq "https://$host" "$ENDPOINT_FILE" \
+    || fail "$ENDPOINT_FILE no longer pins $host over https."
+done
+
+# A provider host in *code* anywhere else is a second place a request could be
+# aimed from. Comments are excluded deliberately: each adapter's module
+# documentation cites the official reference it was written against — which is
+# the record §13 asks for — and a rule that forbade naming the vendor in
+# prose would be a rule against documenting the API.
+#
+# `tests/` is excluded by path and only by path: the suite drives a loopback
+# mock and has to be able to assert what it is *not* talking to.
+stray=""
+while IFS= read -r file; do
+  case "$file" in
+    "./$ENDPOINT_FILE") continue ;;
+    */tests/*) continue ;;
+  esac
+  if strip_comments <"$file" \
+      | grep -Eq '(api\.openai\.com|generativelanguage\.googleapis\.com|api\.voyageai\.com)'; then
+    stray="$stray$file"$'\n'
+  fi
+done < <(find . -name '*.rs' -not -path './target/*' -not -path './.git/*' -not -path './node_modules/*' | sort)
+if [ -n "$stray" ]; then
+  printf '%s' "$stray" >&2
+  fail "a provider endpoint appears in code outside $ENDPOINT_FILE; the set of hosts this product can reach is that file and nothing else."
+fi
+
+# No `http://` in the worker's shipped source. A plain-text request to an
+# embeddings API is a credential and a note's text on the wire.
+plaintext=""
+while IFS= read -r file; do
+  if shipped_only "$file" | strip_comments | grep -q 'http://'; then
+    plaintext="$plaintext$file"$'\n'
+  fi
+done < <(find "$WORKER_SRC" -name '*.rs' | sort)
+if [ -n "$plaintext" ]; then
+  printf '%s' "$plaintext" >&2
+  fail "$WORKER_SRC names a plain-text URL in shipped code."
+fi
+
+# ---------------------------------------------------------------------------
+# 4. TLS is validated. Nowhere in this workspace is it turned off.
+# ---------------------------------------------------------------------------
+# Comments are stripped for the same reason as above, and it matters more here
+# than anywhere: `http.rs` and the mock's own module documentation both say, in
+# prose, that `danger_accept_invalid_certs` does not appear in this repository
+# and why. A gate that failed on the sentence explaining the rule would make the
+# rule undocumentable.
+insecure=""
+while IFS= read -r file; do
+  if strip_comments <"$file" \
+      | grep -Eq 'danger_accept_invalid_certs|danger_accept_invalid_hostnames|DangerousClientConfig|dangerous\(\)|set_certificate_verifier|ServerCertVerifier|NoCertificateVerification'; then
+    insecure="$insecure$file"$'\n'
+  fi
+done < <(find . -name '*.rs' -not -path './target/*' -not -path './.git/*' -not -path './node_modules/*' | sort)
+if [ -n "$insecure" ]; then
+  printf '%s' "$insecure" >&2
+  fail "certificate validation is being weakened somewhere in this workspace."
+fi
+
+# And the hardening that is not a dependency: zero redirects, no proxy.
+grep -q 'max_redirects(0)' "$WORKER_SRC/http.rs" \
+  || fail "$WORKER_SRC/http.rs no longer sets max_redirects(0); a 30x would send the Authorization header to whatever the Location said."
+grep -q '\.proxy(None)' "$WORKER_SRC/http.rs" \
+  || fail "$WORKER_SRC/http.rs no longer disables the proxy; ureq reads ALL_PROXY/HTTPS_PROXY/HTTP_PROXY when it builds a default agent, and a proxy sees the note text."
+grep -q 'timeout_connect' "$WORKER_SRC/http.rs" \
+  || fail "$WORKER_SRC/http.rs no longer sets a connect timeout."
+grep -q 'timeout_global' "$WORKER_SRC/http.rs" \
+  || fail "$WORKER_SRC/http.rs no longer sets a whole-operation deadline."
+grep -q '\.limit(MAX_BODY_BYTES)' "$WORKER_SRC/http.rs" \
+  || fail "$WORKER_SRC/http.rs no longer reads the response body under an explicit ceiling."
+
+# The features, stated in one place and checked here, because a convenient
+# `default-features = true` would bring back gzip, cookies and a SOCKS proxy.
+grep -q 'ureq = { version = "3.4", default-features = false, features = \["rustls"\] }' "$WORKER_MANIFEST" \
+  || fail "$WORKER_MANIFEST no longer pins ureq to the minimal, rustls-only feature set."
+manifest_body() { sed -e 's|#.*||' "$WORKER_MANIFEST"; }
+for forbidden in '"gzip"' '"cookies"' '"socks-proxy"' '"native-tls"' '"brotli"' '"charset"' 'openssl'; do
+  if manifest_body | grep -q -- "$forbidden"; then
+    fail "$WORKER_MANIFEST enables \`$forbidden\`."
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# 5. No credential is hardcoded, and none is forwarded to the worker.
+# ---------------------------------------------------------------------------
+# A key-shaped literal in source. The prefixes are the ones the three vendors
+# actually issue, so this catches a real key pasted in far more reliably than a
+# rule about entropy would.
+leaked="$(grep -rEn '"(sk-[A-Za-z0-9]{16,}|pa-[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_-]{16,})"' \
+  --include='*.rs' --include='*.toml' --include='*.md' . \
+  --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules || true)"
+if [ -n "$leaked" ]; then
+  printf '%s\n' "$leaked" >&2
+  fail "something shaped like a real provider key is committed to this repository."
+fi
+
+# The spawner's allowlist must contain no credential name. This is the rule
+# that keeps `noteit-mcp` from receiving one by inheritance.
+spawner="$CLIENT_SRC/worker.rs"
+grep -q 'env_clear()' "$spawner" \
+  || fail "$spawner no longer clears the worker's environment; a key in this process would reach the worker by inheritance."
+# The declaration itself, and not every later mention of its name: the tests in
+# that file legitimately list the credential variables in order to assert they
+# are *not* on it.
+inherit_list="$(awk '/^pub const INHERITED_VARIABLES/ { inside = 1 } inside { print } inside && /^\];/ { exit }' "$spawner")"
+[ -n "$inherit_list" ] || fail "$spawner no longer declares INHERITED_VARIABLES."
+for name in OPENAI_API_KEY GEMINI_API_KEY VOYAGE_API_KEY; do
+  if grep -q "$name" <<<"$inherit_list"; then
+    fail "$spawner forwards $name to the worker."
+  fi
+done
+# And the list must be an allowlist rather than everything: a `for (name, value)
+# in std::env::vars()` in the spawn path would satisfy the rule above and
+# forward the key anyway.
+if grep -Eq 'std::env::vars\(\)|env::vars\(\)' <<<"$(shipped_only "$spawner")"; then
+  fail "$spawner iterates the whole environment; the worker's must be built from a named list."
+fi
+
+# The two crates that both know the credential file must agree about it. They
+# are deliberately not allowed to depend on each other — that is the whole
+# point of the split — so the agreement is checked here instead of shared.
+for token in 'credentials.toml' 'OPENAI_API_KEY' 'GEMINI_API_KEY' 'VOYAGE_API_KEY'; do
+  grep -q -- "$token" "$WORKER_SRC/credential.rs" \
+    || fail "$WORKER_SRC/credential.rs no longer names \`$token\`."
+  grep -rq -- "$token" "$CLIENT_SRC/" \
+    || fail "$CLIENT_SRC no longer names \`$token\`; the diagnostic and the worker would disagree about where a key lives."
+done
+
+# The credential type may not be printable. A `Debug` derive on it is how a key
+# reaches a log line, a panic message or a test snapshot.
+if grep -qE '#\[derive\([^)]*Debug[^)]*\)\]\s*$' <(grep -B2 'pub struct Credential' "$WORKER_SRC/credential.rs"); then
+  fail "$WORKER_SRC/credential.rs derives Debug for Credential."
+fi
+grep -q 'Credential(<redacted>)' "$WORKER_SRC/credential.rs" \
+  || fail "$WORKER_SRC/credential.rs no longer redacts Credential's Debug."
+
+# No credential on a command line. `argv` is visible in ps and in procfs.
+if grep -Eq 'arg\(.*(API_KEY|api_key|credential|secret|token)' <<<"$(code_of "$CLIENT_SRC")"; then
+  fail "$CLIENT_SRC puts something credential-shaped on the worker's command line."
+fi
+
+# ---------------------------------------------------------------------------
+# 6. The test redirection is test-only.
+# ---------------------------------------------------------------------------
+if manifest_body | grep -qE '^\s*default\s*=' ; then
+  fail "$WORKER_MANIFEST declares default features; test-endpoints must never be one."
+fi
+grep -q 'test-endpoints = \[\]' "$WORKER_MANIFEST" \
+  || fail "$WORKER_MANIFEST no longer declares the test-endpoints feature."
+# Every read of a base-URL override must be behind the feature.
+overrides="$(grep -rn 'NOTEIT_EMBED_TEST_BASE_URL\|test_override' "$WORKER_SRC" | grep -v 'endpoint.rs' || true)"
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  file="${line%%:*}"
+  grep -q 'cfg(feature = "test-endpoints")' "$file" \
+    || fail "$file reads a base-URL override without the test-endpoints guard."
+done <<<"$overrides"
+
+# ---------------------------------------------------------------------------
+# 7. The protocol crate stays a serialiser.
+# ---------------------------------------------------------------------------
+protocol_code="$(code_of "$PROTOCOL_SRC")"
+if grep -Eq '\b(std::net|tokio::net|UnixStream|UnixListener|TcpStream|TcpListener|std::fs|File::|Command::new)\b' <<<"$protocol_code"; then
+  grep -En '\b(std::net|tokio::net|UnixStream|UnixListener|TcpStream|TcpListener|std::fs|File::|Command::new)\b' <<<"$protocol_code" >&2
+  fail "$PROTOCOL_SRC does I/O. It is on both sides of the boundary and must describe bytes, never move them."
+fi
+
+# And the client crate speaks AF_UNIX and only AF_UNIX. The family rule, the
+# same one ADR-047 draws for the Core.
+client_code="$(code_of "$CLIENT_SRC")"
+if grep -Eq '\b(TcpListener|TcpStream|UdpSocket|ToSocketAddrs|SocketAddrV4|SocketAddrV6|IpAddr|Ipv4Addr|Ipv6Addr)\b' <<<"$client_code"; then
+  grep -En '\b(TcpListener|TcpStream|UdpSocket|ToSocketAddrs|SocketAddrV4|SocketAddrV6|IpAddr|Ipv4Addr|Ipv6Addr)\b' <<<"$client_code" >&2
+  fail "$CLIENT_SRC names an internet socket or address type; AF_UNIX is permitted here and AF_INET/AF_INET6 are not."
+fi
+grep -q 'std::os::unix::net::UnixStream' "$CLIENT_SRC/client.rs" \
+  || fail "$CLIENT_SRC/client.rs no longer connects over a Unix socket; the rule above permits AF_UNIX precisely because this is how the worker is reached."
+
+# The protocol must carry no URL. This is the SSRF guarantee, asserted rather
+# than reviewed.
+if grep -Eq '\b(url|base_url|endpoint|host|headers)\b *:' <<<"$protocol_code"; then
+  grep -En '\b(url|base_url|endpoint|host|headers)\b *:' <<<"$protocol_code" >&2
+  fail "$PROTOCOL_SRC declares a field that could name a destination. A request names a provider; where that provider is, is a constant in $WORKER."
+fi
+grep -qE 'pub fn is_model_token\(text: &str\) -> bool' "$PROTOCOL_SRC/lib.rs" \
+  || fail "$PROTOCOL_SRC no longer validates the model as a narrow token; Gemini puts the model in a URL path."
+
+printf '%s\n' "Embed boundary OK: HTTP and TLS exist only in $WORKER, which has no store, no note, no shell and no way to write a file; the three endpoints are https constants in one file, TLS validation is on everywhere, redirects are zero and no proxy is read; no credential is hardcoded, none is forwarded to the worker and none can be printed; the protocol carries no URL and the client speaks AF_UNIX only."
