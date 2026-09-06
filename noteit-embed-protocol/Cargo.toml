@@ -1,0 +1,22 @@
+[package]
+name = "noteit-embed-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The framed AF_UNIX protocol between Note-it and its remote embedding worker"
+publish = false
+
+# Deliberately the smallest manifest in the workspace.
+#
+# This crate is on *both* sides of the process boundary: the client half links
+# into the same binary as the note store, and the server half links into the one
+# process that talks to the internet. Anything that arrives here arrives in both
+# places at once, which is why the dependency list is a serialiser and nothing
+# else — no I/O, no socket, no HTTP, no filesystem, no clock. The types describe
+# bytes; moving them is somebody else's job.
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

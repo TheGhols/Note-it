@@ -1202,6 +1202,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "noteit-embed-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "noteit-embedding-local"
 version = "0.1.0"
 dependencies = [
