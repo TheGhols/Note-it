@@ -51,10 +51,16 @@ printf '\n==> Binários Rust do Note-it (release, workspace inteiro)\n'
 cargo build --release --workspace
 
 printf '\n==> Conferindo os binários\n'
+# `noteit-embed` is here since 4.3D and is not optional to check for. The
+# workspace build produces it either way, but a release that shipped without it
+# would fail in the one way that is hard to notice: remote retrieval would
+# silently degrade to lexical — correctly, and reporting `unavailable` — on
+# every question, because there would be no worker to spawn.
 readonly BINARIES=(
   target/release/note-it
   target/release/noteit
   target/release/noteit-mcp
+  target/release/noteit-embed
 )
 for binary in "${BINARIES[@]}"; do
   [[ -f "$binary" ]] || fail "esperado mas não encontrado: $binary"
