@@ -579,6 +579,86 @@ fn losing_the_cache_costs_money_and_never_a_note() {
 }
 
 #[test]
+fn a_trashed_note_is_collected_from_the_cache_on_disk() {
+    // §16 and §83: an orphan vector — one whose note is gone — has to be
+    // collected, and the cache may not grow without bound. The in-memory index
+    // forgets it on the next pass; this is about the file, which outlives the
+    // process and is what the *next* start reads.
+    let world = World::new(Duration::ZERO, 0.0);
+    let store = world.store(world.session(SemanticFallbackPolicy::Automatic));
+    let (_, semantic, _) = world.ask(&store, "pressao alta");
+    assert_eq!(semantic, SemanticStatusView::Succeeded);
+
+    let space = space::space_for(ProviderId::OpenAi, MODEL, DIMENSION);
+    let before = cache::load(
+        &world.cache_root,
+        &space,
+        noteit_core::chunking::CHUNKER_VERSION,
+    )
+    .expect("load");
+    let notes_before: std::collections::BTreeSet<Uuid> =
+        before.iter().map(|record| record.note_id).collect();
+    assert_eq!(notes_before.len(), 4);
+
+    // One note goes to the trash, and **nothing new is written**. That second
+    // half is the whole point: a pass that also embeds something would rewrite
+    // the cache for that reason and hide this.
+    let paths = world.sandbox.store_paths();
+    let doomed = *notes_before.iter().next().expect("a note");
+    std::fs::create_dir_all(&paths.trash_dir).expect("trash dir");
+    noteit_core::trash::move_to_trash(
+        &paths.notes_dir,
+        &paths.trash_dir,
+        &doomed,
+        noteit_core::chrono::Utc::now(),
+    )
+    .expect("trash");
+
+    world.worker.reset();
+    let second = world.store(world.session(SemanticFallbackPolicy::Automatic));
+    let (_, semantic, _) = world.ask(&second, "pressao alta");
+    assert_eq!(semantic, SemanticStatusView::Succeeded);
+    assert_eq!(
+        world.worker.requests(),
+        1,
+        "nothing should have been re-embedded; only the query"
+    );
+
+    let after = cache::load(
+        &world.cache_root,
+        &space,
+        noteit_core::chunking::CHUNKER_VERSION,
+    )
+    .expect("load");
+    let notes_after: std::collections::BTreeSet<Uuid> =
+        after.iter().map(|record| record.note_id).collect();
+    assert!(
+        !notes_after.contains(&doomed),
+        "the trashed note's vectors are still in the cache on disk; an orphan \
+         that is never collected is unbounded growth (§16, §83)"
+    );
+    assert_eq!(notes_after.len(), 3);
+}
+
+#[test]
+fn a_reachable_worker_is_reported_as_available_even_when_this_process_did_not_start_it() {
+    // §53. The socket is one per session since 4.3D, so a worker may well
+    // belong to another Note-it process — `ensure` adopts a live one rather
+    // than starting a second beside it. A diagnostic that answered "worker: not
+    // started" while a worker was answering questions would be describing this
+    // handle's bookkeeping rather than the machine.
+    let world = World::new(Duration::ZERO, 0.0);
+    let session = world.session(SemanticFallbackPolicy::Automatic);
+    // The fake worker is listening and this session has spawned nothing.
+    let report = session.report();
+    assert!(report.remote);
+    assert!(
+        report.worker_running,
+        "a worker is listening on the socket and the report says there is none"
+    );
+}
+
+#[test]
 fn a_corrupt_cache_is_rebuilt_rather_than_used() {
     let world = World::new(Duration::ZERO, 0.0);
     let first = world.store(world.session(SemanticFallbackPolicy::Automatic));

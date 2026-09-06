@@ -990,6 +990,16 @@ Recolher: vetor cuja nota sumiu, chunk de revisão antiga, índice de provider q
 não se usa mais, cache de modelo removido. Sem crescimento ilimitado — e a
 limpeza **nunca** apaga nota.
 
+> **Um defeito da 4.3D, corrigido pela 4.3D.R1.** No modo remoto, o índice em
+> memória esquecia a nota que saiu do store, mas o **cache em disco** só era
+> reescrito quando alguma nota tinha sido *embutida* naquele passe. Um passe cujo
+> único efeito era esquecer não reescrevia nada: os vetores da nota apagada
+> ficavam no arquivo, eram carregados de volta no início seguinte, esquecidos de
+> novo, e nunca recolhidos — que é exatamente o crescimento ilimitado que esta
+> seção proíbe. O passe passou a reportar `embedded` **e** `forgotten`, e o cache
+> é reescrito quando qualquer um dos dois é diferente de zero. O início morno que
+> não perdeu nada continua não reescrevendo nada.
+
 ## 17. O que o MCP vê
 
 * **Nunca vetores.** `noteit_context` não devolve arrays de float. Gasta tokens,

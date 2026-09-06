@@ -3236,6 +3236,34 @@ O custo de reconstruir é o outro lado, e é o que justifica guardar qualquer
 coisa: um store de mil notas com dois chunks cada são 2 000 embeddings pagos, e
 `load` os devolve em 68 ms.
 
+### Dois defeitos que a 4.3D.R1 encontrou, e o que eles ensinam
+
+Nenhum dos dois foi achado lendo o código: os dois vieram de perguntar "qual
+teste provaria isso?" e descobrir que não havia nenhum.
+
+**O cache guardava órfãos para sempre.** O índice em memória esquece a nota que
+saiu do store, mas o arquivo só era reescrito quando alguma nota tinha sido
+*embutida* naquele passe. Um passe cujo único efeito era esquecer não reescrevia
+nada, e os vetores da nota apagada sobreviviam ao processo, voltavam no início
+seguinte e eram esquecidos outra vez — indefinidamente. A causa é uma variável
+chamada `cache_dirty` cujo significado tinha derivado de *"o índice mudou"* para
+*"algo foi embutido"*, que não são a mesma coisa. O passe passou a devolver as
+duas contagens com nomes próprios, `embedded` e `forgotten`, e o arquivo é
+reescrito quando qualquer uma é diferente de zero.
+
+**O diagnóstico descrevia a contabilidade e não a máquina.** Quando o socket
+virou um por sessão, `ensure` passou a **adotar** um worker vivo em vez de subir
+um segundo ao lado. Mas o relatório continuou perguntando `is_running()` — *"este
+handle iniciou um?"* —, então um worker de outro processo do Note-it,
+respondendo perguntas naquele instante, aparecia como "não iniciado". A pergunta
+certa é `is_reachable()`, que é sobre o socket e não sobre a bookkeeping deste
+handle. Continua não iniciando nada: conecta a um socket Unix e desliga.
+
+O que os dois têm em comum é a lição: **quando uma mudança de arquitetura
+redefine uma pergunta, todo lugar que a fazia precisa ser revisitado.** A adoção
+de worker e a contagem de mudanças do índice foram as duas mudanças, e cada uma
+deixou um chamador para trás.
+
 ### O que esta decisão deliberadamente não fez
 
 * **Não afrouxou nenhum gate existente.** Os quatro anteriores estão

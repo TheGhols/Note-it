@@ -96,12 +96,20 @@ struct SemanticState {
     /// thing that stops a second start from re-embedding the whole store, and
     /// doing it again on every question would be a different kind of waste.
     cache_consulted: bool,
-    /// Whether anything has been embedded since the cache was last written.
+    /// Whether the index has changed since the cache was last written.
     ///
-    /// The remote cache is written only when this is true. A start that found
-    /// every note already cached writes nothing, which is what makes "a warm
-    /// start costs no requests" also mean "a warm start costs no rewrite"
-    /// (§81).
+    /// **Changed, not "embedded" — and that distinction was a defect.** The
+    /// first version set this only when something was newly embedded, so a pass
+    /// whose only change was *forgetting* a note left the file alone: the
+    /// vectors of a trashed note stayed on disk, were loaded back on the next
+    /// start, forgotten again, and never collected. That is the unbounded
+    /// growth §16 forbids and the orphan collection §83 requires, and
+    /// `a_trashed_note_is_collected_from_the_cache_on_disk` is the test that
+    /// found it.
+    ///
+    /// A start that found every note already cached and lost none still writes
+    /// nothing, which is what keeps "a warm start costs no requests" also
+    /// meaning "a warm start costs no rewrite" (§81).
     cache_dirty: bool,
 }
 
@@ -367,9 +375,8 @@ impl SemanticState {
             }
         }
 
-        let embedded =
-            synchronise(core, provider, index).map_err(engine::RetrievalError::Context)?;
-        if embedded > 0 {
+        let synced = synchronise(core, provider, index).map_err(engine::RetrievalError::Context)?;
+        if synced.changed() {
             self.cache_dirty = true;
         }
         let before = SemanticIndex::vector_count(index);
@@ -384,8 +391,8 @@ impl SemanticState {
         self.vectors = after;
 
         // Written after the retrieval rather than before it, so a question is
-        // never made slower by a save it did not need — and only when
-        // something was actually embedded, so a warm start writes nothing.
+        // never made slower by a save it did not need — and only when the index
+        // actually changed, so a warm start that lost nothing writes nothing.
         if remote && self.cache_dirty {
             if let Some(root) = cache_root {
                 if persist(root, &space, index) {
@@ -622,8 +629,16 @@ impl SemanticSession {
                         source.config.provider,
                         &source.config_dir,
                     ),
-                    // Asked, never caused.
-                    source.worker.is_running(),
+                    // `is_reachable` and not `is_running`, and that was a
+                    // defect: since the socket became one per session, a worker
+                    // may well belong to another Note-it process — `ensure`
+                    // adopts a live one rather than starting a second beside
+                    // it. `is_running` answers "did *this handle* spawn one",
+                    // which is bookkeeping; a person reading a diagnostic is
+                    // asking about the machine. Still asked and never caused:
+                    // this connects to a Unix socket and hangs up, and starts
+                    // nothing.
+                    source.worker.is_reachable(),
                 )
             }
         };
@@ -670,27 +685,54 @@ impl SemanticSession {
 /// of `docs/semantic-retrieval.md` demands.
 ///
 /// One note changing therefore costs one note's embedding, never the store's.
+/// What one synchronisation pass did.
+///
+/// Two counts and not one, because they answer two different questions and the
+/// first version of this conflated them. `embedded` is what a request costs
+/// (§81, §82); `forgotten` is what the cache on disk has to stop
+/// holding (§16, §83). A pass can do either without the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Synced {
+    /// Notes read and embedded on this pass. Each one cost the provider.
+    embedded: usize,
+    /// Notes dropped because the live store no longer has them.
+    forgotten: usize,
+}
+
+impl Synced {
+    /// Whether the index is different from what the cache on disk holds.
+    fn changed(self) -> bool {
+        self.embedded > 0 || self.forgotten > 0
+    }
+}
+
 fn synchronise(
     core: &NoteItCore,
     provider: &dyn EmbeddingProvider,
     index: &mut InMemoryIndex,
-) -> Result<usize, engine::ContextError> {
+) -> Result<Synced, engine::ContextError> {
     let live = core
         .storage()
         .list_notes_by_recency()
         .map_err(|_| engine::ContextError::StoreUnavailable)?;
     let live_set: BTreeSet<Uuid> = live.iter().copied().collect();
 
+    // Counted, because a note that left the store has to leave the file too —
+    // not only the in-memory index. Without this count the cache kept the
+    // vectors of trashed notes for ever.
+    let mut forgotten = 0usize;
     for note_id in index.note_ids() {
         if !live_set.contains(&note_id) {
             index.invalidate_note(&note_id);
+            forgotten += 1;
         }
     }
 
-    // Counted, and the count is what decides whether the remote cache is
-    // rewritten. A pass that embedded nothing found every note already cached,
-    // and rewriting the same file for it would be the one cost a warm start is
-    // not supposed to have (§81, §82).
+    // Counted, and together with `forgotten` this is what decides whether the
+    // remote cache is rewritten. A pass that embedded nothing *and* lost
+    // nothing found every note already cached, and rewriting the same file for
+    // it would be the one cost a warm start is not supposed to have
+    // (§81, §82).
     let mut embedded = 0usize;
     for note_id in live {
         if index.holds(&note_id) {
@@ -710,5 +752,8 @@ fn synchronise(
             embedded += 1;
         }
     }
-    Ok(embedded)
+    Ok(Synced {
+        embedded,
+        forgotten,
+    })
 }

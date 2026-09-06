@@ -212,6 +212,9 @@ fn status() -> StatusReport {
         (true, false, None)
     };
 
+    // Read before `paths` is moved into the report.
+    let worker_running = remote && worker_is_reachable(&paths.runtime_dir);
+
     StatusReport {
         paths,
         semantic: SemanticStatusReport {
@@ -226,10 +229,17 @@ fn status() -> StatusReport {
             dimension,
             space_verifiable,
             credential_present,
-            // The CLI is not the process that answers questions, so it never
-            // has a worker of its own. Saying "no" here is true of this
-            // process and is not a claim about the MCP server's.
-            worker_running: false,
+            // The CLI never starts a worker, and until 4.3D.R1 it reported a
+            // flat `false` on the grounds that it has none *of its own*. That
+            // was the wrong question: the socket is one per session, so a
+            // worker started by the MCP server is reachable from here, and a
+            // status that said "not started" while one was answering questions
+            // described this process's bookkeeping rather than the machine.
+            //
+            // This connects to a Unix socket and hangs up. It starts nothing,
+            // sends no request and costs no money — which is what §53
+            // requires of a diagnostic.
+            worker_running,
             cache_directory,
         },
     }
@@ -240,6 +250,17 @@ fn remote_provider_id(
     provider: noteit_core::settings::SemanticProvider,
 ) -> Option<noteit_embedding_remote::RemoteProviderId> {
     noteit_embedding_remote::RemoteProviderId::parse(provider.as_str())
+}
+
+/// Whether a worker is answering on this session's socket.
+///
+/// Observed, never caused: a connect and a hang-up on a Unix socket. A path
+/// that merely *exists* would be the wrong answer — a crashed worker leaves
+/// exactly that behind.
+fn worker_is_reachable(runtime_dir: &std::path::Path) -> bool {
+    noteit_embedding_remote::client::socket_is_live(
+        &runtime_dir.join(noteit_embedding_remote::worker::SOCKET_NAME),
+    )
 }
 
 /// Whether a key exists for this provider — never what it is.
