@@ -1454,6 +1454,10 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
 
         **Régua e integridade preservadas sem defeitos.** Nenhum código produtivo precisou ser alterado (zero defeitos reproduzíveis). A régua congelada (`cargo test -p noteit-core --test retrieval_corpus`) mantém métricas exatas: **R@1 = 0,633, R@3 = 0,767, R@5 = 0,833, MRR = 0,711**, com **35 candidatos sem resposta** e **zero demotions**. BM25 congelado em `k1 = 1.2` e `b = 0.75`. Catálogo MCP fixado em **16 tools**. As 5 checagens de fronteira passam ilesas (`check-core-boundary`, `check-cli-boundary`, `check-mcp-boundary`, `check-embedding-boundary`, `check-embed-boundary`). O armazenamento real do usuário permaneceu estritamente intocado, com fingerprint SHA-256 verificado antes e depois (`3d4e8773926342d14aca041daca70326978df6d99794b00917c1b32edca12aa9`).
 
+        Fechamento documentado no commit `8c26d43`, com CI remoto integralmente verde no run #113 (Rust 8m12s, Frontend 48s).
+
+        **Gate para Fase 5.0: LIBERADO.**
+
 Captura e Exportação, OCR e PDF permanecem adiados e não são puxados para a Fase 4.0A ou 4.0B.
 
 **Recência e o CLI.** Desde a Fase 3.8R, "mais recente" é o próprio `updated_at` da nota — a última alteração em seu texto — com o `mtime` do arquivo como substituto para uma nota que não possui nenhum. É o que decide qual nota uma invocação traz de volta quando cada nota é fechada, e por qual ordem de pesquisa e troca rápida. Se uma fase futura precisar de "a nota que abri pela última vez" como distinta de "a nota que escrevi pela última vez", ela pertence a `state.json` como estado explícito, não aos carimbos de data e hora do sistema de arquivos.
