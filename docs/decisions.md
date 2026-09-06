@@ -2799,3 +2799,101 @@ das duas.
 credencial, nenhum `noteit-embed`, nenhum HTTP, nenhum cache vetorial em disco,
 nenhum ANN, nenhum score publicado. Tudo isso continua sendo 4.3D ou continua
 sendo não.
+
+## ADR-059: O artefato é verificado com `ring`, e o resto do Note-it continua com o SHA-256 do Core
+
+**Contexto.** A 4.3C fechou `BLOCKED` por um único item: a carga do artefato
+custava 2 077–3 475 ms contra um orçamento de 2 s, e mais de 90% disso era o
+SHA-256 de 489 MiB que a §5.1 tornou obrigatório. Três saídas foram registradas
+e nenhuma era do implementador: aceitar o custo, trocar o artefato por uma
+quantização de terceiro, ou escrever SIMD criptográfico à mão.
+
+**Problema.** Nenhuma das três é boa. Aceitar o custo é mover a régua depois de
+ver o número. A quantização troca proveniência e move os vetores para ganhar
+tempo de carga, que é a pior razão possível para trocar um modelo. E SIMD
+escrito à mão num primitivo que também calcula **revisões de nota** é a
+categoria de mudança que ninguém deveria fazer para agradar um cronômetro.
+
+Havia uma quarta pergunta que ninguém tinha feito: **a implementação atual é
+boa?** O `sha256sum` do sistema fazia 344 MiB/s na mesma máquina, contra
+197 MiB/s do Core — quase o dobro, e sem SHA-NI dos dois lados. Isso é medição
+faltando, não hardware faltando.
+
+**Decisão: medir quatro implementações sobre o artefato real, e adotar a que
+ganhou por uma margem que justifique o custo.**
+
+Mesmo arquivo, mesmos bytes, mesmo digest, release, melhor de três execuções,
+máquina sem SHA-NI:
+
+| implementação | melhor | vazão |
+| --- | --- | --- |
+| `noteit-core`, como estava | 2 429 ms | 197–201 MiB/s |
+| `sha2` 0.10 (RustCrypto) | 2 739 ms | 174–178 MiB/s |
+| `sha2-asm` 0.6 | 2 589 ms | 187–189 MiB/s |
+| **`ring` 0.17** | **1 501 ms** | **324–326 MiB/s** |
+
+**As duas crates puras em Rust são mais lentas que a implementação do
+Note-it.** Esse é o resultado que contraria a intuição de que "uma crate
+mantida é mais rápida", e é a razão de a medição existir: adotar `sha2` por
+reputação teria custado 11% de desempenho e uma dependência. A única
+implementação mais rápida é `ring`, que carrega o assembly AVX2 herdado do
+BoringSSL.
+
+Com ela, a carga do artefato mede **1 758–1 890 ms em quatro execuções** durante
+a implementação, e o orçamento de 2 s da §25 é atendido **sem ter sido tocado**.
+
+O fechamento da R1 não aceitou essas quatro como prova. Repetiu a medição em
+**doze processos independentes**, com o estado do cache de página controlado —
+quatro delas com os arquivos despejados por `posix_fadvise(DONTNEED)`, e a
+condição verificada pela taxa de leitura e não afirmada. Cada execução está
+listada em §26.7. As doze cabem: **1 375–1 556 ms com cache quente, 1 577–1 789
+ms com cache frio**, a pior delas com 10,6% de folga. Na mesma medição, a
+implementação do Core sozinha custaria **1 854–2 123 ms** — o orçamento inteiro
+antes de ler um byte — que é o motivo de a 4.3C não ter tido como caber.
+
+**Onde ela entra, e onde não entra.** Só em `noteit-embedding-local`, e só para
+os dois arquivos do artefato. `NoteRevision`, o manifesto do artefato e todo
+outro digest do produto continuam em `noteit_core::hashing::sha256_hex`, que
+não mudou uma linha nesta R1. O escopo é o menor que resolve o problema: a
+crate opcional que paga o custo é a única que ganha a dependência, o Core
+mantém o grafo enxuto que é um valor arquitetural declarado, e o primitivo que
+decide se uma nota mudou continua sendo o mesmo de sempre.
+
+**Duas implementações de um primitivo são dois conjuntos de bugs** — a menos
+que algo as amarre. `noteit-embedding-local/tests/digest_agreement.rs` é esse
+algo: os vetores publicados do FIPS 180-4, todo comprimento de 0 a 129 bytes
+(onde o preenchimento muda de forma), e um megabyte pseudoaleatório
+determinístico. Se as duas discordarem de um byte, o build falha ali, e não na
+máquina de alguém com um artefato recusado sem explicação.
+
+**O custo, medido e não estimado.**
+
+```text
+crates novas no grafo Linux    ring, untrusted        (getrandom e libc já estavam)
+crates novas no lock           +12, das quais 10 são alvos Windows que não compilam aqui
+licenças                       Apache-2.0 AND ISC (ring), ISC (untrusted)
+binário noteit-mcp             12 192 272 → 12 215 976 bytes   (+0,19%)
+binário noteit                  3 525 992 →  3 530 472 bytes   (+0,13%)
+binário note-it (desktop)       4 524 760 → inalterado
+rede                           nenhuma; check-embedding-boundary continua reprovando
+                               qualquer crate HTTP, TLS ou de socket em qualquer profundidade
+```
+
+O custo real não é o tamanho: é que **o build passa a exigir um compilador C**,
+porque `ring` compila o assembly do BoringSSL. Na prática essa exigência já
+existia — `rustc` invoca `cc` para linkar — mas passou a ser declarada em vez de
+incidental: `scripts/doctor` verifica `cc`, e o workflow do CI instala `gcc`
+pelo nome.
+
+**O que esta decisão deliberadamente não fez.**
+
+* **Não moveu o orçamento.** Ele continua em 2 s, e a §26.7 registra que a
+  margem vai de 22% a 10,6%, as doze medições individuais, e de onde a folga
+  some.
+* **Não escreveu SIMD à mão.** A tentativa de acelerar o laço do Core com
+  índices constantes foi medida e ficou **mais lenta** (168 MiB/s); está
+  registrada porque uma otimização que não funcionou também é resultado.
+* **Não adotou a variante int8.** Ela continua sendo a resposta errada pela
+  razão certa: trocaria proveniência e moveria vetores para ganhar segundos.
+* **Não tocou em `NoteRevision`.** Nem no valor, nem na implementação, nem no
+  arquivo.

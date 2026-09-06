@@ -738,7 +738,14 @@ contrário: uma frase mais forte do que o mecanismo.
 que o Core não precisa de socket — toda leitura, e uma gravação feita
 diretamente com o lease livre — a asserção é que **nenhum socket existe em
 nenhuma amostra**. A observação é contínua durante toda a operação, com
-intervalo médio medido de 14 µs a 76 µs.
+intervalo médio medido de 14 µs a 76 µs numa máquina ociosa.
+
+Esse número é **relatado, nunca asserido**. Desde a 4.3C.R1 o que a suíte exige
+do monitor é que ele ainda estivesse amostrando quando a operação terminou e
+que nunca tenha ficado calado por muito tempo — o **pior** intervalo, medido
+pelo próprio monitor, e não a média. A média era a estatística errada: ela não
+limita um pior caso, e portanto não detectava o monitor que trava, que é a
+única falha capaz de tornar um resultado limpo inútil.
 
 **Melhor esforço, e deliberadamente não é o que sustenta a garantia.** A
 *família* de um socket é consultada nas tabelas do núcleo. Dois limites foram
@@ -760,6 +767,15 @@ controle: o Core abre um socket, entrega a mudança e o fecha dentro da mesma
 chamada MCP — exatamente a forma que a prova anterior não enxergava. O monitor
 é **obrigado** a vê-lo; se não vir, o teste falha e o resultado limpo ao lado
 dele não é aceito.
+
+**E o controle deixou de depender de sorte.** Até a 4.3C.R1 ele apostava que
+uma amostra cairia dentro de um socket que vive dezenas de microssegundos: sob
+carga, falhava quatro execuções em seis. Agora a autoridade falsa **segura** a
+requisição dentro da operação, e o teste só a libera depois de ver o monitor
+ver o socket. No caminho fail-closed, onde os sockets são `connect` que falham
+e nada pode segurá-los, a recusa é **repetida até ser vista**, com teto de
+tentativas — cada tentativa é uma recusa completa sobre o caminho real. Nos
+dois casos a propriedade provada é a mesma de antes; o que saiu foi a aposta.
 
 **Conteúdo é conteúdo.** Aspas, barras invertidas, novas linhas, tabulações,
 Unicode, emoji, RTL legítimo, controles bidi, sequências ANSI, caracteres de

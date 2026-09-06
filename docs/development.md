@@ -213,6 +213,32 @@ suíte prova e o que ela não prova está escrito nela e em `docs/mcp.md`: a
 presença de socket é sólida, a família é melhor esforço, e a garantia de família
 repousa nas regras estáticas.
 
+**Um instrumento amostrado não pode provar sua própria sensibilidade por
+sorteio**, e a 4.3C.R1 corrigiu isso. A suíte afirmava que o monitor "olhava
+com frequência suficiente" por um teto de 1 ms no intervalo **médio** entre
+amostras. Esse número era propriedade da máquina onde o arquivo foi escrito, e
+media a estatística errada: a afirmação da suíte é sobre o **pior** intervalo,
+e uma média não limita um pior caso — um monitor que amostra muito e depois
+trava tem média excelente e um ponto cego. Pior, o teto não implicava o que se
+supunha: sob carga, execuções com média de 43–122 µs — muito dentro do
+milissegundo — **deixaram de ver** um socket que provavelmente existia, porque
+ele vive microssegundos dentro de uma janela de milissegundos.
+
+O que passou a valer, e nenhuma parte disso é um limite afrouxado:
+
+* o controle positivo virou **encontro marcado** e não sorteio: a autoridade
+  falsa segura a requisição dentro da operação, a conexão do Core fica aberta
+  até o monitor ser observado vendo-a, e só então o teste libera. O socket
+  continua sendo um que abre e fecha **dentro de uma única chamada MCP**;
+* o caminho fail-closed, cujos sockets são `connect` que falham e não dá para
+  segurar, **repete a recusa até o instrumento ver uma**, com um teto de
+  tentativas. Cada tentativa é uma recusa completa sobre o caminho real, então
+  o laço exercita mais a propriedade e não menos;
+* a densidade passou a ser asserida pelo **pior** intervalo, medido pelo
+  próprio monitor, mais uma prova de que ele ainda estava amostrando quando a
+  operação terminou. Isso detecta o monitor que parou — a falha que a
+  documentação nomeava e que a média não conseguia enxergar.
+
 ## Executando com um store descartável
 
 Qualquer execução experimental ou de integração deve passar pelo auxiliar de isolamento, em vez de um conjunto escrito à mão de variáveis ​​de ambiente:

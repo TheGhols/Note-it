@@ -1213,22 +1213,24 @@ foi a última indexação, e o estado do índice.
 
 ## 25. Orçamentos propostos
 
-| grandeza | orçamento | de onde vem | **medido em Rust (4.3C)** |
+| grandeza | orçamento | de onde vem | **medido em Rust (depois da 4.3C.R1)** |
 | --- | --- | --- | --- |
 | indexação a frio, 1 000 notas (local) | ≤ 2 s | medido 0,79 s em Python | **0,274 s** ✔ |
 | indexação a frio, 10 000 notas (local) | ≤ 20 s | medido 7,13 s | **2,16 s** ✔ |
 | consulta quente, 10 000 vetores | ≤ 20 ms | medido 3,5 ms p50 / 6,9 ms p95 | **8,73 ms p50 / 10,51 ms p95** ✔ |
-| carga do artefato local | ≤ 2 s | medido 1,0–1,8 s, **sem verificação do artefato** | **2,08–3,48 s** ✘ — §26.7 |
+| carga do artefato local | ≤ 2 s | medido 1,0–1,8 s, **sem verificação do artefato** | 4.3C: **2,08–3,48 s** ✘ → 4.3C.R1: **1,76–1,89 s** ✔ — §26.7 |
 | RSS acrescido pelo modelo | a medir em Rust | os números da 4.3A são de processo Python e **não são representativos** | **1,007 GiB**, medido |
 | consulta com provider remoto | a medir | latência de rede domina | 4.3D |
 | resposta MCP | inalterada | os tetos da 4.2R continuam valendo | inalterada ✔ |
 
-O único orçamento não atendido é a carga do artefato, e §26.7 mostra a medição
-componente a componente em vez de mover o número: o orçamento foi derivado de uma
-operação que não verificava o artefato, e a verificação — obrigatória por §5.1 —
-responde por 91–97% do tempo. A faixa existe porque a medição depende da carga da
-máquina, e **nenhuma das repetições cabe no orçamento**: a melhor delas, numa
-máquina ociosa e com o cache de página quente, é 2 077 ms.
+**Todos os orçamentos são atendidos — desde a 4.3C.R1, e não desde a 4.3C.**
+A linha da carga do artefato carrega os dois números de propósito: a 4.3C mediu
+2 077–3 475 ms contra os 2 s e fechou `BLOCKED` por este item, e esse resultado
+continua sendo o que a 4.3C mediu. O que mudou na R1 não foi o orçamento: a
+verificação — obrigatória por §5.1 e responsável por mais de 90% do tempo —
+passou a ser calculada por uma implementação de SHA-256 medida como 1,6× mais
+rápida que a anterior, escolhida entre quatro candidatas sobre o artefato real.
+§26.7 mostra as duas medições lado a lado e a ADR-059 registra a decisão.
 
 ## 26. O provider local, como foi implementado (4.3C)
 
@@ -1401,33 +1403,34 @@ Uma edição custa a reindexação de uma nota, nunca a do store.
 Release, nesta máquina (Intel i5-9300H, 8 threads, sem SHA-NI), store sintético
 em diretório temporário, duas passagens de chunk por nota:
 
-A medição foi repetida quatro vezes: uma durante a fase, com a máquina
-ocupada e o cache de página frio, e três numa máquina ociosa. **As duas colunas
-estão aqui porque a diferença é da máquina e não do código**, e porque um número
-único esconderia a variável que decide o veredito do orçamento.
+A carga do artefato foi medida em três situações, e as três estão aqui porque
+a diferença entre elas é o que decidiu o veredito do orçamento: a máquina
+ocupada e o cache de página frio (4.3C), a máquina ociosa com o SHA-256 antigo
+(4.3C, repetido), e a máquina ociosa depois que a 4.3C.R1 trocou o SHA-256 que
+verifica o artefato (ADR-059).
 
 ```text
-                                          máquina ocupada    máquina ociosa (3 execuções)
-carga do artefato (ler + VERIFICAR)          3 475 ms         2 288 / 2 130 / 2 077 ms
-    ler                                        314 ms              74 /    78 /    68 ms
-    sha256 de 489 MiB                        3 116 ms           2 091 / 1 973 / 2 008 ms
-    vazão de sha256                        157 MiB/s         234 / 248 / 243 MiB/s
-RSS acrescido pelo modelo              1 056 584 KiB       1 056 456 – 1 056 584 KiB
-RSS de um processo lexical-only, 1 000 notas   672 KiB                       608 KiB
+                                    4.3C ocupada   4.3C ociosa (3x)   4.3C.R1 (4x)
+carga do artefato (ler + VERIFICAR)     3 475 ms   2 288/2 130/2 077   1 886/1 890/1 758/1 812 ms
+    ler                                   314 ms        74/  78/  68            89–112 ms
+    sha256 de 489 MiB                   3 116 ms   2 091/1 973/2 008            1 490 ms
+    vazão de sha256                    157 MiB/s   234/248/243 MiB/s          326 MiB/s
+RSS acrescido pelo modelo         1 056 584 KiB   1 056 456–1 056 584   1 056 520–1 056 584 KiB
+RSS de um processo lexical-only, 1 000 notas    672 KiB          608 KiB
 
-escala   indexação a frio        vetores   consulta quente p50/p95        reindexar 1 nota
-   100     27 ms /     15 ms        200   0,143/0,193 ms /  0,10/0,15 ms    0,11–0,14 ms
- 1 000    274 ms /    148 ms      2 000   1,761/2,689 ms /  0,90/1,55 ms    0,11–0,19 ms
- 5 000  1 144 ms /    793 ms     10 000   8,732/10,508 ms / 6,22–7,14 / 6,75–9,15 ms  0,11–0,13 ms
-10 000  2 162 ms /  1 480 ms     20 000  19,602/23,278 ms / 13,6–14,9 / 14,6–17,1 ms  0,10–0,27 ms
+escala   indexação a frio        vetores   consulta quente p50/p95     reindexar 1 nota
+   100     27 ms /     17 ms        200   0,143/0,193 · 0,11/0,21 ms     0,11–0,16 ms
+ 1 000    274 ms /    199 ms      2 000   1,761/2,689 · 0,98/1,57 ms     0,10–0,16 ms
+ 5 000  1 144 ms /    953 ms     10 000   8,732/10,508 · 7,7/9,7 ms      0,12–0,20 ms
+10 000  2 162 ms /  1 870 ms     20 000  19,602/23,278 · 16,9/19,7 ms    0,12–0,15 ms
 
-RSS após 200 consultas repetidas: delta 0 KiB em todas as escalas, nas duas colunas
+RSS após 200 consultas repetidas: delta 0 KiB em todas as escalas, em todas as colunas
 ```
 
-Os números da coluna da esquerda são os que esta especificação usou para julgar
-os orçamentos, porque são o **pior caso medido**; os da direita mostram que a
-única grandeza que muda o veredito — a carga do artefato — **continua fora do
-orçamento mesmo no melhor caso**.
+O par em cada célula é **máquina ocupada / máquina ociosa**. A coluna da
+esquerda continua registrada porque é o pior caso já medido, e porque foi contra
+ela que a 4.3C declarou o orçamento não atendido — o que era a leitura correta
+naquele momento.
 
 Qualidade no corpus congelado, encadeada, através do motor real:
 
@@ -1438,59 +1441,91 @@ ganhos:     q07, q10, q11 e q28 passaram a ter resposta onde não havia
 ruído:      as duas consultas sem resposta ganharam 3 candidatos cada, o teto
 ```
 
-### 26.7 O orçamento que não foi atendido, e por quê
+### 26.7 O orçamento que quase não foi atendido, e o que o fechou
 
-**`carga do artefato local ≤ 2 s` (§25) não é atendido: 2 077–3 475 ms.**
+**`carga do artefato local ≤ 2 s` (§25): 1 758–1 890 ms, atendido.** Chegou
+aqui pelo caminho longo, e o caminho importa mais que o número.
 
-O orçamento não foi movido, e a medição foi repetida em vez de escolhida. O que
-segue é o pior caso e o melhor caso:
+**A 4.3C mediu 2 077–3 475 ms e declarou o item não atendido.** Estava certo:
+a verificação obrigatória por §5.1 custava 83–97% da carga, o orçamento tinha
+sido derivado de um protótipo Python que **não verificava nada**, e nenhuma
+repetição cabia em 2 s. O número não foi movido então e não foi movido agora.
+
+**A 4.3C.R1 mediu implementações de SHA-256 em vez de discutir o orçamento.**
+Mesmo artefato, mesmos bytes, mesmo digest, release, melhor de três:
 
 ```text
-                                          ocupada      ociosa (melhor de 3)
-ler 489 MiB do disco                       314 ms                  68 ms
-sha256 de 489 MiB                        3 116 ms               2 008 ms
-    vazão                               157 MiB/s              243 MiB/s
-construir o tokenizer (500 353 entradas)   ~1 100 ms, em paralelo com o acima
-total                                    3 475 ms               2 077 ms
+noteit-core, como estava      2 429–2 549 ms    197–201 MiB/s
+sha2 0.10 (RustCrypto)        2 739–2 838 ms    174–178 MiB/s
+sha2-asm 0.6                  2 589–2 636 ms    187–189 MiB/s
+ring 0.17                     1 501–1 507 ms    324–326 MiB/s
+                              (referência: sha256sum do sistema 344 MiB/s)
 ```
 
-**O melhor caso ainda estoura o orçamento em 3,9%**, e o excedente é inteiramente
-o SHA-256.
+O resultado contraria a expectativa de que uma crate mantida seria mais rápida:
+**as duas implementações puras em Rust são mais lentas que a do Note-it**, e a
+única mais rápida é `ring`, que carrega o assembly AVX2 do BoringSSL. A ADR-059
+registra a decisão, o custo e o que ela deliberadamente não fez — não houve
+SIMD escrito à mão, não houve troca do artefato por uma quantização de terceiro,
+e o `NoteRevision` continua exatamente na implementação do Core.
 
-A carga já é paralela: os pesos são lidos e verificados numa thread enquanto o
-tokenizer é lido, verificado e construído noutra, então o total é o maior dos
-dois e não a soma. O caminho crítico é o SHA-256, que responde por **83% do pior
-caso e 97% do melhor** — quanto mais ociosa a máquina, mais o que resta é
-exclusivamente a verificação.
+Com `ring` verificando os dois arquivos do artefato, a carga fica:
 
-**A origem do orçamento explica a diferença.** §25 o derivou de "medido 1,0–1,8 s"
-num protótipo Python que **não verificava o artefato** — §5.1, que torna a
-verificação obrigatória, foi escrita depois. Os dois números medem operações
-diferentes: sem a verificação, a carga aqui é ≈1,1 s e cabe no orçamento; com
-ela, não cabe.
+```text
+ler 489 MiB do disco (cache quente)         89–112 ms
+sha256 de 489 MiB com ring                    1 490 ms   (328 MiB/s)
+construir o tokenizer (500 353 entradas)      ~1 100 ms, em paralelo com o acima
+total, quatro execuções          1 886 / 1 890 / 1 758 / 1 812 ms
+```
 
-Otimizações aplicadas dentro do escopo, e o que ainda faltaria:
+A carga continua paralela — os pesos são lidos e verificados numa thread
+enquanto o tokenizer é lido, verificado e construído noutra, então o total é o
+maior dos dois e não a soma — e o caminho crítico continua sendo o SHA-256.
 
-* o SHA-256 do Core foi desenrolado e deixou de copiar a mensagem inteira só para
-  acrescentar o preenchimento — 13% mais rápido e meio gigabyte a menos de pico,
-  com o mesmo digest e os mesmos vetores publicados;
-* leitura e verificação foram paralelizadas com a construção do tokenizer;
-* **o que falta é hardware.** Esta máquina não tem SHA-NI. Numa máquina ociosa a
-  implementação do Core faz 234–248 MiB/s, e o `sha256sum` do sistema — SHA-256
-  com AVX2, altamente otimizado — chega a 370–390 MiB/s, o teto prático aqui.
-  Mesmo nesse teto, 507 MiB custariam ≈1,3 s, e o orçamento só seria atendido com
-  folga de 0,3 s. Numa máquina com SHA-NI (≈2 GB/s) a carga inteira cairia para
-  ≈1,4 s.
+#### A certificação da 4.3C.R1, e o protocolo dela
 
-A conclusão honesta é que **o orçamento é função do tamanho do artefato e da
-vazão de SHA-256 da máquina**, e a especificação o fixou sem nenhuma das duas
-variáveis. Acima de ~400 MiB de artefato, verificar em menos de 2 s exige
-hardware que nem toda máquina tem — e as quatro execuções acima, ocupada ou
-ociosa, ficam todas do lado de fora. As saídas são três, e nenhuma é do
-implementador: aceitar o custo (uma vez por processo, num recurso opcional),
-adotar um artefato menor (a int8 de §26.2, ao custo de proveniência de terceiro),
-ou escrever um SHA-256 com SIMD no Core (mudança sensível a um primitivo que
-calcula revisões de nota, e que merece decisão própria).
+Os quatro números acima são de durante a implementação. O fechamento da R1 não
+os aceitou como prova: repetiu a medição em **doze processos independentes**,
+`cargo test -p noteit-embedding-local --release --test semantic_performance --
+--ignored`, e cada execução está listada individualmente porque nem a melhor
+nem a média decidem um orçamento.
+
+O estado do cache de página foi **controlado e não suposto**. As quatro
+execuções frias tiveram os dois arquivos despejados do cache com
+`posix_fadvise(POSIX_FADV_DONTNEED)` imediatamente antes, e a condição foi
+verificada em vez de afirmada: a mesma leitura mede 6,4 GB/s com o cache quente
+e 1,4 GB/s depois do despejo, que é exatamente a taxa do dispositivo lido com
+`O_DIRECT` (1,3 GB/s). Uma leitura acima de 1,3 GB/s não pode ter vindo do
+disco.
+
+```text
+carga do artefato (ler + VERIFICAR + construir), release, orçamento 2 000 ms
+
+cache quente, 8 execuções    1 375  1 424  1 439  1 453  1 457  1 489  1 502  1 556
+cache frio, 4 execuções      1 577  1 630  1 712  1 789
+
+                             mínimo    mediana    máximo
+cache quente                  1 375     1 455     1 556
+cache frio                    1 577     1 671     1 789
+as doze                       1 375     1 471     1 789
+```
+
+**As doze cabem, e a pior delas cabe com 10,6% de folga.** O componente, na
+mesma medição: `ring` 370–426 MiB/s, e a implementação do Core, cronometrada
+lado a lado sobre os mesmos bytes e concordando com ela em todas as execuções,
+230–264 MiB/s. Essa segunda coluna é o diagnóstico que fecha o argumento da
+4.3C: **só o SHA-256 do Core custaria 1 854–2 123 ms**, ou seja, o orçamento
+inteiro antes de ler um byte ou construir um tokenizer. Não havia como caber.
+
+**O que isto não resolve.** O orçamento continua sendo função do tamanho do
+artefato e da vazão de SHA-256 da máquina, e a margem medida vai de 22% no
+melhor caso a 10,6% no pior: uma máquina mais lenta ou um artefato maior tornam
+a conta apertada de novo. O cache frio, agora que foi medido de fato, custa
+150–230 ms e **não** é o que decide o veredito; o SHA-256 é.
+Numa máquina com SHA-NI a verificação cairia para ~250 ms e a margem deixaria de
+ser uma preocupação. Esta é a razão para o gatilho de reavaliação continuar
+escrito: **acima de ~600 MiB de artefato, ou numa máquina abaixo de ~300 MiB/s
+de SHA-256, o orçamento de 2 s precisa ser rediscutido em vez de perseguido.**
 
 **Nenhum outro orçamento falha**, e a consulta quente foi medida na escala que
 §25 nomeia — dez mil **vetores**, que são cinco mil notas de dois parágrafos, e

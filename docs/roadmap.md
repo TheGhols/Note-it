@@ -1305,19 +1305,72 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         3,2 ms · 100 notas 11,6 ms · 1 000 notas 129 ms · 5 000 notas 642 ms. O custo é dominado
         pela varredura e pela leitura de cada nota — o preço conhecido de não ter índice (D-04) —
         e não pelo BM25.
-  - [ ] **4.3C — Provider local.** Planejada. A implementação do provider local escolhido pela
-        4.3A — embeddings estáticos de token, sem runtime de inferência —, distribuição do
-        artefato, ciclo de vida, custo de CPU e memória medidos em Rust, operação offline e
-        indexação incremental. As questões que a 4.3A deixou abertas são pré-requisito: qualidade
-        sob quantização, licença de `model2vec-rs` e RSS real. **`k1` e `b` não estão entre
-        elas**: foram congelados em 1.2 e 0.75 e a 4.3B os usa exatamente assim. Reabri-los exige
-        três coisas e não duas — um conjunto de tuning novo, um conjunto de avaliação separado que
-        não seja usado no ajuste, e a decisão explícita de reabrir os parâmetros. O corpus da 4.3A
-        continua sendo régua de regressão e não serve para nenhuma das duas primeiras.
+  - [x] **4.3C — Provider local.** Implementação concluída; **o fechamento original ficou
+        bloqueado pelo orçamento de carga do artefato e foi resolvido pela 4.3C.R1.** O provider
+        local escolhido pela 4.3A — embeddings estáticos de token, sem runtime de inferência —,
+        com distribuição do artefato, ciclo de vida, custo de CPU e memória medidos em Rust,
+        operação offline e indexação incremental. Detalhes e medições na ADR-058 e em
+        `docs/semantic-retrieval.md` §26.
+
+        **O que a 4.3C mediu, e o que ela não atendeu.** Doze dos treze orçamentos da §25 passaram
+        na primeira medição. Um não passou: `carga do artefato local ≤ 2 s`, medido em
+        **2 077–3 475 ms**, com a verificação SHA-256 obrigatória de 489 MiB respondendo por
+        83–97% do tempo. A fase fechou `BLOCKED` por esse item — a leitura correta naquele
+        momento, contra a implementação de SHA-256 que existia então — e o número **não** foi
+        movido para acomodá-lo. É a 4.3C.R1 que o fecha, e o registro histórico continua sendo
+        esse.
 
         **Liberada pela 4.3B, e deliberadamente não fundida com ela.** Fundir teria custado a
         única coisa que importa quando a recuperação semântica responder mal: distinguir bug do
         motor de bug do modelo. Com as fases separadas, a 4.3B pode ser auditada sozinha.
+
+        As questões que a 4.3A deixou abertas eram pré-requisito: qualidade sob quantização,
+        licença de `model2vec-rs` e RSS real. **`k1` e `b` não estavam entre elas**: foram
+        congelados em 1.2 e 0.75 e a 4.3B os usa exatamente assim. Reabri-los exige três coisas e
+        não duas — um conjunto de tuning novo, um conjunto de avaliação separado que não seja
+        usado no ajuste, e a decisão explícita de reabrir os parâmetros. O corpus da 4.3A continua
+        sendo régua de regressão e não serve para nenhuma das duas primeiras.
+    - [x] **4.3C.R1 — Fechamento do provider semântico local.** Orçamento, paridade diagnóstica e
+          CI encerrados. Três resíduos objetivos e nenhuma funcionalidade nova; ADR-059 registra a
+          decisão corretiva, e a ADR-058 continua representando a decisão da 4.3C.
+
+          **O orçamento, atendido sem ser tocado.** Quatro implementações de SHA-256 foram medidas
+          sobre o artefato real, com o mesmo digest saindo de todas: `noteit-core` 197–201 MiB/s,
+          `sha2` 0.10 **174–178**, `sha2-asm` 0.6 **187–189**, `ring` 0.17 **324–326**. As duas
+          crates puras em Rust são mais lentas que a do próprio Note-it. Com `ring` verificando os
+          dois arquivos do artefato, a carga foi certificada em **doze processos independentes** —
+          oito com cache de página quente, quatro com ele frio por despejo controlado e verificado
+          — e mede **1 375–1 789 ms**, todas dentro dos 2 s, a pior com 10,6% de folga. Na mesma
+          medição o SHA-256 do Core sozinho custaria 1 854–2 123 ms, que é o orçamento inteiro
+          antes de ler um byte: a 4.3C não tinha como caber. `ring` fica **isolada** em
+          `noteit-embedding-local`, declarada num único manifesto e usada num único arquivo;
+          `NoteRevision` e todo outro digest continuam na implementação do Core, que é
+          byte-idêntica à do commit anterior, e `tests/digest_agreement.rs` amarra as duas nos
+          vetores do FIPS 180-4, em todo comprimento de 0 a 129 bytes, num megabyte
+          pseudoaleatório e no artefato real.
+
+          **Diagnóstico e carregador deixaram de poder discordar.** `noteit status` e o relatório
+          da sessão MCP perguntavam `Path::is_file`, que **segue** symlink, enquanto o carregador
+          usa `symlink_metadata` e o recusa — um artefato ligado por symlink era anunciado como
+          disponível e rejeitado na primeira pergunta. Os dois passaram a compartilhar a mesma
+          inspeção, e ela continua custando um `stat` por arquivo.
+
+          **O CI passou a rodar os gates que só rodavam localmente.** `embedding-boundary` e
+          `embedding-tests` estavam em `scripts/check` e não no workflow. O estágio `ci-parity`
+          reprova o build se qualquer estágio deixar de aparecer em `.github/workflows/ci.yml`;
+          `offline` é exceção nomeada e documentada, por exigir namespaces de rede sem privilégio.
+
+          **E uma prova frágil foi fortalecida em vez de silenciada.** `mcp_no_network.rs` afirmava
+          a densidade de amostragem do seu monitor por um teto de 1 ms no intervalo **médio** —
+          estatística errada, já que a afirmação da suíte é sobre o **pior** intervalo, e teto
+          insuficiente, já que sob carga execuções com média de 43–122 µs deixaram de ver um
+          socket que provavelmente existia. O controle positivo era o que falhava, quatro
+          execuções em seis. Ele virou encontro marcado, o caminho fail-closed repete a recusa até
+          o instrumento ver uma, e a densidade passou a ser asserida pelo pior intervalo mais uma
+          prova de que o monitor ainda amostrava no fim: **20/20 sob a mesma carga que reprovava
+          4 em 6.**
+
+          **Gate para Fase 4.3D: LIBERADO.**
   - [ ] **4.3D — Providers remotos opcionais.** Planejada. OpenAI, Gemini, Voyage ou outros
         aprovados, sempre opt-in: o processo `noteit-embed` separado, que é o único com cliente
         HTTP e o único que vê a credencial, falando com o Core por AF_UNIX — de modo que a
