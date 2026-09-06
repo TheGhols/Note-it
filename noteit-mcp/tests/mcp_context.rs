@@ -1096,3 +1096,57 @@ fn the_largest_answer_this_tool_can_give_is_still_a_small_one() {
         );
     }
 }
+
+#[test]
+fn parity_between_cli_json_and_mcp_context() {
+    let sandbox = Sandbox::new();
+    let _id1 = sandbox.seed("Sepse grave com disfunção orgânica múltipla e hipotensão refratária.");
+    let _id2 = sandbox
+        .seed("Protocolo de choque séptico: ressuscitação volêmica precoce e noradrenalina.");
+    let _id3 = sandbox.seed("Outro assunto sobre ortopedia e fraturas.");
+
+    let mut client = McpClient::start(&sandbox);
+    let mcp_res = context(
+        &mut client,
+        json!({
+            "query": "choque séptico",
+            "limit": 10
+        }),
+    );
+    client.finish();
+
+    let cli_bin = support::mcp_bin()
+        .parent()
+        .expect("parent dir")
+        .join("noteit");
+    let mut cli_cmd = std::process::Command::new(cli_bin);
+    sandbox.apply_env(&mut cli_cmd);
+    cli_cmd.args(["--json", "contexto", "choque séptico", "--limite", "10"]);
+    let output = cli_cmd.output().expect("cli output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let cli_json: Value = serde_json::from_slice(&output.stdout).expect("valid cli json");
+
+    assert_eq!(cli_json["status"], "ok");
+    let cli_data = &cli_json["data"];
+
+    assert_eq!(cli_data["semantic_status"], mcp_res["semantic_status"]);
+    assert_eq!(cli_data["truncated"], mcp_res["truncated"]);
+    assert_eq!(cli_data["omitted_count"], mcp_res["omitted_count"]);
+
+    let mcp_candidates = mcp_res["candidates"].as_array().expect("mcp candidates");
+    let cli_candidates = cli_data["candidates"].as_array().expect("cli candidates");
+    assert_eq!(cli_candidates.len(), mcp_candidates.len());
+    assert!(!cli_candidates.is_empty());
+
+    for (cli_c, mcp_c) in cli_candidates.iter().zip(mcp_candidates.iter()) {
+        assert_eq!(cli_c["note_id"], mcp_c["note_id"]);
+        assert_eq!(cli_c["label"], mcp_c["label"]);
+        assert_eq!(cli_c["snippet"], mcp_c["snippet"]);
+        assert_eq!(cli_c["reasons"], mcp_c["reasons"]);
+        assert_eq!(cli_c["matched_text"], mcp_c["matched_text"]);
+    }
+}

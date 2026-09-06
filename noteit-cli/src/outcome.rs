@@ -17,6 +17,7 @@
 //! list holds it, and it is the *human* renderer that neutralises terminal
 //! escapes on its way to a terminal. JSON is data and gets the real value.
 
+use noteit_core::context::{ContextError, ContextResult, SemanticStatus};
 use noteit_core::revision::NoteRevision;
 use noteit_core::settings::{SemanticFallbackPolicy, SemanticMode, SemanticProvider};
 use noteit_core::write::{WriteError, WriteOutcome};
@@ -71,6 +72,7 @@ pub enum Command {
     List,
     Read,
     Search,
+    Context,
     Tags,
     Properties,
     Tasks,
@@ -99,6 +101,7 @@ impl Command {
             Self::List => "list",
             Self::Read => "read",
             Self::Search => "search",
+            Self::Context => "context",
             Self::Tags => "tags",
             Self::Properties => "properties",
             Self::Tasks => "tasks",
@@ -137,7 +140,7 @@ impl Command {
     }
 
     /// Every command, for the tests that assert the contract is complete.
-    pub const ALL: [Command; 21] = [
+    pub const ALL: [Command; 22] = [
         Command::Welcome,
         Command::Help,
         Command::Version,
@@ -145,6 +148,7 @@ impl Command {
         Command::List,
         Command::Read,
         Command::Search,
+        Command::Context,
         Command::Tags,
         Command::Properties,
         Command::Tasks,
@@ -245,6 +249,10 @@ pub enum Outcome {
     Search {
         query: String,
         batch: ReadBatch<SearchResult>,
+    },
+    Context {
+        result: Box<ContextResult>,
+        semantic_status: SemanticStatus,
     },
     Tags {
         catalog: MetadataCatalog,
@@ -452,6 +460,10 @@ pub enum ReadError {
     NoteRead { detail: String },
     /// The store could not be listed or searched.
     Listing { detail: String },
+    /// Contextual retrieval failed.
+    Context(ContextError),
+    /// Semantic channel was required by configuration but is unavailable.
+    SemanticUnavailable,
 }
 
 /// Why a command produced no result.

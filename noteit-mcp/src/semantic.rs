@@ -25,7 +25,7 @@ use noteit_core::chunking::CHUNKER_VERSION;
 use noteit_core::context::{self as engine, RetrievalMode, SemanticStatus};
 use noteit_core::embedding::EmbeddingSpaceId;
 use noteit_core::semantic::{
-    index_document, EmbeddingProvider, EmbeddingRecord, InMemoryIndex, SemanticFallback,
+    synchronise, EmbeddingProvider, EmbeddingRecord, InMemoryIndex, SemanticFallback,
     SemanticIndex, SemanticRuntime,
 };
 use noteit_core::settings::{SemanticFallbackPolicy, SemanticRetrievalConfig};
@@ -33,7 +33,7 @@ use noteit_core::{NoteItCore, StorePaths, Uuid};
 use noteit_embedding_local::{ArtifactError, ArtifactExpectation, LocalProvider};
 use noteit_embedding_remote::worker::{WorkerHandle, WorkerPaths};
 use noteit_embedding_remote::{cache, RemoteConfig, RemoteProvider, RemoteProviderId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -659,101 +659,4 @@ impl SemanticSession {
             worker_running,
         }
     }
-}
-
-/// Brings the index up to date with the live store, and only where it is not.
-///
-/// The rule is one sentence: **index what the index does not hold, forget what
-/// the store no longer has.** Everything else follows from it, including the
-/// part that looks missing:
-///
-/// * a note that was never indexed is not held → it is read and indexed;
-/// * a note that was **edited** is still held, so this pass leaves it alone —
-///   and then the retrieval reads it, finds `source_revision` no longer
-///   matches the note as it is now, discards the candidate and forgets the
-///   note. It is then no longer held, so the next pass reindexes it. The
-///   caller notices the drop and runs one more pass immediately, so the edit
-///   is visible to the very question that revealed it;
-/// * a note in the trash is not in the live scan → it is forgotten;
-/// * a restored note is live and not held → it is indexed again.
-///
-/// What this deliberately does **not** do is ask a second, cheaper question
-/// about whether a note changed. `updated_at` moves with the text and stays put
-/// when a tag, a property or a colour changes, so a pass that trusted it would
-/// keep stale vectors for exactly the edits the revision exists to catch. The
-/// canonical revision stays the only detector of note state, which is what §7
-/// of `docs/semantic-retrieval.md` demands.
-///
-/// One note changing therefore costs one note's embedding, never the store's.
-/// What one synchronisation pass did.
-///
-/// Two counts and not one, because they answer two different questions and the
-/// first version of this conflated them. `embedded` is what a request costs
-/// (§81, §82); `forgotten` is what the cache on disk has to stop
-/// holding (§16, §83). A pass can do either without the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Synced {
-    /// Notes read and embedded on this pass. Each one cost the provider.
-    embedded: usize,
-    /// Notes dropped because the live store no longer has them.
-    forgotten: usize,
-}
-
-impl Synced {
-    /// Whether the index is different from what the cache on disk holds.
-    fn changed(self) -> bool {
-        self.embedded > 0 || self.forgotten > 0
-    }
-}
-
-fn synchronise(
-    core: &NoteItCore,
-    provider: &dyn EmbeddingProvider,
-    index: &mut InMemoryIndex,
-) -> Result<Synced, engine::ContextError> {
-    let live = core
-        .storage()
-        .list_notes_by_recency()
-        .map_err(|_| engine::ContextError::StoreUnavailable)?;
-    let live_set: BTreeSet<Uuid> = live.iter().copied().collect();
-
-    // Counted, because a note that left the store has to leave the file too —
-    // not only the in-memory index. Without this count the cache kept the
-    // vectors of trashed notes for ever.
-    let mut forgotten = 0usize;
-    for note_id in index.note_ids() {
-        if !live_set.contains(&note_id) {
-            index.invalidate_note(&note_id);
-            forgotten += 1;
-        }
-    }
-
-    // Counted, and together with `forgotten` this is what decides whether the
-    // remote cache is rewritten. A pass that embedded nothing *and* lost
-    // nothing found every note already cached, and rewriting the same file for
-    // it would be the one cost a warm start is not supposed to have
-    // (§81, §82).
-    let mut embedded = 0usize;
-    for note_id in live {
-        if index.holds(&note_id) {
-            continue;
-        }
-        let Ok(document) = core.read_note(&note_id) else {
-            // A note that cannot be read is not a candidate anywhere else
-            // either, and the retrieval will report it as a warning in its own
-            // words. Skipped rather than half-indexed.
-            continue;
-        };
-        // A note that cannot be embedded — an artifact and a text that have
-        // nothing in common, or a provider that is not answering — is left out
-        // of the index rather than allowed to fail the whole pass. Lexical
-        // retrieval still finds it.
-        if index_document(&document, provider, index).is_ok() {
-            embedded += 1;
-        }
-    }
-    Ok(Synced {
-        embedded,
-        forgotten,
-    })
 }

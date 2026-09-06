@@ -148,6 +148,7 @@ enum MachineData {
     Notes(NotesData),
     Note(NoteEnvelopeData),
     Search(SearchData),
+    Context(ContextData),
     Tags(TagsData),
     Properties(PropertiesData),
     Tasks(TasksData),
@@ -277,6 +278,47 @@ struct SearchData {
     query: String,
     results: Vec<SearchResultData>,
     count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ContextData {
+    semantic_status: &'static str,
+    candidates: Vec<ContextCandidateData>,
+    truncated: bool,
+    omitted_count: usize,
+    warnings: Vec<ContextWarningData>,
+    warnings_truncated: bool,
+    omitted_warning_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ContextCandidateData {
+    note_id: String,
+    label: String,
+    snippet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    reasons: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_text: Option<String>,
+    tasks: Vec<ContextTaskData>,
+    tasks_truncated: bool,
+    omitted_task_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ContextTaskData {
+    note_id: String,
+    task_ref: String,
+    text: String,
+    checked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ContextWarningData {
+    code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -478,6 +520,13 @@ fn read_error_code(error: &ReadError) -> &'static str {
         ReadError::Selector(NoteSelectorError::Ambiguous(_, _)) => "ambiguous_selector",
         ReadError::Selector(NoteSelectorError::StoreUnavailable(_)) => "store_unavailable",
         ReadError::NoteRead { .. } | ReadError::Listing { .. } => "read_failed",
+        ReadError::Context(noteit_core::context::ContextError::QueryTooLong { .. }) => {
+            "invalid_input"
+        }
+        ReadError::Context(noteit_core::context::ContextError::StoreUnavailable) => {
+            "store_unavailable"
+        }
+        ReadError::SemanticUnavailable => "semantic_unavailable",
     }
 }
 
@@ -489,6 +538,10 @@ fn read_error_message(error: &ReadError) -> String {
     match error {
         ReadError::Selector(inner) => inner.to_string(),
         ReadError::NoteRead { detail } | ReadError::Listing { detail } => detail.clone(),
+        ReadError::Context(inner) => inner.to_string(),
+        ReadError::SemanticUnavailable => {
+            "o canal semântico é obrigatório pela configuração e não está disponível".to_string()
+        }
     }
 }
 
@@ -682,6 +735,10 @@ fn data_of(outcome: &Outcome) -> MachineData {
                 results,
             })
         }
+        Outcome::Context {
+            result,
+            semantic_status,
+        } => MachineData::Context(context_data(result, *semantic_status)),
         Outcome::Tags { catalog, .. } => MachineData::Tags(tags_data(catalog)),
         Outcome::Properties { catalog, .. } => MachineData::Properties(properties_data(catalog)),
         Outcome::Tasks { state, batch } => {
@@ -806,6 +863,55 @@ fn search_result(result: &SearchResult) -> SearchResultData {
         snippet: result.snippet.clone(),
         match_count: result.match_count,
         matched_text: result.matched_text.clone(),
+    }
+}
+
+fn context_data(
+    result: &noteit_core::context::ContextResult,
+    semantic_status: noteit_core::context::SemanticStatus,
+) -> ContextData {
+    ContextData {
+        semantic_status: match semantic_status {
+            noteit_core::context::SemanticStatus::NotRequested => "not_requested",
+            noteit_core::context::SemanticStatus::Succeeded => "succeeded",
+            noteit_core::context::SemanticStatus::Unavailable => "unavailable",
+        },
+        candidates: result.candidates.iter().map(context_candidate).collect(),
+        truncated: result.truncated,
+        omitted_count: result.omitted_count,
+        warnings: result.warnings.iter().map(context_warning).collect(),
+        warnings_truncated: result.warnings_truncated,
+        omitted_warning_count: result.omitted_warning_count,
+    }
+}
+
+fn context_candidate(c: &noteit_core::context::Candidate) -> ContextCandidateData {
+    ContextCandidateData {
+        note_id: uuid(&c.note_id),
+        label: c.label.clone(),
+        snippet: c.snippet.clone(),
+        updated_at: timestamp(c.updated_at),
+        reasons: c.reasons.iter().map(|r| r.as_str()).collect(),
+        matched_text: c.matched_text.clone(),
+        tasks: c
+            .tasks
+            .iter()
+            .map(|t| ContextTaskData {
+                note_id: uuid(&t.note_id),
+                task_ref: t.task_ref.clone(),
+                text: t.text.clone(),
+                checked: t.checked,
+            })
+            .collect(),
+        tasks_truncated: c.tasks_truncated,
+        omitted_task_count: c.omitted_task_count,
+    }
+}
+
+fn context_warning(w: &noteit_core::context::ContextWarning) -> ContextWarningData {
+    ContextWarningData {
+        code: read_warning_code(w.kind),
+        note_id: w.note_id.as_ref().map(uuid),
     }
 }
 

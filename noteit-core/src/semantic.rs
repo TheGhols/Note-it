@@ -490,3 +490,65 @@ impl<'a> SemanticRuntime<'a> {
             .nearest_notes(&embedded, self.policy.preliminary_hits)
     }
 }
+
+// ----------------------------------------------------------- synchronization
+
+/// What one synchronisation pass did.
+///
+/// Two counts and not one: `embedded` is what a request costs; `forgotten` is
+/// what the cache on disk has to stop holding. A pass can do either without the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Synced {
+    /// Notes read and embedded on this pass.
+    pub embedded: usize,
+    /// Notes dropped because the live store no longer has them.
+    pub forgotten: usize,
+}
+
+impl Synced {
+    /// Whether the index changed on this pass.
+    pub fn changed(self) -> bool {
+        self.embedded > 0 || self.forgotten > 0
+    }
+}
+
+/// Brings the index up to date with the live store, and only where it is not.
+///
+/// The rule is: index what the index does not hold, forget what the store no
+/// longer has.
+pub fn synchronise(
+    core: &crate::NoteItCore,
+    provider: &dyn EmbeddingProvider,
+    index: &mut InMemoryIndex,
+) -> Result<Synced, crate::context::ContextError> {
+    let live = core
+        .storage()
+        .list_notes_by_recency()
+        .map_err(|_| crate::context::ContextError::StoreUnavailable)?;
+    let live_set: std::collections::BTreeSet<Uuid> = live.iter().copied().collect();
+
+    let mut forgotten = 0usize;
+    for note_id in index.note_ids() {
+        if !live_set.contains(&note_id) {
+            index.invalidate_note(&note_id);
+            forgotten += 1;
+        }
+    }
+
+    let mut embedded = 0usize;
+    for note_id in live {
+        if index.holds(&note_id) {
+            continue;
+        }
+        let Ok(document) = core.read_note(&note_id) else {
+            continue;
+        };
+        if index_document(&document, provider, index).is_ok() {
+            embedded += 1;
+        }
+    }
+    Ok(Synced {
+        embedded,
+        forgotten,
+    })
+}

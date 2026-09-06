@@ -431,6 +431,7 @@ pub fn render_help(ctx: &OutputContext) -> String {
          \x20 listar       Listar notas vivas em ordem de atualização\n\
          \x20 ler <ID>     Ler uma nota pelo UUID ou prefixo de 8 caracteres\n\
          \x20 buscar <Q>   Buscar notas pelo conteúdo de texto\n\
+         \x20 contexto [Q] Recuperar contexto relevante das notas (Segundo Cérebro)\n\
          \x20 tags         Listar tags e contagem de notas\n\
          \x20 propriedades Listar propriedades e contagem de notas\n\
          \x20 tarefas      Listar tarefas (pendentes por padrão), com a referência de cada uma\n\
@@ -474,7 +475,7 @@ pub fn render_help(ctx: &OutputContext) -> String {
          \x20 noteit --json listar\n\
          \x20 noteit listar --help\n\n\
          {section_aliases}\n\
-         \x20 list, read, search, properties, tasks, trash, help, version\n\
+         \x20 list, read, search, context, properties, tasks, trash, help, version\n\
          \x20 create, append, edit, add, remove, set, complete, reopen, restore\n"
     )
 }
@@ -749,6 +750,75 @@ pub fn render_search_results(ctx: &OutputContext, query: &str, results: &[Search
         &format!("{count} notas encontradas")
     };
     out.push_str(&ctx.dim(count_label));
+    out.push('\n');
+
+    out
+}
+
+pub fn render_context_results(
+    ctx: &OutputContext,
+    result: &noteit_core::context::ContextResult,
+    semantic_status: noteit_core::context::SemanticStatus,
+) -> String {
+    if result.candidates.is_empty() {
+        return "Nenhum contexto encontrado.\n".to_string();
+    }
+
+    let mut out = String::new();
+
+    for candidate in &result.candidates {
+        let prefix = ctx.dim(&id_prefix(&candidate.note_id));
+        let label = ctx.bold(&sanitize_for_terminal(&candidate.label));
+        let snippet = sanitize_for_terminal(&candidate.snippet);
+
+        out.push_str(&format!("{prefix}  {label}\n"));
+        out.push_str(&format!("          {snippet}\n"));
+
+        if !candidate.reasons.is_empty() {
+            let reasons_str: Vec<&str> = candidate
+                .reasons
+                .iter()
+                .map(|r| match r {
+                    noteit_core::context::Reason::TextMatch => "texto",
+                    noteit_core::context::Reason::TermMatch => "termos",
+                    noteit_core::context::Reason::SharedTag => "tag",
+                    noteit_core::context::Reason::PropertyMatch => "propriedade",
+                    noteit_core::context::Reason::TaskMatch => "tarefa",
+                    noteit_core::context::Reason::SemanticMatch => "semântico",
+                    noteit_core::context::Reason::Recent => "recente",
+                })
+                .collect();
+            out.push_str(&format!(
+                "          {}\n",
+                ctx.dim(&format!("motivo: {}", reasons_str.join(", ")))
+            ));
+        }
+
+        if !candidate.tasks.is_empty() {
+            for task in &candidate.tasks {
+                let box_mark = if task.checked { "[x]" } else { "[ ]" };
+                let task_text = sanitize_for_terminal(&task.text);
+                out.push_str(&format!("          {box_mark} {task_text}\n"));
+            }
+        }
+
+        out.push('\n');
+    }
+
+    let count = result.candidates.len();
+    let count_label = if count == 1 {
+        "1 candidato encontrado".to_string()
+    } else {
+        format!("{count} candidatos encontrados")
+    };
+    out.push_str(&ctx.dim(&count_label));
+
+    if result.truncated {
+        out.push_str(&ctx.dim(&format!(" ({} omitidos pelo limite)", result.omitted_count)));
+    }
+    if semantic_status == noteit_core::context::SemanticStatus::Unavailable {
+        out.push_str(&ctx.dim(" [canal semântico indisponível]"));
+    }
     out.push('\n');
 
     out
@@ -1131,6 +1201,10 @@ fn render_outcome(ctx: &OutputContext, outcome: &Outcome) -> String {
         Outcome::Notes(batch) => render_notes_list(ctx, &batch.items),
         Outcome::Note { document, .. } => render_note_read(ctx, document),
         Outcome::Search { query, batch } => render_search_results(ctx, query, &batch.items),
+        Outcome::Context {
+            result,
+            semantic_status,
+        } => render_context_results(ctx, result, *semantic_status),
         Outcome::Tags { catalog, .. } => render_tags(ctx, catalog),
         Outcome::Properties { catalog, .. } => render_properties(ctx, catalog),
         Outcome::Tasks { state, batch } => render_tasks(ctx, &batch.items, *state),
@@ -1210,6 +1284,10 @@ pub fn render_read_error(ctx: &OutputContext, error: &ReadError) -> String {
         }
         ReadError::NoteRead { detail } | ReadError::Listing { detail } => {
             sanitize_for_terminal(detail)
+        }
+        ReadError::Context(inner) => sanitize_for_terminal(&inner.to_string()),
+        ReadError::SemanticUnavailable => {
+            "o canal semântico é obrigatório pela configuração e não está disponível.".to_string()
         }
     };
     format!("{} {message}\n", ctx.bold("Erro:"))

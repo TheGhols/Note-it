@@ -99,6 +99,29 @@ pub enum CliCommand {
         propriedade: Vec<String>,
     },
 
+    /// Recuperar contexto relevante das notas (Segundo Cérebro)
+    #[command(name = "contexto", alias = "context")]
+    Contexto {
+        /// Termo ou consulta de busca de contexto
+        consulta: Option<String>,
+
+        /// Limite de notas exibidas (1 a 50)
+        #[arg(long = "limite", alias = "limit")]
+        limite: Option<usize>,
+
+        /// Filtrar por tag (repetível para múltiplos filtros com AND)
+        #[arg(long = "tag", action = clap::ArgAction::Append)]
+        tag: Vec<String>,
+
+        /// Filtrar por propriedade chave=valor (repetível com AND)
+        #[arg(long = "propriedade", alias = "property", action = clap::ArgAction::Append)]
+        propriedade: Vec<String>,
+
+        /// Incluir tarefas correspondentes
+        #[arg(long = "tarefas", alias = "tasks")]
+        tarefas: bool,
+    },
+
     /// Listar catálogo de tags derivadas, ou alterar as tags de uma nota
     #[command(name = "tags")]
     Tags {
@@ -383,6 +406,19 @@ mod tests {
             CliArgs::try_parse_from(["noteit", "search", "choque septico"]).expect("search alias");
         assert!(
             matches!(search.command, Some(CliCommand::Buscar { consulta, .. }) if consulta == "choque septico")
+        );
+
+        let contexto =
+            CliArgs::try_parse_from(["noteit", "contexto", "choque séptico"]).expect("contexto");
+        assert!(
+            matches!(contexto.command, Some(CliCommand::Contexto { consulta: Some(c), .. }) if c == "choque séptico")
+        );
+
+        let context =
+            CliArgs::try_parse_from(["noteit", "context", "sepsis", "--limit", "5", "--tasks"])
+                .expect("context alias");
+        assert!(
+            matches!(context.command, Some(CliCommand::Contexto { consulta: Some(c), limite: Some(5), tarefas: true, .. }) if c == "sepsis")
         );
 
         let tags = CliArgs::try_parse_from(["noteit", "tags"]).expect("tags");

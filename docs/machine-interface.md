@@ -90,7 +90,7 @@ O nome canônico do comando lógico, independente de como foi escrito:
 
 ```text
 welcome   help    version   status
-list      read    search    tags    properties   tasks   trash
+list      read    search    context tags    properties   tasks   trash
 create    append  edit
 tag_add   tag_remove
 property_set   property_remove
@@ -171,6 +171,18 @@ Os carimbos de data e hora são sempre RFC 3339 em UTC (`2026-09-02T00:35:58Z`) 
   "results": [ { "note_id": "…", "label": "…", "snippet": "…",
                  "match_count": 2, "matched_text": "Biópsia" } ],
   "count": 1 }
+
+// contexto
+{ "query": "choque séptico",
+  "candidates": [ { "note_id": "…", "label": "…", "snippet": "…",
+                    "reasons": [ "text_match", "recent" ],
+                    "matched_text": "…",
+                    "tasks": [ { "task_ref": "…", "text": "…", "checked": false, "depth": 0 } ],
+                    "tasks_truncated": false, "omitted_task_count": 0 } ],
+  "count": 1,
+  "truncated": false,
+  "omitted_count": 0,
+  "semantic_status": "disabled" }
 
 // tags
 { "tags": [ { "name": "Medicina", "note_count": 3 } ], "count": 1 }

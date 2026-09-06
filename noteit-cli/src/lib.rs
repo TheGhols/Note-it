@@ -2,6 +2,7 @@ pub mod cli;
 pub mod machine;
 pub mod outcome;
 pub mod output;
+pub mod semantic;
 pub mod welcome;
 
 /// The one write authority, re-exported under the name this crate has always
@@ -361,6 +362,45 @@ fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {
                 Err(detail) => Executed::failed(
                     Some(Command::Search),
                     CommandError::Read(ReadError::Listing { detail }),
+                ),
+            }
+        }
+
+        CliCommand::Contexto {
+            consulta,
+            limite,
+            tag,
+            propriedade,
+            tarefas,
+        } => {
+            let filter = match parse_filter(tag, &propriedade) {
+                Ok(filter) => filter,
+                Err(error) => return usage_failure(Command::Context, error),
+            };
+            let paths = StorePaths::resolve();
+            let core = NoteItCore::open_read_only();
+            let request = noteit_core::context::ContextRequest {
+                query: consulta.unwrap_or_default(),
+                filter,
+                include_tasks: tarefas,
+                limit: limite,
+            };
+
+            match semantic::retrieve_context(&core, &paths, &request) {
+                semantic::Retrieved::Answer(result, semantic_status) => Executed::ok(
+                    Command::Context,
+                    Outcome::Context {
+                        result: Box::new(result),
+                        semantic_status,
+                    },
+                ),
+                semantic::Retrieved::Refused(error) => Executed::failed(
+                    Some(Command::Context),
+                    CommandError::Read(ReadError::Context(error)),
+                ),
+                semantic::Retrieved::SemanticRequired => Executed::failed(
+                    Some(Command::Context),
+                    CommandError::Read(ReadError::SemanticUnavailable),
                 ),
             }
         }
