@@ -1507,10 +1507,10 @@ cache frio, 4 execuções      1 577  1 630  1 712  1 789
                              mínimo    mediana    máximo
 cache quente                  1 375     1 455     1 556
 cache frio                    1 577     1 671     1 789
-as doze                       1 375     1 471     1 789
+as doze                       1 375     1 496     1 789
 ```
 
-**As doze cabem, e a pior delas cabe com 10,6% de folga.** O componente, na
+**As doze cabem, e a pior delas cabe com 211 ms de folga (10,5%).** O componente, na
 mesma medição: `ring` 370–426 MiB/s, e a implementação do Core, cronometrada
 lado a lado sobre os mesmos bytes e concordando com ela em todas as execuções,
 230–264 MiB/s. Essa segunda coluna é o diagnóstico que fecha o argumento da
@@ -1518,8 +1518,8 @@ lado a lado sobre os mesmos bytes e concordando com ela em todas as execuções,
 inteiro antes de ler um byte ou construir um tokenizer. Não havia como caber.
 
 **O que isto não resolve.** O orçamento continua sendo função do tamanho do
-artefato e da vazão de SHA-256 da máquina, e a margem medida vai de 22% no
-melhor caso a 10,6% no pior: uma máquina mais lenta ou um artefato maior tornam
+artefato e da vazão de SHA-256 da máquina, e a margem medida vai de 625 ms
+(31%) no melhor caso a 211 ms (10,5%) no pior: uma máquina mais lenta ou um artefato maior tornam
 a conta apertada de novo. O cache frio, agora que foi medido de fato, custa
 150–230 ms e **não** é o que decide o veredito; o SHA-256 é.
 Numa máquina com SHA-NI a verificação cairia para ~250 ms e a margem deixaria de

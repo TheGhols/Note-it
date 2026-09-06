@@ -2847,7 +2847,7 @@ O fechamento da R1 não aceitou essas quatro como prova. Repetiu a medição em
 quatro delas com os arquivos despejados por `posix_fadvise(DONTNEED)`, e a
 condição verificada pela taxa de leitura e não afirmada. Cada execução está
 listada em §26.7. As doze cabem: **1 375–1 556 ms com cache quente, 1 577–1 789
-ms com cache frio**, a pior delas com 10,6% de folga. Na mesma medição, a
+ms com cache frio**, a pior delas com 211 ms de folga (10,5%). Na mesma medição, a
 implementação do Core sozinha custaria **1 854–2 123 ms** — o orçamento inteiro
 antes de ler um byte — que é o motivo de a 4.3C não ter tido como caber.
 
@@ -2888,7 +2888,7 @@ pelo nome.
 **O que esta decisão deliberadamente não fez.**
 
 * **Não moveu o orçamento.** Ele continua em 2 s, e a §26.7 registra que a
-  margem vai de 22% a 10,6%, as doze medições individuais, e de onde a folga
+  margem vai de 625 ms (31%) a 211 ms (10,5%), as doze medições individuais, e de onde a folga
   some.
 * **Não escreveu SIMD à mão.** A tentativa de acelerar o laço do Core com
   índices constantes foi medida e ficou **mais lenta** (168 MiB/s); está

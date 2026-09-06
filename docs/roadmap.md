@@ -1340,7 +1340,7 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           crates puras em Rust são mais lentas que a do próprio Note-it. Com `ring` verificando os
           dois arquivos do artefato, a carga foi certificada em **doze processos independentes** —
           oito com cache de página quente, quatro com ele frio por despejo controlado e verificado
-          — e mede **1 375–1 789 ms**, todas dentro dos 2 s, a pior com 10,6% de folga. Na mesma
+          — e mede **1 375–1 789 ms**, todas dentro dos 2 s, a pior com 211 ms de folga (10,5%). Na mesma
           medição o SHA-256 do Core sozinho custaria 1 854–2 123 ms, que é o orçamento inteiro
           antes de ler um byte: a 4.3C não tinha como caber. `ring` fica **isolada** em
           `noteit-embedding-local`, declarada num único manifesto e usada num único arquivo;
