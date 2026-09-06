@@ -6,6 +6,7 @@ members = [
     "noteit-embedding-local",
     "noteit-embed-protocol",
     "noteit-embed",
+    "noteit-embedding-remote",
 ]
 resolver = "2"
 

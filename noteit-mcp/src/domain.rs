@@ -103,10 +103,8 @@ impl Store {
     /// what makes "a release cannot turn semantics on" true of this type and
     /// not only of the file format.
     pub fn with_settings(paths: StorePaths, semantic: SemanticRetrievalConfig) -> Self {
-        Self {
-            paths,
-            semantic: SemanticSession::new(semantic),
-        }
+        let semantic = SemanticSession::new(semantic, &paths);
+        Self { paths, semantic }
     }
 
     /// A store whose semantic channel was assembled by the caller.

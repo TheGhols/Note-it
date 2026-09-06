@@ -185,6 +185,16 @@ impl InMemoryIndex {
     pub fn note_ids(&self) -> Vec<Uuid> {
         self.by_note.keys().copied().collect()
     }
+
+    /// What is held for one note, in the order it was inserted.
+    ///
+    /// Added in 4.3D so a remote index can be written to disk. A borrow and
+    /// never a clone of the whole index: the caller that persists is the only
+    /// one that needs this, and a `records()` returning everything would be an
+    /// invitation to hold a second copy of every vector in the process.
+    pub fn records_for(&self, note_id: &Uuid) -> &[EmbeddingRecord] {
+        self.by_note.get(note_id).map(Vec::as_slice).unwrap_or(&[])
+    }
 }
 
 impl SemanticIndex for InMemoryIndex {

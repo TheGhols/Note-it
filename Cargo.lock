@@ -1204,6 +1204,7 @@ dependencies = [
  "libc",
  "noteit-core",
  "noteit-embedding-local",
+ "noteit-embedding-remote",
  "serde",
  "serde_json",
  "tempfile",
@@ -1256,11 +1257,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "noteit-embedding-remote"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "noteit-core",
+ "noteit-embed-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "noteit-mcp"
 version = "0.1.0"
 dependencies = [
  "noteit-core",
  "noteit-embedding-local",
+ "noteit-embedding-remote",
  "rmcp",
  "schemars",
  "serde",

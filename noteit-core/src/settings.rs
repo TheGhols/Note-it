@@ -68,16 +68,76 @@ pub enum SemanticMode {
 
 /// Which provider the semantic channel uses.
 ///
-/// One variant in 4.3C, and that is the honest shape: a remote provider is
-/// 4.3D's, and an enum listing providers that do not exist would be an API
-/// nobody wrote. `local` is also the default *inside* `mode = "semantic"`, so
-/// turning semantics on without saying more never reaches a network.
+/// One variant in 4.3C and four since 4.3D. `local` is still the default
+/// *inside* `mode = "semantic"`, so turning semantics on without saying more
+/// never reaches a network: a remote provider is only ever reached by somebody
+/// naming it.
+///
+/// There is no `Anthropic`. The official documentation says, verbatim,
+/// *"Anthropic does not offer its own embedding model"*, and a variant for a
+/// product that does not exist would be an API nobody wrote.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticProvider {
     /// In-process, offline, no key and no charge. Nothing leaves the machine.
     #[default]
     Local,
+    /// OpenAI, through the isolated `noteit-embed` worker.
+    #[serde(rename = "openai")]
+    OpenAi,
+    /// Google Gemini, through the isolated `noteit-embed` worker.
+    Gemini,
+    /// Voyage AI, through the isolated `noteit-embed` worker.
+    Voyage,
+}
+
+impl SemanticProvider {
+    /// The stable identifier this provider is known by.
+    ///
+    /// Never a translated label: it becomes the `provider` field of an
+    /// `EmbeddingSpaceId` and therefore part of what decides whether two
+    /// vectors may be compared (§69).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::OpenAi => "openai",
+            Self::Gemini => "gemini",
+            Self::Voyage => "voyage",
+        }
+    }
+
+    /// Whether choosing this provider means note text leaves the machine.
+    ///
+    /// The one question the privacy warning is built from, answered by the
+    /// type rather than by a list somebody keeps in step (§20, §54).
+    pub const fn is_remote(self) -> bool {
+        !matches!(self, Self::Local)
+    }
+
+    /// The model this provider uses when the configuration names none.
+    ///
+    /// A **versioned** identifier for every one of them, which is §5.1's
+    /// fourth rule: prefer the pinned name when the vendor publishes one, so
+    /// that a default configuration produces a space that can be verified
+    /// rather than one marked as an unverifiable alias.
+    pub const fn default_model(self) -> &'static str {
+        match self {
+            Self::Local => "potion-multilingual-128M",
+            Self::OpenAi => "text-embedding-3-small",
+            Self::Gemini => "gemini-embedding-001",
+            Self::Voyage => "voyage-4",
+        }
+    }
+
+    /// The dimension that model produces when none is asked for.
+    pub const fn default_dimension(self) -> usize {
+        match self {
+            Self::Local => 256,
+            Self::OpenAi => 1536,
+            Self::Gemini => 3072,
+            Self::Voyage => 1024,
+        }
+    }
 }
 
 /// What the semantic channel does when it cannot answer.
@@ -104,7 +164,7 @@ pub enum SemanticFallbackPolicy {
 /// after it while the defaults hold — [`AppConfig`] does not serialise this
 /// table unless something in it was changed, so enabling the feature is visible
 /// in the file and leaving it alone rewrites nothing.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SemanticRetrievalConfig {
     #[serde(default)]
     pub mode: SemanticMode,
@@ -112,6 +172,22 @@ pub struct SemanticRetrievalConfig {
     pub provider: SemanticProvider,
     #[serde(default)]
     pub fallback: SemanticFallbackPolicy,
+    /// The model, when the configuration names one.
+    ///
+    /// `None` means [`SemanticProvider::default_model`], which is a versioned
+    /// identifier for every provider. Absent from a `config.toml` written
+    /// before 4.3D, and that absence must keep loading — which is what
+    /// `#[serde(default)]` on every field of this table is for (§71).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The dimension, when the configuration asks for one.
+    ///
+    /// `None` means the model's own, and the two are different facts:
+    /// `text-embedding-ada-002` refuses a `dimensions` field, so "1536 because
+    /// that is what the model gives" and "1536 because somebody asked" cannot
+    /// be the same request even though they name one number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimension: Option<usize>,
 }
 
 impl SemanticRetrievalConfig {
@@ -129,7 +205,104 @@ impl SemanticRetrievalConfig {
     pub fn semantic_is_enabled(&self) -> bool {
         self.mode == SemanticMode::Semantic && self.fallback != SemanticFallbackPolicy::LexicalOnly
     }
+
+    /// Whether this configuration sends note text off the machine.
+    ///
+    /// Both halves matter and both are checked: a remote provider that is not
+    /// enabled sends nothing, and an enabled channel with the local provider
+    /// sends nothing either. This is the predicate every privacy warning and
+    /// every "does a worker start" decision is built from, so there is one of
+    /// it (§20, §43, §44).
+    pub fn remote_is_active(&self) -> bool {
+        self.semantic_is_enabled() && self.provider.is_remote()
+    }
+
+    /// The model this configuration resolves to.
+    pub fn resolved_model(&self) -> String {
+        self.model
+            .clone()
+            .unwrap_or_else(|| self.provider.default_model().to_string())
+    }
+
+    /// The dimension this configuration resolves to, and whether it was asked
+    /// for.
+    pub fn resolved_dimension(&self) -> (usize, bool) {
+        match self.dimension {
+            Some(dimension) => (dimension, true),
+            None => (self.provider.default_dimension(), false),
+        }
+    }
+
+    /// Why this configuration cannot be used, if it cannot.
+    ///
+    /// §72: a remote mode with an empty model, a dimension of zero or an
+    /// absurd one is a typed, documented refusal rather than a request that
+    /// fails somewhere downstream with a vendor's sentence.
+    pub fn validate(&self) -> Result<(), SemanticConfigError> {
+        if let Some(model) = &self.model {
+            let trimmed = model.trim();
+            if trimmed.is_empty() {
+                return Err(SemanticConfigError::EmptyModel);
+            }
+            if trimmed.len() > 64
+                || !trimmed
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+                || trimmed.starts_with('.')
+                || trimmed.contains("..")
+            {
+                return Err(SemanticConfigError::InvalidModel);
+            }
+        }
+        if let Some(dimension) = self.dimension {
+            if dimension == 0 {
+                return Err(SemanticConfigError::ZeroDimension);
+            }
+            if dimension > MAX_CONFIGURED_DIMENSION {
+                return Err(SemanticConfigError::DimensionTooLarge);
+            }
+        }
+        Ok(())
+    }
 }
+
+/// The largest dimension a configuration may ask for.
+///
+/// Above every dimension any supported provider offers — OpenAI's largest is
+/// 3 072, Gemini's is 3 072, Voyage's is 2 048 — and finite, which is the
+/// property that matters.
+pub const MAX_CONFIGURED_DIMENSION: usize = 4096;
+
+/// Why a semantic configuration is refused.
+///
+/// Facts and not sentences from anywhere else, and no variant carries the
+/// offending value: this type is one layer away from a diagnostic somebody
+/// pastes into an issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticConfigError {
+    /// `model = ""`.
+    EmptyModel,
+    /// A model name outside the token alphabet — which for a remote provider
+    /// is a name that could steer a URL, since Gemini puts the model in a path.
+    InvalidModel,
+    /// `dimension = 0`, which is a space nothing can be compared in.
+    ZeroDimension,
+    /// A dimension beyond [`MAX_CONFIGURED_DIMENSION`].
+    DimensionTooLarge,
+}
+
+impl std::fmt::Display for SemanticConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyModel => "o modelo configurado está vazio",
+            Self::InvalidModel => "o modelo configurado tem caracteres que não são de um modelo",
+            Self::ZeroDimension => "a dimensão configurada é zero",
+            Self::DimensionTooLarge => "a dimensão configurada está acima do máximo suportado",
+        })
+    }
+}
+
+impl std::error::Error for SemanticConfigError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppConfig {

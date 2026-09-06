@@ -21,6 +21,12 @@ noteit-core = { path = "../noteit-core" }
 # makes turning the feature on a matter of configuration rather than of which
 # binary somebody happened to install.
 noteit-embedding-local = { path = "../noteit-embedding-local" }
+# The remote provider. Present in every build and reached in none of them by
+# default: the factory configuration names `local`, and a remote provider is
+# only ever built by somebody naming one. It brings no HTTP and no TLS —
+# `scripts/check-mcp-boundary` still refuses both in this graph, unchanged, and
+# that is the property the whole process split exists to keep.
+noteit-embedding-remote = { path = "../noteit-embedding-remote" }
 # The official Rust SDK for the Model Context Protocol. Nothing here
 # implements JSON-RPC, framing or version negotiation: that is the SDK's job
 # and a second implementation of a protocol is a second set of bugs.

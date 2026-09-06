@@ -197,9 +197,22 @@ struct SemanticStatusData {
     fallback: &'static str,
     enabled: bool,
     local: bool,
-    model: &'static str,
+    model: String,
+    dimension: usize,
     artifact_present: bool,
     artifact_path: Option<String>,
+    /// Whether note text leaves the machine under this configuration.
+    remote: bool,
+    /// The same sentence the human renderer prints, so a script that reads
+    /// this surface cannot honestly claim it was not told (§54).
+    privacy: &'static str,
+    /// Whether the vendor promises the model behind this name does not move.
+    space_verifiable: bool,
+    /// Whether a key exists. **Never the key**: this field is a boolean and
+    /// there is no field for a value (§53).
+    credential_present: bool,
+    worker_running: bool,
+    cache_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -710,6 +723,9 @@ fn status_data(report: &StatusReport) -> StatusData {
             },
             provider: match semantic.provider {
                 SemanticProvider::Local => "local",
+                SemanticProvider::OpenAi => "openai",
+                SemanticProvider::Gemini => "gemini",
+                SemanticProvider::Voyage => "voyage",
             },
             fallback: match semantic.fallback {
                 SemanticFallbackPolicy::Automatic => "automatic",
@@ -717,12 +733,25 @@ fn status_data(report: &StatusReport) -> StatusData {
                 SemanticFallbackPolicy::LexicalOnly => "lexical_only",
             },
             enabled: semantic.enabled,
-            // One provider exists in this phase and it runs in this process.
-            local: true,
-            model: semantic.model,
+            local: !semantic.remote,
+            model: semantic.model.clone(),
+            dimension: semantic.dimension,
             artifact_present: semantic.artifact_present,
             artifact_path: semantic
                 .artifact_directory
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            remote: semantic.remote,
+            privacy: if semantic.remote {
+                "trechos das suas notas sao enviados ao provider remoto para gerar embeddings"
+            } else {
+                "o conteudo nao sai desta maquina"
+            },
+            space_verifiable: semantic.space_verifiable,
+            credential_present: semantic.credential_present,
+            worker_running: semantic.worker_running,
+            cache_path: semantic
+                .cache_directory
                 .as_ref()
                 .map(|path| path.display().to_string()),
         },

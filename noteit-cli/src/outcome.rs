@@ -193,9 +193,35 @@ pub struct SemanticStatusReport {
     pub provider: SemanticProvider,
     pub fallback: SemanticFallbackPolicy,
     pub enabled: bool,
-    pub model: &'static str,
+    /// The model in use, which since 4.3D is not always the local one.
+    pub model: String,
     pub artifact_present: bool,
     pub artifact_directory: Option<PathBuf>,
+    /// Whether this configuration sends note text off the machine.
+    pub remote: bool,
+    /// The dimension the space declares.
+    pub dimension: usize,
+    /// Whether the vendor promises the model behind this name does not move.
+    ///
+    /// `false` for a mutable alias, and it is shown rather than hidden: with
+    /// one, nothing can detect that the weights changed on the other side, and
+    /// §32 says the honest answer is to expose that and keep a rebuild
+    /// path rather than to invent a detector.
+    pub space_verifiable: bool,
+    /// Whether a credential is present for the configured provider.
+    ///
+    /// **A boolean and never a value.** A person needs to know whether they
+    /// still have to put a key somewhere; nobody needs the key echoed back
+    /// (§53).
+    pub credential_present: bool,
+    /// Whether the worker is running *now*.
+    ///
+    /// Asked without starting one: a diagnostic that started a process to say
+    /// whether a process was running would be a different command
+    /// (§53).
+    pub worker_running: bool,
+    /// Where the remote cache for this space would be.
+    pub cache_directory: Option<PathBuf>,
 }
 
 /// A command that produced a result.

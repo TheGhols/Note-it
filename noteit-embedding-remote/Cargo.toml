@@ -1,0 +1,33 @@
+[package]
+name = "noteit-embedding-remote"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Note-it's remote embedding provider: an AF_UNIX client, a worker's lifecycle, and a derived vector cache"
+publish = false
+
+[dependencies]
+# The contracts. The dependency points this way for the same reason it does in
+# `noteit-embedding-local`: the Core defines `EmbeddingProvider` and must never
+# learn what runs behind it.
+noteit-core = { path = "../noteit-core" }
+# The two messages and their limits, shared with the worker.
+noteit-embed-protocol = { path = "../noteit-embed-protocol" }
+# The cache header. Its body is a byte layout, not JSON.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Where the cache lives, by the same XDG rules the rest of Note-it follows.
+dirs = "5.0"
+
+# There is deliberately no HTTP crate here, and no TLS one. This crate is a
+# *client of the worker*, not a client of a vendor: it opens an AF_UNIX socket
+# and writes a frame. `scripts/check-embed-boundary` fails the build if a
+# network stack ever appears in this graph — that is the whole point of the
+# process split, and this manifest is where it would be undone.
+
+[dev-dependencies]
+noteit-core = { path = "../noteit-core", features = ["test-support"] }
+tempfile = "3.10"

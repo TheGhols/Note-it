@@ -544,23 +544,78 @@ fn render_semantic_status(ctx: &OutputContext, semantic: &SemanticStatusReport) 
     };
     let provider = match semantic.provider {
         SemanticProvider::Local => "local (em processo, nada sai desta máquina)",
+        SemanticProvider::OpenAi => "openai (remoto)",
+        SemanticProvider::Gemini => "gemini (remoto)",
+        SemanticProvider::Voyage => "voyage (remoto)",
     };
     out.push_str(&format!("Provider  {provider}\n"));
     out.push_str(&format!("Modelo    {}\n", semantic.model));
+    out.push_str(&format!("Dimensão  {}\n", semantic.dimension));
     out.push_str(&format!("Fallback  {fallback}\n"));
-    out.push_str(&format!("Artefato  {availability}\n"));
-    if let Some(directory) = &semantic.artifact_directory {
+
+    if !semantic.remote {
+        out.push_str(&format!("Artefato  {availability}\n"));
+        if let Some(directory) = &semantic.artifact_directory {
+            out.push_str(&format!(
+                "          {}\n",
+                sanitize_for_terminal(&directory.display().to_string())
+            ));
+        }
+        // The one sentence §20 requires of the local mode, said plainly
+        // rather than left to be deduced from the word "local".
+        out.push_str(&format!(
+            "Privacid. {}\n",
+            ctx.green("o conteúdo não sai desta máquina")
+        ));
+    } else {
+        // §20 and §54: the difference between local and remote has to
+        // be legible, not deducible. It is stated before anything else about
+        // the remote configuration, and it names the provider.
+        out.push_str(&format!(
+            "Privacid. {}\n",
+            ctx.yellow(&format!(
+                "trechos das suas notas são enviados para {} para gerar embeddings",
+                semantic.provider.as_str()
+            ))
+        ));
         out.push_str(&format!(
             "          {}\n",
-            sanitize_for_terminal(&directory.display().to_string())
+            ctx.dim("um índice local não torna privado um embedding gerado remotamente")
         ));
+        let credential = if semantic.credential_present {
+            ctx.green("presente")
+        } else {
+            ctx.yellow("ausente — o worker não terá como autenticar")
+        };
+        // Yes or no. Never the value: there is no code path from a key to this
+        // line, because `credential_present` is a bool.
+        out.push_str(&format!("Credenc.  {credential}\n"));
+        let space = if semantic.space_verifiable {
+            ctx.green("verificável (o fornecedor versiona este nome)")
+        } else {
+            ctx.yellow("NÃO verificável (alias móvel — os pesos podem mudar sem aviso)")
+        };
+        out.push_str(&format!("Espaço    {space}\n"));
+        let worker = if semantic.worker_running {
+            ctx.green("em execução")
+        } else {
+            ctx.dim("não iniciado (sob demanda)")
+        };
+        out.push_str(&format!("Worker    {worker}\n"));
+        if let Some(directory) = &semantic.cache_directory {
+            out.push_str(&format!(
+                "Cache     {}\n",
+                sanitize_for_terminal(&directory.display().to_string())
+            ));
+        }
     }
+
     // The index lives in the process that answers questions, which is the MCP
     // server and never this one. Saying so is more useful than a number that
     // would always be zero here.
     out.push_str(&format!(
         "Índice    {}\n",
-        ctx.dim("em memória, por processo — construído por quem responde consultas")
+        ctx.dim("construído por quem responde consultas; o remoto persiste em cache")
     ));
     out
 }

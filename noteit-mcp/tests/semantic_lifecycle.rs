@@ -147,6 +147,10 @@ fn settings(mode: SemanticMode, fallback: SemanticFallbackPolicy) -> SemanticRet
         mode,
         provider: SemanticProvider::Local,
         fallback,
+        // Absent, which is what a `config.toml` written before 4.3D has and
+        // what every local configuration keeps having.
+        model: None,
+        dimension: None,
     }
 }
 

@@ -215,6 +215,19 @@ impl ChunkId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Rebuilds an identifier that was written down, refusing anything else.
+    ///
+    /// Added in 4.3D for the remote cache. A `ChunkId` is the digest `of`
+    /// produced, so the only thing that can be checked about a stored one is
+    /// that it is a digest — which is enough to stop an arbitrary string
+    /// becoming an identifier, and honest about not being a proof that this
+    /// digest was ever computed from a chunk. What makes a cached record
+    /// trustworthy is the file's own digest and the `source_revision` compared
+    /// against the note, not this.
+    pub fn from_digest(text: &str) -> Option<Self> {
+        crate::embedding::is_digest(text).then(|| Self(text.to_string()))
+    }
 }
 
 #[cfg(test)]

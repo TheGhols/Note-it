@@ -185,6 +185,33 @@ fn status() -> StatusReport {
         .as_deref()
         .map(noteit_embedding_local::artifact::artifact_availability)
         .is_some_and(|availability| availability.is_ok());
+    let remote = semantic.provider.is_remote();
+    let model = semantic.resolved_model();
+    let (dimension, _) = semantic.resolved_dimension();
+
+    // Everything below is answered *without* opening a network, starting a
+    // worker or reading a key's value. §53: a diagnostic that had to
+    // reach a provider to describe itself would be the one command that turned
+    // `lexical_only` into traffic.
+    let (space_verifiable, credential_present, cache_directory) = if remote {
+        let provider = remote_provider_id(semantic.provider);
+        let space =
+            provider.map(|id| noteit_embedding_remote::space::space_for(id, &model, dimension));
+        (
+            space
+                .as_ref()
+                .map(|space| space.artifact.is_verifiable())
+                .unwrap_or(false),
+            provider.is_some_and(|id| credential_is_present(id, &paths.config_dir)),
+            space.as_ref().and_then(|space| {
+                noteit_embedding_remote::cache::default_root()
+                    .map(|root| noteit_embedding_remote::cache::cache_directory(&root, space))
+            }),
+        )
+    } else {
+        (true, false, None)
+    };
+
     StatusReport {
         paths,
         semantic: SemanticStatusReport {
@@ -192,11 +219,39 @@ fn status() -> StatusReport {
             provider: semantic.provider,
             fallback: semantic.fallback,
             enabled: semantic.semantic_is_enabled(),
-            model: noteit_embedding_local::POTION_MULTILINGUAL_128M.model,
+            model,
             artifact_present,
             artifact_directory: directory,
+            remote,
+            dimension,
+            space_verifiable,
+            credential_present,
+            // The CLI is not the process that answers questions, so it never
+            // has a worker of its own. Saying "no" here is true of this
+            // process and is not a claim about the MCP server's.
+            worker_running: false,
+            cache_directory,
         },
     }
+}
+
+/// The wire identifier for a configured provider, when it has one.
+fn remote_provider_id(
+    provider: noteit_core::settings::SemanticProvider,
+) -> Option<noteit_embedding_remote::RemoteProviderId> {
+    noteit_embedding_remote::RemoteProviderId::parse(provider.as_str())
+}
+
+/// Whether a key exists for this provider — never what it is.
+///
+/// Reads only enough to answer yes or no, and the value is dropped on the next
+/// line. `Credential` has no `Debug` and no `Display`, so there is no way for
+/// it to reach a rendered status even by accident (§53, §22).
+fn credential_is_present(
+    provider: noteit_embedding_remote::RemoteProviderId,
+    config_dir: &std::path::Path,
+) -> bool {
+    noteit_embedding_remote::credential_present(provider, config_dir)
 }
 
 fn execute(parsed: CliArgs, stdin: StdinSource<'_>) -> Executed {

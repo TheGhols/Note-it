@@ -368,6 +368,18 @@ impl EmbeddingVector {
         self.values.len()
     }
 
+    /// The components, for the one caller that has to write them down.
+    ///
+    /// Added in 4.3D for the remote cache, which persists vectors that cost
+    /// money to obtain. Deliberately a borrow and deliberately not `Debug`,
+    /// `Display` or `Serialize` on the type itself: a vector is derived from a
+    /// private note, and the difference between "a module that decided to
+    /// persist this" and "every log line that formatted it" is exactly this
+    /// method being the only way out.
+    pub fn components(&self) -> &[f32] {
+        &self.values
+    }
+
     /// Cosine similarity against another vector of the same dimension.
     ///
     /// Both vectors are valid by construction and both norms are positive, so
@@ -496,6 +508,26 @@ pub enum SemanticError {
     ChunkerMismatch { expected: u32, actual: u32 },
     /// A document could not be reduced to the canonical form an identity needs.
     Unindexable,
+    /// The provider refused the credential, or there was none to offer.
+    ///
+    /// The five variants below arrived with 4.3D and remote providers, and
+    /// they are the categories §11 and §25 of
+    /// `docs/semantic-retrieval.md` name. A local provider produces none of
+    /// them — it has no credential, no quota and no clock — which is why they
+    /// were not here before and why adding them changed no existing arm.
+    ///
+    /// Not one of them carries a payload. A vendor's sentence, its request
+    /// identifier and its HTTP body are exactly what must not travel, and a
+    /// variant with nothing in it cannot carry one however it is formatted.
+    Authentication,
+    /// The provider does not have the model that was asked for.
+    ModelUnavailable,
+    /// The provider is rate limiting, and the retry policy gave up.
+    RateLimited,
+    /// A timeout fired: connect, request, or the whole operation.
+    Timeout,
+    /// The operation was abandoned before it finished.
+    Cancelled,
 }
 
 impl fmt::Display for SemanticError {
@@ -520,6 +552,15 @@ impl fmt::Display for SemanticError {
             Self::Unindexable => {
                 formatter.write_str("o documento não pôde ser reduzido à forma canônica")
             }
+            Self::Authentication => {
+                formatter.write_str("o provider recusou a credencial, ou não havia uma")
+            }
+            Self::ModelUnavailable => {
+                formatter.write_str("o provider não tem o modelo configurado")
+            }
+            Self::RateLimited => formatter.write_str("o provider está limitando a taxa"),
+            Self::Timeout => formatter.write_str("o provider não respondeu a tempo"),
+            Self::Cancelled => formatter.write_str("a operação foi cancelada"),
         }
     }
 }

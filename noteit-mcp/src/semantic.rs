@@ -21,15 +21,19 @@
 //! `noteit-embedding-local`, whose whole dependency graph is checked by
 //! `scripts/check-embedding-boundary`.
 
+use noteit_core::chunking::CHUNKER_VERSION;
 use noteit_core::context::{self as engine, RetrievalMode, SemanticStatus};
+use noteit_core::embedding::EmbeddingSpaceId;
 use noteit_core::semantic::{
-    index_document, EmbeddingProvider, InMemoryIndex, SemanticFallback, SemanticIndex,
-    SemanticRuntime,
+    index_document, EmbeddingProvider, EmbeddingRecord, InMemoryIndex, SemanticFallback,
+    SemanticIndex, SemanticRuntime,
 };
 use noteit_core::settings::{SemanticFallbackPolicy, SemanticRetrievalConfig};
-use noteit_core::{NoteItCore, Uuid};
+use noteit_core::{NoteItCore, StorePaths, Uuid};
 use noteit_embedding_local::{ArtifactError, ArtifactExpectation, LocalProvider};
-use std::collections::BTreeSet;
+use noteit_embedding_remote::worker::{WorkerHandle, WorkerPaths};
+use noteit_embedding_remote::{cache, RemoteConfig, RemoteProvider, RemoteProviderId};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -48,12 +52,36 @@ pub enum Retrieved {
 enum Loaded {
     /// Not attempted. The factory default never leaves this state.
     Never,
-    Ready(Box<LocalProvider>),
+    /// The in-process provider, with its artifact read and verified.
+    Local(Box<LocalProvider>),
+    /// The out-of-process one.
+    ///
+    /// Building this starts nothing: a `RemoteProvider` holds a socket path and
+    /// a handle, and the worker is spawned by the first request that actually
+    /// needs one (§44). So there is no "failed to load" state for the
+    /// remote arm — a provider that cannot be reached fails per request, with
+    /// the typed word for why, and the next request may well succeed.
+    Remote(Box<RemoteProvider>),
     /// Attempted and refused. Remembered rather than retried: the artifact is
     /// half a gigabyte and re-reading it on every query to be told the same
     /// thing again would cost seconds per question. Provisioning a model is an
     /// explicit act, and so is restarting the server after it.
     Failed(ArtifactError),
+}
+
+impl Loaded {
+    /// The provider, whichever it is.
+    fn provider(&self) -> Option<&dyn EmbeddingProvider> {
+        match self {
+            Self::Local(provider) => Some(provider.as_ref()),
+            Self::Remote(provider) => Some(provider.as_ref()),
+            Self::Never | Self::Failed(_) => None,
+        }
+    }
+
+    fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote(_))
+    }
 }
 
 /// The provider, the index, and how much of the store is in it.
@@ -62,6 +90,19 @@ struct SemanticState {
     index: Option<InMemoryIndex>,
     indexed_at: Option<SystemTime>,
     vectors: usize,
+    /// Whether the on-disk cache has been consulted for the space now held.
+    ///
+    /// Consulted once per space and not once per query: reading it is the
+    /// thing that stops a second start from re-embedding the whole store, and
+    /// doing it again on every question would be a different kind of waste.
+    cache_consulted: bool,
+    /// Whether anything has been embedded since the cache was last written.
+    ///
+    /// The remote cache is written only when this is true. A start that found
+    /// every note already cached writes nothing, which is what makes "a warm
+    /// start costs no requests" also mean "a warm start costs no rewrite"
+    /// (§81).
+    cache_dirty: bool,
 }
 
 impl SemanticState {
@@ -71,6 +112,8 @@ impl SemanticState {
             index: None,
             indexed_at: None,
             vectors: 0,
+            cache_consulted: false,
+            cache_dirty: false,
         }
     }
 }
@@ -132,11 +175,93 @@ impl ArtifactSource {
     }
 }
 
+/// Where a remote provider's worker and cache live.
+#[derive(Clone)]
+pub struct RemoteSource {
+    pub config: RemoteConfig,
+    pub worker: Arc<WorkerHandle>,
+    /// Where the worker looks for a credential, so a diagnostic can ask
+    /// whether one is there without reaching for the worker.
+    pub config_dir: PathBuf,
+    /// Where the derived vector cache goes.
+    ///
+    /// `None` means no cache at all, which is a state only a test asks for: in
+    /// the product a remote provider without persistence would re-embed the
+    /// whole store on every start, and §20 measured what that costs in
+    /// money rather than in seconds.
+    pub cache_root: Option<PathBuf>,
+}
+
+/// What a session builds when it is asked for a provider.
+#[derive(Clone)]
+pub enum ProviderSource {
+    Local(ArtifactSource),
+    Remote(Box<RemoteSource>),
+}
+
+impl ProviderSource {
+    /// Resolves the configuration into something buildable.
+    ///
+    /// **Nothing is loaded and no process is started here.** This decides what
+    /// *would* be built; `ensure_provider` is what builds it, and only when a
+    /// question actually needs one.
+    pub fn from_settings(settings: &SemanticRetrievalConfig, paths: &StorePaths) -> Self {
+        match RemoteProviderId::parse(settings.provider.as_str()) {
+            None => Self::Local(ArtifactSource::Pinned),
+            Some(provider) => {
+                let (dimension, dimension_requested) = settings.resolved_dimension();
+                Self::Remote(Box::new(RemoteSource {
+                    config: RemoteConfig {
+                        provider,
+                        model: settings.resolved_model(),
+                        dimension,
+                        dimension_requested,
+                    },
+                    worker: Arc::new(WorkerHandle::new(WorkerPaths::resolve(
+                        paths.config_dir.clone(),
+                        &paths.runtime_dir,
+                    ))),
+                    config_dir: paths.config_dir.clone(),
+                    cache_root: cache::default_root(),
+                }))
+            }
+        }
+    }
+
+    fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote(_))
+    }
+
+    fn model(&self) -> String {
+        match self {
+            Self::Local(source) => source.model().to_string(),
+            Self::Remote(source) => source.config.model.clone(),
+        }
+    }
+
+    fn provider_id(&self) -> &'static str {
+        match self {
+            Self::Local(_) => noteit_embedding_local::PROVIDER_ID,
+            Self::Remote(source) => source.config.provider.as_str(),
+        }
+    }
+
+    fn present(&self) -> bool {
+        match self {
+            Self::Local(source) => source.present(),
+            // A remote provider needs no artifact on this machine. Whether it
+            // can *answer* is a different question, and one a diagnostic must
+            // not spend a request to ask (§53).
+            Self::Remote(_) => true,
+        }
+    }
+}
+
 /// A handle on that state, cheap to clone and shared by every request.
 #[derive(Clone)]
 pub struct SemanticSession {
     settings: SemanticRetrievalConfig,
-    source: ArtifactSource,
+    source: ProviderSource,
     state: Arc<Mutex<SemanticState>>,
 }
 
@@ -150,6 +275,16 @@ pub struct SemanticReport {
     pub model: String,
     pub local: bool,
     pub artifact_available: bool,
+    /// Whether note text leaves the machine under this configuration.
+    pub remote: bool,
+    /// The dimension the space declares.
+    pub dimension: usize,
+    /// Whether the vendor promises the model behind this name does not move.
+    pub space_verifiable: bool,
+    /// Whether a key exists for the configured provider. **Never the key.**
+    pub credential_present: bool,
+    /// Whether a worker is running now. Asked without starting one.
+    pub worker_running: bool,
     /// Why a provider could not be built, when one was tried and refused.
     ///
     /// A closed enum of Note-it's own — never a library's sentence and never a
@@ -162,17 +297,25 @@ pub struct SemanticReport {
 
 impl SemanticState {
     /// Makes sure a provider has been asked for exactly once.
-    fn ensure_provider(&mut self, source: &ArtifactSource) {
-        if matches!(self.provider, Loaded::Never) {
-            self.provider = match source.load() {
-                Ok(provider) => Loaded::Ready(Box::new(provider)),
-                Err(error) => Loaded::Failed(error),
-            };
+    fn ensure_provider(&mut self, source: &ProviderSource) {
+        if !matches!(self.provider, Loaded::Never) {
+            return;
         }
+        self.provider = match source {
+            ProviderSource::Local(artifact) => match artifact.load() {
+                Ok(provider) => Loaded::Local(Box::new(provider)),
+                Err(error) => Loaded::Failed(error),
+            },
+            // Constructing this reads nothing and starts nothing. The worker
+            // appears on the first request that needs one.
+            ProviderSource::Remote(remote) => Loaded::Remote(Box::new(
+                RemoteProvider::with_worker(remote.config.clone(), Arc::clone(&remote.worker)),
+            )),
+        };
     }
 
     fn ready(&self) -> bool {
-        matches!(self.provider, Loaded::Ready(_))
+        self.provider.provider().is_some()
     }
 
     /// Syncs the index and runs one retrieval.
@@ -187,10 +330,12 @@ impl SemanticState {
         core: &NoteItCore,
         request: &engine::ContextRequest,
         fallback: SemanticFallback,
+        cache_root: Option<&std::path::Path>,
     ) -> Result<(engine::RetrievalOutcome, bool), engine::RetrievalError> {
-        let Loaded::Ready(provider) = &self.provider else {
+        let Some(provider) = self.provider.provider() else {
             unreachable!("callers check readiness before reaching here")
         };
+        let remote = self.provider.is_remote();
 
         // An index belongs to one space. A provider whose artifact changed is a
         // different space, and the old index is dropped rather than
@@ -201,32 +346,117 @@ impl SemanticState {
             .as_ref()
             .is_none_or(|index| *SemanticIndex::space(index) != space);
         if stale_space {
-            self.index = Some(InMemoryIndex::new(space));
+            self.index = Some(InMemoryIndex::new(space.clone()));
             self.indexed_at = None;
+            // A new space is a new cache to consult. Without this, switching
+            // provider and switching back would reuse the first space's
+            // "already consulted" and never read the second's file.
+            self.cache_consulted = false;
+            self.cache_dirty = false;
         }
         let index = self.index.as_mut().expect("an index was just ensured");
 
-        synchronise(core, provider, index).map_err(engine::RetrievalError::Context)?;
+        // The cache is read once per space, before anything is embedded. This
+        // is the whole reason it exists: without it a second start re-sends
+        // every note to the provider and the user pays twice for the same
+        // vectors (§20, §81).
+        if remote && !self.cache_consulted {
+            self.cache_consulted = true;
+            if let Some(root) = cache_root {
+                restore_from_cache(root, &space, index);
+            }
+        }
+
+        let embedded =
+            synchronise(core, provider, index).map_err(engine::RetrievalError::Context)?;
+        if embedded > 0 {
+            self.cache_dirty = true;
+        }
         let before = SemanticIndex::vector_count(index);
         self.vectors = before;
         self.indexed_at = Some(SystemTime::now());
 
-        let runtime = SemanticRuntime::new(provider.as_ref(), index).with_fallback(fallback);
+        let runtime = SemanticRuntime::new(provider, index).with_fallback(fallback);
         let outcome = engine::retrieve_with(core, request, RetrievalMode::Semantic(runtime))?;
 
         let index = self.index.as_ref().expect("the index is still there");
         let after = SemanticIndex::vector_count(index);
         self.vectors = after;
+
+        // Written after the retrieval rather than before it, so a question is
+        // never made slower by a save it did not need — and only when
+        // something was actually embedded, so a warm start writes nothing.
+        if remote && self.cache_dirty {
+            if let Some(root) = cache_root {
+                if persist(root, &space, index) {
+                    self.cache_dirty = false;
+                }
+            }
+        }
         Ok((outcome, after < before))
     }
 }
 
+/// Puts a saved space's vectors back into a fresh index.
+///
+/// Every refusal the cache can make is the same answer here — start empty and
+/// let `synchronise` embed what is missing — because a cache is derived and
+/// rebuilding it is always correct. Nothing is repaired and nothing is
+/// partially read: `load` either returns a whole, verified set or an error.
+fn restore_from_cache(root: &std::path::Path, space: &EmbeddingSpaceId, index: &mut InMemoryIndex) {
+    let Ok(records) = cache::load(root, space, CHUNKER_VERSION) else {
+        return;
+    };
+    let mut by_note: BTreeMap<Uuid, Vec<EmbeddingRecord>> = BTreeMap::new();
+    for record in records {
+        by_note.entry(record.note_id).or_default().push(record);
+    }
+    for (note_id, records) in by_note {
+        // `replace_note` validates the whole batch — space, chunker, note —
+        // before it accepts any of it, so a cache that passed its own checks
+        // and still disagrees with this index is refused here rather than
+        // mixed in.
+        let _ = index.replace_note(&note_id, records);
+    }
+}
+
+/// Writes the index for this space, and bounds what is kept.
+///
+/// Returns whether the save succeeded. A failure is not an error to report to
+/// the caller: the vectors are in memory and the answer is already correct, and
+/// the only cost of a cache that did not get written is that the next start
+/// pays for them again.
+fn persist(root: &std::path::Path, space: &EmbeddingSpaceId, index: &InMemoryIndex) -> bool {
+    let mut records = Vec::with_capacity(SemanticIndex::vector_count(index));
+    for note_id in index.note_ids() {
+        records.extend(index.records_for(&note_id).iter().cloned());
+    }
+    if cache::save(root, space, CHUNKER_VERSION, &records).is_err() {
+        return false;
+    }
+    cache::prune(root, space);
+    true
+}
+
 impl SemanticSession {
-    pub fn new(settings: SemanticRetrievalConfig) -> Self {
-        Self::with_artifact(settings, ArtifactSource::Pinned)
+    /// The session the product builds, from a configuration and the store's
+    /// own paths.
+    ///
+    /// The paths are needed because a remote provider's worker socket lives in
+    /// the runtime directory and its credentials file in the config directory —
+    /// and because neither is a thing this crate should be resolving twice.
+    pub fn new(settings: SemanticRetrievalConfig, paths: &StorePaths) -> Self {
+        let source = ProviderSource::from_settings(&settings, paths);
+        Self::with_source(settings, source)
     }
 
+    /// A session pointed at a local artifact the caller named.
     pub fn with_artifact(settings: SemanticRetrievalConfig, source: ArtifactSource) -> Self {
+        Self::with_source(settings, ProviderSource::Local(source))
+    }
+
+    /// A session whose provider the caller resolved.
+    pub fn with_source(settings: SemanticRetrievalConfig, source: ProviderSource) -> Self {
         Self {
             settings,
             source,
@@ -234,8 +464,16 @@ impl SemanticSession {
         }
     }
 
+    /// Where the remote cache goes, when there is one.
+    fn cache_root(&self) -> Option<&std::path::Path> {
+        match &self.source {
+            ProviderSource::Local(_) => None,
+            ProviderSource::Remote(remote) => remote.cache_root.as_deref(),
+        }
+    }
+
     pub fn settings(&self) -> SemanticRetrievalConfig {
-        self.settings
+        self.settings.clone()
     }
 
     /// Runs one retrieval, with or without the semantic channel.
@@ -292,7 +530,8 @@ impl SemanticSession {
             _ => SemanticFallback::Automatic,
         };
 
-        match state.sync_and_run(core, request, fallback) {
+        let cache_root = self.cache_root();
+        match state.sync_and_run(core, request, fallback, cache_root) {
             Ok((outcome, forgot)) => {
                 if !forgot {
                     return Retrieved::Answer(outcome.result, outcome.semantic_status);
@@ -301,7 +540,7 @@ impl SemanticSession {
                 // dropped from the index, so one more pass re-embeds exactly
                 // those notes and asks again — bounded to a single retry, so a
                 // note being written continuously cannot spin here.
-                match state.sync_and_run(core, request, fallback) {
+                match state.sync_and_run(core, request, fallback, cache_root) {
                     Ok((outcome, _)) => Retrieved::Answer(outcome.result, outcome.semantic_status),
                     Err(error) => Self::refuse(error),
                 }
@@ -334,6 +573,13 @@ impl SemanticSession {
     /// Whether the artifact is *available* is answered without loading one: the
     /// question is about the machine, and a diagnostic that spent seconds
     /// hashing half a gigabyte to answer it would be a different feature.
+    ///
+    /// Nothing here starts a worker, opens a socket or reaches a network, and
+    /// nothing here reads a key's value. §53 asks for exactly that: a
+    /// person must be able to see the mode, the provider, the model, the
+    /// dimension, whether the space is verifiable, the state of the index, and
+    /// whether a credential exists — **without** the act of looking becoming
+    /// the act that sends something.
     pub fn report(&self) -> SemanticReport {
         let state = self.state.lock().ok();
         let (indexed_notes, indexed_vectors, last_indexed, loaded, failure) = match state.as_deref()
@@ -350,16 +596,52 @@ impl SemanticSession {
             ),
             None => (None, None, None, false, None),
         };
+        let remote = self.source.is_remote();
+        let (dimension, space_verifiable, credential_present, worker_running) = match &self.source {
+            ProviderSource::Local(_) => (
+                noteit_embedding_local::POTION_MULTILINGUAL_128M.dimension,
+                // A local artifact's identity is the digest of bytes that were
+                // loaded, which is the strongest of the three answers §5.1
+                // defines.
+                true,
+                false,
+                false,
+            ),
+            ProviderSource::Remote(source) => {
+                let space = noteit_embedding_remote::space::space_for(
+                    source.config.provider,
+                    &source.config.model,
+                    source.config.dimension,
+                );
+                (
+                    source.config.dimension,
+                    space.artifact.is_verifiable(),
+                    // Yes or no. The value never enters this process: this is a
+                    // `bool` and there is no field it could go in.
+                    noteit_embedding_remote::credential_present(
+                        source.config.provider,
+                        &source.config_dir,
+                    ),
+                    // Asked, never caused.
+                    source.worker.is_running(),
+                )
+            }
+        };
         SemanticReport {
             enabled: self.settings.semantic_is_enabled(),
-            provider: noteit_embedding_local::PROVIDER_ID,
-            model: self.source.model().to_string(),
-            local: true,
+            provider: self.source.provider_id(),
+            model: self.source.model(),
+            local: !remote,
             artifact_available: loaded || self.source.present(),
             artifact_error: failure,
             indexed_notes,
             indexed_vectors,
             last_indexed,
+            remote,
+            dimension,
+            space_verifiable,
+            credential_present,
+            worker_running,
         }
     }
 }
@@ -390,9 +672,9 @@ impl SemanticSession {
 /// One note changing therefore costs one note's embedding, never the store's.
 fn synchronise(
     core: &NoteItCore,
-    provider: &LocalProvider,
+    provider: &dyn EmbeddingProvider,
     index: &mut InMemoryIndex,
-) -> Result<(), engine::ContextError> {
+) -> Result<usize, engine::ContextError> {
     let live = core
         .storage()
         .list_notes_by_recency()
@@ -405,6 +687,11 @@ fn synchronise(
         }
     }
 
+    // Counted, and the count is what decides whether the remote cache is
+    // rewritten. A pass that embedded nothing found every note already cached,
+    // and rewriting the same file for it would be the one cost a warm start is
+    // not supposed to have (§81, §82).
+    let mut embedded = 0usize;
     for note_id in live {
         if index.holds(&note_id) {
             continue;
@@ -416,9 +703,12 @@ fn synchronise(
             continue;
         };
         // A note that cannot be embedded — an artifact and a text that have
-        // nothing in common — is left out of the index rather than allowed to
-        // fail the whole pass. Lexical retrieval still finds it.
-        let _ = index_document(&document, provider, index);
+        // nothing in common, or a provider that is not answering — is left out
+        // of the index rather than allowed to fail the whole pass. Lexical
+        // retrieval still finds it.
+        if index_document(&document, provider, index).is_ok() {
+            embedded += 1;
+        }
     }
-    Ok(())
+    Ok(embedded)
 }

@@ -35,7 +35,13 @@ pub mod trash;
 pub mod warning;
 pub mod write;
 
-mod atomic_file;
+/// The one atomic write in this workspace.
+///
+/// Public since 4.3D, because the remote semantic cache has to be committed by
+/// rename exactly the way a note is (§36, §79). A second implementation of
+/// "when is a file replaced" would be a second answer, and the two would
+/// disagree the first time one of them was edited.
+pub mod atomic_file;
 mod visible_text;
 
 pub use chrono;

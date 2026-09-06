@@ -20,6 +20,11 @@ noteit-core = { path = "../noteit-core" }
 # in it — the constants and the path rule live in one crate so that the CLI and
 # the MCP server cannot come to disagree about which artifact is the artifact.
 noteit-embedding-local = { path = "../noteit-embedding-local" }
+# The remote provider, for `noteit status` and nothing else. The CLI never
+# builds a provider, never starts a worker and never reads a key's value: it
+# asks this crate where a cache would be, whether a space is verifiable, and
+# whether a credential exists — three questions with no side effect.
+noteit-embedding-remote = { path = "../noteit-embedding-remote" }
 clap = { version = "4.5", features = ["derive"] }
 # The machine interface is serialised, never assembled. Both are already in the
 # workspace's dependency graph through `noteit-core`; stated here because this
