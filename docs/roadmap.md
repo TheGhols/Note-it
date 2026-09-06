@@ -1429,10 +1429,17 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         Propor um teto a partir de um mock seria derivar um limite do resultado obtido.
 
         **Gate para Fase 4.3E: LIBERADO.**
-  - [ ] **4.3E — Integração do Segundo Cérebro.** Planejada. `noteit_context` publicando o canal de
-        recuperação como motivo, superfície de CLI, configuração, estado do índice, ranking
-        híbrido, explicabilidade, fallback e comportamento na troca de provider. As 16 tools são
-        preservadas salvo decisão posterior extremamente justificada.
+  - [x] **4.3E — Integração do Segundo Cérebro.** Integração ponta a ponta do sistema de recuperação contextual unindo Core, CLI e MCP como um produto único e coerente. **`noteit-core::context` e `noteit-core::semantic` permanecem a autoridade única e soberana**: toda leitura, validação de `source_revision`, pontuação BM25, ranqueamento híbrido, explicabilidade de motivos e políticas de degradação pertencem exclusivamente ao Core. CLI e MCP são estritamente consumidores de apresentação, sem reinventar a recuperação e sem duplicar lógica de sincronização.
+
+        **O Core como autoridade de sincronização.** `noteit_core::semantic::synchronise` foi extraído e tornado público, unificando a sincronização incremental dos índices em memória sob a regra imutável: *indexa o que o índice não tem, esquece o que o store não tem mais*. O servidor `noteit-mcp` passou a consumi-lo diretamente, eliminando a duplicação entre processos e garantindo que o ciclo de vida vetorial e a invalidação por revisão canônica sejam idênticos em toda a plataforma.
+
+        **Superfície de CLI e paridade total com o MCP.** O Note-it CLI ganha o comando `contexto` com alias bilíngue internacional `context` (`noteit contexto [consulta] [--limite N] [--tag TAG] [--propriedade CHAVE=VALOR] [--tarefas ESTADO]`). A apresentação humana entrega UUID truncado em 8 caracteres, títulos em negrito, snippets higienizados contra escape ANSI, motivos explicáveis em português (`texto`, `termos`, `tag`, `propriedade`, `tarefa`, `semântico`, `recente`) e tarefas formatadas legivelmente. Sob `--json`, a saída emite o envelope estrito da máquina sob `data.candidates`, onde a garantia por tipo proíbe qualquer vazamento interno: **zero ocorrências de `revision`, `etag`, `score`, `similarity`, `vector`, `embedding` ou `path`**. A paridade rigorosa entre `noteit --json contexto` e o tool `noteit_context` foi provada pelo teste de integração real sobre stdio `parity_between_cli_json_and_mcp_context` em `noteit-mcp/tests/mcp_context.rs`, conferindo campo a campo sob o mesmo store.
+
+        **A régua de regressão e as fronteiras permanecem intactas.** A avaliação contra o corpus congelado (`cargo test -p noteit-core --test retrieval_corpus`) atesta preservação absoluta dos parâmetros BM25 (`k1 = 1.2`, `b = 0.75`) e das métricas de referência: **R@1 = 0,633, R@3 = 0,767, R@5 = 0,833, MRR = 0,711**, com **35 candidatos sem resposta** e **zero demotions**. O catálogo público do MCP foi mantido rigorosamente em **exatamente 16 tools**. As fronteiras arquiteturais continuam passando sem exceção (`check-core-boundary`, `check-cli-boundary`, `check-mcp-boundary`, `check-embedding-boundary` e `check-embed-boundary`). O armazenamento real do usuário permaneceu intocado, com o digest SHA-256 verificado antes e depois (`3d4e8773926342d14aca041daca70326978df6d99794b00917c1b32edca12aa9`).
+
+        Fechamento documentado no commit `1026fed`, com CI remoto integralmente verde no run #111 (Rust 7m56s, Frontend 2m1s).
+
+        **Gate para Fase 4.3R: LIBERADO.**
   - [ ] **4.3R — Auditoria ofensiva da recuperação semântica.** Planejada. Vetor obsoleto, índice
         trocado, provider trocado, modelo trocado dentro do mesmo provider, dimensão errada,
         NaN/Inf, modelo ausente, cache corrompido, symlink no cache, prompt injection, resposta
