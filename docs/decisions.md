@@ -2942,9 +2942,27 @@ afirmado: `check-mcp-boundary`, `check-core-boundary`, `check-cli-boundary` e
 passando. O `check-embed-boundary` é novo e diz a outra metade — que o único
 crate autorizado a ter rede não pode ter mais nada.
 
-Medido: HTTP/TLS são **5 crates** no grafo do `noteit-embed` e **0** no do
-`noteit-mcp` (158 crates), do `noteit-core` (40), do `noteit-embedding-local`
-(117), do `noteit-embedding-remote` (44) e do `noteit-embed-protocol` (14).
+Medido, contando os nomes que a lista `NETWORK_CRATES` do próprio
+`scripts/check-embed-boundary` reprova — que é a definição que o CI aplica, e
+não um padrão inventado para o parágrafo:
+
+```console
+$ cargo tree -p <crate> --edges normal --prefix none \
+    | grep -oP '^\S+ ' | grep -E "$NETWORK_CRATES" | sort -u | wc -l
+```
+
+| crate | crates de rede no grafo | crates no grafo |
+| --- | --- | --- |
+| `noteit-embed` | **8** | 34 |
+| `noteit-mcp` | **0** | 158 |
+| `noteit-core` | **0** | 40 |
+| `noteit-embedding-local` | **0** | 117 |
+| `noteit-embedding-remote` | **0** | 44 |
+| `noteit-embed-protocol` | **0** | 14 |
+
+Os oito: `ureq`, `ureq-proto`, `rustls`, `rustls-webpki`, `rustls-pki-types`,
+`webpki-roots`, `http`, `httparse`. Os zeros são o que a fase comprou, e são o
+número que não pode subir.
 
 ### A biblioteca HTTP, e cada feature desligada com motivo
 
@@ -2964,10 +2982,30 @@ Medido: HTTP/TLS são **5 crates** no grafo do `noteit-embed` e **0** no do
 | `native-tls`, `platform-verifier`, `brotli`, `vendored` | idem |
 
 `ureq` não implementa HTTP/2 nem HTTP/3, então `h2`, `h3` e `quinn` estão
-**ausentes do grafo** e não meramente sem uso. Onze crates novas ao todo:
-`ureq`, `ureq-proto`, `rustls`, `rustls-webpki`, `rustls-pki-types`,
-`webpki-roots`, `http`, `httparse`, `percent-encoding`, `subtle`, `utf8-zero`,
-`zeroize`. Custo de binário: `noteit-embed` tem 3 447 320 bytes em release, e o
+**ausentes do grafo** e não meramente sem uso.
+
+**O que a fase acrescentou ao grafo, em três números que medem três coisas
+diferentes** — e por isso ditos separadamente, com o comando que os reproduz:
+
+```console
+$ git show <antes>:Cargo.lock | grep -oP '^name = "\K[^"]+' | sort > antes
+$ git show <depois>:Cargo.lock | grep -oP '^name = "\K[^"]+' | sort > depois
+$ comm -13 <(sort -u antes) <(sort -u depois)     # nomes novos
+$ wc -l antes depois                              # entradas
+```
+
+| grandeza | valor |
+| --- | --- |
+| **crates novas do workspace** | **3** — `noteit-embed-protocol`, `noteit-embed`, `noteit-embedding-remote` |
+| **dependências externas novas** (nomes) | **12** — `ureq`, `ureq-proto`, `rustls`, `rustls-webpki`, `rustls-pki-types`, `webpki-roots`, `http`, `httparse`, `percent-encoding`, `subtle`, `utf8-zero`, `zeroize` |
+| **entradas novas no `Cargo.lock`** | **16** (253 → 269) |
+
+Os três não fecham por soma, e o motivo é a décima sexta entrada: `base64` já
+estava no lock em `0.13.1` e passou a estar **também** em `0.23.1`. Um nome que
+já existia ganhando uma segunda versão é uma entrada nova e **não** um nome
+novo, então 3 + 12 = 15 nomes e 16 entradas. Nenhum package foi removido.
+
+Custo de binário: `noteit-embed` tem 3 447 320 bytes em release, e o
 `noteit-mcp` **não cresceu** — ele não linka nada disso.
 
 ### Endurecimento de HTTP, item a item

@@ -1656,8 +1656,8 @@ noteit-mcp ─────► noteit-core ─────► EmbeddingProvider
                                         └── noteit-embedding-remote   44 crates
                                                  │  AF_UNIX, 0 HTTP/TLS
                                                  ▼
-                                          noteit-embed                40 crates
-                                                 │  5 crates de HTTP/TLS
+                                          noteit-embed                34 crates
+                                                 │  8 crates de rede
                                                  ▼
                                           api do fornecedor
 ```
@@ -1789,7 +1789,10 @@ fronteira do processo.
 | cache: 10 000 notas × 2 chunks, dim 1 536 | 20 000 vetores, 121,3 MiB, save 665 ms, load p50 726 ms |
 | binário `noteit-embed`, release | 3 447 320 bytes |
 | binário `noteit-mcp`, release | 12 571 680 bytes, **sem crescer** — ele não linka nada de HTTP |
-| crates novas | 11 |
+| crates novas do workspace | **3** — `noteit-embed-protocol`, `noteit-embed`, `noteit-embedding-remote` |
+| dependências externas novas (nomes) | **12** |
+| entradas novas no `Cargo.lock` | **16** (253 → 269) — a décima sexta é `base64` ganhando uma segunda versão |
+| crates de rede no grafo do worker | **8**, pelo padrão `NETWORK_CRATES` do gate |
 
 O atraso de 40 ms é **latência simulada do provider** e está nomeado como tal: a
 parcela medida é a da outra thread, não a dele. As linhas de spawn, round trip e

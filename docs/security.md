@@ -160,7 +160,8 @@ não deixar acontecer.
 **Um processo, e só ele tem rede.** `noteit-embed` é o único componente do
 produto com cliente HTTP e o único que vê uma credencial. O `noteit-mcp` — o
 processo que um host de IA inicia, que fala com um agente e que tem autoridade
-para gravar — continua sem nenhuma pilha de rede: HTTP/TLS são 5 crates no grafo
+para gravar — continua sem nenhuma pilha de rede: pelo padrão `NETWORK_CRATES`
+do próprio gate, são **8** crates de rede no grafo
 do worker e **0** nos grafos do `noteit-mcp`, do `noteit-core`, do
 `noteit-embedding-local`, do `noteit-embedding-remote` e do
 `noteit-embed-protocol`. `scripts/check-embed-boundary` **estende** os quatro
@@ -205,10 +206,11 @@ que se escreve um segundo header controlando só um.
 **O fornecedor não escreve a mensagem pública do Note-it.** Todo status HTTP,
 corpo de erro, request ID e frase de biblioteca vira uma palavra de um conjunto
 fechado antes de atravessar a fronteira do processo, e o MCP publica um `code` e
-nunca uma frase. Verificado por varredura: 42 saídas de caminhos de falha —
-nove status × três providers, corpo não-JSON, JSON truncado, vetor nulo, corpo
-hostil, resposta truncada, hangup, worker sem credencial, o quadro serializado
-que iria no fio — buscando dois sentinels e o request ID do fornecedor.
+nunca uma frase. Verificado por varredura: **39** saídas de caminhos de falha —
+nove status × três providers (27), quatro corpos malformados, duas falhas de
+transporte, o worker inteiro sem credencial, o quadro serializado que iria no
+fio, os três erros de credencial e o `Debug` do `Credential` — buscando dois
+sentinels e o request ID do fornecedor.
 
 **Um vetor remoto continua sendo dado privado.** O cache vive em
 `$XDG_CACHE_HOME/note-it/semantic/`, nunca dentro de `notes/`, `trash/` ou

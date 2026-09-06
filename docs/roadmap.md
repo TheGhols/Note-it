@@ -1380,7 +1380,8 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
         `check-core-boundary`, `check-cli-boundary` e `check-embedding-boundary` **não tiveram uma
         linha editada** nesta fase e continuam passando; `check-embed-boundary` é novo e diz a outra
         metade — que o único crate autorizado a ter rede não pode ter store, nota, shell nem forma
-        de escrever arquivo. Medido: HTTP/TLS são **5 crates** no grafo do `noteit-embed` e **0** nos
+        de escrever arquivo. Medido pelo padrão `NETWORK_CRATES` do próprio gate: **8** crates
+        de rede no grafo do `noteit-embed` e **0** nos
         do `noteit-mcp` (158), `noteit-core` (40), `noteit-embedding-local` (117),
         `noteit-embedding-remote` (44) e `noteit-embed-protocol` (14). O binário do servidor MCP
         **não cresceu**: ele não linka nada disso.

@@ -51,7 +51,9 @@ noteit-mcp ─────► noteit-core ─────► EmbeddingProvider
 A separação não é elegância: é a única forma de ter provider remoto **sem** pôr
 uma pilha HTTP no grafo do `noteit-mcp`, **sem** pôr a credencial no processo
 que fala com o agente, e **sem** dar ao MCP a capacidade genérica de fazer uma
-requisição. Medido: HTTP/TLS são 5 crates no grafo do `noteit-embed` e **0** nos
+requisição. Medido pelo padrão `NETWORK_CRATES` do próprio
+`scripts/check-embed-boundary`: **8** crates de rede no grafo do `noteit-embed`
+e **0** nos
 grafos do `noteit-mcp` (158 crates), `noteit-core` (40),
 `noteit-embedding-local` (117), `noteit-embedding-remote` (44) e
 `noteit-embed-protocol` (14). `scripts/check-embed-boundary` **estende** os
