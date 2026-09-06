@@ -8,9 +8,30 @@
 //! with nothing in the arithmetic to say so.
 
 use noteit_core::embedding::{ArtifactIdentity, ArtifactManifestV1};
-use noteit_core::hashing::sha256_hex;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// The SHA-256 of a file's bytes, as sixty-four lowercase hexadecimal
+/// characters.
+///
+/// The same digest `noteit_core::hashing::sha256_hex` produces — proved on
+/// every published vector and on a megabyte of pseudo-random bytes in
+/// `tests/digest_agreement.rs` — computed by `ring` because here the input is
+/// 489 MiB and the throughput is a budget. Measured on this machine, best of
+/// three in release over the real artifact: 197–201 MiB/s for the Core's,
+/// 324–326 MiB/s for this. `NoteRevision` and every other digest in the
+/// product stay on the Core's implementation; this one exists for the artifact
+/// and for nothing else.
+fn file_digest_hex(bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest.as_ref() {
+        use std::fmt::Write as _;
+        // Writing into a String cannot fail, and the digest is fixed width.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
 
 /// The weights file, by the name the model's publisher gives it.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -149,7 +170,7 @@ pub fn read_weights_in_background(directory: &Path) -> WeightsInFlight {
     WeightsInFlight {
         handle: std::thread::spawn(move || {
             let bytes = read_checked(&path, MAX_WEIGHTS_BYTES)?;
-            let digest = sha256_hex(&bytes);
+            let digest = file_digest_hex(&bytes);
             Ok((bytes, digest))
         }),
     }
@@ -167,7 +188,7 @@ pub fn read_verified_tokenizer(
 ) -> Result<(Vec<u8>, String), ArtifactError> {
     let path = artifact_files(directory).1;
     let bytes = read_checked(&path, MAX_TOKENIZER_BYTES)?;
-    let digest = sha256_hex(&bytes);
+    let digest = file_digest_hex(&bytes);
     if digest != expected {
         return Err(ArtifactError::Unexpected);
     }
@@ -195,12 +216,18 @@ pub fn load(
     })
 }
 
-/// One file, refused for every reason it can be refused for before it is read.
+/// Every reason one file can be refused before a byte of it is read.
 ///
 /// `symlink_metadata` and not `metadata`: the second follows the link and
 /// would answer about the target, which is exactly the substitution this is
 /// here to notice.
-fn read_checked(path: &Path, ceiling: u64) -> Result<Vec<u8>, ArtifactError> {
+///
+/// It is a separate function because two callers need it and must not be able
+/// to disagree — [`read_checked`], which is on the way to hashing the bytes,
+/// and [`artifact_availability`], which is all a diagnostic is allowed to ask.
+/// One `symlink_metadata` and two comparisons, answering about the path itself
+/// and never about what the path points at.
+fn inspect(path: &Path, ceiling: u64) -> Result<u64, ArtifactError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -215,6 +242,32 @@ fn read_checked(path: &Path, ceiling: u64) -> Result<Vec<u8>, ArtifactError> {
     if length == 0 || length > ceiling {
         return Err(ArtifactError::ImplausibleSize);
     }
+    Ok(length)
+}
+
+/// Whether both files are ones the loader would get as far as reading.
+///
+/// The question a diagnostic surface asks — `noteit status`, and the report
+/// the MCP session publishes — and deliberately **not** the question the
+/// loader asks. It shares [`inspect`] with `read_checked`, so a path the
+/// diagnosis calls available is a path the loader will not refuse for being
+/// absent, a symlink, a directory or an implausible size. It stops there: it
+/// reads no bytes and hashes nothing, because a command that spent seconds
+/// verifying half a gigabyte to answer "is it installed?" would be a different
+/// command. Whether the bytes are the *right* bytes is settled where a
+/// provider is built, from the bytes.
+pub fn artifact_availability(directory: &Path) -> Result<(), ArtifactError> {
+    let (weights, tokenizer) = artifact_files(directory);
+    inspect(&weights, MAX_WEIGHTS_BYTES)?;
+    inspect(&tokenizer, MAX_TOKENIZER_BYTES)?;
+    Ok(())
+}
+
+/// One file, refused by [`inspect`] and then read.
+///
+/// The length is checked twice on purpose — see below.
+fn read_checked(path: &Path, ceiling: u64) -> Result<Vec<u8>, ArtifactError> {
+    inspect(path, ceiling)?;
     let bytes = fs::read(path).map_err(|_| ArtifactError::Unreadable)?;
     // The length was checked before the read and is checked again after it:
     // between the two, the file may have been replaced.

@@ -104,21 +104,24 @@ impl ArtifactSource {
         }
     }
 
+    /// Whether a diagnostic may say the artifact is there.
+    ///
+    /// It asks the provider crate, which answers by the same rule its loader
+    /// applies — `symlink_metadata`, regular files only, plausible sizes — so
+    /// this cannot report "available" for something `load` would refuse. It
+    /// still reads no bytes: a report is not a verification, and saying so
+    /// costs one `stat` per file.
     fn present(&self) -> bool {
-        let (directory, _) = match self {
-            Self::Pinned => (
-                match noteit_embedding_local::artifact_directory(
-                    &noteit_embedding_local::POTION_MULTILINGUAL_128M,
-                ) {
-                    Some(directory) => directory,
-                    None => return false,
-                },
-                (),
-            ),
-            Self::At { directory, .. } => (directory.clone(), ()),
+        let directory = match self {
+            Self::Pinned => match noteit_embedding_local::artifact_directory(
+                &noteit_embedding_local::POTION_MULTILINGUAL_128M,
+            ) {
+                Some(directory) => directory,
+                None => return false,
+            },
+            Self::At { directory, .. } => directory.clone(),
         };
-        let (weights, tokenizer) = noteit_embedding_local::artifact::artifact_files(&directory);
-        weights.is_file() && tokenizer.is_file()
+        noteit_embedding_local::artifact::artifact_availability(&directory).is_ok()
     }
 
     fn model(&self) -> &str {

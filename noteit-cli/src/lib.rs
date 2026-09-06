@@ -165,11 +165,16 @@ fn significant_argument_count(args: &[std::ffi::OsString]) -> usize {
 /// [`CommandError`], and the renderers decide what that looks like.
 /// What the machine looks like, for `noteit status`.
 ///
-/// Reads the configuration and looks for the artifact's two files. Loads
-/// nothing: `status` is a question about the machine, and one that spent
-/// seconds verifying half a gigabyte of weights to answer it would be a
-/// different command. Whether those bytes are the *right* bytes is decided
+/// Reads the configuration and asks the provider crate whether its two files
+/// are there. Loads nothing: `status` is a question about the machine, and one
+/// that spent seconds verifying half a gigabyte of weights to answer it would
+/// be a different command. Whether those bytes are the *right* bytes is decided
 /// where a provider is actually built, from the bytes themselves.
+///
+/// The question is asked through `artifact_availability` and not through
+/// `Path::is_file`, because the two do not agree: `is_file` follows a symlink
+/// and the loader refuses one. A status that said "present" about a file the
+/// loader will reject is a status that lies.
 fn status() -> StatusReport {
     let paths = StorePaths::resolve();
     let semantic = AppConfig::read_only(&paths.config_file_path()).semantic_retrieval;
@@ -178,9 +183,8 @@ fn status() -> StatusReport {
     );
     let artifact_present = directory
         .as_deref()
-        .map(noteit_embedding_local::artifact::artifact_files)
-        .map(|(weights, tokenizer)| weights.is_file() && tokenizer.is_file())
-        .unwrap_or(false);
+        .map(noteit_embedding_local::artifact::artifact_availability)
+        .is_some_and(|availability| availability.is_ok());
     StatusReport {
         paths,
         semantic: SemanticStatusReport {

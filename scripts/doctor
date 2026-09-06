@@ -91,6 +91,11 @@ check_rust() {
   require_command bash "necessário para os scripts do repositório"
   require_command git "necessário para o controle de versão"
   require_command cargo "instale a toolchain Rust"
+  # A C compiler, and not only because rustc drives the linker through it:
+  # since 4.3C.R1 the embedding artifact is verified with `ring`, whose build
+  # compiles BoringSSL's assembly. A machine without `cc` fails late, inside a
+  # dependency's build script, which is a bad place to learn this.
+  require_command cc "no Arch Linux: pacote gcc — o build de \`ring\` compila assembly"
 
   if require_command rustc "instale a toolchain Rust"; then
     local have want

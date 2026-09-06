@@ -123,18 +123,44 @@ fn what_the_local_semantic_channel_costs() {
     );
 
     // The verification, timed on its own, because the budget in §25 was
-    // measured against a load that had none.
+    // measured against a load that had none — and timed with *both*
+    // implementations, because which one runs is the whole reason this line
+    // exists. The provider hashes the artifact with `ring`; the Core's own
+    // implementation still computes every note revision, and the two agree
+    // byte for byte (`tests/digest_agreement.rs`).
     let hash_started = Instant::now();
     let bytes = std::fs::read(directory.join("model.safetensors")).expect("weights");
     let read = hash_started.elapsed();
-    let digest_started = Instant::now();
-    let _ = noteit_core::hashing::sha256_hex(&bytes);
-    let digest = digest_started.elapsed();
+    let megabytes = bytes.len() as f64 / 1048576.0;
+
+    let ring_started = Instant::now();
+    let ring_digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+    let ring_elapsed = ring_started.elapsed();
+
+    let core_started = Instant::now();
+    let core_digest = noteit_core::hashing::sha256_hex(&bytes);
+    let core_elapsed = core_started.elapsed();
+
+    let ring_hex: String = ring_digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        ring_hex, core_digest,
+        "the two implementations disagreed on the artifact itself"
+    );
+
     println!(
-        "  dos quais: ler {:>6.0} ms   sha256 {:>6.0} ms  ({:.0} MiB/s)",
+        "  dos quais: ler {:>6.0} ms   sha256 (ring, o do carregador) {:>6.0} ms  ({:.0} MiB/s)",
         read.as_secs_f64() * 1000.0,
-        digest.as_secs_f64() * 1000.0,
-        bytes.len() as f64 / 1048576.0 / digest.as_secs_f64()
+        ring_elapsed.as_secs_f64() * 1000.0,
+        megabytes / ring_elapsed.as_secs_f64()
+    );
+    println!(
+        "             sha256 (noteit-core, o das revisões)  {:>6.0} ms  ({:.0} MiB/s)",
+        core_elapsed.as_secs_f64() * 1000.0,
+        megabytes / core_elapsed.as_secs_f64()
     );
     drop(bytes);
 

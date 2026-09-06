@@ -12,6 +12,7 @@ use noteit_core::embedding::{
     cosine, ArtifactIdentity, ArtifactManifestV1, EmbeddingRole, SemanticError,
 };
 use noteit_core::semantic::EmbeddingProvider;
+use noteit_embedding_local::artifact::artifact_availability;
 use noteit_embedding_local::{
     ArtifactError, ArtifactExpectation, LocalProvider, EMBEDDING_RECIPE_VERSION,
     NORMALIZATION_VERSION,
@@ -503,6 +504,208 @@ fn loading_and_embedding_write_nothing() {
     assert_eq!(
         before, after,
         "loading a model or embedding text changed the directory it read from"
+    );
+}
+
+// ------------------------------------- what a diagnostic is allowed to claim
+
+/// The cheap answer and the real one must not be able to disagree.
+///
+/// `noteit status` and the MCP session's report both say whether the artifact
+/// is there, and both must answer by the loader's rule. The bug this pins was
+/// real: they asked `Path::is_file`, which **follows** a symlink, while the
+/// loader calls `symlink_metadata` and refuses one — so a symlinked artifact
+/// was reported available and then rejected on the first question.
+#[test]
+fn the_availability_report_agrees_with_the_loader() {
+    let home = tempdir().expect("tempdir");
+    let elsewhere = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+
+    // A provisioned artifact: both say yes.
+    assert!(
+        artifact_availability(home.path()).is_ok(),
+        "a provisioned artifact must be reported available"
+    );
+    LocalProvider::load(home.path(), &expectation).expect("load");
+
+    // The weights gone: both say no, and for the same reason.
+    let weights = home.path().join("model.safetensors");
+    let kept = elsewhere.path().join("weights.bin");
+    fs::rename(&weights, &kept).expect("move");
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::Missing
+    );
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::Missing
+    );
+
+    // The weights back, but as a symlink to the very same honest bytes. The
+    // loader refuses the path, so the report has to refuse it too — this is
+    // the case `Path::is_file` got wrong.
+    std::os::unix::fs::symlink(&kept, &weights).expect("symlink");
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::NotARegularFile,
+        "a symlinked artifact must not be reported available: the loader refuses it"
+    );
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::NotARegularFile
+    );
+}
+
+/// The other shapes the loader refuses, refused by the report as well.
+///
+/// A directory where a file belongs, an empty file, and a tokenizer that is
+/// there while the weights are not. None of these needs a byte to be read to
+/// be answered, which is why the report is allowed to answer them.
+#[test]
+fn the_availability_report_refuses_every_shape_the_loader_refuses() {
+    let home = tempdir().expect("tempdir");
+    simple(home.path());
+
+    let tokenizer = home.path().join("tokenizer.json");
+    let saved = fs::read(&tokenizer).expect("read");
+
+    fs::remove_file(&tokenizer).expect("remove");
+    fs::create_dir(&tokenizer).expect("directory");
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::NotARegularFile
+    );
+
+    fs::remove_dir(&tokenizer).expect("remove");
+    fs::write(&tokenizer, b"").expect("empty");
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::ImplausibleSize,
+        "an empty file is refused by the loader, so it is not an available artifact"
+    );
+
+    fs::write(&tokenizer, &saved).expect("restore");
+    assert!(artifact_availability(home.path()).is_ok());
+
+    // One of the two is not both of them.
+    fs::remove_file(home.path().join("model.safetensors")).expect("remove");
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::Missing
+    );
+}
+
+/// A symlink is refused whether or not it points at anything.
+///
+/// `symlink_metadata` answers about the link itself, so a broken link is a
+/// non-regular file and not a missing one — and that distinction is the whole
+/// value of not following it. The loader and the report say the same word.
+#[test]
+fn a_broken_symlink_is_refused_by_the_loader_and_by_the_report() {
+    let home = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+
+    let weights = home.path().join("model.safetensors");
+    fs::remove_file(&weights).expect("remove");
+    std::os::unix::fs::symlink(home.path().join("nada-aqui"), &weights).expect("symlink");
+
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::NotARegularFile,
+        "a broken symlink is a symlink, and a symlink is refused before its target is a question"
+    );
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::NotARegularFile
+    );
+}
+
+/// A symlink pointing at a directory, refused for being a symlink.
+///
+/// Worth pinning separately: had the rule been `metadata` plus "is it a
+/// file?", this case would still be refused — but for the target's reason and
+/// not the link's, and the symlink-to-a-regular-file case above would have
+/// slipped through. One rule, one reason.
+#[test]
+fn a_symlink_to_a_directory_is_refused_by_the_loader_and_by_the_report() {
+    let home = tempdir().expect("tempdir");
+    let elsewhere = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+
+    let tokenizer = home.path().join("tokenizer.json");
+    fs::remove_file(&tokenizer).expect("remove");
+    std::os::unix::fs::symlink(elsewhere.path(), &tokenizer).expect("symlink");
+
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::NotARegularFile
+    );
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::NotARegularFile
+    );
+}
+
+/// The ceiling, refused by both, and refused before anything is allocated.
+///
+/// The file is sparse — `set_len` and not half a gigabyte of writing — because
+/// the rule is about the length the filesystem reports and both callers read
+/// that length before they read a byte. That is the point of the ceiling: a
+/// directory is configuration, and configuration does not get to decide how
+/// much memory this process asks for.
+#[test]
+fn a_file_over_the_ceiling_is_refused_by_the_loader_and_by_the_report() {
+    let home = tempdir().expect("tempdir");
+    let expectation = simple(home.path());
+
+    let tokenizer = home.path().join("tokenizer.json");
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&tokenizer)
+        .expect("open");
+    file.set_len(noteit_embedding_local::artifact::MAX_TOKENIZER_BYTES + 1)
+        .expect("grow");
+    drop(file);
+
+    assert_eq!(
+        artifact_availability(home.path()).unwrap_err(),
+        ArtifactError::ImplausibleSize
+    );
+    assert_eq!(
+        LocalProvider::load(home.path(), &expectation).unwrap_err(),
+        ArtifactError::ImplausibleSize
+    );
+}
+
+/// Answering it costs no bytes.
+///
+/// The point of a separate report is that `noteit status` stays instant on a
+/// machine with half a gigabyte of weights installed. Timing is a poor
+/// assertion, so this checks the observable consequence instead: the files are
+/// not touched, and the call is fast enough that reading 489 MiB could not
+/// have happened.
+#[test]
+fn the_availability_report_reads_no_bytes() {
+    let home = tempdir().expect("tempdir");
+    simple(home.path());
+    let before = fingerprint(home.path());
+
+    let started = std::time::Instant::now();
+    for _ in 0..1_000 {
+        assert!(artifact_availability(home.path()).is_ok());
+    }
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        before,
+        fingerprint(home.path()),
+        "the report wrote something"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "a thousand availability reports took {elapsed:?}; this is a stat, not a read"
     );
 }
 
