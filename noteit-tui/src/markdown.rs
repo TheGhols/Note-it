@@ -35,7 +35,7 @@ impl CalloutKind {
             Self::Note => "[NOTA]",
             Self::Tip => "[DICA]",
             Self::Important => "[IMPORTANTE]",
-            Self::Warning => "[ATENÇÃO]",
+            Self::Warning => "[AVISO]",
             Self::Caution => "[CUIDADO]",
         }
     }
@@ -500,7 +500,7 @@ mod tests {
         assert!(full.contains("Corpo da nota"));
         assert!(full.contains("[DICA]"));
         assert!(full.contains("Corpo da dica"));
-        assert!(full.contains("[ATENÇÃO]"));
+        assert!(full.contains("[AVISO]"));
         assert!(full.contains("Corpo do aviso"));
         assert!(full.contains("│ Citação comum"));
     }

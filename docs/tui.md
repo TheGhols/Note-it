@@ -298,6 +298,18 @@ A **Fase 5.0B** construiu o esqueleto fundamental do `noteit-tui`:
 
 A **Fase 5.0C** implementou a experiência de leitura, navegação e apresentação somente-leitura da TUI:
 
+Correção do relatório da 5.0C: `git diff d6ed712609d78b085650dc298aa452f0c86de6c4 -- noteit-tui/tests/terminal_lifecycle.rs` retornou saída vazia na verificação de 2026-09-07 (cenário a). O arquivo permanece idêntico à versão da 5.0B; a divergência dos nomes anteriormente reportados foi um erro de transcrição, sem alteração no código dos testes. Os nomes reais dos nove testes são:
+
+1. `test_normal_exit_with_q_and_termios_restoration`
+2. `test_normal_exit_with_esc_and_termios_restoration`
+3. `test_ctrl_c_in_raw_mode_exits_cleanly`
+4. `test_sigterm_signal_restores_terminal`
+5. `test_controlled_panic_restores_terminal_via_panic_hook`
+6. `test_resize_event_adapts_without_corruption`
+7. `test_missing_store_fails_with_clear_message_before_raw_mode`
+8. `test_non_tty_stdout_fails_with_clear_diagnostic`
+9. `test_cli_flags_help_and_version`
+
 ### 9.1 Painéis de Navegação por Teclado
 - **Notas Recentes (`RecentNotes`):**
   - Consome `core.list_summaries(&NoteFilter::default(), None)`.
@@ -337,7 +349,7 @@ Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>
   - Metadados de conclusão (`<!-- note-it:completed_at=... -->`) removidos do texto visível via `noteit_core::task::extract_completed_at`.
 - **Citações e Alertas GFM (Phase 3.5):**
   - Citações comuns (`> `) formatadas com barra vertical `│ ` em ciano/itálico.
-  - Alertas GFM (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`) reconhecidos em qualquer caixa e formatados com barra vertical `▍ ` com seus rótulos visíveis destacados: `[NOTA]`, `[DICA]`, `[IMPORTANTE]`, `[ATENÇÃO]`, `[CUIDADO]`.
+  - Alertas GFM (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`) reconhecidos em qualquer caixa e formatados com barra vertical `▍ ` com seus rótulos visíveis destacados: `[NOTA]`, `[DICA]`, `[IMPORTANTE]`, `[AVISO]`, `[CUIDADO]`.
   - Marcadores de alertas não suportados (`> [!FOO]`) são preservados como citações comuns sem perda ou corrupção de conteúdo (conforme ADR-026).
 - **Blocos de Código:** Cercados por crases (```` ``` ````) ou tis (`~~~`), com cabeçalho indicando a linguagem declarada (`┌── [lang] ──`), corpo em texto simples em fonte monoespaçada e rodapé delimitador (`└───`). Zero dependência de syntax highlighting (`syntect` proibido).
 - **Cálculos e Declarações Matemáticas:** Linhas iniciando com `=` ou declarações de variáveis `:=` são renderizadas como texto Markdown cru, sem avaliação de expressões matemáticas (conforme especificação da Fase 3.6/3.7).

@@ -402,8 +402,8 @@ fn test_rendered_buffer_contains_all_blocks_via_test_backend() {
         "Buffer must contain [IMPORTANTE] callout label"
     );
     assert!(
-        buffer_text.contains("[ATENÇÃO]"),
-        "Buffer must contain [ATENÇÃO] callout label"
+        buffer_text.contains("[AVISO]"),
+        "Buffer must contain [AVISO] callout label"
     );
     assert!(
         buffer_text.contains("[CUIDADO]"),
@@ -453,7 +453,7 @@ fn test_dump_all_block_types_snapshot() {
     assert!(text.contains("[NOTA]"));
     assert!(text.contains("[DICA]"));
     assert!(text.contains("[IMPORTANTE]"));
-    assert!(text.contains("[ATENÇÃO]"));
+    assert!(text.contains("[AVISO]"));
     assert!(text.contains("[CUIDADO]"));
     assert!(text.contains("┌── [rust]"));
     assert!(text.contains("= 100 * 2.5"));
