@@ -291,3 +291,63 @@ A **Fase 5.0B** construiu o esqueleto fundamental do `noteit-tui`:
   7. Rejeição com erro explicativo antes do modo raw quando o store não existe.
   8. Rejeição de redirecionamentos em ambientes sem TTY.
   9. Execução das opções `--help` e `--version` sem inicializar terminal gráfico.
+
+---
+
+## 9. Detalhes de Implementação da Fase 5.0C (Modo Leitura, Navegação e Apresentação)
+
+A **Fase 5.0C** implementou a experiência de leitura, navegação e apresentação somente-leitura da TUI:
+
+### 9.1 Painéis de Navegação por Teclado
+- **Notas Recentes (`RecentNotes`):**
+  - Consome `core.list_summaries(&NoteFilter::default(), None)`.
+  - Ordenação estrita por recência canônica do Note-it (`updated_at` decrescente, desempates por `mtime` e UUID). NUNCA utiliza `mtime` do sistema de arquivos como critério primário.
+  - Exibe rótulo da nota, data formatada (`YYYY-MM-DD HH:MM`) e tags associadas (`#tag`).
+- **Tarefas Pendentes (`PendingTasks`):**
+  - Consome `core.list_tasks(TaskStateFilter::Pending, &NoteFilter::default(), None)`.
+  - Reutiliza diretamente o scanner de tarefas de `noteit-core` (`task::parse_tasks`), sem duplicar expressões regulares.
+  - Exibe indicador de tarefa pendente `☐`, o texto limpo da tarefa e a identificação da nota de origem `[<label>]`.
+  - Pressionar `Enter` na tarefa abre a nota correspondente no painel de leitura.
+- **Lixeira (`Trash`):**
+  - Consome `core.list_trash()`, listando notas descartadas na pasta `trash/`.
+  - Apresenta indicador `🗑️`, rótulo da nota e data de exclusão.
+  - Modo estritamente somente-leitura: exibe prévia do snippet e metadados no painel de leitura, sem suporte a restauração (restauração é mutação reservada para a Fase 5.0D).
+- **Atalhos de Navegação:**
+  - `Tab` / `BackTab` (Shift+Tab): alternância cíclica entre painéis (`Notas Recentes` ↔ `Tarefas Pendentes` ↔ `Lixeira`).
+  - `1`, `2`, `3`: seleção direta do painel desejado.
+  - Setas `Up`/`Down` e teclas `k`/`j`: navegação na lista do painel ativo.
+  - `Home`/`g` e `End`/`G`: salto para o início e fim da lista.
+  - `Enter`, `Right` ou `l`: transição de foco para o painel de leitura.
+  - `Esc`, `Left` ou `h`: retorno de foco para a lista de navegação.
+
+### 9.2 Busca Rápida via Tecla `/`
+- Acionada a qualquer momento pela tecla `/`.
+- Exibe campo de consulta interativo no cabeçalho superior (`🔍 Busca Rápida no Core`).
+- **Delegação ao Core:** consome diretamente `core.search_notes(&query)`. Reaproveita integralmente o motor léxico e de dobra de caixa/acentos (`search::fold`), contagem de correspondências e ranqueamento sem duplicar lógica de matching.
+- Resultados atualizados dinamicamente no painel lateral à medida que o usuário digita.
+- Navegação entre resultados via setas `Up`/`Down`. `Enter` abre a nota selecionada no painel de leitura; `Esc` cancela a busca e restaura o painel anterior.
+
+### 9.3 Formatador e Renderizador de Markdown (`markdown.rs`)
+Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>`):
+- **Títulos (Headings):** Níveis 1 a 6 (`# ` a `###### `) estilizados com distinção visual de negrito, itálico e cores hierárquicas (amarelo, ciano, verde, branco, cinza).
+- **Listas:** Marcadores de listas não ordenadas (`-`, `*`, `+`) renderizados com marcadores `• ` em ciano, preservando indentação; listas numeradas (`1.`, `2.`) com números preservados.
+- **Checkboxes de Tarefas:**
+  - Pendentes: `☐ ` em amarelo e texto normal.
+  - Concluídas: `☑ ` em verde e texto riscado/esmaecido.
+  - Metadados de conclusão (`<!-- note-it:completed_at=... -->`) removidos do texto visível via `noteit_core::task::extract_completed_at`.
+- **Citações e Alertas GFM (Phase 3.5):**
+  - Citações comuns (`> `) formatadas com barra vertical `│ ` em ciano/itálico.
+  - Alertas GFM (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`) reconhecidos em qualquer caixa e formatados com barra vertical `▍ ` com seus rótulos visíveis destacados: `[NOTA]`, `[DICA]`, `[IMPORTANTE]`, `[ATENÇÃO]`, `[CUIDADO]`.
+  - Marcadores de alertas não suportados (`> [!FOO]`) são preservados como citações comuns sem perda ou corrupção de conteúdo (conforme ADR-026).
+- **Blocos de Código:** Cercados por crases (```` ``` ````) ou tis (`~~~`), com cabeçalho indicando a linguagem declarada (`┌── [lang] ──`), corpo em texto simples em fonte monoespaçada e rodapé delimitador (`└───`). Zero dependência de syntax highlighting (`syntect` proibido).
+- **Cálculos e Declarações Matemáticas:** Linhas iniciando com `=` ou declarações de variáveis `:=` são renderizadas como texto Markdown cru, sem avaliação de expressões matemáticas (conforme especificação da Fase 3.6/3.7).
+
+### 9.4 Testes Automatizados com `TestBackend` (`tests/navigation_and_rendering.rs`)
+- Suíte automatizada com 7 testes de integração executados contra store sintético descartável:
+  1. `test_recency_ordering_follows_updated_at`: comprova que a listagem de notas segue estritamente `updated_at` decrescente.
+  2. `test_panel_navigation_shortcuts`: testa alternância de painéis via `Tab`, `BackTab` e teclas numéricas `1`, `2`, `3`.
+  3. `test_pending_tasks_extraction_and_opening`: valida extração de tarefas pendentes do Core e abertura da nota de origem por `Enter`.
+  4. `test_trash_listing_and_preview`: valida listagem e prévia de itens da lixeira.
+  5. `test_quick_search_delegates_to_core`: comprova ativação de busca com `/`, consulta ao Core e seleção por `Enter`.
+  6. `test_rendered_buffer_contains_all_blocks_via_test_backend`: asserção direta do buffer do `TestBackend` validando a presença de todos os tipos de blocos renderizados (H1-H3, listas, checkboxes, blockquote, os 5 alertas GFM, código e cálculos).
+  7. `test_dump_all_block_types_snapshot`: geração de dump do buffer renderizado comprovando apresentação sem display físico.

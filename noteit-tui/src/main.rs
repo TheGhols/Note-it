@@ -1,9 +1,6 @@
-mod app;
-mod terminal;
-mod ui;
-
-use app::App;
 use noteit_core::StorePaths;
+use noteit_tui::app::App;
+use noteit_tui::terminal;
 use std::env;
 use std::io::{self, IsTerminal};
 use std::process;
@@ -81,7 +78,7 @@ Dica: execute 'note-it' para inicializar o aplicativo ou crie uma nota com 'note
     }
 
     // 8. Run interactive application event loop
-    let mut app = App::new(term_flag);
+    let mut app = App::new_at(paths, term_flag);
     let run_result = app.run(&mut terminal);
 
     // 9. Restore terminal safely upon return

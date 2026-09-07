@@ -9,6 +9,10 @@ rust-version.workspace = true
 description = "Terminal User Interface for Note-it"
 publish = false
 
+[lib]
+name = "noteit_tui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "noteit-tui"
 path = "src/main.rs"
