@@ -37,12 +37,14 @@ readonly RUST_STAGES=(
   mcp-boundary
   embedding-boundary
   embed-boundary
+  tui-boundary
   core-tests
   cli-tests
   mcp-tests
   embedding-tests
   embed-tests
   remote-tests
+  tui-tests
   workspace-tests
 )
 
@@ -77,6 +79,7 @@ Estágios Rust:
   mcp-boundary     scripts/check-mcp-boundary
   embedding-boundary  scripts/check-embedding-boundary
   embed-boundary   scripts/check-embed-boundary
+  tui-boundary     scripts/check-tui-boundary
   offline          scripts/check-offline (exige namespaces de rede sem privilégio)
   core-tests       cargo test -p noteit-core, sem display
   cli-tests        cargo test -p noteit-cli, sem display e sem barramento
@@ -84,6 +87,7 @@ Estágios Rust:
   embedding-tests  cargo test -p noteit-embedding-local, sem display e sem rede
   embed-tests      cargo test -p noteit-embed, contra um mock local de HTTP
   remote-tests     cargo test -p noteit-embedding-remote e -p noteit-embed-protocol
+  tui-tests        cargo test -p noteit-tui, sem display e sem barramento
   workspace-tests  cargo test --workspace (inclui o harness de isolamento)
 
 Estágios do frontend, todos executados em ui/:
@@ -145,6 +149,7 @@ stage_embedding_boundary() { "$REPO_ROOT/scripts/check-embedding-boundary"; }
 # them: HTTP and TLS become legal in exactly one crate, and that crate is
 # checked for being unable to do anything else.
 stage_embed_boundary() { "$REPO_ROOT/scripts/check-embed-boundary"; }
+stage_tui_boundary() { "$REPO_ROOT/scripts/check-tui-boundary"; }
 # Deliberately *not* in the `rust` aggregate. It needs unprivileged user
 # namespaces, which a container or a hardened kernel may not give, and a stage
 # that quietly passes where it cannot run would be worse than one that has to be
@@ -195,6 +200,10 @@ stage_embed_tests() {
 stage_remote_tests() {
   env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
     cargo test -p noteit-embedding-remote -p noteit-embed-protocol
+}
+stage_tui_tests() {
+  env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+    cargo test -p noteit-tui
 }
 stage_workspace_tests() { cargo test --workspace; }
 

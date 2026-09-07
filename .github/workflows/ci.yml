@@ -72,6 +72,9 @@ jobs:
       - name: Remote Embedding Worker Boundary
         run: scripts/check embed-boundary
 
+      - name: TUI Dependency Boundary
+        run: scripts/check tui-boundary
+
       - name: Headless Core Tests
         run: scripts/check core-tests
 
@@ -89,6 +92,9 @@ jobs:
 
       - name: Remote Provider And Protocol Tests
         run: scripts/check remote-tests
+
+      - name: Headless TUI Tests
+        run: scripts/check tui-tests
 
       - name: Run Rust Unit Tests
         run: scripts/check workspace-tests

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fails if the headless TUI ever gains a desktop UI, network or async runtime dependency.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tree="$(cargo tree -p noteit-tui --edges normal --prefix none)"
+
+FORBIDDEN_PATTERN='^(gtk4|gdk4|webkit6|gtk4-layer-shell|wayland($|-)|niri($|-)|tokio($|-)|hyper($|-)|reqwest($|-)|ureq($|-)|curl($|-))( |$)'
+
+if grep -Eq "$FORBIDDEN_PATTERN" <<<"$tree"; then
+  printf '%s\n' "TUI boundary violation: noteit-tui depends on forbidden desktop, network, or async runtime crates (gtk, gdk, webkit, layer-shell, wayland, niri, tokio, hyper, reqwest, ureq, curl)." >&2
+  grep -E "$FORBIDDEN_PATTERN" <<<"$tree" >&2
+  exit 1
+fi
+
+if grep -En '(serde_yaml|std::fs::read_dir)' noteit-tui/src/*.rs >/dev/null 2>&1; then
+  printf '%s\n' "TUI boundary violation: noteit-tui/src contains direct YAML parsing or directory traversal; all store access must pass through noteit-core." >&2
+  exit 1
+fi
+
+printf '%s\n' "TUI boundary OK: noteit-tui has no desktop GUI, network or async runtime dependencies, and delegates store operations to noteit-core."

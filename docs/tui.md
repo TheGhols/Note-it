@@ -245,3 +245,49 @@ Seguindo o padrão disciplinado das Fases 4.0 a 4.3:
   - Prova de que todos os 6 gates de fronteira passam ilesos.
   - Prova de zero regressão no Core, na CLI, no MCP e na GUI.
   - CI remoto integralmente verde.
+
+---
+
+## 8. Detalhes de Implementação da Fase 5.0B (Shell e Portão de Fronteira)
+
+A **Fase 5.0B** construiu o esqueleto fundamental do `noteit-tui`:
+
+### 8.1 Estrutura do Crate e Dependências
+- Crate adicionado ao workspace em `noteit-tui/` com binário único `target/release/noteit-tui`.
+- Dependências de produção: `ratatui` (0.30.2 com backend `crossterm`), `crossterm` (0.29.0), `signal-hook` (0.3.18) e `noteit-core` (path dependency).
+- Dependências de desenvolvimento: `libc` (0.2) e `tempfile` (3.14) para os testes de pseudoterminal (PTY).
+- Sem runtime assíncrono (sem `tokio`), sem rede e sem bibliotecas de interface desktop.
+
+### 8.2 Ciclo de Vida e Restauração Segura do Terminal (`terminal.rs`)
+- **Guarda RAII (`TerminalGuard`):** Instanciação segura que ativa o modo raw (`enable_raw_mode()`), entra no alternate screen (`EnterAlternateScreen`), oculta o cursor e captura o terminal crossterm. Implementa a trait `Drop` para garantir de forma infalível a desativação do modo raw (`disable_raw_mode()`), o retorno à tela padrão (`LeaveAlternateScreen`), a visibilidade do cursor (`Show`) e a liberação de buffers na saída normal ou por retorno antecipado.
+- **Hook de Pânico Customizado (`install_panic_hook`):** Antes de qualquer inicialização de terminal, instala-se um panic hook global. Caso ocorra um panic em qualquer ponto do runtime da TUI, o hook restaura imediatamente o modo cozido do terminal e sai do alternate screen antes de chamar o tratador padrão de panic do Rust. Isso elimina completamente o clássico defeito de "terminal quebrado/inutilizável" após falhas inesperadas.
+- **Tratamento de Sinais POSIX (`signal-hook`):** Registro assíncrono-seguro de handlers para `SIGINT` e `SIGTERM`. Ao receber qualquer sinal, uma flag booleana atômica (`SHUTDOWN_REQUESTED`) é alterada. O loop síncrono faz polling de eventos a cada 50 ms (`crossterm::event::poll`) e inspeciona a flag antes e depois de cada espera, terminando imediatamente o loop e acionando o destrutor do `TerminalGuard`.
+
+### 8.3 Redimensionamento e Eventos (`app.rs` e `ui.rs`)
+- **Redimensionamento Seguro:** Eventos `Event::Resize(w, h)` emitidos pelo crossterm são consumidos no loop e o Ratatui realiza `terminal.autoresize()` antes de cada `terminal.draw()`.
+- **Layout com Guardas de Dimensão:** O renderizador em `ui.rs` verifica dimensões mínimas utilizáveis (ex.: largura ou altura degeneradas), desenhando layouts responsivos com `Constraint::Percentage` e `Constraint::Min` sem causar pânico de fatiamento de tela.
+- **Comandos de Saída:** O loop encerra deterministicamente pelas teclas `q`, `Esc` e `Ctrl+C`.
+
+### 8.4 Validações de Pré-Voo (Fail-Fast antes do Modo Raw)
+- **Store Ausente:** O caminho do store é resolvido via `StorePaths::resolve()` antes de ativar o modo raw ou alternate screen. Caso `paths.notes_dir.exists()` seja falso, a TUI imprime diagnóstico claro em `stderr` (`Error: O diretório de notas não existe: <caminho>`) e finaliza com código 1, mantendo o terminal do usuário limpo.
+- **Não-TTY:** Se `stdout` não for um terminal interativo (`io::stdout().is_terminal() == false`), a TUI recusa a execução em lote/pipe com código 1, orientando o usuário a utilizar a CLI (`noteit`).
+
+### 8.5 Portão de Fronteira Mecânico (`scripts/check-tui-boundary`)
+- Script de verificação contínua executado no CI e no `./scripts/check` (`tui-boundary`).
+- Impede terminantemente a introdução de:
+  - Bibliotecas de GUI de desktop (`gtk`, `gdk`, `webkit`, `layer-shell`, `wayland`, `niri`).
+  - Runtimes assíncronos ou clientes de rede (`tokio`, `hyper`, `reqwest`, `ureq`, `curl`, etc.).
+  - Desvios diretos de I/O em disco acessando arquivos Markdown do store sem transitar por `noteit-core`.
+
+### 8.6 Testes Automatizados em Pseudoterminal (`tests/terminal_lifecycle.rs`)
+- Harness de testes sobre PTY Unix (`openpty` via `libc`), medindo o estado de `termios` (`c_lflag` com flags `ICANON` e `ECHO`) antes e após a execução do binário real.
+- Suíte de 9 testes automatizados cobrindo:
+  1. Restauração de `termios` após saída com `q`.
+  2. Restauração de `termios` após saída com `Esc`.
+  3. Restauração de `termios` após interrupção por `Ctrl+C`.
+  4. Restauração de `termios` e shutdown limpo ao receber sinal `SIGTERM`.
+  5. Restauração de `termios` e saída de alternate screen em caso de panic controlado (`--panic-for-test`).
+  6. Redimensionamento de janela via ioctl `TIOCSWINSZ` sem corrupção gráfica.
+  7. Rejeição com erro explicativo antes do modo raw quando o store não existe.
+  8. Rejeição de redirecionamentos em ambientes sem TTY.
+  9. Execução das opções `--help` e `--version` sem inicializar terminal gráfico.
