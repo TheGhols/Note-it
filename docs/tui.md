@@ -502,3 +502,194 @@ no Core, 1 de compatibilidade v2/v3, 2 do receiver e 1 com desktop real.
 Nenhum arquivo de `noteit-tui`, manifesto, lockfile ou boundary foi alterado.
 
 **FASE 5.0D AINDA NÃO INICIADA.**
+
+## 11. Fase 5.0D — Cliente transacional e editor externo
+
+Baseline aprovada: `2fc1eecf1073321de5a18ab3ba956c2e94ff6008`.
+Implementação autorizada após revisão humana da R0; fechamento depende dos gates
+e do CI do HEAD final. A seção 10 registra o encerramento histórico da R0.
+Nenhum contrato do Core/R0, dependência, comando CLI, tool MCP ou função da GUI
+é alterado nesta fase. A 5.0E não está iniciada.
+
+### 11.1 Teclas e snapshot de leitura
+
+| Contexto | Tecla | Ação |
+| --- | --- | --- |
+| Notas Recentes, lista | `n` | Criar nota vazia e abrir no Reader, sem prompt de título |
+| Reader ativo | `Space` | Alternar a tarefa sob o cursor de leitura |
+| Reader ativo | `d` | Confirmação inline `Mover para a lixeira? [y/N]` |
+| Confirmação | `y` | Descartar com a revision que estava exibida antes da confirmação |
+| Confirmação | `n`, `Esc`, `Enter` | Cancelar sem escrever |
+| Lixeira, lista ou Reader | `r` | Restaurar o item exibido, sem confirmação |
+| Reader ativo | `e` | Abrir o corpo Markdown em `$EDITOR` |
+
+Setas/`j`/`k` movem o cursor por linhas de origem; `PgUp`/`PgDn` movem dez
+linhas e `Home`/`g` voltam ao início. A linha selecionada tem fundo destacado.
+Ao avançar, ela fica no topo do corpo visível; wrapping continua no Ratatui.
+O renderizador anterior somente ganhou posições de origem, sem mudar seus
+rótulos, parsing ou saída Markdown. O scanner `task::parse_tasks` do Core decide
+se a linha é realmente uma tarefa e fornece seu `task_ref`; texto dentro de
+fences não vira tarefa por semelhança visual.
+
+`LoadedDocument` centraliza `{ id, document, revision, in_trash }`. A revision
+vem de `write::revision_of` sobre o próprio documento retornado por `read_note`
+ou `read_trash_note`. Conteúdo e revision são capturados juntos, não em widgets.
+O `current_note_id` anterior permanece apenas como projeção para navegação.
+O preview da lixeira usa o documento canônico carregado, não uma revision obtida
+silenciosamente no momento de restaurar.
+
+### 11.2 Funil de escrita e conflitos
+
+| Ação | Operação passada a `authority::perform_at` | Precondição |
+| --- | --- | --- |
+| Toggle | `MutateNote` com `CompleteTask` ou `ReopenTask` | `Some(snapshot.revision)` |
+| Criar | `CreateNote { draft }`, corpo vazio | Destino ausente, contrato atômico da R0 |
+| Descartar | `DiscardNote` | Revision do snapshot confirmado |
+| Restaurar | `RestoreFromTrashAtRevision` | Revision do snapshot da lixeira |
+| Editor | `MutateNote` com `ReplaceBody` ou `ClearBody` | `Some(original_revision)`, anterior ao editor |
+
+Nenhum desses caminhos grava no store diretamente ou mantém lease em repouso.
+O `NoteItCore` da navegação permanece somente-leitura. `authority::perform_at`
+escolhe lease local pontual ou encaminhamento ao desktop pelo socket privado v3;
+a TUI não implementa cliente IPC nem ciclo alternativo de descarte.
+
+Em `WriteError::RevisionConflict`, toggle/descarte/restauração mostram conflito,
+recarregam conteúdo/lista e revision, sem aplicar sucesso local ou reenviar.
+Criação não inventa revision para inexistência: um erro é mostrado, sem retry.
+Após sucesso, a TUI relê a nota ou a lista pelo Core. No editor, a proteção dos
+bytes recusados acontece **antes** de reler para exibição. Nenhuma leitura de
+retorno é usada para substituir a precondição original e fazer uma escrita passar.
+
+### 11.3 Editor, terminal e seleção de mutação
+
+`TerminalGuard::suspend()` usa `restore()`. `resume()` reativa raw/alternate
+screen e o cursor oculto. Construção, suspensão, Drop e panic hook compartilham
+o cleanup do terminal. Ao retornar, um resize fullscreen do Ratatui invalida seu
+buffer anterior e redesenha a tela, mesmo se as dimensões não mudaram.
+`signal-hook` continua marcando a mesma flag; durante o editor ela é consultada
+a cada 50 ms. Interrupção encerra/recolhe o filho, preserva edições significativas
+no temporário e informa seu caminho também na saída do terminal.
+
+O programa é resolvido de `$EDITOR`, com fallback **`vi`** quando ausente/vazio.
+O valor é um nome/caminho de executável literal, podendo conter espaços; não é
+avaliado por shell. Para argumentos, configure um script wrapper como `$EDITOR`.
+`std::process::Command` recebe o caminho temporário como argumento separado.
+Nenhuma dependência adicional foi necessária.
+
+O temporário exclusivo é `${TMPDIR:-/tmp}/noteit-<note-id>-<uuid>.md`, criado
+com permissão `0600`, conteúdo bruto do corpo e `sync_all` antes do spawn.
+Não contém o front matter do arquivo de armazenamento. A saída permanece em
+bytes separados da visão UTF-8 usada para escolher a operação:
+
+1. Bytes idênticos: no-op, nenhuma escrita/revision/recovery.
+2. Bytes diferentes mas `canonical_content` igual: canonical no-op, mesmas garantias.
+3. Forma canônica diferente e não vazia: `ReplaceBody { body: edited }`.
+4. Forma canônica esvaziada: `ClearBody`, sem confirmação adicional.
+
+**O `$EDITOR` preserva integralmente o conteúdo significativo segundo o modelo
+canônico do Note-it. Terminadores `\n`/`\r` no fim do corpo não fazem parte da
+representação canônica persistida e, isoladamente, não avançam revision. Em
+conflito, o recovery preserva literalmente a saída do editor antes dessa canonização.**
+
+Espaços finais continuam significativos. Um corpo já vazio seguido apenas de
+terminadores é no-op; esvaziar um corpo não vazio usa `ClearBody`, não uma
+tentativa de `ReplaceBody` seguida de tratamento de `InvalidInput`.
+Exit status não-zero, falha do processo ou saída não UTF-8 não são persistidos;
+edições significativas ficam no temporário com mensagem/caminho. Não há
+conversão UTF-8 com perdas. Erro de retomada também preserva o temporário.
+
+### 11.4 Recovery literal e política de retenção
+
+Em conflito, criar exclusivamente:
+
+```text
+${XDG_STATE_HOME:-$HOME/.local/state}/note-it/tui-recovery/<note-id>-<uuid>.md
+```
+
+Arquivo `0600`, novos diretórios `0700`, UUID e `create_new` contra colisão;
+sem sobrescrever recovery existente. Os bytes são exatamente os devolvidos
+pelo editor, inclusive terminadores e arquivo de **zero bytes** quando vazio.
+Não há front matter adicional, serialização, merge, canonização ou retry.
+Sincroniza arquivo e diretório antes de apagar o temporário original.
+
+Após sucesso, no-op ou recovery confirmado, remove o temporário. Se recovery
+falhar, mantém o temporário e informa tanto o erro quanto seu caminho completo.
+Outras falhas de escrita mantêm essa última cópia e não afirmam sucesso.
+Falha de remoção pós-sucesso gera aviso, não perde o texto. Recovery e temporários
+retidos não têm coleta automática nesta fase; o usuário decide quando removê-los.
+Esses arquivos de trabalho são a exceção explicitamente autorizada ao I/O local:
+não pertencem ao store e nunca substituem a escrita via authority.
+
+### 11.5 Provas e gates
+
+Testes novos em `noteit-tui/tests/transactions.rs`, `editor_process.rs` e
+`desktop_concurrency.rs`. Os 9 PTY e 7 testes de navegação anteriores permanecem
+byte-idênticos; os cinco testes Markdown conservam nomes e lógica.
+O teste gráfico dedicado exige os binários reais e o harness inalterado:
+
+```sh
+cargo build --bin note-it
+NOTE_IT_REQUIRE_TUI_DESKTOP_TEST=1 cargo test -p noteit-tui --test desktop_concurrency -- --nocapture
+```
+
+Em ambiente sem Wayland, o teste informa ausência de prova gráfica; com a variável
+acima, ausência de display é falha. A execução dedicada local deve comprovar:
+R1 recusada após R2 do desktop, R2 preservada/recarregada sem retry; edição válida
+aplicado exatamente uma vez pelo receiver; lease liberado pela TUI ainda aberta
+e desktop capaz de adquirir authority e continuar respondendo.
+
+Gates locais finais (2026-09-08):
+
+| Gate | Passaram | Ignorados preexistentes |
+| --- | ---: | ---: |
+| `core-tests` | 675 | 1 |
+| `cli-tests` | 185 | 0 |
+| `mcp-tests` | 226 | 1 |
+| `embedding-tests` | 37 | 3 |
+| `embed-tests` | 112 | 1 |
+| `remote-tests` | 87 | 0 |
+| `tui-tests` | 43 | 0 |
+| `workspace-tests` | 1499 | 6 |
+| `frontend-test` | 1233 (59 arquivos) | 0 |
+| Desktop real, execução dedicada obrigatória | 1 | 0 |
+
+Contagens por execução, não somáveis. Dos 43 resultados TUI no gate sem display,
+42 executam as provas headless/PTY e o teste gráfico retorna explicitamente sem
+prova gráfica; a execução dedicada acima exige Wayland e não aceita esse retorno.
+O workspace local também executou o caso gráfico. São 22 testes novos: 18 de
+transações/editor, 3 com processo real/PTY e 1 com os dois binários reais.
+As tabelas de casos nos testes incluem os no-ops literal/canônico, espaços finais,
+`ClearBody`, recovery vazio/terminadores, falha de recovery, editor não-zero,
+UTF-8 inválido e writer inacessível sem bypass.
+
+Também passaram os seis boundaries, `ci-parity`, `rust-format`, `rust-check`,
+`rust-clippy` (workspace, todos os targets/features, `-D warnings`), `frontend-lint`
+e `frontend-build`. O build frontend conserva o aviso de chunk maior que 500 kB.
+`scripts/check-tui-boundary`, `scripts/note-it-isolated`, Core/R0, GUI, CLI, MCP,
+manifestos e lockfiles não foram alterados. Os fingerprints dos dados/configuração/
+estado reais (nomes, conteúdo, tamanho e mtime) permaneceram iguais.
+
+Saída literal da execução dedicada final, além de três repetições consecutivas
+verdes durante a verificação:
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/desktop_concurrency.rs (target/debug/deps/desktop_concurrency-2c1baf8c912c4380)
+
+running 1 test
+C: real TUI mutated locally; lease released while TUI remained alive
+COMMAND: /home/guhols/Projetos/Note-It/scripts/note-it-isolated --root /tmp/noteit-5d-YXPZP5 -- (NOTE_IT_BINARY=/home/guhols/Projetos/Note-It/target/debug/note-it)
+COMMAND: scripts/note-it-isolated --root /tmp/noteit-5d-YXPZP5 --verify
+note-it-isolated: io.github.theghols.NoteIt is on the private bus for /tmp/noteit-5d-YXPZP5
+DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/note-it-bus-8xSX6Y/dbus-LvOt2X1T8n,guid=7bd7e2d3f992b122541408a06aa08618
+
+C: desktop acquired authority and mapped its window with the same TUI still alive
+A: TUI sent its displayed R1; RevisionConflict; R2 bytes intact; TUI displayed R2; zero retry commits
+B: valid TUI editor mutation committed exactly once by desktop receiver; private socket v3; desktop lease remained held
+C: desktop accepted and confirmed its next mutation after TUI; no perpetual lease or permanent GUI block
+test real_tui_and_isolated_desktop_enforce_revision_socket_and_pointwise_lease ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.59s
+```
+
+Gates locais aprovados; fechamento remoto pendente do CI da implementação.

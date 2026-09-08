@@ -31,7 +31,13 @@ pub fn render(frame: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
-            Constraint::Length(1),
+            Constraint::Length(
+                if app.notice.is_empty() && app.discard_confirmation.is_none() {
+                    1
+                } else {
+                    4
+                },
+            ),
         ])
         .split(area);
 
@@ -220,7 +226,7 @@ fn render_recent_notes_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let max_items = area.height as usize / 2;
+    let max_items = (area.height as usize / 2).max(1);
     let window_start = if app.recent_selected >= max_items {
         app.recent_selected.saturating_sub(max_items - 1)
     } else {
@@ -288,7 +294,7 @@ fn render_pending_tasks_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let max_items = area.height as usize / 2;
+    let max_items = (area.height as usize / 2).max(1);
     let window_start = if app.tasks_selected >= max_items {
         app.tasks_selected.saturating_sub(max_items - 1)
     } else {
@@ -351,7 +357,7 @@ fn render_trash_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let max_items = area.height as usize / 2;
+    let max_items = (area.height as usize / 2).max(1);
     let window_start = if app.trash_selected >= max_items {
         app.trash_selected.saturating_sub(max_items - 1)
     } else {
@@ -418,7 +424,7 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let max_items = area.height as usize / 2;
+    let max_items = (area.height as usize / 2).max(1);
     let window_start = if app.search_selected >= max_items {
         app.search_selected.saturating_sub(max_items - 1)
     } else {
@@ -519,12 +525,15 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Yellow),
                 )),
                 Line::from(Span::styled(
-                    trash.snippet.clone(),
+                    app.current_note
+                        .as_ref()
+                        .filter(|note| note.in_trash && note.id == trash.note_id)
+                        .map_or_else(|| trash.snippet.clone(), |note| note.content.clone()),
                     Style::default().fg(Color::White),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "(As notas na lixeira são somente-leitura nesta fase; restauração em 5.0D)",
+                    "[r] Restaurar a revision exibida",
                     Style::default().fg(Color::DarkGray).italic(),
                 )),
             ];
@@ -587,12 +596,30 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
 
         // Render Markdown content
-        let md_lines = markdown::render_markdown(&doc.content);
-        lines.extend(md_lines);
+        let mut rendered = markdown::render_with_sources(&doc.content);
+        let cursor_line = rendered
+            .sources
+            .iter()
+            .position(|source| *source == app.reader_cursor)
+            .unwrap_or(0);
+        if is_focused {
+            if let Some(line) = rendered.lines.get_mut(cursor_line) {
+                line.style = line.style.bg(Color::DarkGray);
+            }
+        }
+        // Start at the selected source line when navigating. Wrapping remains
+        // Ratatui's job; a long visual line cannot shift the task's identity.
+        let start = if is_focused && cursor_line > 0 {
+            lines.clear();
+            cursor_line
+        } else {
+            0
+        };
+        lines.extend(rendered.lines.into_iter().skip(start));
 
         let p = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .scroll((app.reader_scroll as u16, 0));
+            .scroll((app.reader_scroll.min(u16::MAX as usize) as u16, 0));
 
         frame.render_widget(p, inner);
     } else {
@@ -609,13 +636,27 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    if app.discard_confirmation.is_some() || !app.notice.is_empty() {
+        let text = if app.discard_confirmation.is_some() {
+            "Mover para a lixeira? [y/N]"
+        } else {
+            &app.notice
+        };
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(Color::Yellow)),
+            area,
+        );
+        return;
+    }
     let shortcuts = match app.focus {
         Focus::Search => " [Enter] Abrir Nota  [↑↓] Selecionar  [Esc] Cancelar Busca ",
         Focus::Reader => {
-            " [↑↓/jk] Rolar  [PgUp/PgDn] Pág  [Esc/h] Voltar ao Painel  [/] Buscar  [q] Sair "
+            " [↑↓/jk] Cursor  [Space] Tarefa  [e] Editor  [d] Lixeira  [r] Restaurar  [Esc] Voltar  [q] Sair "
         }
         Focus::List => {
-            " [Tab/1-3] Alternar Painéis  [/] Buscar  [↑↓/jk] Navegar  [Enter/l] Ler  [q/Esc] Sair "
+            " [Tab/1-3] Painéis  [n] Nova  [r] Restaurar  [/] Buscar  [↑↓/jk] Navegar  [Enter] Ler  [q] Sair "
         }
     };
 

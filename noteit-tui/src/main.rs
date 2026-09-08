@@ -79,7 +79,7 @@ Dica: execute 'note-it' para inicializar o aplicativo ou crie uma nota com 'note
 
     // 8. Run interactive application event loop
     let mut app = App::new_at(paths, term_flag);
-    let run_result = app.run(&mut terminal);
+    let run_result = app.run(&mut terminal, &mut guard);
 
     // 9. Restore terminal safely upon return
     guard.restore()?;

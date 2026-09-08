@@ -18,24 +18,47 @@ pub struct TerminalGuard {
 impl TerminalGuard {
     /// Initializes terminal into raw mode and alternate screen, hiding the cursor.
     pub fn new() -> io::Result<(Self, Terminal<CrosstermBackend<Stdout>>)> {
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, Hide)?;
-        let backend = CrosstermBackend::new(stdout);
+        let mut guard = Self { active: false };
+        guard.resume()?;
+        let backend = CrosstermBackend::new(io::stdout());
         let terminal = Terminal::new(backend)?;
-        Ok((Self { active: true }, terminal))
+        Ok((guard, terminal))
+    }
+
+    /// Leave the TUI through the same cleanup path used on exit.
+    pub fn suspend(&mut self) -> io::Result<()> {
+        self.restore()
+    }
+
+    /// Re-enter after an editor; idempotent and guarded on partial failure.
+    pub fn resume(&mut self) -> io::Result<()> {
+        if !self.active {
+            self.active = true;
+            enable_raw_mode()?;
+            execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        }
+        Ok(())
     }
 
     /// Restores terminal to its standard cooked mode and leaves alternate screen.
     pub fn restore(&mut self) -> io::Result<()> {
         if self.active {
+            restore_terminal()?;
             self.active = false;
-            let mut stdout = io::stdout();
-            let _ = execute!(stdout, LeaveAlternateScreen, Show, DisableMouseCapture);
-            let _ = disable_raw_mode();
         }
         Ok(())
     }
+}
+
+fn restore_terminal() -> io::Result<()> {
+    let screen = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        Show,
+        DisableMouseCapture
+    );
+    let raw = disable_raw_mode();
+    screen.and(raw)
 }
 
 impl Drop for TerminalGuard {
@@ -49,9 +72,7 @@ pub fn install_panic_hook() {
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         // First restore terminal state immediately so error output is readable
-        let mut stdout = io::stdout();
-        let _ = execute!(stdout, LeaveAlternateScreen, Show, DisableMouseCapture);
-        let _ = disable_raw_mode();
+        let _ = restore_terminal();
         previous_hook(panic_info);
     }));
 }

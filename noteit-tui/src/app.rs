@@ -3,15 +3,17 @@
 //! Provides interactive navigation across recent notes, pending tasks, and trash,
 //! with quick search (/) using noteit-core in-process.
 
-use crate::ui;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crate::{document::LoadedDocument, editor, terminal::TerminalGuard, ui};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use noteit_core::Uuid;
 use noteit_core::{
+    authority,
     filter::NoteFilter,
-    model::{NoteDocument, NoteSummary},
+    model::NoteSummary,
     search::SearchResult,
     task::{TaskEntry, TaskStateFilter},
     trash::TrashEntry,
+    write::{NoteDraft, NoteMutation, WriteError, WriteOperation},
     NoteItCore, StorePaths,
 };
 use ratatui::{backend::Backend, backend::CrosstermBackend, Terminal};
@@ -87,9 +89,14 @@ pub struct App {
     pub search_selected: usize,
 
     // Reader state
-    pub current_note: Option<NoteDocument>,
+    pub current_note: Option<LoadedDocument>,
+    /// Compatibility projection for navigation; mutations use the snapshot.
     pub current_note_id: Option<Uuid>,
     pub reader_scroll: usize,
+    pub reader_cursor: usize,
+    pub notice: String,
+    pub discard_confirmation: Option<LoadedDocument>,
+    editor_requested: bool,
 
     // Lifecycle
     pub should_quit: bool,
@@ -123,6 +130,10 @@ impl App {
             current_note: None,
             current_note_id: None,
             reader_scroll: 0,
+            reader_cursor: 0,
+            notice: String::new(),
+            discard_confirmation: None,
+            editor_requested: false,
             should_quit: false,
             term_flag,
         };
@@ -168,14 +179,19 @@ impl App {
 
     /// Loads a specific note by UUID into the reader pane.
     pub fn load_note(&mut self, id: Uuid) {
-        if self.current_note_id == Some(id) && self.current_note.is_some() {
+        if self
+            .current_note
+            .as_ref()
+            .is_some_and(|note| note.id == id && !note.in_trash)
+        {
             return;
         }
         match self.core.read_note(&id) {
             Ok(doc) => {
-                self.current_note = Some(doc);
+                self.current_note = LoadedDocument::new(doc, false).ok();
                 self.current_note_id = Some(id);
                 self.reader_scroll = 0;
+                self.reader_cursor = 0;
             }
             Err(_) => {
                 self.current_note = None;
@@ -207,10 +223,24 @@ impl App {
 
     /// Handles a keyboard event. Returns true if the event caused the app to quit.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if key.kind == KeyEventKind::Release {
+            return self.should_quit;
+        }
         // Ctrl+C always terminates the application immediately
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
             return true;
+        }
+
+        if let Some(snapshot) = self.discard_confirmation.take() {
+            match key.code {
+                KeyCode::Char('y' | 'Y') => self.discard(snapshot),
+                KeyCode::Char('n' | 'N') | KeyCode::Esc | KeyCode::Enter => {
+                    self.notice = "Descarte cancelado".into();
+                }
+                _ => self.discard_confirmation = Some(snapshot),
+            }
+            return self.should_quit;
         }
 
         // Mode-specific handling
@@ -220,11 +250,19 @@ impl App {
             Focus::List => self.handle_key_list(key),
         }
 
+        // Selection changes load a canonical trash snapshot for preview and
+        // subsequent restore. Restore itself never refreshes its precondition.
+        if self.panel == ActivePanel::Trash && self.focus != Focus::Search {
+            self.load_selected_trash(false);
+        }
+
         self.should_quit
     }
 
     fn handle_key_list(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Char('n') if self.panel == ActivePanel::RecentNotes => self.create_note(),
+            KeyCode::Char('r') if self.panel == ActivePanel::Trash => self.restore_selected(),
             // Exit shortcuts
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.should_quit = true;
@@ -370,6 +408,12 @@ impl App {
 
     fn handle_key_reader(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Char(' ') if self.panel != ActivePanel::Trash => self.toggle_task(),
+            KeyCode::Char('d') if self.panel != ActivePanel::Trash => {
+                self.discard_confirmation = self.current_note.clone().filter(|note| !note.in_trash);
+            }
+            KeyCode::Char('e') if self.panel != ActivePanel::Trash => self.editor_requested = true,
+            KeyCode::Char('r') if self.panel == ActivePanel::Trash => self.restore_selected(),
             // Return to list focus
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                 self.focus = Focus::List;
@@ -388,19 +432,20 @@ impl App {
 
             // Scroll reader pane
             KeyCode::Up | KeyCode::Char('k') => {
-                self.reader_scroll = self.reader_scroll.saturating_sub(1);
+                self.move_cursor(-1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.reader_scroll = self.reader_scroll.saturating_add(1);
+                self.move_cursor(1);
             }
             KeyCode::PageUp => {
-                self.reader_scroll = self.reader_scroll.saturating_sub(10);
+                self.move_cursor(-10);
             }
             KeyCode::PageDown => {
-                self.reader_scroll = self.reader_scroll.saturating_add(10);
+                self.move_cursor(10);
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.reader_scroll = 0;
+                self.reader_cursor = 0;
             }
 
             // Switch panels even while in reader
@@ -481,6 +526,232 @@ impl App {
                 self.load_note(note.id);
             }
         }
+        if self.panel == ActivePanel::Trash {
+            self.load_selected_trash(false);
+        }
+    }
+
+    fn move_cursor(&mut self, delta: isize) {
+        let last = self
+            .current_note
+            .as_ref()
+            .map_or(0, |note| note.content.lines().count().saturating_sub(1));
+        self.reader_cursor = self.reader_cursor.saturating_add_signed(delta).min(last);
+    }
+
+    fn load_selected_trash(&mut self, force: bool) {
+        let Some(id) = self
+            .trash_items
+            .get(self.trash_selected)
+            .map(|item| item.note_id)
+        else {
+            self.current_note = None;
+            self.current_note_id = None;
+            return;
+        };
+        if !force
+            && self
+                .current_note
+                .as_ref()
+                .is_some_and(|note| note.id == id && note.in_trash)
+        {
+            return;
+        }
+        self.current_note = self
+            .core
+            .read_trash_note(&id)
+            .ok()
+            .and_then(|doc| LoadedDocument::new(doc, true).ok());
+        self.current_note_id = self.current_note.as_ref().map(|note| note.id);
+        self.reader_cursor = 0;
+    }
+
+    fn reload_note(&mut self, id: Uuid) {
+        let cursor = self.reader_cursor;
+        self.current_note = None;
+        self.load_note(id);
+        self.reader_cursor = cursor;
+        self.move_cursor(0);
+    }
+
+    fn mutation_error(&mut self, error: WriteError, id: Uuid, in_trash: bool) {
+        self.notice = if matches!(error, WriteError::RevisionConflict { .. }) {
+            self.reload_all();
+            if in_trash {
+                self.load_selected_trash(true);
+            } else {
+                self.reload_note(id);
+            }
+            "Conflito de revision; nenhuma sobrescrita. Nota recarregada; ação não repetida.".into()
+        } else {
+            format!("Operação não confirmada: {error}")
+        };
+    }
+
+    pub fn toggle_task(&mut self) {
+        let Some(note) = self.current_note.as_ref().filter(|note| !note.in_trash) else {
+            return;
+        };
+        let tasks = noteit_core::task::parse_tasks(
+            note.id,
+            &noteit_core::search::label_for(&note.content),
+            &note.content,
+        );
+        let Some(task) = tasks
+            .into_iter()
+            .find(|task| task.line_number == self.reader_cursor + 1)
+        else {
+            self.notice = "Posicione o cursor sobre uma tarefa".into();
+            return;
+        };
+        let id = note.id;
+        let task_ref = task.task_ref.to_string();
+        let mutation = if task.checked {
+            NoteMutation::ReopenTask { task_ref }
+        } else {
+            NoteMutation::CompleteTask { task_ref }
+        };
+        let operation = WriteOperation::MutateNote {
+            selector: id.to_string(),
+            mutation,
+            expected_revision: Some(note.revision.clone()),
+        };
+        match authority::perform_at(&self.paths, &operation) {
+            Ok(_) => {
+                self.reload_all();
+                self.reload_note(id);
+                self.notice = "Tarefa alternada".into();
+            }
+            Err(error) => self.mutation_error(error, id, false),
+        }
+    }
+
+    fn create_note(&mut self) {
+        let operation = WriteOperation::CreateNote {
+            draft: NoteDraft {
+                content: String::new(),
+                tags: Vec::new(),
+                properties: Vec::new(),
+            },
+        };
+        match authority::perform_at(&self.paths, &operation) {
+            Ok(write) => {
+                self.reload_all();
+                self.load_note(write.outcome.note_id);
+                self.focus = Focus::Reader;
+                self.notice = "Nota criada".into();
+            }
+            Err(error) => self.notice = format!("Não foi possível criar a nota: {error}"),
+        }
+    }
+
+    fn discard(&mut self, note: LoadedDocument) {
+        let operation = WriteOperation::DiscardNote {
+            selector: note.id.to_string(),
+            expected_revision: note.revision,
+        };
+        match authority::perform_at(&self.paths, &operation) {
+            Ok(_) => {
+                self.current_note = None;
+                self.current_note_id = None;
+                self.reload_all();
+                self.panel = ActivePanel::RecentNotes;
+                self.focus = Focus::List;
+                self.on_panel_switched();
+                self.notice = "Nota movida para a lixeira".into();
+            }
+            Err(error) => self.mutation_error(error, note.id, false),
+        }
+    }
+
+    fn restore_selected(&mut self) {
+        let Some(note) = self.current_note.as_ref().filter(|note| note.in_trash) else {
+            return;
+        };
+        let id = note.id;
+        let operation = WriteOperation::RestoreFromTrashAtRevision {
+            selector: id.to_string(),
+            expected_revision: note.revision.clone(),
+        };
+        match authority::perform_at(&self.paths, &operation) {
+            Ok(_) => {
+                self.reload_all();
+                self.load_selected_trash(true);
+                self.notice = "Nota restaurada".into();
+            }
+            Err(error) => self.mutation_error(error, id, true),
+        }
+    }
+
+    fn open_editor(
+        &mut self,
+        guard: &mut TerminalGuard,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ) -> io::Result<()> {
+        let Some(note) = self.current_note.clone().filter(|note| !note.in_trash) else {
+            return Ok(());
+        };
+        let session = match editor::EditorSession::prepare(note, &std::env::temp_dir()) {
+            Ok(session) => session,
+            Err(error) => {
+                self.notice = format!("Não foi possível preparar editor: {error}");
+                return Ok(());
+            }
+        };
+        if let Err(error) = guard.suspend() {
+            // A partial terminal transition must not launch a child or return
+            // to the input loop. Drop/normal exit retry the shared cleanup.
+            return Err(io::Error::other(format!(
+                "Falha ao suspender terminal: {error}. Temporário preservado em {}",
+                session.temporary.display()
+            )));
+        }
+        let run = session.run(
+            &editor::editor_program(std::env::var_os("EDITOR")),
+            &self.term_flag,
+        );
+        if let Err(error) = guard
+            .resume()
+            // Fullscreen resize clears the display and invalidates Ratatui's
+            // previous buffer, even if the editor did not change dimensions.
+            .and_then(|()| {
+                terminal
+                    .size()
+                    .and_then(|size| terminal.resize(size.into()))
+            })
+        {
+            return Err(io::Error::other(format!(
+                "Falha ao retomar terminal: {error}. Temporário preservado em {}",
+                session.temporary.display()
+            )));
+        }
+        let run = if self.term_flag.load(Ordering::Relaxed) {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Editor interrompido",
+            ))
+        } else {
+            run
+        };
+        let result = session.finish(
+            &self.paths,
+            run,
+            editor::recovery_directory(
+                std::env::var_os("XDG_STATE_HOME"),
+                std::env::var_os("HOME"),
+            ),
+        );
+        if result.reload {
+            self.reload_all();
+            self.reload_note(session.original.id);
+        }
+        self.notice = result.message;
+        // A signal exits without another frame: do not hide the recovery path.
+        if self.term_flag.load(Ordering::Relaxed) {
+            guard.suspend()?;
+            eprintln!("{}", self.notice);
+        }
+        Ok(())
     }
 
     /// Draws the current application frame to any backend (useful for tests and headless validation).
@@ -490,7 +761,11 @@ impl App {
     }
 
     /// Main interactive event loop.
-    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
+    pub fn run(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        guard: &mut TerminalGuard,
+    ) -> io::Result<()> {
         terminal.draw(|frame| ui::render(frame, self))?;
         let mut needs_redraw = false;
 
@@ -508,6 +783,9 @@ impl App {
                 match event::read()? {
                     Event::Key(key) => {
                         self.handle_key(key);
+                        if std::mem::take(&mut self.editor_requested) {
+                            self.open_editor(guard, terminal)?;
+                        }
                         needs_redraw = true;
                     }
                     Event::Resize(_cols, _rows) => {

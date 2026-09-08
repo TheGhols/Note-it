@@ -53,11 +53,31 @@ impl CalloutKind {
 
 /// Renders raw Markdown content into styled Ratatui lines.
 pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    render_with_sources(content).lines
+}
+
+/// Presentation is unchanged; attach source positions for the reading cursor.
+#[derive(Default)]
+pub struct RenderedMarkdown {
+    pub lines: Vec<Line<'static>>,
+    pub sources: Vec<usize>,
+    source: usize,
+}
+
+impl RenderedMarkdown {
+    fn push(&mut self, line: Line<'static>) {
+        self.lines.push(line);
+        self.sources.push(self.source);
+    }
+}
+
+pub fn render_with_sources(content: &str) -> RenderedMarkdown {
+    let mut lines = RenderedMarkdown::default();
     let raw_lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
 
     while i < raw_lines.len() {
+        lines.source = i;
         let line = raw_lines[i];
         let trimmed = line.trim();
 
@@ -89,6 +109,7 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
 
             i += 1;
             while i < raw_lines.len() {
+                lines.source = i;
                 let code_line = raw_lines[i];
                 if code_line.trim().starts_with(fence_prefix) {
                     i += 1;
@@ -129,6 +150,7 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
 
                 i += 1;
                 while i < raw_lines.len() {
+                    lines.source = i;
                     let next_line = raw_lines[i].trim();
                     if !next_line.starts_with('>') {
                         break;
