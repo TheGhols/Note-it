@@ -369,7 +369,9 @@ Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>
 Subfase isolada de contrato, anterior à implementação funcional da 5.0D.
 Baseline: `bf097742293f092a1cbc97e97a83243fe2f80bf5`.
 Não implementa atalhos, edição, toggle, confirmação, `$EDITOR` ou recovery na TUI.
-O fechamento depende dos gates locais e do CI remoto; o roadmap registra esse estado.
+**5.0D.R0: PASS.** Gates locais e [CI da implementação](https://github.com/TheGhols/Note-it/actions/runs/34210340965)
+confirmados verdes para `fc6d39a765ffe00ef038c467a64106aaeec87e06` antes deste
+fechamento documental. A 5.0D funcional depende de revisão e nova autorização.
 
 ### 10.1 Contrato público e protocolo privado
 
