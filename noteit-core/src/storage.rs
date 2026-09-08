@@ -402,6 +402,16 @@ impl StorageManager {
         self.save_note_atomic_with_id(&doc.metadata.id, doc)
     }
 
+    /// Creation has an absence precondition, enforced at atomic publication.
+    /// Updating an existing note must continue to use the separate save path.
+    pub(crate) fn create_note_atomic(&self, doc: &NoteDocument) -> Result<PathBuf, String> {
+        let serialized = doc.serialize()?;
+        self.back_up_before_mutation();
+        let target = self.note_path(&doc.metadata.id);
+        crate::atomic_file::create_atomic(&target, serialized.as_bytes(), "new note")?;
+        Ok(target)
+    }
+
     /// Moves a note into the trash, where it can be restored from.
     ///
     /// See [`crate::trash`] for the move itself. Everything the application
@@ -538,8 +548,17 @@ impl StorageManager {
 
     pub fn load_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
         let path = self.note_path(id);
+        Self::load_document_at(&path, id)
+    }
+
+    /// Reads a trash item with the same parser and identity checks as a live note.
+    pub fn load_trash_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
+        Self::load_document_at(&trash::entry_path(&self.paths.trash_dir, id), id)
+    }
+
+    fn load_document_at(path: &Path, id: &Uuid) -> Result<NoteDocument, String> {
         let meta =
-            fs::symlink_metadata(&path).map_err(|e| format!("Nota {} não encontrada: {e}", id))?;
+            fs::symlink_metadata(path).map_err(|e| format!("Nota {} não encontrada: {e}", id))?;
         if meta.file_type().is_symlink() {
             return Err(format!(
                 "Leitura recusada: o arquivo `{}` é um link simbólico.",
@@ -552,7 +571,7 @@ impl StorageManager {
                 path.display()
             ));
         }
-        let content = fs::read_to_string(&path)
+        let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read note {}: {e}", path.display()))?;
         NoteDocument::parse_with_id(&content, *id)
     }
@@ -929,6 +948,25 @@ impl StorageManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn creation_with_a_forced_identity_collision_preserves_the_original_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = super::StorageManager::with_custom_paths(
+            dir.path().join("notes"),
+            dir.path().join("config"),
+            dir.path().join("state"),
+            dir.path().join("runtime"),
+        )
+        .unwrap();
+        let mut document = crate::model::NoteDocument::new_empty();
+        document.content = "original".into();
+        let path = storage.create_note_atomic(&document).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        document.content = "same UUID must not overwrite".into();
+        assert!(storage.create_note_atomic(&document).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(storage.notes_dir()).unwrap().count(), 1);
+    }
     use super::*;
     use crate::metadata::{NoteMetadata, NoteProperty};
     use tempfile::tempdir;

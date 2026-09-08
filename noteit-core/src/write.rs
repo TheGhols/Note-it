@@ -187,6 +187,7 @@ pub enum WriteOutcomeKind {
     TaskCompleted,
     TaskReopened,
     NoteRestored,
+    NoteDiscarded,
 }
 
 /// A mutation that happened. Only ever built after the write committed.
@@ -319,6 +320,7 @@ pub struct NoteDraft {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum WriteOperation {
+    /// Atomic creation conditioned on destination absence, never an update.
     CreateNote {
         draft: NoteDraft,
     },
@@ -345,6 +347,16 @@ pub enum WriteOperation {
     },
     RestoreFromTrash {
         selector: String,
+    },
+    /// Conditional variants are separate so older receivers cannot silently
+    /// ignore a revision field and perform an unconditional move.
+    RestoreFromTrashAtRevision {
+        selector: String,
+        expected_revision: NoteRevision,
+    },
+    DiscardNote {
+        selector: String,
+        expected_revision: NoteRevision,
     },
 }
 
@@ -642,13 +654,8 @@ pub fn apply_over_live_body(
     mutation: &NoteMutation,
     expected_revision: &Option<NoteRevision>,
 ) -> Result<LiveMutation, WriteError> {
-    let mut base = committed.clone();
-    let live = NoteDocument::canonical_content(live_body);
-    let adopted_unsaved_text = base.content != live;
-    if adopted_unsaved_text {
-        base.content = live.to_string();
-        base.touch_content_modified();
-    }
+    let base = document_over_live_body(committed, live_body);
+    let adopted_unsaved_text = base.content != committed.content;
 
     // Checked here, on the folded base, and before a single mutation is
     // applied. This is the case the file on disk cannot answer: a client read
@@ -672,6 +679,18 @@ pub fn apply_over_live_body(
         adopted_unsaved_text,
         base_revision,
     })
+}
+
+/// The same live base for body mutations and conditional structural changes.
+/// Pure: obtaining the editor snapshot must never persist a refused request.
+pub fn document_over_live_body(committed: &NoteDocument, live_body: &str) -> NoteDocument {
+    let mut base = committed.clone();
+    let live = NoteDocument::canonical_content(live_body);
+    if base.content != live {
+        base.content = live.to_string();
+        base.touch_content_modified();
+    }
+    base
 }
 
 /// The revision of a document, as a write error rather than a string.
@@ -719,6 +738,36 @@ pub fn ensure_revision_matches(
 pub fn execute(core: &NoteItCore, operation: &WriteOperation) -> Result<WriteOutcome, WriteError> {
     match operation {
         WriteOperation::CreateNote { draft } => create_note(core, draft),
+        WriteOperation::DiscardNote {
+            selector,
+            expected_revision,
+        } => {
+            let note_id = core.resolve_note_id(selector)?;
+            let document = core
+                .read_note(&note_id)
+                .map_err(|detail| WriteError::StoreUnavailable { detail })?;
+            ensure_revision_matches(&note_id, &document, &Some(expected_revision.clone()))?;
+            core.storage()
+                .move_note_to_trash(&note_id)
+                .map_err(|detail| WriteError::Persistence { detail })?;
+            Ok(WriteOutcome::new(
+                note_id,
+                WriteOutcomeKind::NoteDiscarded,
+                true,
+            ))
+        }
+        WriteOperation::RestoreFromTrashAtRevision {
+            selector,
+            expected_revision,
+        } => {
+            let note_id = core.resolve_trash_id(selector)?;
+            let document = core
+                .read_trash_note(&note_id)
+                .map_err(|detail| WriteError::StoreUnavailable { detail })?;
+            let revision =
+                ensure_revision_matches(&note_id, &document, &Some(expected_revision.clone()))?;
+            restore_note(core, &note_id, selector).map(|outcome| outcome.with_revision(revision))
+        }
         WriteOperation::MutateNote {
             selector,
             mutation,
@@ -747,19 +796,27 @@ pub fn execute(core: &NoteItCore, operation: &WriteOperation) -> Result<WriteOut
         }
         WriteOperation::RestoreFromTrash { selector } => {
             let note_id = core.resolve_trash_id(selector)?;
-            match core.storage().restore_note_from_trash(&note_id) {
-                Ok(()) => Ok(WriteOutcome::new(
-                    note_id,
-                    WriteOutcomeKind::NoteRestored,
-                    true,
-                )),
-                Err(RestoreError::Occupied) => Err(WriteError::TrashTargetOccupied { note_id }),
-                Err(RestoreError::Missing) => Err(WriteError::NotFound {
-                    selector: selector.clone(),
-                }),
-                Err(RestoreError::Failed(detail)) => Err(WriteError::Persistence { detail }),
-            }
+            restore_note(core, &note_id, selector)
         }
+    }
+}
+
+fn restore_note(
+    core: &NoteItCore,
+    note_id: &Uuid,
+    selector: &str,
+) -> Result<WriteOutcome, WriteError> {
+    match core.storage().restore_note_from_trash(note_id) {
+        Ok(()) => Ok(WriteOutcome::new(
+            *note_id,
+            WriteOutcomeKind::NoteRestored,
+            true,
+        )),
+        Err(RestoreError::Occupied) => Err(WriteError::TrashTargetOccupied { note_id: *note_id }),
+        Err(RestoreError::Missing) => Err(WriteError::NotFound {
+            selector: selector.to_string(),
+        }),
+        Err(RestoreError::Failed(detail)) => Err(WriteError::Persistence { detail }),
     }
 }
 
@@ -771,7 +828,9 @@ pub fn create_note(core: &NoteItCore, draft: &NoteDraft) -> Result<WriteOutcome,
         .map_err(|error| WriteError::Validation {
             detail: error.to_string(),
         })?;
-    commit(core, &document)?;
+    core.storage()
+        .create_note_atomic(&document)
+        .map_err(|detail| WriteError::Persistence { detail })?;
     let revision = revision_of(&document)?;
     Ok(
         WriteOutcome::new(document.metadata.id, WriteOutcomeKind::NoteCreated, true)

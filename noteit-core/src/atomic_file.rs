@@ -33,6 +33,51 @@ pub fn write_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<(), String>
     write_atomic_inner(path, bytes, what, false)
 }
 
+/// Publishes a complete file only if its destination is absent. Unlike an
+/// update, creation must never replace an existing name. The commit point is
+/// `hard_link`, the same no-clobber mechanism used by trash restoration.
+/// The temporary file is private, exclusive and on the destination filesystem.
+/// There is no existence check and no rename fallback.
+pub(crate) fn create_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<(), String> {
+    create_atomic_before_publish(path, bytes, what, || {})
+}
+
+fn create_atomic_before_publish(
+    path: &Path,
+    bytes: &[u8],
+    what: &str,
+    before_publish: impl FnOnce(),
+) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| format!("{what}: no parent"))?;
+    let temp = parent.join(format!(".tmp.create.{}", uuid::Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(crate::permissions::PRIVATE_FILE_MODE);
+    }
+    let mut file = options
+        .open(&temp)
+        .map_err(|error| format!("Failed to prepare {what}: {error}"))?;
+    let published = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            before_publish();
+            fs::hard_link(&temp, path)
+        });
+    drop(file);
+    if let Err(error) = fs::remove_file(&temp) {
+        eprintln!("Failed to remove creation temporary file: {error}");
+    }
+    published.map_err(|error| {
+        format!("Failed to create {what} without replacing a destination: {error}")
+    })?;
+    sync_directory_after_commit(parent, what);
+    Ok(())
+}
+
 /// Makes a directory entry that has already changed — a rename, a link, a
 /// removal — durable.
 ///
@@ -145,6 +190,62 @@ fn sync_directory(directory: &Path, fail_directory_sync: bool) -> Result<(), Str
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn creation_publishes_complete_content_and_cleans_temporary() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        create_atomic_before_publish(&path, b"complete note", "test", || {
+            assert!(!path.exists(), "final name must not expose a partial write");
+            let entries: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+            assert_eq!(entries.len(), 1);
+            let temp = entries[0].as_ref().unwrap().path();
+            assert_eq!(temp.parent(), path.parent());
+            assert_eq!(fs::read(temp).unwrap(), b"complete note");
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"complete note");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn collision_at_the_publication_point_never_overwrites() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        // Force the collision after temp sync, immediately before hard_link.
+        let result = create_atomic_before_publish(&path, b"loser", "test", || {
+            fs::write(&path, b"winner").unwrap();
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"winner");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(create_atomic(&path, b"another loser", "test").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"winner");
+    }
+
+    #[test]
+    fn concurrent_creations_have_one_winner_and_no_overwrite() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let barrier = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                create_atomic_before_publish(&path, b"one", "test", || {
+                    barrier.wait();
+                })
+            });
+            let two = scope.spawn(|| {
+                create_atomic_before_publish(&path, b"two", "test", || {
+                    barrier.wait();
+                })
+            });
+            (one.join().unwrap(), two.join().unwrap())
+        });
+        assert_ne!(results.0.is_ok(), results.1.is_ok());
+        let expected = if results.0.is_ok() { b"one" } else { b"two" };
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     fn debris_in(directory: &Path) -> Vec<String> {
         fs::read_dir(directory)

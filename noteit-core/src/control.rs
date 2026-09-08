@@ -88,7 +88,10 @@ use uuid::Uuid;
 /// describes the public `--json` document and is unchanged; this one describes
 /// a private socket between two processes of the same application. They move
 /// for different reasons and must not be tied together.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Version 3 adds conditional lifecycle operations and, critically, makes
+/// CreateNote no-clobber. Its shape is unchanged, so a version-2 authority
+/// could otherwise decode it and publish with the older replacing writer.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The largest frame either end will accept, in bytes.
 ///

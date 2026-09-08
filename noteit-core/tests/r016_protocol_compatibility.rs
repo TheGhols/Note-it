@@ -334,13 +334,35 @@ fn r016_r3_the_same_version_still_does_all_three_things() {
 // ------------------------------------------------------- the version itself
 
 #[test]
+fn r0_creation_cannot_reach_a_version_two_replacing_authority() {
+    let (_tmp, core) = store();
+    let id = seed(&core, "existing");
+    let before = fs::read(core.storage().note_path(&id)).unwrap();
+    let operation = WriteOperation::CreateNote {
+        draft: write::NoteDraft::default(),
+    };
+    let mut request = ControlRequest::new(operation);
+    let mut frame = Vec::new();
+    write_frame(&mut frame, &request).unwrap();
+    assert!(authority_speaking(2, &core, &frame).is_err());
+    assert_eq!(core.list_notes().unwrap(), vec![id]);
+    assert_eq!(fs::read(core.storage().note_path(&id)).unwrap(), before);
+
+    request.protocol_version = 2;
+    frame.clear();
+    write_frame(&mut frame, &request).unwrap();
+    assert!(authority_speaking(PROTOCOL_VERSION, &core, &frame).is_err());
+    assert_eq!(core.list_notes().unwrap(), vec![id]);
+}
+
+#[test]
 fn the_protocol_version_moved_when_the_meaning_of_a_request_did() {
     // A guard against the exact oversight this phase corrects: adding a field
     // to an operation changes what a request means, and the number has to move
     // with it or two builds silently disagree.
     assert_eq!(
-        PROTOCOL_VERSION, 2,
-        "adding `expected_revision` to MutateNote changed what a mutation means"
+        PROTOCOL_VERSION, 3,
+        "no-clobber creation must not reach the version-2 replacing writer"
     );
     assert_ne!(PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION);
 
@@ -368,5 +390,5 @@ fn the_private_protocol_version_is_not_the_public_schema_version() {
             || machine_interface.contains("schema_version"),
         "the public contract still documents its own version"
     );
-    assert_eq!(PROTOCOL_VERSION, 2, "the private one is at 2");
+    assert_eq!(PROTOCOL_VERSION, 3, "the private one is at 3");
 }

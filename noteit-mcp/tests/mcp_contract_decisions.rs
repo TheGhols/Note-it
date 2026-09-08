@@ -34,6 +34,8 @@ enum Decision {
     /// The agent asked for this by calling a specific tool, so naming it again
     /// in the answer tells it nothing it did not already know.
     ImpliedByTheToolThatWasCalled,
+    /// R0 extends the Core only; no MCP tool exposes discard.
+    NotExposedByAnyTool,
 }
 
 /// Every `WriteOutcomeKind`, and what this boundary does with it.
@@ -55,10 +57,11 @@ fn decision_for(kind: WriteOutcomeKind) -> Decision {
         | WriteOutcomeKind::TaskCompleted
         | WriteOutcomeKind::TaskReopened
         | WriteOutcomeKind::NoteRestored => Decision::ImpliedByTheToolThatWasCalled,
+        WriteOutcomeKind::NoteDiscarded => Decision::NotExposedByAnyTool,
     }
 }
 
-/// The eleven outcomes the Core names today, each one decided.
+/// The eleven exposed outcomes retain their decisions; discard stays unexposed.
 ///
 /// The list is not the guarantee — `decision_for` is, because it does not
 /// compile with a variant missing. This checks the other direction: that the
@@ -87,6 +90,10 @@ fn every_outcome_kind_the_core_can_name_has_a_decision() {
     for kind in kinds {
         assert_eq!(decision_for(kind), Decision::ImpliedByTheToolThatWasCalled);
     }
+    assert_eq!(
+        decision_for(WriteOutcomeKind::NoteDiscarded),
+        Decision::NotExposedByAnyTool
+    );
 }
 
 /// And the decision is what the wire actually shows.

@@ -250,6 +250,11 @@ impl NoteItCore {
         self.storage.load_note(id)
     }
 
+    /// Reads the complete canonical document needed for a conditional restore.
+    pub fn read_trash_note(&self, id: &Uuid) -> Result<NoteDocument, String> {
+        self.storage.load_trash_note(id)
+    }
+
     /// Searches every live note, or lists recent notes for an empty query.
     ///
     /// A scan that could not be performed is an error rather than an empty

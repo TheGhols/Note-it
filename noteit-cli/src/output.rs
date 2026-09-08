@@ -1021,6 +1021,7 @@ pub fn render_write_outcome(ctx: &OutputContext, outcome: &WriteOutcome) -> Stri
         WriteOutcomeKind::TaskCompleted => "Tarefa concluída.\n".to_string(),
         WriteOutcomeKind::TaskReopened => "Tarefa reaberta.\n".to_string(),
         WriteOutcomeKind::NoteRestored => format!("Nota restaurada: {prefix}\n"),
+        WriteOutcomeKind::NoteDiscarded => format!("Nota movida para a lixeira: {prefix}\n"),
     }
 }
 

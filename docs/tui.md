@@ -363,3 +363,140 @@ Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>
   5. `test_quick_search_delegates_to_core`: comprova ativação de busca com `/`, consulta ao Core e seleção por `Enter`.
   6. `test_rendered_buffer_contains_all_blocks_via_test_backend`: asserção direta do buffer do `TestBackend` validando a presença de todos os tipos de blocos renderizados (H1-H3, listas, checkboxes, blockquote, os 5 alertas GFM, código e cálculos).
   7. `test_dump_all_block_types_snapshot`: geração de dump do buffer renderizado comprovando apresentação sem display físico.
+
+## 10. Fase 5.0D.R0 — Fechamento do Contrato de Mutação Concorrente
+
+Subfase isolada de contrato, anterior à implementação funcional da 5.0D.
+Baseline: `bf097742293f092a1cbc97e97a83243fe2f80bf5`.
+Não implementa atalhos, edição, toggle, confirmação, `$EDITOR` ou recovery na TUI.
+O fechamento depende dos gates locais e do CI remoto; o roadmap registra esse estado.
+
+### 10.1 Contrato público e protocolo privado
+
+| Operação de `WriteOperation` | Precondição | Execução no Core |
+| --- | --- | --- |
+| `CreateNote { draft }` | Destino ausente; não existe revision anterior | `write::create_note` → `StorageManager::create_note_atomic` → `atomic_file::create_atomic` |
+| `MutateNote { selector, mutation, expected_revision }` | `Some(revision)` obrigatório para o futuro caller TUI | Contrato existente, preservado |
+| `DiscardNote { selector, expected_revision }` | Revision obrigatória da nota ativa lida | `write::execute` → `ensure_revision_matches` → `StorageManager::move_note_to_trash` |
+| `RestoreFromTrashAtRevision { selector, expected_revision }` | Revision obrigatória do item lido em trash | `write::execute` → `read_trash_note` → `ensure_revision_matches` → `restore_note` → `StorageManager::restore_note_from_trash` |
+
+`RestoreFromTrash { selector }` conserva a assinatura e o comportamento dos
+consumidores humanos existentes. A restauração condicionada usa uma variante
+distinta: um decoder antigo não pode ignorar um campo e restaurar sem validar.
+`NoteItCore::read_trash_note` usa o mesmo parser canônico e as mesmas verificações
+de identidade/arquivo regular de `read_note`; `write::revision_of` calcula o token.
+Não há revision fictícia para criação.
+
+O protocolo privado passa de **2 para 3**. Isso também é necessário para criação:
+embora sua assinatura seja igual, uma autoridade v2 ainda poderia usar a
+persistência substitutiva. A checagem de versão existente recusa o pedido antes
+de executá-lo. Não muda o schema público JSON da CLI nem o handshake MCP.
+O novo resultado é `WriteOutcomeKind::NoteDiscarded`. A CLI somente completa
+seus dois matches exaustivos; não ganha comando de descarte. O MCP não ganha tool.
+
+### 10.2 Publicação atômica não é o mesmo que durabilidade
+
+Criação segue esta sequência:
+
+1. Criar temporário **exclusivo** (`create_new`) e privado no mesmo diretório do destino.
+2. Escrever todo o documento e executar `sync_all` no arquivo: sincroniza o
+   conteúdo antes de sua publicação, mas ainda não publica o nome final.
+3. Executar `std::fs::hard_link(temp, destino)`: este é o ponto de commit.
+   O filesystem publica o nome somente se ele estiver ausente. Um nome existente
+   faz a operação falhar, preservando seus bytes. Não há `exists()` antes da
+   publicação nem fallback para `rename`. Leitores do nome final nunca veem o
+   arquivo parcialmente escrito.
+4. Remover o nome temporário. Após a publicação, a nota já existe pelo nome final;
+   falha de limpeza gera aviso, não transforma um commit em erro.
+5. Sincronizar o diretório com `sync_directory_after_commit`: torna durável a
+   alteração das entradas do diretório. Se essa sincronização falhar, o commit
+   continua visível, mas sua sobrevivência a uma queda de energia não está
+   assegurada. O caminho existente de aviso pós-commit é preservado.
+
+A propriedade atômica é **publicação completa condicionada à ausência**, não
+uma promessa de durabilidade sem sincronização do diretório. Os testes não
+simulam queda de energia. O mecanismo de hard link já era usado pela restauração
+da lixeira; não adiciona dependência, syscall explícita, `unsafe` ou nova plataforma.
+Se o filesystem recusar hard links, a criação falha sem publicação substitutiva.
+
+### 10.3 Descarte com desktop ativo
+
+O cliente continua usando exclusivamente `authority::perform_at`: lease livre
+produz execução local pontual; lease ocupado encaminha pelo socket privado.
+O lease continua cobrindo leitura, validação e movimento; não é retido pela TUI.
+
+O fluxo humano anterior era `request_flush` → `commit_trash` → mover arquivo →
+persistir estado fechado → fechar/remover janela. Esse fluxo foi extraído para
+`NoteItAppClone::commit_discard_after_flush`, compartilhado com o receiver, sem
+mudar a ação humana.
+
+No receiver, `discard_note` usa `begin_external_write` para capturar o Markdown
+com o editor congelado. `document_over_live_body` reaproveita a composição de
+documento já usada nas mutações externas. `validate_discard_base` verifica tanto
+essa base viva quanto o documento em disco contra a revision esperada, **antes**
+de flush persistente, desarme da captura, movimento ou fechamento. Não existe
+`await` entre validação e commit. Com a base validada igual ao disco, não há texto
+pendente para gravar: o receiver passa flush bem-sucedido ao ciclo compartilhado.
+
+Em divergência, `ensure_revision_matches` produz `WriteError::RevisionConflict`.
+O receiver chama `abort_external_write`, libera a coordenação de ciclo de vida
+e devolve o erro. Não fecha a janela, não move a nota, não atualiza o pedido e
+não reenvia. Na restauração, a mesma verificação ocorre antes da primitive de
+restauração, preservando origem, destino e sidecar em conflito.
+
+Como no contrato existente, o lease coordena writers Note-it. Não é um bloqueio
+mandatório contra um processo externo que ignore o protocolo e escreva diretamente
+no store. A precondição de ausência da criação é garantida pelo filesystem mesmo
+na disputa pelo nome final; não depende da probabilidade do UUID.
+
+### 10.4 Evidência automatizada da R0
+
+- `atomic_file` e `storage`: publicação completa, colisão forçada imediatamente
+  antes do hard link, dois publicadores concorrentes e colisão de UUID fixa.
+- `tests/concurrent_lifecycle.rs`: criação via authority; descarte/restauração
+  válidos byte-idênticos; revisions antigas preservam origem/destino/sidecar;
+  restauração válida recusa destino ocupado; lease inacessível não é contornado;
+  variantes condicionadas recusam revision ausente, nula ou vazia.
+- `r016_protocol_compatibility`: criação v3 não alcança writer v2; receptor v3
+  também recusa pedido v2 antes da execução.
+- Receiver: texto não salvo e disco alterado são recusados antes do descarte.
+- `tests/r0_desktop_discard.rs`: abre desktop real por `scripts/note-it-isolated`,
+  confirma WebView carregada, efetua escrita via socket e prova descarte recusado
+  mantendo estado/janela, descarte válido fechando ambos e restauração condicionada
+  sem reabrir janela. Usa store descartável e barramento privado, sem TUI.
+
+Comando para exigir a prova gráfica (sem permitir skip):
+
+```sh
+NOTE_IT_REQUIRE_DESKTOP_TEST=1 cargo test --test r0_desktop_discard -- --nocapture
+```
+
+Em CI sem Wayland, somente esse teste gráfico informa skip; os testes de Core,
+receiver e protocolo continuam executando. O estágio real de frontend é
+`scripts/check frontend-test`, no singular.
+
+Validação local da R0 (2026-09-08), com zero falhas:
+
+| Gate | Passaram | Ignorados preexistentes |
+| --- | ---: | ---: |
+| `core-tests` | 675 | 1 |
+| `cli-tests` | 185 | 0 |
+| `mcp-tests` | 226 | 1 |
+| `embedding-tests` | 37 | 3 |
+| `embed-tests` | 112 | 1 |
+| `remote-tests` | 87 | 0 |
+| `tui-tests` | 21 (9 PTY + 7 navegação + 5 markdown) | 0 |
+| `workspace-tests` | 1477 | 6 |
+| `frontend-test` | 1233 (59 arquivos) | 0 |
+| Desktop real, execução dedicada | 1 | 0 |
+
+Contagens por execução, não somáveis: o workspace repete testes das crates.
+Os ignorados são os benchmarks, a comparação com artefato provisionado e o
+smoke test pago de provider real já excluídos das suítes normais.
+Os seis boundaries (`core`, `cli`, `mcp`, `embedding`, `embed`, `tui`),
+`rust-format`, `ci-parity` e Clippy do workspace com todos os targets/features
+também passaram. Foram adicionados 16 testes: 4 de criação, 8 de ciclo de vida
+no Core, 1 de compatibilidade v2/v3, 2 do receiver e 1 com desktop real.
+Nenhum arquivo de `noteit-tui`, manifesto, lockfile ou boundary foi alterado.
+
+**FASE 5.0D AINDA NÃO INICIADA.**

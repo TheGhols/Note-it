@@ -352,10 +352,16 @@ pub async fn apply_operation(
     operation: &WriteOperation,
 ) -> Result<WriteOutcome, WriteError> {
     match operation {
-        WriteOperation::CreateNote { .. } | WriteOperation::RestoreFromTrash { .. } => {
+        WriteOperation::CreateNote { .. }
+        | WriteOperation::RestoreFromTrash { .. }
+        | WriteOperation::RestoreFromTrashAtRevision { .. } => {
             let core = controller.context.borrow().core.clone();
             write::execute(&core, operation)
         }
+        WriteOperation::DiscardNote {
+            selector,
+            expected_revision,
+        } => discard_note(controller, selector, expected_revision).await,
         WriteOperation::MutateNote {
             selector,
             mutation,
@@ -382,6 +388,85 @@ pub async fn apply_operation(
             }
         }
     }
+}
+
+/// A conditional discard uses the existing editor barrier, then the GUI's
+/// canonical flush/move/close cycle. No await separates validation and commit.
+async fn discard_note(
+    controller: &NoteItAppClone,
+    selector: &str,
+    expected: &NoteRevision,
+) -> Result<WriteOutcome, WriteError> {
+    let core = controller.context.borrow().core.clone();
+    let id = core.resolve_note_id(selector)?;
+    controller
+        .begin_external_write()
+        .map_err(|detail| WriteError::WriterBusy { detail })?;
+    let window = controller.context.borrow().windows.get(&id).cloned();
+    let request_id = Uuid::new_v4();
+    let snapshot = match &window {
+        Some(window) if window.is_loaded() => {
+            let (sender, receiver) = oneshot::channel();
+            window.begin_external_write(request_id, move |result| {
+                let _ = sender.send(result);
+            });
+            receiver.await.unwrap_or_else(|_| {
+                Err("a nota aberta foi fechada durante a alteração".to_string())
+            })
+        }
+        Some(window) => Ok(window.document.borrow().content.clone()),
+        None => core.read_note(&id).map(|document| document.content),
+    };
+    let outcome = (|| {
+        let markdown = snapshot.map_err(|detail| WriteError::WriterBusy { detail })?;
+        let disk = core
+            .read_note(&id)
+            .map_err(|detail| WriteError::StoreUnavailable { detail })?;
+        let committed = window
+            .as_ref()
+            .map(|window| window.document.borrow().clone())
+            .unwrap_or_else(|| disk.clone());
+        let base = write::document_over_live_body(&committed, &markdown);
+        // Both the editor and disk must still describe the state the caller
+        // read. Refusal happens before flush, capture teardown, move or close.
+        validate_discard_base(&id, &base, &disk, expected)?;
+        controller.disarm_autopaste_for(id, "trash");
+        // The frozen body equals the validated disk revision: there is no
+        // unsaved text to persist. Pass that successful flush to the same cycle.
+        controller
+            .commit_discard_after_flush(id, Ok(()))
+            .map_err(|detail| WriteError::Persistence { detail })?;
+        Ok(WriteOutcome::new(
+            id,
+            write::WriteOutcomeKind::NoteDiscarded,
+            true,
+        ))
+    })();
+    if outcome.is_err() {
+        if let Some(window) = &window {
+            if window.is_loaded() {
+                window.abort_external_write(request_id);
+            }
+        }
+    }
+    controller.finish_external_write();
+    diagnostics::log(format_args!(
+        "event=conditional-discard note={id} loaded={} committed={}",
+        window.as_ref().is_some_and(|window| window.is_loaded()),
+        outcome.is_ok()
+    ));
+    outcome
+}
+
+fn validate_discard_base(
+    id: &Uuid,
+    live: &NoteDocument,
+    disk: &NoteDocument,
+    expected: &NoteRevision,
+) -> Result<(), WriteError> {
+    write::ensure_revision_matches(id, live, &Some(expected.clone()))?;
+    write::ensure_revision_matches(id, disk, &Some(expected.clone()))?;
+    Ok(())
 }
 
 fn mutate_unloaded(
@@ -553,6 +638,32 @@ mod tests {
     use super::committed_outcome;
     use noteit_core::write::{WriteOutcome, WriteOutcomeKind};
     use uuid::Uuid;
+
+    #[test]
+    fn discard_refuses_unsaved_editor_text_before_any_filesystem_or_window_effect() {
+        use noteit_core::write::{self, WriteError};
+        let disk = noteit_core::model::NoteDocument::new_empty();
+        let expected = write::revision_of(&disk).unwrap();
+        let live = write::document_over_live_body(&disk, "unsaved paragraph");
+        assert!(matches!(
+            super::validate_discard_base(&disk.metadata.id, &live, &disk, &expected),
+            Err(WriteError::RevisionConflict { .. })
+        ));
+        assert!(disk.content.is_empty());
+        assert_eq!(live.content, "unsaved paragraph");
+    }
+
+    #[test]
+    fn discard_checks_disk_even_when_the_open_buffer_still_matches() {
+        use noteit_core::write::{self, WriteError};
+        let live = noteit_core::model::NoteDocument::new_empty();
+        let expected = write::revision_of(&live).unwrap();
+        let changed_disk = write::document_over_live_body(&live, "external disk edit");
+        assert!(matches!(
+            super::validate_discard_base(&live.metadata.id, &live, &changed_disk, &expected),
+            Err(WriteError::RevisionConflict { .. })
+        ));
+    }
 
     fn appended() -> WriteOutcome {
         WriteOutcome::new(Uuid::new_v4(), WriteOutcomeKind::ContentAppended, true)

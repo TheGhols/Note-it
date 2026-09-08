@@ -455,6 +455,7 @@ fn outcome_kind_token(kind: WriteOutcomeKind) -> &'static str {
         WriteOutcomeKind::TaskCompleted => "task_completed",
         WriteOutcomeKind::TaskReopened => "task_reopened",
         WriteOutcomeKind::NoteRestored => "note_restored",
+        WriteOutcomeKind::NoteDiscarded => "note_discarded",
     }
 }
 

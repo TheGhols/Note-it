@@ -1154,30 +1154,38 @@ impl NoteItAppClone {
         let request_id = NEXT_FLUSH_ID.fetch_add(1, Ordering::SeqCst);
         let app = self.clone();
         window.request_flush(request_id, move |flush| {
-            let outcome = commit_trash(
-                flush,
-                || app.context.borrow().core.storage().move_note_to_trash(&id),
-                || {
-                    let mut ctx = app.context.borrow_mut();
-                    // Closed rather than forgotten: the geometry stays, so a
-                    // note that comes back out of the trash comes back the
-                    // size and place it was.
-                    ctx.state.notes.entry(id).or_default().is_open = false;
-                    persist_state_now(&mut ctx, "trash-note")
-                },
-                || {
-                    let window = app.context.borrow_mut().windows.remove(&id);
-                    if let Some(window) = window {
-                        window.close_after_save();
-                    }
-                },
-            );
+            let outcome = app.commit_discard_after_flush(id, flush);
 
             if let Err(error) = outcome {
                 eprintln!("Move to trash failed for note {id}: {error}");
                 app.report_data_result(id, "trash", false, TRASH_FAILED_MESSAGE);
             }
         });
+    }
+
+    /// Shared by the human GUI action and the conditional authority receiver.
+    /// The receiver must validate its frozen snapshot before reaching here.
+    pub(crate) fn commit_discard_after_flush(
+        &self,
+        id: Uuid,
+        flush: Result<(), String>,
+    ) -> Result<(), String> {
+        commit_trash(
+            flush,
+            || self.context.borrow().core.storage().move_note_to_trash(&id),
+            || {
+                let mut ctx = self.context.borrow_mut();
+                // Closed rather than forgotten: retain the note's geometry.
+                ctx.state.notes.entry(id).or_default().is_open = false;
+                persist_state_now(&mut ctx, "trash-note")
+            },
+            || {
+                let window = self.context.borrow_mut().windows.remove(&id);
+                if let Some(window) = window {
+                    window.close_after_save();
+                }
+            },
+        )
     }
 
     /// Answers a request for the contents of the trash. Reading only: no file
@@ -1413,7 +1421,7 @@ impl NoteItAppClone {
 
     /// Stops capturing if `note_id` is the note doing it. A note that never
     /// held the target must not switch it off for the note that does.
-    fn disarm_autopaste_for(&self, note_id: Uuid, reason: &str) {
+    pub(crate) fn disarm_autopaste_for(&self, note_id: Uuid, reason: &str) {
         if self.context.borrow().autopaste.is_target(note_id) {
             self.disarm_autopaste(reason);
         }

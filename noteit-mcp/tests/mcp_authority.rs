@@ -317,7 +317,7 @@ fn mcp_25_a_peer_that_refuses_our_version_gets_no_second_unconditional_try() {
 /// interface's schema version. Two contracts, two numbers.
 #[test]
 fn mcp_25_the_private_protocol_is_version_two_and_is_not_a_public_number() {
-    assert_eq!(noteit_core::control::PROTOCOL_VERSION, 2);
+    assert_eq!(noteit_core::control::PROTOCOL_VERSION, 3);
 }
 
 // ------------------------------------------------------------------ MCP-26
