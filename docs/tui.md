@@ -371,7 +371,7 @@ Baseline: `bf097742293f092a1cbc97e97a83243fe2f80bf5`.
 Não implementa atalhos, edição, toggle, confirmação, `$EDITOR` ou recovery na TUI.
 **5.0D.R0: PASS.** Gates locais e [CI da implementação](https://github.com/TheGhols/Note-it/actions/runs/34210340965)
 confirmados verdes para `fc6d39a765ffe00ef038c467a64106aaeec87e06` antes deste
-fechamento documental. A 5.0D funcional depende de revisão e nova autorização.
+fechamento documental. Naquele momento, a 5.0D funcional dependia de revisão e nova autorização.
 
 ### 10.1 Contrato público e protocolo privado
 
@@ -501,13 +501,14 @@ também passaram. Foram adicionados 16 testes: 4 de criação, 8 de ciclo de vid
 no Core, 1 de compatibilidade v2/v3, 2 do receiver e 1 com desktop real.
 Nenhum arquivo de `noteit-tui`, manifesto, lockfile ou boundary foi alterado.
 
-**FASE 5.0D AINDA NÃO INICIADA.**
+**Situação no fechamento da R0: FASE 5.0D AINDA NÃO INICIADA.** A revisão humana
+posterior autorizou a fase funcional registrada na seção 11.
 
 ## 11. Fase 5.0D — Cliente transacional e editor externo
 
 Baseline aprovada: `2fc1eecf1073321de5a18ab3ba956c2e94ff6008`.
-Implementação autorizada após revisão humana da R0; fechamento depende dos gates
-e do CI do HEAD final. A seção 10 registra o encerramento histórico da R0.
+Implementação concluída após revisão humana da R0, gates locais e CI verde da
+implementação. A seção 10 registra o encerramento histórico da R0.
 Nenhum contrato do Core/R0, dependência, comando CLI, tool MCP ou função da GUI
 é alterado nesta fase. A 5.0E não está iniciada.
 
@@ -692,4 +693,6 @@ test real_tui_and_isolated_desktop_enforce_revision_socket_and_pointwise_lease .
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.59s
 ```
 
-Gates locais aprovados; fechamento remoto pendente do CI da implementação.
+Fechamento documental após o [CI da implementação concluído com sucesso](https://github.com/TheGhols/Note-it/actions/runs/34284207606)
+para `0ce2825262f28c40c8763f83b702a1368899dd37`, com ambos os jobs aprovados.
+**Fase 5.0D concluída. Fase 5.0E não iniciada.**
