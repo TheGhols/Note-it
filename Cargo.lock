@@ -1469,6 +1469,7 @@ dependencies = [
  "libc",
  "noteit-core",
  "ratatui",
+ "rustix",
  "signal-hook",
  "tempfile",
 ]

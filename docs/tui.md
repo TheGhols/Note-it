@@ -507,10 +507,12 @@ posterior autorizou a fase funcional registrada na seção 11.
 ## 11. Fase 5.0D — Cliente transacional e editor externo
 
 Baseline aprovada: `2fc1eecf1073321de5a18ab3ba956c2e94ff6008`.
-Implementação concluída após revisão humana da R0, gates locais e CI verde da
-implementação. A seção 10 registra o encerramento histórico da R0.
-Nenhum contrato do Core/R0, dependência, comando CLI, tool MCP ou função da GUI
-é alterado nesta fase. A 5.0E não está iniciada.
+O primeiro fechamento, após os gates e CI da implementação, foi invalidado pela
+auditoria posterior de restauração do terminal. **5.0D: BLOCKED — regressão de
+restauração confirmada**, até validar a revisão corretiva e seu CI remoto.
+A seção 10 registra o encerramento histórico da R0, que permanece intocado.
+A correção foi autorizada a usar `rustix 1.1.4` diretamente na TUI; nenhum contrato
+do Core/R0, comando CLI, tool MCP ou função da GUI muda. A 5.0E não está iniciada.
 
 ### 11.1 Teclas e snapshot de leitura
 
@@ -563,9 +565,10 @@ retorno é usada para substituir a precondição original e fazer uma escrita pa
 
 ### 11.3 Editor, terminal e seleção de mutação
 
-`TerminalGuard::suspend()` usa `restore()`. `resume()` reativa raw/alternate
-screen e o cursor oculto. Construção, suspensão, Drop e panic hook compartilham
-o cleanup do terminal. Ao retornar, um resize fullscreen do Ratatui invalida seu
+`TerminalGuard::suspend()` usa `restore()`. Na revisão corretiva da seção 12,
+`resume()` primeiro restaura o snapshot original e somente depois reativa
+raw/alternate screen e o cursor oculto. Construção, suspensão, Drop e panic hook
+compartilham o cleanup do terminal. Ao retornar, um resize fullscreen do Ratatui invalida seu
 buffer anterior e redesenha a tela, mesmo se as dimensões não mudaram.
 `signal-hook` continua marcando a mesma flag; durante o editor ela é consultada
 a cada 50 ms. Interrupção encerra/recolhe o filho, preserva edições significativas
@@ -575,7 +578,8 @@ O programa é resolvido de `$EDITOR`, com fallback **`vi`** quando ausente/vazio
 O valor é um nome/caminho de executável literal, podendo conter espaços; não é
 avaliado por shell. Para argumentos, configure um script wrapper como `$EDITOR`.
 `std::process::Command` recebe o caminho temporário como argumento separado.
-Nenhuma dependência adicional foi necessária.
+A execução do editor usa apenas `std`; a correção da restauração do terminal
+adiciona a dependência direta autorizada na seção 12.
 
 O temporário exclusivo é `${TMPDIR:-/tmp}/noteit-<note-id>-<uuid>.md`, criado
 com permissão `0600`, conteúdo bruto do corpo e `sync_all` antes do spawn.
@@ -695,4 +699,192 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 Fechamento documental após o [CI da implementação concluído com sucesso](https://github.com/TheGhols/Note-it/actions/runs/34284207606)
 para `0ce2825262f28c40c8763f83b702a1368899dd37`, com ambos os jobs aprovados.
-**Fase 5.0D concluída. Fase 5.0E não iniciada.**
+Esse fechamento foi prematuro: `00140b7c95565d1424a678282c068bc25c8a460a`
+registrou conclusão antes de detectar que um editor deixando `stty raw -echo`
+contaminava a referência de restauração do Crossterm. O CI anterior não cobria
+esse cenário. **5.0D: BLOCKED**, aguardando prova e CI da correção.
+**Fase 5.0E não iniciada.**
+
+## 12. Revisão corretiva da 5.0D — ownership do terminal
+
+### 12.1 Histórico e defeito
+
+Baseline corretiva: `00140b7c95565d1424a678282c068bc25c8a460a`, confirmada
+como `HEAD == origin/main`, com árvore limpa antes das alterações. A implementação
+original `0ce2825262f28c40c8763f83b702a1368899dd37` e seu fechamento documental
+tinham CI verde, mas os testes verificavam somente editores que restauravam o
+terminal. A auditoria invalidou o fechamento: **BLOCKED — regressão confirmada**.
+
+O Crossterm descarta sua referência de termios ao desativar raw mode. Depois de
+um editor executar `stty raw -echo`, `resume()` guardava esse estado contaminado
+como nova referência. Ao sair, restaurava o estado do editor, não o estado T0
+anterior à primeira entrada da TUI. Não era uma falha do store nem da R0.
+
+### 12.2 Invariante e dependência
+
+`TerminalGuard` possui um `Arc<OriginalTerminal>` com descriptor **owned** e
+snapshot `Termios` privados e imutáveis. Captura com `tcgetattr` antes de qualquer
+raw mode. A seleção repete a função `tty_fd()` do Crossterm **0.29.0**, tanto no
+backend libc quanto no rustix: stdin quando `isatty(stdin)`, senão abertura
+read/write de `/dev/tty`. Não presume que stdout seja o terminal de termios.
+O descriptor duplicado mantém uma referência ao mesmo objeto de terminal.
+
+`rustix = { version = "=1.1.4", features = ["termios"] }` é dependência direta
+somente de `noteit-tui`, com a feature padrão `std`. `cargo tree -p noteit-tui -i
+rustix` confirma uma única versão **1.1.4**, já usada por Crossterm e tempfile.
+O lockfile só acrescenta `"rustix"` à lista de dependências da TUI: nenhum pacote
+ou versão novo. Nenhum `unsafe` novo, outra crate POSIX ou alteração no Core/R0.
+
+Invariante: **T0 é a única autoridade de restauração durante toda a vida do guard;
+nenhuma saída de editor redefine T0.**
+
+- `suspend()`: tenta sair da alternate screen, mostrar cursor, desativar mouse,
+  desativar raw do Crossterm e, por último, aplicar T0 com `tcsetattr(..., Now)`.
+- `resume()`: executa essa normalização antes de permitir que Crossterm capture
+  novamente sua referência e habilite raw/alternate screen.
+- `restore()`/Drop: fazem a mesma restauração, mesmo se o guard estava inativo;
+  um editor pode ter modificado o terminal enquanto suspenso.
+- Todas as operações de cleanup são avaliadas mesmo se uma falhar. O primeiro
+  erro é retornado, mas nunca impede a tentativa final de aplicar T0.
+- Estados `Inactive`, `Active` e `Uncertain` distinguem transições completas de
+  falhas parciais. Antes de uma transição o estado fica `Uncertain`; só muda ao
+  completar todas as operações. Nova tentativa não vira falso sucesso por um
+  `active = true` prematuro. Falha na construção também passa pelo Drop.
+
+O panic hook obtém o mesmo snapshot por `Mutex<Weak<OriginalTerminal>>`, faz
+upgrade para `Arc`, solta o mutex e restaura antes de chamar o hook anterior.
+Não há I/O nem callback enquanto o mutex está travado, `static mut` ou sincronização
+unsafe. Não existe segundo snapshot mutável. Um segundo guard simultâneo é recusado;
+ao terminar a ownership, o `Weak` não mantém o terminal vivo nem contamina uma
+futura inicialização.
+
+### 12.3 Regressão independente e falhas parciais
+
+Antes da correção, foi compilado e preservado o binário real da baseline em
+`/tmp/noteit-5d-terminal-evidence-p4m9O3/noteit-tui-baseline`.
+SHA-256 do executável:
+`4ea8e8d2025b2ae1751f4d0d179e1f0f3fed84dfa1a25dfedda835b906f01131`.
+O mesmo teste seleciona opcionalmente esse executável arquivado; por padrão usa
+o binário real compilado pelo Cargo. Nenhum código da TUI simulado no teste.
+
+```sh
+NOTEIT_TUI_REGRESSION_BINARY=/tmp/noteit-5d-terminal-evidence-p4m9O3/noteit-tui-baseline cargo test -p noteit-tui --test editor_process real_tui_restores_exact_termios_after_editor_leaves_raw_no_echo -- --nocapture
+```
+
+Resultado pré-correção, exit code **101**:
+
+```text
+test real_tui_restores_exact_termios_after_editor_leaves_raw_no_echo ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.13s
+```
+
+A fixture cria store descartável via authority, usa XDG/TMP privados e remove o
+barramento herdado. O harness captura termios do slave PTY **antes do spawn**,
+abre a nota com Enter, aciona `e`, espera o editor salvar e deixar `stty raw -echo`,
+e sai com `q`. Compara antes de qualquer limpeza: o Drop do harness só recolhe
+o filho, não restaura termios. O snapshot compara a representação Debug completa
+do rustix, incluindo bits desconhecidos, disciplina de linha, todos os caracteres
+de controle e velocidades; `Termios` não implementa `PartialEq`.
+
+| Campo | T0 antes | Baseline depois | Correção depois |
+| --- | --- | --- | --- |
+| Input | `ICRNL \| IXON` | `0x0` | `ICRNL \| IXON` |
+| Output | `OPOST \| ONLCR` | `ONLCR` | `OPOST \| ONLCR` |
+| Local | `ECHOCTL \| ECHOKE \| ISIG \| ICANON \| ECHO \| ECHOE \| ECHOK \| IEXTEN` | sem `ISIG`, `ICANON`, `ECHO` | exatamente T0 |
+| Control | `CSIZE \| CREAD \| 0xf` | igual | igual |
+| Disciplina e caracteres | snapshot completo do PTY | iguais | iguais |
+| Velocidades entrada/saída | `38400 / 38400` | iguais | iguais |
+
+Após a correção, a mesma regressão passa com todos os campos exatamente iguais.
+Cinco testes adicionais em `editor_process.rs` cobrem:
+
+1. Defeito literal no binário real (`stty raw -echo`).
+2. Três ciclos de editor, exits **7, 0, 8**, também corrompendo INTR, ERASE,
+   VMIN, VTIME e velocidade para 19200. Cada novo editor recebe T0 exato;
+   após retorno a TUI está raw e após saída restaura T0.
+3. Binário real com controlling TTY criado por `setsid --ctty --wait` e stdin
+   redirecionado para `/dev/null`: valida o caminho real de `/dev/tty`.
+4. Panic após editor contaminado, antes **e** depois de `resume()`. Subprocessos
+   do próprio teste exercitam guard/hook de produção, sem switches novos no
+   aplicativo. O hook anterior mede T0 antes de imprimir; não basta o Drop.
+5. Pipe de stdout fechado deterministicamente pelo pai: falhas em inicialização,
+   suspensão, retomada e Drop não pulam a restauração canônica. Segunda tentativa
+   de resume continua retornando erro, não falso sucesso. Inicialização recusada
+   não deixa registro de guard vivo.
+
+As três provas de editor anteriores passam sem enfraquecimento; o helper agora
+também compara termios completo na saída normal. Os 9 PTY da 5.0B, 7 testes de
+navegação da 5.0C e o arquivo Markdown permanecem byte-idênticos à baseline.
+
+Saída da suíte dedicada:
+
+```text
+PANIC: before-resume: canonical termios verified inside previous hook, before diagnostics and Drop
+PANIC: after-resume: canonical termios verified inside previous hook, before diagnostics and Drop
+OUTPUT FAILURE: initialize: canonical restoration survived BrokenPipe
+OUTPUT FAILURE: suspend: canonical restoration survived BrokenPipe
+OUTPUT FAILURE: resume: canonical restoration survived BrokenPipe
+OUTPUT FAILURE: drop: canonical restoration survived BrokenPipe
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+```
+
+### 12.4 Validação corretiva
+
+`scripts/check all` terminou com exit code **0**:
+
+```text
+scripts/check: all — tudo passou.
+```
+
+| Gate | Passaram | Ignorados preexistentes |
+| --- | ---: | ---: |
+| `core-tests` | 675 | 1 |
+| `cli-tests` | 185 | 0 |
+| `mcp-tests` | 226 | 1 |
+| `embedding-tests` | 37 | 3 |
+| `embed-tests` | 112 | 1 |
+| `remote-tests` | 87 | 0 |
+| `tui-tests` | 48 | 0 |
+| `workspace-tests` | 1504 | 6 |
+| `frontend-test` | 1233 (59 arquivos) | 0 |
+| TUI ↔ desktop dedicado, display obrigatório | 1 | 0 |
+
+`tui-tests` é headless: seus 48 resultados incluem o retorno explícito do teste
+gráfico sem Wayland (47 testes efetivamente executados ali). Isso **não** é prova
+gráfica; ela foi executada separadamente com `NOTE_IT_REQUIRE_TUI_DESKTOP_TEST=1`,
+que falha sem display. Os testes do workspace também passaram na sessão gráfica.
+
+Passaram ainda `ci-parity`, `rust-format`, `rust-check`, `rust-clippy`
+(`--workspace --all-targets --all-features -- -D warnings`), os seis boundary gates
+Core/CLI/MCP/embedding/embed/TUI, `frontend-install`, `frontend-lint` e
+`frontend-build`. Nenhum gate ou warning foi suprimido. O build frontend mantém
+o aviso preexistente de chunk acima de 500 kB.
+
+A prova dedicada usou `cargo build --bin note-it` seguido de
+`NOTE_IT_REQUIRE_TUI_DESKTOP_TEST=1 cargo test -p noteit-tui --test desktop_concurrency -- --nocapture`.
+Trechos literais da execução corretiva:
+
+```text
+C: real TUI mutated locally; lease released while TUI remained alive
+COMMAND: /home/guhols/Projetos/Note-It/scripts/note-it-isolated --root /tmp/noteit-5d-NZo5i2 -- (NOTE_IT_BINARY=/home/guhols/Projetos/Note-It/target/debug/note-it)
+COMMAND: scripts/note-it-isolated --root /tmp/noteit-5d-NZo5i2 --verify
+note-it-isolated: io.github.theghols.NoteIt is on the private bus for /tmp/noteit-5d-NZo5i2
+C: desktop acquired authority and mapped its window with the same TUI still alive
+A: TUI sent its displayed R1; RevisionConflict; R2 bytes intact; TUI displayed R2; zero retry commits
+B: valid TUI editor mutation committed exactly once by desktop receiver; private socket v3; desktop lease remained held
+C: desktop accepted and confirmed its next mutation after TUI; no perpetual lease or permanent GUI block
+test real_tui_and_isolated_desktop_enforce_revision_socket_and_pointwise_lease ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s
+```
+
+O termios completo antes/depois também coincidiu nessa execução. Logs locais
+preservados em `/tmp/noteit-5d-terminal-evidence-p4m9O3/`: `pre-fix.log`,
+`pre-fix-final-harness.log`, `post-fix.log`, `editor-regressions.log`,
+`all-gates.log`, `desktop-concurrency.log` e `rustix-features.log`.
+Os fingerprints de conteúdo e de nomes/tipos/tamanhos/mtimes dos três diretórios
+pessoais (`share`, `config`, `state` de `note-it`) permaneceram respectivamente
+`98a859f2446e3bd2815c3e965bc50acf2366b4690f90ca6f06d8f8402a4b4db3` e
+`a5a3809aece23c816463eedcd2d6240b0ab97c0712befc72cc1538ddc3429e1f`.
+
+CI da revisão corretiva ainda pendente. O status permanece **5.0D: BLOCKED** até
+a conclusão da validação remota. **5.0E não iniciada.**

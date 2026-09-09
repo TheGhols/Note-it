@@ -58,10 +58,19 @@ pub struct Tui {
     pub child: Child,
     pub output: Vec<u8>,
     cursor_queries: usize,
+    original_termios: rustix::termios::Termios,
 }
 
 impl Tui {
     pub fn spawn(root: &Path, configure: impl FnOnce(&mut Command)) -> Self {
+        Self::spawn_program(root, env!("CARGO_BIN_EXE_noteit-tui").as_ref(), configure)
+    }
+
+    pub fn spawn_program(
+        root: &Path,
+        program: &Path,
+        configure: impl FnOnce(&mut Command),
+    ) -> Self {
         let mut master = 0;
         let mut slave = 0;
         let size = libc::winsize {
@@ -85,11 +94,12 @@ impl Tui {
         );
         let master = unsafe { OwnedFd::from_raw_fd(master) };
         let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+        let original_termios = rustix::termios::tcgetattr(&slave).unwrap();
         assert_eq!(
             unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
             0
         );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_noteit-tui"));
+        let mut command = Command::new(program);
         command
             .env("XDG_DATA_HOME", root.join("data"))
             .env("XDG_CONFIG_HOME", root.join("config"))
@@ -108,6 +118,7 @@ impl Tui {
             child,
             output: Vec::new(),
             cursor_queries: 0,
+            original_termios,
         }
     }
     pub fn input(&self, bytes: &[u8]) {
@@ -124,6 +135,18 @@ impl Tui {
         );
         let flags = unsafe { state.assume_init() }.c_lflag;
         flags & (libc::ICANON | libc::ECHO) == libc::ICANON | libc::ECHO
+    }
+    pub fn assert_restored(&self) {
+        let after = rustix::termios::tcgetattr(&self.slave).unwrap();
+        // Rustix Termios has no PartialEq. Its complete Debug representation
+        // includes all flag bits, line discipline, every control code and speeds.
+        let before = format!("{:?}", self.original_termios);
+        let after = format!("{after:?}");
+        println!("TERMIOS_BEFORE={before}\nTERMIOS_AFTER={after}");
+        assert_eq!(
+            after, before,
+            "the application must restore the original PTY"
+        );
     }
     pub fn drain(&mut self) {
         let mut bytes = [0u8; 8192];
@@ -181,6 +204,7 @@ impl Tui {
             self.child.try_wait().unwrap().is_some()
         });
         assert!(self.child.wait().unwrap().success());
+        self.assert_restored();
         assert!(self.cooked());
     }
 }

@@ -5,20 +5,81 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use rustix::termios::{tcgetattr, tcsetattr, OptionalActions, Termios};
+use std::fs::File;
 use std::io::{self, Stdout};
+use std::os::fd::{AsFd, OwnedFd};
 use std::panic;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
+
+// The guard owns the immutable lifetime baseline; the hook only borrows its
+// ownership. Never hold this mutex during terminal I/O or the previous hook.
+static PANIC_TERMINAL: Mutex<Weak<OriginalTerminal>> = Mutex::new(Weak::new());
+
+struct OriginalTerminal {
+    tty: OwnedFd,
+    attributes: Termios,
+}
+
+impl OriginalTerminal {
+    fn capture() -> io::Result<Self> {
+        // Match Crossterm 0.29's Unix tty_fd(), in both its libc and rustix
+        // backends: stdin if it is a TTY, otherwise /dev/tty (NOT stdout).
+        // Keep an owned reference to that terminal, without borrowing raw FDs.
+        let stdin = io::stdin();
+        let tty = if rustix::termios::isatty(&stdin) {
+            stdin.as_fd().try_clone_to_owned()?
+        } else {
+            File::options()
+                .read(true)
+                .write(true)
+                .open("/dev/tty")?
+                .into()
+        };
+        let attributes = tcgetattr(&tty)?;
+        Ok(Self { tty, attributes })
+    }
+
+    fn restore(&self) -> io::Result<()> {
+        tcsetattr(&self.tty, OptionalActions::Now, &self.attributes)?;
+        Ok(())
+    }
+}
+
+#[derive(PartialEq)]
+enum State {
+    Inactive,
+    Active,
+    // A transition started but has not completed successfully. Cleanup must
+    // still run; neither an early return nor a failed restore means inactive.
+    Uncertain,
+}
 
 /// RAII guard responsible for restoring the terminal upon normal return, error, or unwind.
 pub struct TerminalGuard {
-    active: bool,
+    original: Arc<OriginalTerminal>,
+    state: State,
 }
 
 impl TerminalGuard {
     /// Initializes terminal into raw mode and alternate screen, hiding the cursor.
     pub fn new() -> io::Result<(Self, Terminal<CrosstermBackend<Stdout>>)> {
-        let mut guard = Self { active: false };
+        let original = Arc::new(OriginalTerminal::capture()?);
+        {
+            let mut registered = PANIC_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
+            if registered.upgrade().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "terminal guard already exists",
+                ));
+            }
+            *registered = Arc::downgrade(&original);
+        }
+        let mut guard = Self {
+            original,
+            state: State::Inactive,
+        };
         guard.resume()?;
         let backend = CrosstermBackend::new(io::stdout());
         let terminal = Terminal::new(backend)?;
@@ -32,33 +93,40 @@ impl TerminalGuard {
 
     /// Re-enter after an editor; idempotent and guarded on partial failure.
     pub fn resume(&mut self) -> io::Result<()> {
-        if !self.active {
-            self.active = true;
-            enable_raw_mode()?;
-            execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        if self.state == State::Active {
+            return Ok(());
         }
+        // Clear any incomplete Crossterm transition, then restore T0 BEFORE
+        // Crossterm captures its next baseline. An editor cannot redefine T0.
+        self.restore()?;
+        self.state = State::Uncertain;
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        self.state = State::Active;
         Ok(())
     }
 
-    /// Restores terminal to its standard cooked mode and leaves alternate screen.
+    /// Restore the exact initial attributes, not an assumed "cooked" default.
     pub fn restore(&mut self) -> io::Result<()> {
-        if self.active {
-            restore_terminal()?;
-            self.active = false;
-        }
+        // Always clean up, even when inactive: the editor can have changed the
+        // terminal while suspended. State records OUR completed transitions,
+        // never a claim about an external process's terminal behavior.
+        self.state = State::Uncertain;
+        restore_terminal(Some(&self.original))?;
+        self.state = State::Inactive;
         Ok(())
     }
 }
 
-fn restore_terminal() -> io::Result<()> {
-    let screen = execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        Show,
-        DisableMouseCapture
-    );
+fn restore_terminal(original: Option<&OriginalTerminal>) -> io::Result<()> {
+    // Evaluate every operation, retaining the first error. In particular no
+    // screen/cursor/raw-mode failure may skip the final authoritative tcsetattr.
+    let screen = execute!(io::stdout(), LeaveAlternateScreen);
+    let cursor = execute!(io::stdout(), Show);
+    let mouse = execute!(io::stdout(), DisableMouseCapture);
     let raw = disable_raw_mode();
-    screen.and(raw)
+    let canonical = original.map_or(Ok(()), OriginalTerminal::restore);
+    screen.and(cursor).and(mouse).and(raw).and(canonical)
 }
 
 impl Drop for TerminalGuard {
@@ -72,7 +140,11 @@ pub fn install_panic_hook() {
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         // First restore terminal state immediately so error output is readable
-        let _ = restore_terminal();
+        let original = PANIC_TERMINAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upgrade();
+        let _ = restore_terminal(original.as_deref());
         previous_hook(panic_info);
     }));
 }
