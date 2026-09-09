@@ -896,5 +896,12 @@ O teste foi tornado determinístico inicializando no PTY e redirecionando stdout
 depois para um socket local cujo peer já estava fechado. A operação sob teste
 continua recebendo `BrokenPipe`, sem depender de timing ou tamanho de terminal.
 
-Novo CI da revisão corretiva ainda pendente. O status permanece **5.0D: BLOCKED**
-até a conclusão da validação remota. **5.0E não iniciada.**
+A revisão corretiva final de implementação/testes é
+`7196a2f0f0007d01967d02a8d7f5795822c3200f`. Seu
+[CI `34348671971`](https://github.com/TheGhols/Note-it/actions/runs/34348671971)
+terminou `completed/success`, com os jobs Rust e frontend aprovados. Isso fecha
+explicitamente o estado BLOCKED descoberto pela auditoria, sem apagar o primeiro
+fechamento prematuro nem a falha de harness intermediária.
+
+**5.0D: PASS — defeito de restauração do terminal corrigido e provado
+independentemente. Fase 5.0E não iniciada.**
