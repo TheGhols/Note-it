@@ -174,10 +174,7 @@ fn panic_hook_restores_before_diagnostics_after_poisoned_editor() {
 fn screen_output_failure_never_skips_canonical_restore() {
     use noteit_tui::terminal::TerminalGuard;
     use rustix::termios::tcgetattr;
-    use std::{
-        io,
-        process::{Command, Stdio},
-    };
+    use std::{io, os::unix::net::UnixStream, process::Command};
 
     const PROBE: &str = "NOTEIT_TERMINAL_OUTPUT_FAILURE_PROBE";
     if let Ok(mode) = std::env::var(PROBE) {
@@ -197,9 +194,15 @@ fn screen_output_failure_never_skips_canonical_restore() {
                 .success());
         }
         fs::write(root.join("ready"), "").unwrap();
-        wait("parent closes output pipe", || {
+        wait("parent releases output failure", || {
             root.join("release").exists()
         });
+        // Redirect only after any Terminal::new sizing. With the peer gone,
+        // every screen command gets deterministic EPIPE on every runner.
+        let (writer, reader) = UnixStream::pair().unwrap();
+        drop(reader);
+        rustix::stdio::dup2_stdout(&writer).unwrap();
+        drop(writer);
         match mode.as_str() {
             "initialize" => {
                 let error = TerminalGuard::new().err().unwrap();
@@ -239,11 +242,9 @@ fn screen_output_failure_never_skips_canonical_restore() {
                 "screen_output_failure_never_skips_canonical_restore",
                 "--nocapture",
             ])
-            .env(PROBE, mode)
-            .stdout(Stdio::piped());
+            .env(PROBE, mode);
         });
         wait("guard probe ready", || root.path().join("ready").exists());
-        drop(child.child.stdout.take().unwrap());
         fs::write(root.path().join("release"), "").unwrap();
         wait("output failure probe exits", || {
             child.drain();

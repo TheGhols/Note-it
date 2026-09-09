@@ -807,7 +807,8 @@ Cinco testes adicionais em `editor_process.rs` cobrem:
 4. Panic após editor contaminado, antes **e** depois de `resume()`. Subprocessos
    do próprio teste exercitam guard/hook de produção, sem switches novos no
    aplicativo. O hook anterior mede T0 antes de imprimir; não basta o Drop.
-5. Pipe de stdout fechado deterministicamente pelo pai: falhas em inicialização,
+5. Stdout redirecionado, após o sizing inicial quando aplicável, para um socket
+   local cujo peer já foi fechado: falhas determinísticas em inicialização,
    suspensão, retomada e Drop não pulam a restauração canônica. Segunda tentativa
    de resume continua retornando erro, não falso sucesso. Inicialização recusada
    não deixa registro de guard vivo.
@@ -886,5 +887,14 @@ pessoais (`share`, `config`, `state` de `note-it`) permaneceram respectivamente
 `98a859f2446e3bd2815c3e965bc50acf2366b4690f90ca6f06d8f8402a4b4db3` e
 `a5a3809aece23c816463eedcd2d6240b0ab97c0712befc72cc1538ddc3429e1f`.
 
-CI da revisão corretiva ainda pendente. O status permanece **5.0D: BLOCKED** até
-a conclusão da validação remota. **5.0E não iniciada.**
+O primeiro CI corretivo, run
+[`34324317979`](https://github.com/TheGhols/Note-it/actions/runs/34324317979),
+validou as sete provas de terminal anteriores, mas expôs uma fragilidade no teste
+de falha parcial: o subprocesso começava com stdout em pipe e podia bloquear no
+sizing de `Terminal::new()` antes de criar seu marcador. A produção não falhou.
+O teste foi tornado determinístico inicializando no PTY e redirecionando stdout
+depois para um socket local cujo peer já estava fechado. A operação sob teste
+continua recebendo `BrokenPipe`, sem depender de timing ou tamanho de terminal.
+
+Novo CI da revisão corretiva ainda pendente. O status permanece **5.0D: BLOCKED**
+até a conclusão da validação remota. **5.0E não iniciada.**
