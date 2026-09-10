@@ -340,8 +340,8 @@ Correção do relatório da 5.0C: `git diff d6ed712609d78b085650dc298aa452f0c86d
 - Navegação entre resultados via setas `Up`/`Down`. `Enter` abre a nota selecionada no painel de leitura; `Esc` cancela a busca e restaura o painel anterior.
 
 ### 9.3 Formatador e Renderizador de Markdown (`markdown.rs`)
-Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>`):
-- **Títulos (Headings):** Níveis 1 a 6 (`# ` a `###### `) estilizados com distinção visual de negrito, itálico e cores hierárquicas (amarelo, ciano, verde, branco, cinza).
+Renderiza documentos Markdown para linhas estilizadas do Ratatui (`Line<'static>`). O registro abaixo descreve a 5.0C; a varredura inline foi reescrita na Fase 5.0D.1 e vive hoje em `inline.rs` — ver seção 13:
+- **Títulos (Headings):** Níveis 1 a 6 (`# ` a `###### `) estilizados com distinção visual de negrito, itálico e cores hierárquicas (amarelo, ciano, verde, branco, cinza). *(Substituído na Fase 5.0D.1: os seis níveis passaram a ter cores próprias em `Color::Rgb` — ver seção 13.5.)*
 - **Listas:** Marcadores de listas não ordenadas (`-`, `*`, `+`) renderizados com marcadores `• ` em ciano, preservando indentação; listas numeradas (`1.`, `2.`) com números preservados.
 - **Checkboxes de Tarefas:**
   - Pendentes: `☐ ` em amarelo e texto normal.
@@ -905,3 +905,278 @@ fechamento prematuro nem a falha de harness intermediária.
 
 **5.0D: PASS — defeito de restauração do terminal corrigido e provado
 independentemente. Fase 5.0E não iniciada.**
+
+## 13. Fase 5.0D.1 — Fidelidade de Markdown e compatibilidade com notas da GUI
+
+### 13.1 Defeito: o leitor mostrava o arquivo, não a nota
+
+Uma nota é Markdown, e Markdown diz duas coisas ao mesmo tempo: as palavras e
+como elas estão vestidas. O leitor da 5.0C mostrava as duas. O diagnóstico
+visual, feito sobre notas reais escritas pelo editor gráfico, encontrou sete
+vazamentos e uma hierarquia incompleta:
+
+| O que aparecia na tela | Causa no renderer da 5.0C |
+| --- | --- |
+| `<span data-note-it-color="#DC2626" style="color:#DC2626">` | `parse_inlines` não reconhecia HTML nenhum; `<` era um caractere comum. |
+| `<mark data-note-it-highlight="#FDE68A" style="background-color:#FDE68A">` | idem. |
+| `<u>…</u>` | idem — não havia sublinhado no vocabulário do renderer. |
+| `<!-- comentário -->` | comentários só eram removidos dentro de tarefas, por `extract_completed_at`. |
+| `&nbsp;` | não havia decodificação de entidades. |
+| `~~riscado~~` | riscado não era um delimitador reconhecido. |
+| `*negrito com italico*` sobrando de `***…***` | negrito e itálico eram dois `find` independentes: o de `**` consumia dois asteriscos de três e deixava o par restante na tela. |
+| `**tarefa em negrito**` no painel de tarefas | `ui.rs` desenhava `task.text` — Markdown cru — como um `Span` literal. |
+| H4 branco, H5 cinza, H6 cinza escuro | a paleta tinha três cores e depois acabava. |
+
+O parser anterior era uma sequência de `find` sobre um `Vec<char>`: sem pilha,
+sem noção de aninhamento e sem regra de pareamento. Era por isso que `***x***`
+quebrava, que um `<span>` dentro de um `<mark>` não tinha como existir, e que
+`3 * 4 * 5` corria o risco de virar itálico. Ampliar aquele desenho com mais
+substituições globais teria multiplicado os casos sem resolver a composição, que
+é o requisito central: cor, marca-texto e ênfase precisam conviver.
+
+### 13.2 Arquitetura: reconhecimento de bloco separado da varredura inline
+
+A correção separa as duas responsabilidades em dois módulos do mesmo diretório —
+`noteit-tui/src/*.rs`, portanto ambos continuam sob a varredura de
+`scripts/check-tui-boundary`:
+
+- **`markdown.rs` — reconhecimento de bloco.** Decide o *tipo* de cada linha
+  armazenada (cerca, comentário de bloco, citação, alerta, título, régua,
+  tarefa, lista, lista numerada, parágrafo) e a moldura em que ela é desenhada.
+  Não interpreta nada dentro da linha.
+- **`inline.rs` — projeção inline.** Uma varredura por linha, com três
+  colaboradores explícitos: um **scanner de tokens**, que reconhece exatamente
+  as construções que o serializador do próprio Note-it escreve; uma **pilha de
+  tags**, para que `</span>` restaure o estilo que estava aberto quando o
+  `<span>` abriu, e não o estilo nenhum; e um **emissor**, que agrupa trechos de
+  estilo igual em um único `Span` e é o único ponto por onde texto vira
+  apresentação — razão pela qual é também o único ponto onde controles de
+  terminal são removidos.
+
+A ênfase recorre (um delimitador só é delimitador se tiver par, então sua
+extensão é conhecida antes do conteúdo ser lido) e é limitada a 32 níveis; as
+tags não recorrem, então uma nota com duzentos `<span>` aninhados custa duzentas
+entradas de `Vec` e nenhuma pilha de chamadas.
+
+As regras de pareamento de ênfase, escape, code span, entidade e link são
+deliberadamente as mesmas de `noteit_core::visible_text`. As duas projeções
+respondem perguntas diferentes — "quais são as palavras?" para rótulo e busca,
+"quais palavras e com que estilo?" para o leitor — e ficariam incoerentes se
+discordassem sobre o que era um delimitador. É por isso que `= 100 * 2.5`,
+`3 * 4 * 5`, `note_it_config` e `~/Downloads` continuam intactos nos dois lados.
+
+**Nenhuma dependência foi adicionada.** `Cargo.lock` permaneceu byte-idêntico e
+`cargo tree -p noteit-tui` não mudou.
+
+### 13.3 Subconjunto HTML admitido
+
+Três elementos, e nada mais:
+
+| Forma armazenada | Efeito no leitor |
+| --- | --- |
+| `<span data-note-it-color="#RRGGBB">` | `Style::fg(Color::Rgb(..))` |
+| `<span style="color:#RRGGBB">` | idem, como alternativa quando o atributo canônico falta ou é inválido |
+| `<span data-note-it-font-size="NN">` | abre e fecha sem efeito — um terminal não tem corpo de fonte; o texto permanece |
+| `<mark data-note-it-highlight="#RRGGBB">` | `Style::bg(..)` mais `fg(#1E293B)` |
+| `<mark style="background-color:#RRGGBB">` | idem |
+| `<mark>` sem atributo | destaque com o primeiro amarelo da paleta (`#FDE68A`) — a grafia das notas anteriores ao atributo |
+| `<u>` … `</u>` | `Modifier::UNDERLINED` |
+| `<!-- … -->` | removido inteiro, inclusive `note-it:completed_at` |
+| `&amp;` `&lt;` `&gt;` `&quot;` `&apos;` `&nbsp;` e referências numéricas | decodificados **uma vez** |
+
+O atributo canônico `data-note-it-*` tem precedência; o `style` que o mesmo
+serializador escreve ao lado é aceito como alternativa, lido **por nome exato de
+propriedade** e validado como cor. Não há interpretação de CSS: `position`,
+`z-index`, `expression(…)` ou qualquer outra declaração ao lado é ignorada, não
+avaliada. Cor é `#RGB` ou `#RRGGBB` e mais nada — `red`, `rgb(…)`, `var(…)` e
+`url(javascript:…)` não são cores que o Note-it grava, portanto não são cores
+que o leitor lê.
+
+O `#1E293B` sobre o destaque não é invenção da TUI: é o `HIGHLIGHT_TEXT_COLOR` de
+`ui/src/ui/palettes.ts`, que o editor gráfico escreve no mesmo `style` inline do
+fundo porque os destaques são pálidos de propósito e o texto claro da nota
+sumiria neles. O leitor faz o mesmo pelo mesmo motivo, e o resultado é a mesma
+cascata: `<span cor><mark>` fica com a cor do destaque no texto, `<mark><span
+cor>` deixa a cor interna vencer. Ambos os casos preservam o fundo.
+
+### 13.4 Regras de segurança
+
+- **HTML desconhecido é removido, nunca executado nem impresso.** Uma tag bem
+  formada de um elemento que o Note-it não escreve — `<script>`, `<div>`,
+  `<img>`, `<b>` — desaparece; o que ela envolvia permanece como texto. Um `<`
+  que não abre tag nenhuma (`um < dois`, `<https://exemplo.com>`) continua o
+  caractere que é.
+- **Atributos jamais são executados.** `onclick`, `onerror`, `src` e afins não
+  são lidos: só quatro nomes de atributo têm significado, e o resto do elemento
+  é atravessado apenas para descobrir onde a tag termina — com consciência de
+  aspas, para que um `>` citado não a encerre cedo demais.
+- **Nenhuma URL é resolvida.** Um link mostra suas palavras sublinhadas; o
+  destino não vai à tela e nada o segue. A renderização não abre rede, arquivo
+  nem subprocesso: recebe `&str` e devolve `Span`.
+- **Controles de terminal ficam inertes.** As faixas C0 e C1
+  (`U+0000`–`U+001F`, `U+007F`–`U+009F`) não sobrevivem à passagem pelo emissor,
+  inclusive quando chegam por referência numérica (`&#27;`); a tabulação vira os
+  espaços que representa em vez de mover o cursor. Um `ESC [ 3 1 m` armazenado
+  são cinco caracteres do arquivo de alguém, nunca uma instrução para este
+  terminal.
+- **Fechamento fora de ordem fecha o que dá.** `</span>` fecha o `<span>` mais
+  interno e tudo aberto dentro dele; um fechamento sem nada a fechar é
+  descartado, jamais impresso. Uma tag aberta e nunca fechada termina no limite
+  da construção que a contém.
+- **Nada some em silêncio.** Um delimitador sem par continua o caractere que é.
+  Um `<!--` que ninguém fechou não é um comentário: apenas os quatro caracteres
+  saem, e as palavras depois deles sobrevivem em vez de serem engolidas até o
+  fim do arquivo. A busca pelo `-->` de um comentário de bloco para na primeira
+  cerca de código, porque um `-->` dentro de um bloco pertence ao código.
+- **Dentro de uma cerca nada é interpretado.** Todo caractere é o caractere que
+  alguém digitou; só a inertização se aplica.
+
+### 13.5 Hierarquia H1–H6
+
+Seis níveis, seis cores próprias, todas em `Color::Rgb`:
+
+| Nível | Cor | Modificadores |
+| --- | --- | --- |
+| H1 | `#FFCC66` | negrito + sublinhado |
+| H2 | `#5FD3F3` | negrito |
+| H3 | `#7FD98C` | negrito |
+| H4 | `#E8975A` | negrito |
+| H5 | `#C39BF0` | negrito |
+| H6 | `#93A7C4` | negrito + itálico |
+
+A cor nunca é o único portador da identidade: o marcador `#`…`######` continua
+na tela e os modificadores diferem nas duas pontas, então um terminal de paleta
+pobre — que aproxima o RGB para a entrada mais próxima que tiver — ainda mostra
+seis níveis distinguíveis. A semântica textual e o nível estrutural do título
+não mudaram.
+
+### 13.6 Superfícies corrigidas fora do leitor
+
+Duas telas exibiam Markdown cru pelo mesmo motivo e foram corrigidas com o mesmo
+renderer:
+
+- **Painel de Tarefas Pendentes.** `TaskEntry::text` é uma linha da nota, e agora
+  é lida como uma: o painel mostra `tarefa em negrito`, nunca
+  `**tarefa em negrito**`.
+- **Prévia da lixeira.** Mostrava `note.content` inteiro dentro de um único
+  `Span`; passou a usar `markdown::render_markdown`, porque uma nota na lixeira
+  continua uma nota.
+
+Rótulos de nota e trechos de busca já passavam por `noteit_core::visible_text` e
+não precisaram de nada.
+
+### 13.7 Provas
+
+**Regressão primeiro.** `noteit-tui/tests/markdown_fidelity.rs` foi escrito
+contra a baseline `32cbda6` e falhou em **24 dos 27** testes iniciais, cada um
+pela razão esperada — os três que passavam já eram comportamentos corretos
+(cerca literal, ênfase dentro de título sem vazamento, metadados de tarefa
+ocultos). Depois da correção o arquivo cresceu para **30 testes** e passa
+inteiro.
+
+Contagens finais, `cargo test -p noteit-tui`:
+
+| Alvo | Testes |
+| --- | --- |
+| unitários de `src/lib.rs` (`inline.rs` + `markdown.rs`) | 12 |
+| `tests/markdown_fidelity.rs` | 30 |
+| `tests/navigation_and_rendering.rs` | 7 |
+| `tests/transactions.rs` | 18 |
+| `tests/terminal_lifecycle.rs` | 9 |
+| `tests/editor_process.rs` | 8 |
+| `tests/desktop_concurrency.rs` | 1 |
+| **total** | **85** |
+
+O que é provado, e como:
+
+- **Estilo, não só texto.** As asserções de cor, fundo e modificador inspecionam
+  o `Style` dos `Span`s e as células do `TestBackend` (`cell.fg`, `cell.bg`,
+  `cell.modifier`), nunca apenas `Line::to_string()`.
+- **Títulos.** Os seis níveis têm `fg` mutuamente distintos e H1 difere de H6
+  também em modificador; cor e marca-texto são exercitados **em cada um dos seis
+  níveis**.
+- **Composição.** Fechamento restaurando o estilo anterior; `span` contendo
+  `mark`; `mark` contendo `span`; cor combinada com negrito, itálico, riscado,
+  sublinhado e código.
+- **Blocos.** Parágrafo, lista, lista numerada, tarefa pendente, tarefa
+  concluída, citação e os cinco alertas GFM, todos com cor e ênfase dentro, mais
+  o bloco cercado permanecendo literal.
+- **Entradas hostis.** Tag não fechada, fechamento órfão, fechamento fora de
+  ordem, cor inválida, atributo inesperado, `style` com propriedades extras,
+  `url(javascript:…)`, `<script>`, atributo de evento, `<img onerror>`,
+  sequências ANSI/OSC/C1, entidade numérica que decodifica para `ESC`, Unicode
+  combinado, emoji com ZWJ, 20 000 caracteres e 200 spans aninhados. Nenhuma
+  causa panic, execução ou desaparecimento de texto.
+- **Cursor.** Um comentário de bloco continua ocupando as linhas que armazena —
+  em branco, nunca ausentes — para que a numeração que o cursor de leitura
+  endereça continue honesta.
+- **Buffer desenhado.** Três testes `TestBackend` provam que o buffer final
+  contém as palavras e não contém `<span`, `<mark`, `<u>`, `<!--`, `-->`,
+  `&nbsp;`, `data-note-it-*`, `background-color`, `note-it:completed_at`, `**`
+  nem `~~`.
+
+**Prova em terminal real.** O binário foi executado em pseudoterminal
+(`script -qc`, 150×45, `TERM=xterm-256color`) contra um store descartável, com
+`DISPLAY`, `WAYLAND_DISPLAY` e `DBUS_SESSION_BUS_ADDRESS` removidos do ambiente e
+os quatro `XDG_*` apontados para o diretório temporário. O fluxo ANSI capturado
+mostra `38;2;255;204;102` … `38;2;147;167;196` para os seis títulos,
+`48;2;253;230;138` com `38;2;30;41;59` no marca-texto, `\e[1m`, `\e[1m\e[3m`,
+`\e[9m` e `\e[4m` nas ênfases, `U+00A0` no lugar de `&nbsp;` — e nenhuma das
+grafias de armazenamento.
+
+**Varredura sobre as formas reais.** Um teste descartável renderizou as 42 notas
+do store do usuário em modo estritamente somente-leitura — 502 linhas
+apresentadas, **zero vazamentos** fora de blocos cercados de código, onde a
+marcação literal é o comportamento correto. O arquivo foi removido depois da
+verificação e nenhum conteúdo pessoal foi copiado para o repositório: as
+fixturas versionadas são sintéticas e reproduzem apenas as *formas* observadas.
+
+### 13.8 Gates executados
+
+| Comando | Resultado |
+| --- | --- |
+| `cargo test -p noteit-tui` (sem display e sem barramento) | 85 testes, todos aprovados |
+| `cargo fmt -p noteit-tui -- --check` | limpo (formatados apenas os arquivos alterados) |
+| `cargo check --workspace` | aprovado |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | aprovado, ~80 s |
+| `scripts/check-tui-boundary` | aprovado |
+| `scripts/check rust` (gate canônico, 18 estágios) | **tudo passou**, ~503 s |
+| `git diff --check` | limpo |
+| `git diff --stat Cargo.lock` | vazio — nenhuma dependência adicionada |
+
+### 13.9 Integridade do store real
+
+`~/.local/share/note-it`, `~/.config/note-it` e `~/.local/state/note-it` foram
+inventariados por tipo, tamanho, `mtime` e caminho antes e depois de todo o
+trabalho, inclusive depois de `scripts/check rust` — que executa o harness de
+isolamento e, com display, abre um daemon real do Note-it. Os dois inventários
+são idênticos, com o mesmo SHA-256
+(`3cc2f66847f3c681a7d2c3d71d1cc1cb28fe1f4bbdc2adc6b3d9f2c6d01cc2ba`, 242
+entradas). Nenhuma escrita, nenhuma remoção, nenhum `mtime` movido. O harness
+usa `$WORK/ambient-home` como stand-in de `$HOME` e um barramento privado; o
+`$HOME` real nunca é alvo.
+
+### 13.10 Limitações conhecidas
+
+- **Corpo de fonte não tem representação.** `data-note-it-font-size` é
+  reconhecido e consumido, mas um terminal tem uma célula só: o texto aparece,
+  o tamanho não.
+- **Cor é `Color::Rgb`.** Em um terminal sem truecolor a aproximação é feita pelo
+  próprio emulador. Os títulos sobrevivem a isso pelo marcador `#` e pelos
+  modificadores; uma cor de nota aproximada continua uma cor, apenas menos exata.
+- **Texto colorido dentro de um marca-texto perde a cor**, exatamente como no
+  editor gráfico, onde o `color` inline do `<mark>` vence o do `<span>` externo.
+  É fidelidade deliberada, não correção de contraste.
+- **A seleção do cursor de leitura ainda pinta o fundo da linha** e um
+  marca-texto continua vencendo essa pintura na sua extensão. A legibilidade da
+  seleção sobre cores semânticas é escopo declarado da **Fase 5.0D.3**.
+- **O rótulo `(Fase 5.0B / 5.0C)` no cabeçalho continua obsoleto** — também
+  escopo declarado da 5.0D.3, e por isso não tocado aqui.
+- **Um comentário que começa no meio de uma linha e continua na seguinte** não é
+  tratado como bloco: o marcador sai e o texto permanece. O serializador do
+  Note-it escreve comentários em bloco próprio, então a forma não ocorre em
+  notas que ele produziu.
+
+**5.0D.1: PASS — nenhum HTML canônico, delimitador reconhecido, comentário ou
+entidade alcança a tela; seis níveis de título distinguíveis; store real
+inalterado. Fases 5.0D.2, 5.0D.3 e 5.0E não iniciadas.**

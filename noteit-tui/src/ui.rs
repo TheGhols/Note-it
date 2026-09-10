@@ -319,7 +319,9 @@ fn render_pending_tasks_list(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::White)
         };
 
-        lines.push(Line::from(vec![
+        // A task's text is a line of the note, so it is read as one: the
+        // panel shows `tarefa em negrito`, never `**tarefa em negrito**`.
+        let mut spans = vec![
             Span::styled(prefix, Style::default().fg(Color::Yellow)),
             Span::styled(
                 "☐ ",
@@ -327,8 +329,9 @@ fn render_pending_tasks_list(frame: &mut Frame, app: &App, area: Rect) {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(task.text.clone(), text_style),
-        ]));
+        ];
+        spans.extend(markdown::inline_spans(&task.text, text_style));
+        lines.push(Line::from(spans));
 
         lines.push(Line::from(vec![
             Span::raw("    "),
@@ -498,7 +501,7 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
                 .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
                 .unwrap_or_else(|| "desconhecida".to_string());
 
-            let lines = vec![
+            let mut lines = vec![
                 Line::from(vec![
                     Span::styled(
                         "🗑️ NOTA NA LIXEIRA: ",
@@ -524,19 +527,30 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
                     "Abertura da nota:",
                     Style::default().fg(Color::Yellow),
                 )),
-                Line::from(Span::styled(
-                    app.current_note
-                        .as_ref()
-                        .filter(|note| note.in_trash && note.id == trash.note_id)
-                        .map_or_else(|| trash.snippet.clone(), |note| note.content.clone()),
+            ];
+
+            // A note in the trash is still a note, and it is read with the
+            // same renderer as any other — a raw dump of the file would spell
+            // out the storage the reader is not supposed to see.
+            match app
+                .current_note
+                .as_ref()
+                .filter(|note| note.in_trash && note.id == trash.note_id)
+            {
+                Some(note) => lines.extend(markdown::render_markdown(&note.content)),
+                None => lines.push(Line::from(Span::styled(
+                    trash.snippet.clone(),
                     Style::default().fg(Color::White),
-                )),
+                ))),
+            }
+
+            lines.extend([
                 Line::from(""),
                 Line::from(Span::styled(
                     "[r] Restaurar a revision exibida",
                     Style::default().fg(Color::DarkGray).italic(),
                 )),
-            ];
+            ]);
 
             let p = Paragraph::new(lines).wrap(Wrap { trim: false });
             frame.render_widget(p, inner);

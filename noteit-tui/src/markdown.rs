@@ -1,8 +1,19 @@
 //! Read-only Markdown presentation for Note-it TUI.
 //!
-//! Formats Markdown documents into styled Ratatui lines for the reader pane.
-//! Operates in-process without modifying any stored data or evaluating mathematical expressions.
+//! Block recognition: which *kind* a stored line is — a heading, a quote, a
+//! callout, a list, a task, a fence — and the frame that kind is drawn in.
+//! Everything inside a line belongs to [`crate::inline`], which turns the
+//! words into text and the marks around them into style.
+//!
+//! The split is the point. A fenced block is source and nothing in it is
+//! interpreted; every other block hands its content to one inline scanner, so
+//! a colour behaves the same in a heading, a bullet, a task and an alert
+//! rather than four times over.
+//!
+//! Operates in-process without modifying any stored data or evaluating
+//! mathematical expressions.
 
+use crate::inline;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -51,6 +62,48 @@ impl CalloutKind {
     }
 }
 
+/// The marker each heading level is drawn with, kept so the level a reader
+/// sees is the level the file stores.
+const HEADING_PREFIXES: [&str; 6] = ["# ", "## ", "### ", "#### ", "##### ", "###### "];
+
+/// The six heading levels, each with an identity of its own.
+///
+/// The defect this replaces gave H1 to H3 three clear colours and then ran
+/// out: H4 was the body's white, H5 a grey barely apart from it and H6 a dim
+/// grey — three levels a reader could not name at a glance. The ramp below
+/// keeps a distinct hue per level and descends in weight from warm to cool, so
+/// depth reads as depth on a dark terminal.
+///
+/// Colour is never the only carrier. The `#` marker stays on screen and the
+/// modifiers differ at both ends — H1 underlined, H6 italic — so a terminal
+/// with a poor palette still shows six distinguishable levels.
+fn heading_style(level: usize) -> Style {
+    let (colour, modifiers) = match level {
+        1 => (
+            Color::Rgb(0xFF, 0xCC, 0x66),
+            Modifier::BOLD | Modifier::UNDERLINED,
+        ),
+        2 => (Color::Rgb(0x5F, 0xD3, 0xF3), Modifier::BOLD),
+        3 => (Color::Rgb(0x7F, 0xD9, 0x8C), Modifier::BOLD),
+        4 => (Color::Rgb(0xE8, 0x97, 0x5A), Modifier::BOLD),
+        5 => (Color::Rgb(0xC3, 0x9B, 0xF0), Modifier::BOLD),
+        _ => (
+            Color::Rgb(0x93, 0xA7, 0xC4),
+            Modifier::BOLD | Modifier::ITALIC,
+        ),
+    };
+    Style::default().fg(colour).add_modifier(modifiers)
+}
+
+/// The styled spans one line of note text shows.
+///
+/// Exposed for the surfaces that hold a fragment of a note rather than a whole
+/// one — the pending-task panel shows a task's text, and a task's text is
+/// Markdown like any other line.
+pub fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
+    inline::spans(text, base)
+}
+
 /// Renders raw Markdown content into styled Ratatui lines.
 pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
     render_with_sources(content).lines
@@ -96,7 +149,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             lines.push(Line::from(vec![
                 Span::styled("┌── [", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    lang_display,
+                    inline::inert(&lang_display),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -115,10 +168,14 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
                     i += 1;
                     break;
                 }
-                // Plain code content without syntax highlighting
+                // Plain code content without syntax highlighting. Inside a
+                // fence every character is the character somebody typed, so
+                // nothing is unwrapped, decoded or matched — it is only made
+                // inert, because a stored escape sequence is still not an
+                // instruction to this terminal.
                 lines.push(Line::from(vec![
                     Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(code_line.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(inline::inert(code_line), Style::default().fg(Color::White)),
                 ]));
                 i += 1;
             }
@@ -131,7 +188,37 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             continue;
         }
 
-        // 2. Blockquotes & GFM Callouts / Alerts (> ...)
+        // 2. HTML comments spanning several lines.
+        //
+        // A comment is stored in the note and shown in the editor as a small
+        // labelled block, but it is never what the note *says* — so a reader
+        // sees none of it, and the lines it occupies stay blank rather than
+        // vanishing, which is what keeps the cursor's line numbering honest.
+        // A single-line comment needs nothing here: the inline scan removes
+        // it and the line renders empty. An opener nobody closed is not a
+        // comment at all, and falls through to be read as the text it is.
+        if trimmed.starts_with("<!--") && !trimmed.contains("-->") {
+            // The search stops at a fence: a `-->` inside a code block belongs
+            // to the code, and letting it close a comment would swallow the
+            // block whole. Text is never lost to a guess.
+            let closing = raw_lines[i..]
+                .iter()
+                .take_while(|l| {
+                    let l = l.trim();
+                    !(l.starts_with("```") || l.starts_with("~~~"))
+                })
+                .position(|l| l.contains("-->"));
+            if let Some(offset) = closing {
+                for _ in 0..=offset {
+                    lines.source = i;
+                    lines.push(Line::from(""));
+                    i += 1;
+                }
+                continue;
+            }
+        }
+
+        // 3. Blockquotes & GFM Callouts / Alerts (> ...)
         if trimmed.starts_with('>') {
             let quote_content = trimmed.strip_prefix('>').unwrap().trim_start();
 
@@ -157,7 +244,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
                     }
                     let inner = next_line.strip_prefix('>').unwrap().trim_start();
                     let mut spans = vec![Span::styled("▍ ", Style::default().fg(callout_color))];
-                    spans.extend(parse_inlines(inner, Style::default().fg(Color::White)));
+                    spans.extend(inline::spans(inner, Style::default().fg(Color::White)));
                     lines.push(Line::from(spans));
                     i += 1;
                 }
@@ -165,7 +252,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             } else {
                 // Standard blockquote (not a callout)
                 let mut spans = vec![Span::styled("│ ", Style::default().fg(Color::Cyan))];
-                spans.extend(parse_inlines(
+                spans.extend(inline::spans(
                     quote_content,
                     Style::default()
                         .fg(Color::Cyan)
@@ -177,59 +264,23 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             }
         }
 
-        // 3. Headings (# to ######)
+        // 4. Headings (# to ######)
         if trimmed.starts_with('#') {
             let hash_count = trimmed.chars().take_while(|&c| c == '#').count();
             if hash_count <= 6 && trimmed[hash_count..].starts_with(' ') {
                 let heading_text = trimmed[hash_count..].trim();
-                let (prefix, style) = match hash_count {
-                    1 => (
-                        "# ",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    2 => (
-                        "## ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    3 => (
-                        "### ",
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    4 => (
-                        "#### ",
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    5 => (
-                        "##### ",
-                        Style::default()
-                            .fg(Color::Gray)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    _ => (
-                        "###### ",
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                };
+                let prefix = HEADING_PREFIXES[hash_count - 1];
+                let style = heading_style(hash_count);
 
                 let mut spans = vec![Span::styled(prefix, style)];
-                spans.extend(parse_inlines(heading_text, style));
+                spans.extend(inline::spans(heading_text, style));
                 lines.push(Line::from(spans));
                 i += 1;
                 continue;
             }
         }
 
-        // 4. Thematic breaks / Horizontal rules (---, ***, ___)
+        // 5. Thematic breaks / Horizontal rules (---, ***, ___)
         if (trimmed.starts_with("---") || trimmed.starts_with("***") || trimmed.starts_with("___"))
             && trimmed
                 .chars()
@@ -244,7 +295,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             continue;
         }
 
-        // 5. Task Checkboxes (- [ ] or - [x] / - [X])
+        // 6. Task Checkboxes (- [ ] or - [x] / - [X])
         if let Some((checked, task_text, indent)) = parse_task_line(line) {
             let (cleaned_text, is_checked) = if checked {
                 (task_text, true)
@@ -265,7 +316,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ));
-                spans.extend(parse_inlines(
+                spans.extend(inline::spans(
                     &cleaned_text,
                     Style::default()
                         .fg(Color::DarkGray)
@@ -278,7 +329,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ));
-                spans.extend(parse_inlines(
+                spans.extend(inline::spans(
                     &cleaned_text,
                     Style::default().fg(Color::White),
                 ));
@@ -289,7 +340,7 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             continue;
         }
 
-        // 6. Bullet Lists (- , * , + )
+        // 7. Bullet Lists (- , * , + )
         if let Some((bullet_char, item_text, indent)) = parse_bullet_list(line) {
             let indent_spaces = " ".repeat(indent);
             let mut spans = Vec::new();
@@ -298,13 +349,13 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
             }
             let _ = bullet_char;
             spans.push(Span::styled("• ", Style::default().fg(Color::Cyan)));
-            spans.extend(parse_inlines(&item_text, Style::default().fg(Color::White)));
+            spans.extend(inline::spans(&item_text, Style::default().fg(Color::White)));
             lines.push(Line::from(spans));
             i += 1;
             continue;
         }
 
-        // 7. Numbered Lists (1. , 2. , etc.)
+        // 8. Numbered Lists (1. , 2. , etc.)
         if let Some((num_str, item_text, indent)) = parse_numbered_list(line) {
             let indent_spaces = " ".repeat(indent);
             let mut spans = Vec::new();
@@ -315,17 +366,17 @@ pub fn render_with_sources(content: &str) -> RenderedMarkdown {
                 format!("{num_str} "),
                 Style::default().fg(Color::Cyan),
             ));
-            spans.extend(parse_inlines(&item_text, Style::default().fg(Color::White)));
+            spans.extend(inline::spans(&item_text, Style::default().fg(Color::White)));
             lines.push(Line::from(spans));
             i += 1;
             continue;
         }
 
-        // 8. Normal Paragraph / Plain Text (including math lines like = 2 + 2 or a := 5, rendered as-is)
+        // 9. Normal Paragraph / Plain Text (including math lines like = 2 + 2 or a := 5, rendered as-is)
         if trimmed.is_empty() {
             lines.push(Line::from(""));
         } else {
-            let spans = parse_inlines(line, Style::default().fg(Color::White));
+            let spans = inline::spans(line, Style::default().fg(Color::White));
             lines.push(Line::from(spans));
         }
 
@@ -409,80 +460,6 @@ fn parse_numbered_list(line: &str) -> Option<(String, String, usize)> {
     }
 
     None
-}
-
-/// Parses inline Markdown markers (**bold**, *italic*, `code`) into styled Spans.
-fn parse_inlines(text: &str, base_style: Style) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    let mut current = String::new();
-
-    while i < chars.len() {
-        // Inline code `...`
-        if chars[i] == '`' {
-            if let Some(end_offset) = chars[i + 1..].iter().position(|&c| c == '`') {
-                if !current.is_empty() {
-                    spans.push(Span::styled(current.clone(), base_style));
-                    current.clear();
-                }
-                let code_content: String = chars[i + 1..i + 1 + end_offset].iter().collect();
-                spans.push(Span::styled(
-                    code_content,
-                    Style::default().fg(Color::Yellow),
-                ));
-                i = i + 1 + end_offset + 1;
-                continue;
-            }
-        }
-
-        // Bold **...**
-        if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-            let remaining = &chars[i + 2..];
-            if let Some(pos) = remaining
-                .windows(2)
-                .position(|w| w[0] == '*' && w[1] == '*')
-            {
-                if !current.is_empty() {
-                    spans.push(Span::styled(current.clone(), base_style));
-                    current.clear();
-                }
-                let bold_text: String = chars[i + 2..i + 2 + pos].iter().collect();
-                spans.push(Span::styled(
-                    bold_text,
-                    base_style.add_modifier(Modifier::BOLD),
-                ));
-                i = i + 2 + pos + 2;
-                continue;
-            }
-        }
-
-        // Italic *...*
-        if chars[i] == '*' && (i + 1 < chars.len() && chars[i + 1] != '*') {
-            if let Some(end_offset) = chars[i + 1..].iter().position(|&c| c == '*') {
-                if !current.is_empty() {
-                    spans.push(Span::styled(current.clone(), base_style));
-                    current.clear();
-                }
-                let italic_text: String = chars[i + 1..i + 1 + end_offset].iter().collect();
-                spans.push(Span::styled(
-                    italic_text,
-                    base_style.add_modifier(Modifier::ITALIC),
-                ));
-                i = i + 1 + end_offset + 1;
-                continue;
-            }
-        }
-
-        current.push(chars[i]);
-        i += 1;
-    }
-
-    if !current.is_empty() {
-        spans.push(Span::styled(current, base_style));
-    }
-
-    spans
 }
 
 #[cfg(test)]
