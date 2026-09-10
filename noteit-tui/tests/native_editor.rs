@@ -982,7 +982,7 @@ fn a_real_narrow_terminal_edits_and_restores() {
             cmd.env("XDG_RUNTIME_DIR", root.path().join("runtime"));
         },
     );
-    tui.wait_text("Note-it");
+    tui.wait_text("NOTE-IT");
     tui.input(b"\r");
     tui.wait_text("Edição");
     tui.input(b"X");

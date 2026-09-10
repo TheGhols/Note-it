@@ -7,10 +7,14 @@ use crate::{
     document::LoadedDocument,
     draft::{Draft, Motion},
     editor,
+    formatting::{self, Kind},
     terminal::TerminalGuard,
     ui,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use noteit_core::Uuid;
 use noteit_core::{
     authority,
@@ -87,6 +91,21 @@ pub enum EditorPrompt {
     Conflict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatMenu {
+    Root,
+    TextColor,
+    Highlight,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PendingMouseAction {
+    Panel(ActivePanel),
+    Row(usize),
+    Search,
+    TaskToggle(usize),
+}
+
 /// The interactive TUI application state.
 pub struct App {
     pub core: NoteItCore,
@@ -123,6 +142,11 @@ pub struct App {
     /// The note body being edited, present exactly while `focus` is `Editor`.
     pub draft: Option<Draft>,
     pub editor_prompt: Option<EditorPrompt>,
+    pub format_menu: Option<FormatMenu>,
+    pub format_selected: usize,
+    pub active_text_color: Option<&'static str>,
+    pub active_highlight: Option<&'static str>,
+    pending_mouse_action: Option<PendingMouseAction>,
     /// Set when the open question was raised by somebody asking to leave, so
     /// answering it finishes the exit instead of returning to the reader.
     exit_requested: bool,
@@ -170,6 +194,11 @@ impl App {
             editor_requested: false,
             draft: None,
             editor_prompt: None,
+            format_menu: None,
+            format_selected: 0,
+            active_text_color: None,
+            active_highlight: None,
+            pending_mouse_action: None,
             exit_requested: false,
             editor_scroll: Cell::new(0),
             editor_column: Cell::new(0),
@@ -266,6 +295,9 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return self.should_quit;
         }
+        if self.editor_prompt.is_none() && self.discard_confirmation.is_none() {
+            self.notice.clear();
+        }
         // Ctrl+C is somebody asking to leave, and in raw mode it is a key, not
         // a signal — there is a screen to ask on and somebody there to answer.
         // So it goes through the same question every other user-initiated exit
@@ -317,6 +349,9 @@ impl App {
         match key.code {
             KeyCode::Char('n') if self.panel == ActivePanel::RecentNotes => self.create_note(),
             KeyCode::Char('r') if self.panel == ActivePanel::Trash => self.restore_selected(),
+            KeyCode::Char(' ') if self.panel == ActivePanel::PendingTasks => {
+                self.toggle_selected_task()
+            }
             // Exit shortcuts
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.should_quit = true;
@@ -365,6 +400,7 @@ impl App {
                 ActivePanel::PendingTasks => {
                     if self.tasks_selected > 0 {
                         self.tasks_selected -= 1;
+                        self.load_selected_task_note();
                     }
                 }
                 ActivePanel::Trash => {
@@ -389,6 +425,7 @@ impl App {
                         && self.tasks_selected + 1 < self.pending_tasks.len()
                     {
                         self.tasks_selected += 1;
+                        self.load_selected_task_note();
                     }
                 }
                 ActivePanel::Trash => {
@@ -547,6 +584,10 @@ impl App {
     /// question is asked at, so "switching note, panel, search or discarding
     /// with unsaved text" cannot happen behind the question's back.
     fn handle_key_editor(&mut self, key: KeyEvent) {
+        if self.format_menu.is_some() {
+            self.handle_format_key(key);
+            return;
+        }
         if let Some(prompt) = self.editor_prompt.take() {
             self.answer_prompt(prompt, key);
             return;
@@ -557,6 +598,10 @@ impl App {
         let extend = key.modifiers.contains(KeyModifiers::SHIFT);
         let page = self.editor_viewport.get().max(1);
 
+        if alt && key.code == KeyCode::Char('f') {
+            self.open_format_menu();
+            return;
+        }
         if control || alt {
             match key.code {
                 KeyCode::Char('s') => self.save_draft(),
@@ -577,13 +622,31 @@ impl App {
 
         match key.code {
             KeyCode::Esc => self.leave_editor(),
-            KeyCode::Char(character) => self.edit(|draft| draft.insert_char(character)),
+            KeyCode::Char(character) => {
+                let mut text = [0; 4];
+                self.insert_with_active_style(character.encode_utf8(&mut text));
+            }
             // A note body is Markdown, where indentation is spaces. Storing a
             // tab whose width nothing agrees on would be storing a surprise.
             KeyCode::Tab => self.edit(|draft| draft.insert_str("    ")),
-            KeyCode::Enter => self.edit(Draft::newline),
-            KeyCode::Backspace => self.edit(Draft::backspace),
-            KeyCode::Delete => self.edit(Draft::delete),
+            KeyCode::Enter => self.insert_with_active_style("\n"),
+            KeyCode::Backspace => {
+                let color = self.active_text_color;
+                let highlight = self.active_highlight;
+                self.edit(|draft| {
+                    if !draft.backspace_styled(color, highlight) {
+                        draft.backspace();
+                    }
+                });
+            }
+            KeyCode::Delete => {
+                let styled = self.active_text_color.is_some() || self.active_highlight.is_some();
+                self.edit(|draft| {
+                    if !styled || !draft.styled_delete_is_unsafe() {
+                        draft.delete();
+                    }
+                });
+            }
             KeyCode::Left => self.edit(|draft| draft.move_cursor(Motion::Left, extend)),
             KeyCode::Right => self.edit(|draft| draft.move_cursor(Motion::Right, extend)),
             KeyCode::Up => self.edit(|draft| draft.move_cursor(Motion::Up, extend)),
@@ -593,6 +656,229 @@ impl App {
             KeyCode::PageUp => self.edit(|draft| draft.move_cursor(Motion::PageUp(page), extend)),
             KeyCode::PageDown => {
                 self.edit(|draft| draft.move_cursor(Motion::PageDown(page), extend))
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_with_active_style(&mut self, text: &str) {
+        let color = self.active_text_color;
+        let highlight = self.active_highlight;
+        let styled = color.is_some() || highlight.is_some();
+        self.edit(|draft| {
+            if !draft.insert_styled(text, color, highlight) && !styled {
+                draft.insert_str(text);
+            }
+        });
+    }
+
+    fn open_format_menu(&mut self) {
+        self.format_menu = Some(FormatMenu::Root);
+        self.format_selected = 0;
+    }
+
+    fn handle_format_key(&mut self, key: KeyEvent) {
+        let menu = self.format_menu.unwrap();
+        let count = match menu {
+            FormatMenu::Root => 4,
+            FormatMenu::TextColor => formatting::TEXT_COLORS.len() + 1,
+            FormatMenu::Highlight => formatting::HIGHLIGHT_COLORS.len() + 1,
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.format_menu = None;
+                self.notice.clear();
+            }
+            KeyCode::Up => self.format_selected = self.format_selected.saturating_sub(1),
+            KeyCode::Down => self.format_selected = (self.format_selected + 1).min(count - 1),
+            KeyCode::Enter => self.activate_format_item(self.format_selected),
+            _ => {}
+        }
+    }
+
+    fn activate_format_item(&mut self, index: usize) {
+        match self.format_menu {
+            Some(FormatMenu::Root) => match index {
+                0 => {
+                    self.format_menu = Some(FormatMenu::TextColor);
+                    self.format_selected = 0;
+                }
+                1 => {
+                    self.format_menu = Some(FormatMenu::Highlight);
+                    self.format_selected = 0;
+                }
+                2 => self.apply_format(Kind::TextColor, None),
+                3 => self.apply_format(Kind::Highlight, None),
+                _ => {}
+            },
+            Some(FormatMenu::TextColor) => {
+                let color = index
+                    .checked_sub(1)
+                    .and_then(|i| formatting::TEXT_COLORS.get(i))
+                    .map(|(_, value)| *value);
+                self.apply_format(Kind::TextColor, color);
+            }
+            Some(FormatMenu::Highlight) => {
+                let color = index
+                    .checked_sub(1)
+                    .and_then(|i| formatting::HIGHLIGHT_COLORS.get(i))
+                    .map(|(_, value)| *value);
+                self.apply_format(Kind::Highlight, color);
+            }
+            None => {}
+        }
+    }
+
+    fn apply_format(&mut self, kind: Kind, color: Option<&'static str>) {
+        let Some(selected) = self.draft.as_ref().and_then(Draft::selected_text) else {
+            self.edit(Draft::finish_edit_group);
+            match kind {
+                Kind::TextColor => self.active_text_color = color,
+                Kind::Highlight => self.active_highlight = color,
+            }
+            self.format_menu = None;
+            self.notice.clear();
+            return;
+        };
+        if color.is_none()
+            && self
+                .draft
+                .as_mut()
+                .is_some_and(|draft| draft.clear_enclosing_format(kind))
+        {
+            self.format_menu = None;
+            self.notice.clear();
+            return;
+        }
+        let replacement = if let Some(color) = color {
+            let (open, close) = formatting::wrapper(kind, color);
+            format!("{open}{selected}{close}")
+        } else {
+            formatting::clear_selected(&selected, kind)
+        };
+        self.edit(|draft| {
+            draft.replace_selection_with(&replacement);
+        });
+        self.format_menu = None;
+        self.notice.clear();
+    }
+
+    pub fn handle_mouse(&mut self, mouse: MouseEvent, area: ratatui::layout::Rect) {
+        if self.editor_prompt.is_none() && self.discard_confirmation.is_none() {
+            self.notice.clear();
+        }
+        let target = ui::hit_test(area, self, mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.activate_mouse_target(target),
+            MouseEventKind::ScrollUp => self.scroll_mouse_target(target, -3),
+            MouseEventKind::ScrollDown => self.scroll_mouse_target(target, 3),
+            _ => {}
+        }
+    }
+
+    fn activate_mouse_target(&mut self, target: ui::HitTarget) {
+        match target {
+            ui::HitTarget::Panel(panel) => {
+                self.request_mouse_action(PendingMouseAction::Panel(panel))
+            }
+            ui::HitTarget::Search => self.request_mouse_action(PendingMouseAction::Search),
+            ui::HitTarget::ListRow(index) => {
+                self.request_mouse_action(PendingMouseAction::Row(index))
+            }
+            ui::HitTarget::TaskCheckbox(index) => {
+                self.request_mouse_action(PendingMouseAction::TaskToggle(index))
+            }
+            ui::HitTarget::FormatControl if self.focus == Focus::Editor => self.open_format_menu(),
+            ui::HitTarget::FormatItem(index) => self.activate_format_item(index),
+            _ => {}
+        }
+    }
+
+    fn request_mouse_action(&mut self, action: PendingMouseAction) {
+        if self.focus == Focus::Editor && self.pending_text().is_some() {
+            self.pending_mouse_action = Some(action);
+            self.editor_prompt = Some(EditorPrompt::Pending);
+            return;
+        }
+        if self.focus == Focus::Editor {
+            self.close_editor();
+        }
+        self.perform_mouse_action(action);
+    }
+
+    fn perform_mouse_action(&mut self, action: PendingMouseAction) {
+        self.focus = Focus::List;
+        match action {
+            PendingMouseAction::Panel(panel) => {
+                self.panel = panel;
+                self.on_panel_switched();
+            }
+            PendingMouseAction::Row(index) => match self.panel {
+                ActivePanel::RecentNotes if index < self.recent_notes.len() => {
+                    self.recent_selected = index;
+                    let id = self.recent_notes[index].id;
+                    self.load_note(id);
+                    self.start_editing();
+                }
+                ActivePanel::PendingTasks if index < self.pending_tasks.len() => {
+                    self.tasks_selected = index;
+                    let id = self.pending_tasks[index].note_id;
+                    self.load_note(id);
+                    self.start_editing();
+                }
+                ActivePanel::Trash if index < self.trash_items.len() => {
+                    self.trash_selected = index;
+                    self.load_selected_trash(false);
+                    self.focus = Focus::Reader;
+                }
+                _ => {}
+            },
+            PendingMouseAction::Search => {
+                self.focus = Focus::Search;
+                self.search_query.clear();
+                self.search_results.clear();
+                self.search_selected = 0;
+            }
+            PendingMouseAction::TaskToggle(index) => {
+                self.tasks_selected = index;
+                self.load_selected_task_note();
+                self.toggle_task();
+                self.focus = Focus::List;
+            }
+        }
+    }
+
+    fn scroll_mouse_target(&mut self, target: ui::HitTarget, delta: isize) {
+        match target {
+            ui::HitTarget::Reader => {
+                self.focus = Focus::Reader;
+                self.move_cursor(delta);
+            }
+            ui::HitTarget::Editor => {
+                let motion = if delta < 0 {
+                    Motion::PageUp(delta.unsigned_abs())
+                } else {
+                    Motion::PageDown(delta.unsigned_abs())
+                };
+                self.edit(|draft| draft.move_cursor(motion, false));
+            }
+            ui::HitTarget::List | ui::HitTarget::ListRow(_) => {
+                if self.focus == Focus::Editor && self.pending_text().is_some() {
+                    self.editor_prompt = Some(EditorPrompt::Pending);
+                    return;
+                }
+                if self.focus == Focus::Editor {
+                    self.close_editor();
+                }
+                let code = if delta < 0 {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                };
+                self.focus = Focus::List;
+                for _ in 0..delta.unsigned_abs() {
+                    self.handle_key_list(KeyEvent::from(code));
+                }
             }
             _ => {}
         }
@@ -612,6 +898,9 @@ impl App {
                 // A conflict asks its own question; only a settled save leaves.
                 if self.editor_prompt.is_none() {
                     self.leave_after_answer();
+                    if let Some(action) = self.pending_mouse_action.take() {
+                        self.perform_mouse_action(action);
+                    }
                 } else {
                     // A request to leave does not survive a conflict: that is a
                     // new situation to decide, and asking again costs one key.
@@ -621,6 +910,9 @@ impl App {
             (EditorPrompt::Pending, KeyCode::Char('d' | 'D')) => {
                 self.leave_after_answer();
                 self.notice = "Alterações descartadas".into();
+                if let Some(action) = self.pending_mouse_action.take() {
+                    self.perform_mouse_action(action);
+                }
             }
             (EditorPrompt::Conflict, KeyCode::Char('p' | 'P')) => self.preserve_and_reread(),
             (EditorPrompt::Conflict, KeyCode::Char('r' | 'R')) => {
@@ -630,6 +922,7 @@ impl App {
             (_, KeyCode::Esc) => {
                 // Continuing to edit also cancels the exit that asked.
                 self.exit_requested = false;
+                self.pending_mouse_action = None;
                 self.notice = match prompt {
                     EditorPrompt::Pending => "Edição retomada".into(),
                     EditorPrompt::Conflict => "Rascunho mantido no editor; nada foi escrito".into(),
@@ -648,6 +941,8 @@ impl App {
         };
         self.draft = Some(Draft::new(&note.content));
         self.editor_prompt = None;
+        self.active_text_color = None;
+        self.active_highlight = None;
         self.editor_scroll.set(0);
         self.editor_column.set(0);
         self.focus = Focus::Editor;
@@ -666,6 +961,9 @@ impl App {
         self.draft = None;
         self.editor_prompt = None;
         self.focus = Focus::Reader;
+        self.active_text_color = None;
+        self.active_highlight = None;
+        self.notice.clear();
     }
 
     /// Closes the editor and, when the question was raised by a request to
@@ -820,6 +1118,7 @@ impl App {
     }
 
     fn on_panel_switched(&mut self) {
+        self.notice.clear();
         if self.panel == ActivePanel::RecentNotes {
             if let Some(note) = self.recent_notes.get(self.recent_selected) {
                 self.load_note(note.id);
@@ -828,6 +1127,24 @@ impl App {
         if self.panel == ActivePanel::Trash {
             self.load_selected_trash(false);
         }
+        if self.panel == ActivePanel::PendingTasks {
+            self.load_selected_task_note();
+        }
+    }
+
+    fn load_selected_task_note(&mut self) {
+        if let Some(task) = self.pending_tasks.get(self.tasks_selected) {
+            let id = task.note_id;
+            let line = task.line_number.saturating_sub(1);
+            self.load_note(id);
+            self.reader_cursor = line;
+        }
+    }
+
+    fn toggle_selected_task(&mut self) {
+        self.load_selected_task_note();
+        self.toggle_task();
+        self.focus = Focus::List;
     }
 
     fn move_cursor(&mut self, delta: isize) {
@@ -1123,6 +1440,11 @@ impl App {
                     }
                     Event::Resize(_cols, _rows) => {
                         terminal.autoresize()?;
+                        needs_redraw = true;
+                    }
+                    Event::Mouse(mouse) => {
+                        let size = terminal.size()?;
+                        self.handle_mouse(mouse, size.into());
                         needs_redraw = true;
                     }
                     _ => {}

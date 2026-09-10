@@ -27,6 +27,7 @@
 //! consecutive deletions, so undo walks back the way a person typed rather than
 //! one character at a time.
 
+use crate::formatting::{self, Kind};
 use std::collections::VecDeque;
 
 /// How many undo steps a draft keeps. The oldest is dropped past this.
@@ -122,9 +123,145 @@ impl Draft {
         })
     }
 
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection()?;
+        let text = self.text();
+        Some(text[self.global_byte(start)..self.global_byte(end)].to_owned())
+    }
+
+    /// Replaces the selected source as one undoable editor mutation.
+    pub fn replace_selection_with(&mut self, replacement: &str) -> bool {
+        let Some((start, end)) = self.selection() else {
+            return false;
+        };
+        self.checkpoint(Grouping::Discrete);
+        let mut text = self.text();
+        let start_byte = self.global_byte(start);
+        let end_byte = self.global_byte(end);
+        text.replace_range(start_byte..end_byte, replacement);
+        self.lines = text.split('\n').map(str::to_owned).collect();
+        self.cursor = position_after(start, replacement);
+        self.anchor = Some(start);
+        self.grouping = None;
+        true
+    }
+
+    pub fn clear_enclosing_format(&mut self, kind: Kind) -> bool {
+        let Some((start, end)) = self.selection() else {
+            return false;
+        };
+        let text = self.text();
+        let Some((text, selected_start, selected_end)) = formatting::clear_enclosing(
+            &text,
+            self.global_byte(start),
+            self.global_byte(end),
+            kind,
+        ) else {
+            return false;
+        };
+        self.checkpoint(Grouping::Discrete);
+        self.lines = text.split('\n').map(str::to_owned).collect();
+        self.anchor = Some(position_at_byte(&text, selected_start));
+        self.cursor = position_at_byte(&text, selected_end);
+        self.grouping = None;
+        true
+    }
+
+    /// Inserts one coalesced canonical run for transient future-typing style.
+    pub fn insert_styled(
+        &mut self,
+        typed: &str,
+        color: Option<&str>,
+        highlight: Option<&str>,
+    ) -> bool {
+        if self.selection().is_some() || (color.is_none() && highlight.is_none()) {
+            return false;
+        }
+        let (prefix, suffix) = formatting::combined_wrapper(color, highlight);
+        let escaped = formatting::escaped_typed(typed);
+        let mut text = self.text();
+        let at = self.global_byte(self.cursor);
+        let before = &text[..at];
+        if inside_tag(before) {
+            return false;
+        }
+        self.checkpoint(Grouping::Insert);
+        if before.ends_with(&suffix) {
+            let suffix_at = at - suffix.len();
+            if text[..suffix_at].rfind(&prefix).is_some() {
+                text.insert_str(suffix_at, &escaped);
+                self.lines = text.split('\n').map(str::to_owned).collect();
+                self.cursor = position_at_byte(&text, at + escaped.len());
+                self.anchor = None;
+                return true;
+            }
+        }
+        let replacement = format!("{prefix}{escaped}{suffix}");
+        text.insert_str(at, &replacement);
+        self.lines = text.split('\n').map(str::to_owned).collect();
+        self.cursor = position_at_byte(&text, at + replacement.len());
+        self.anchor = None;
+        true
+    }
+
+    pub fn backspace_styled(&mut self, color: Option<&str>, highlight: Option<&str>) -> bool {
+        let (prefix, suffix) = formatting::combined_wrapper(color, highlight);
+        if prefix.is_empty() {
+            return false;
+        }
+        let mut text = self.text();
+        let at = self.global_byte(self.cursor);
+        if !text[..at].ends_with(&suffix) {
+            return false;
+        }
+        let suffix_at = at - suffix.len();
+        let Some(open_at) = text[..suffix_at].rfind(&prefix) else {
+            return false;
+        };
+        let inner_at = open_at + prefix.len();
+        if inner_at == suffix_at {
+            return false;
+        }
+        self.checkpoint(Grouping::Delete);
+        let inner = &text[inner_at..suffix_at];
+        let remove = ["&amp;", "&lt;", "&gt;"]
+            .into_iter()
+            .find(|entity| inner.ends_with(entity))
+            .map_or_else(
+                || {
+                    inner
+                        .char_indices()
+                        .next_back()
+                        .map(|(byte, _)| inner.len() - byte)
+                        .unwrap()
+                },
+                str::len,
+            );
+        if inner.len() == remove {
+            text.replace_range(open_at..at, "");
+            self.cursor = position_at_byte(&text, open_at);
+        } else {
+            text.replace_range(suffix_at - remove..suffix_at, "");
+            self.cursor = position_at_byte(&text, at - remove);
+        }
+        self.lines = text.split('\n').map(str::to_owned).collect();
+        self.anchor = None;
+        true
+    }
+
+    pub fn styled_delete_is_unsafe(&self) -> bool {
+        let text = self.text();
+        let at = self.global_byte(self.cursor);
+        inside_tag(&text[..at]) || text[at..].starts_with('<')
+    }
+
     /// How many undo steps are currently held. Never above [`UNDO_LIMIT`].
     pub fn history_depth(&self) -> usize {
         self.undo.len()
+    }
+
+    pub fn finish_edit_group(&mut self) {
+        self.grouping = None;
     }
 
     // -- editing ------------------------------------------------------------
@@ -372,6 +509,14 @@ impl Draft {
             .map_or(line.len(), |(byte, _)| byte)
     }
 
+    fn global_byte(&self, position: Position) -> usize {
+        self.lines[..position.line]
+            .iter()
+            .map(|line| line.len() + 1)
+            .sum::<usize>()
+            + self.byte_of(position)
+    }
+
     fn clamp(&mut self) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -379,6 +524,40 @@ impl Draft {
         self.cursor.line = self.cursor.line.min(self.lines.len() - 1);
         self.cursor.column = self.cursor.column.min(self.line_length(self.cursor.line));
     }
+}
+
+fn position_after(start: Position, text: &str) -> Position {
+    let mut parts = text.split('\n');
+    let first = parts.next().unwrap_or_default();
+    let rest: Vec<_> = parts.collect();
+    if rest.is_empty() {
+        Position {
+            line: start.line,
+            column: start.column + first.chars().count(),
+        }
+    } else {
+        Position {
+            line: start.line + rest.len(),
+            column: rest.last().unwrap().chars().count(),
+        }
+    }
+}
+
+fn position_at_byte(text: &str, byte: usize) -> Position {
+    let before = &text[..byte];
+    let line = before.bytes().filter(|value| *value == b'\n').count();
+    let column = before
+        .rsplit_once('\n')
+        .map_or(before, |(_, tail)| tail)
+        .chars()
+        .count();
+    Position { line, column }
+}
+
+fn inside_tag(before: &str) -> bool {
+    before
+        .rfind('<')
+        .is_some_and(|open| before.rfind('>').is_none_or(|close| open > close))
 }
 
 #[cfg(test)]

@@ -1,3 +1,8 @@
+use noteit_core::{
+    authority::perform_at,
+    write::{NoteDraft, WriteOperation},
+    StorePaths,
+};
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
@@ -129,6 +134,48 @@ fn create_test_store() -> (TempDir, PathBuf) {
     (temp, notes_dir)
 }
 
+fn create_test_store_with_note() -> TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths = StorePaths::from_custom_paths(
+        temp.path().join("note-it/notes"),
+        temp.path().join("config/note-it"),
+        temp.path().join("state/note-it"),
+        temp.path().join("runtime"),
+    );
+    perform_at(
+        &paths,
+        &WriteOperation::CreateNote {
+            draft: NoteDraft {
+                content: "nota pelo mouse".into(),
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    temp
+}
+
+fn create_test_store_with_tasks() -> TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths = StorePaths::from_custom_paths(
+        temp.path().join("note-it/notes"),
+        temp.path().join("config/note-it"),
+        temp.path().join("state/note-it"),
+        temp.path().join("runtime"),
+    );
+    perform_at(
+        &paths,
+        &WriteOperation::CreateNote {
+            draft: NoteDraft {
+                content: "- [ ] **mouse**\n- [ ] `teclado`".into(),
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    temp
+}
+
 fn tui_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_noteit-tui"))
 }
@@ -198,8 +245,16 @@ fn test_normal_exit_with_q_and_termios_restoration() {
         "A TUI deve emitir a sequência LeaveAlternateScreen ao encerrar"
     );
     assert!(
-        output.contains("NOTE-IT") && output.contains("Fase 5.0B"),
-        "A tela inicial deve conter o título do produto e a fase"
+        output.contains("NOTE-IT — Interface de Terminal") && !output.contains("Fase 5.0B"),
+        "A tela inicial deve conter o título durável do produto"
+    );
+    assert!(
+        output.contains("\x1b[?1000h"),
+        "captura de mouse deve ser habilitada"
+    );
+    assert!(
+        output.contains("\x1b[?1000l"),
+        "captura de mouse deve ser desabilitada"
     );
 }
 
@@ -228,6 +283,195 @@ fn test_normal_exit_with_esc_and_termios_restoration() {
 
     let final_termios = pty.get_termios();
     assert_eq!(final_termios.c_lflag, initial_termios.c_lflag);
+}
+
+#[test]
+fn test_real_pty_mouse_click_and_dirty_navigation_use_the_prompt() {
+    let temp = create_test_store_with_note();
+    let mut pty = TestPty::open((80, 24));
+    let initial_termios = pty.get_termios();
+    let mut cmd = Command::new(tui_binary());
+    cmd.env("XDG_DATA_HOME", temp.path());
+    cmd.env("XDG_CONFIG_HOME", temp.path().join("config"));
+    cmd.env("XDG_STATE_HOME", temp.path().join("state"));
+    cmd.env("XDG_RUNTIME_DIR", temp.path().join("runtime"));
+    cmd.stdin(pty.device_stdio());
+    cmd.stdout(pty.device_stdio());
+    cmd.stderr(pty.device_stdio());
+    let mut child = cmd.spawn().expect("spawn noteit-tui");
+    drop(cmd);
+    assert!(wait_for_raw_mode(&pty, Duration::from_secs(3)));
+
+    // SGR mouse: click first visible row, type a dirty byte, click Trash.
+    pty.write_input(b"\x1b[<0;5;5M\x1b[<0;5;5m");
+    pty.write_input(b"X");
+    pty.write_input(b"\x1b[<0;45;2M\x1b[<0;45;2m");
+    thread::sleep(Duration::from_millis(100));
+    pty.write_input(b"d");
+    pty.write_input(b"q");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child wait") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
+            }
+            let _ = child.wait();
+            let output = pty.read_all_output();
+            panic!("fluxo futuro não encerrou: {output:?}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert_eq!(pty.get_termios().c_lflag, initial_termios.c_lflag);
+    let output = pty.read_all_output();
+    assert!(
+        output.contains("Edição:"),
+        "clique não abriu editor: {output:?}"
+    );
+    assert!(
+        output.contains("Alterações não salvas"),
+        "clique sujo não abriu confirmação: {output:?}"
+    );
+    assert!(output.contains("\x1b[?1000h") && output.contains("\x1b[?1000l"));
+}
+
+#[test]
+fn test_real_pty_format_palette_writes_canonical_color() {
+    let temp = create_test_store_with_note();
+    let mut pty = TestPty::open((80, 24));
+    let mut cmd = Command::new(tui_binary());
+    cmd.env("XDG_DATA_HOME", temp.path());
+    cmd.env("XDG_CONFIG_HOME", temp.path().join("config"));
+    cmd.env("XDG_STATE_HOME", temp.path().join("state"));
+    cmd.env("XDG_RUNTIME_DIR", temp.path().join("runtime"));
+    cmd.stdin(pty.device_stdio());
+    cmd.stdout(pty.device_stdio());
+    cmd.stderr(pty.device_stdio());
+    let mut child = cmd.spawn().expect("spawn noteit-tui");
+    drop(cmd);
+    assert!(wait_for_raw_mode(&pty, Duration::from_secs(3)));
+    pty.write_input(b"\x1b[<0;5;5M\x1b[<0;5;5m");
+    pty.write_input(b"\x01"); // Ctrl+A
+    pty.write_input(b"\x1b[<0;21;24M\x1b[<0;21;24m"); // Formatar no rodapé
+    thread::sleep(Duration::from_millis(50));
+    pty.write_input(b"\x1b[<0;31;11M\x1b[<0;31;11m"); // Cor do texto
+    thread::sleep(Duration::from_millis(50));
+    pty.write_input(b"\x1b[<0;31;9M\x1b[<0;31;9m"); // Cinza
+    thread::sleep(Duration::from_millis(50));
+    pty.write_input(b"\x13"); // Ctrl+S
+    thread::sleep(Duration::from_millis(50));
+    pty.write_input(b"\x1b");
+    thread::sleep(Duration::from_millis(50));
+    pty.write_input(b"q");
+    assert!(child.wait().expect("child wait").success());
+    let output = pty.read_all_output();
+    assert!(output.contains("Formatar seleção") && output.contains("Cor do texto"));
+    let notes = std::fs::read_dir(temp.path().join("note-it/notes")).unwrap();
+    let stored = notes
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("md"))
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .unwrap();
+    assert!(stored.contains(
+        "<span data-note-it-color=\"#64748B\" style=\"color:#64748B\">nota pelo mouse</span>"
+    ));
+}
+
+#[test]
+fn test_real_pty_future_color_and_highlight_compose_without_selection() {
+    let temp = create_test_store_with_note();
+    let mut pty = TestPty::open((80, 24));
+    let mut cmd = Command::new(tui_binary());
+    cmd.env("XDG_DATA_HOME", temp.path());
+    cmd.env("XDG_CONFIG_HOME", temp.path().join("config"));
+    cmd.env("XDG_STATE_HOME", temp.path().join("state"));
+    cmd.env("XDG_RUNTIME_DIR", temp.path().join("runtime"));
+    cmd.stdin(pty.device_stdio());
+    cmd.stdout(pty.device_stdio());
+    cmd.stderr(pty.device_stdio());
+    let mut child = cmd.spawn().expect("spawn noteit-tui");
+    drop(cmd);
+    assert!(wait_for_raw_mode(&pty, Duration::from_secs(3)));
+    pty.write_input(b"\x1b[<0;5;5M\x1b[<0;5;5m");
+    pty.write_input(b"\x1b[<0;21;24M\x1b[<0;21;24m");
+    thread::sleep(Duration::from_millis(40));
+    pty.write_input(b"\x1b[<0;31;11M\x1b[<0;31;11m");
+    thread::sleep(Duration::from_millis(40));
+    pty.write_input(b"\x1b[<0;31;10M\x1b[<0;31;10m"); // Vermelho
+    pty.write_input(b"abc");
+    pty.write_input(b"\x1b[<0;21;24M\x1b[<0;21;24m");
+    thread::sleep(Duration::from_millis(40));
+    pty.write_input(b"\x1b[<0;31;12M\x1b[<0;31;12m"); // Marca-texto
+    thread::sleep(Duration::from_millis(40));
+    pty.write_input(b"\x1b[<0;31;11M\x1b[<0;31;11m"); // Amarelo
+    pty.write_input(b"def\x13");
+    thread::sleep(Duration::from_millis(150));
+    pty.write_input(b"\x03");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child wait") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
+            }
+            let _ = child.wait();
+            let output = pty.read_all_output();
+            panic!("fluxo futuro não encerrou: {output:?}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    let output = pty.read_all_output();
+    assert!(output.contains("Cor: Vermelho") && output.contains("Marca: Amarelo"));
+    let stored = std::fs::read_dir(temp.path().join("note-it/notes"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("md"))
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .unwrap();
+    assert!(stored.contains(">abc</span>"));
+    assert!(
+        stored.contains("data-note-it-highlight=\"#FDE68A\"")
+            && stored.contains(">def</span></mark>")
+    );
+}
+
+#[test]
+fn test_real_pty_task_checkbox_mouse_and_keyboard_toggle_rendered_tasks() {
+    let temp = create_test_store_with_tasks();
+    let mut pty = TestPty::open((80, 24));
+    let mut cmd = Command::new(tui_binary());
+    cmd.env("XDG_DATA_HOME", temp.path());
+    cmd.env("XDG_CONFIG_HOME", temp.path().join("config"));
+    cmd.env("XDG_STATE_HOME", temp.path().join("state"));
+    cmd.env("XDG_RUNTIME_DIR", temp.path().join("runtime"));
+    cmd.stdin(pty.device_stdio());
+    cmd.stdout(pty.device_stdio());
+    cmd.stderr(pty.device_stdio());
+    let mut child = cmd.spawn().expect("spawn noteit-tui");
+    drop(cmd);
+    assert!(wait_for_raw_mode(&pty, Duration::from_secs(3)));
+    pty.write_input(b"2");
+    thread::sleep(Duration::from_millis(60));
+    pty.write_input(b"\x1b[<0;4;5M\x1b[<0;4;5m");
+    thread::sleep(Duration::from_millis(80));
+    pty.write_input(b" \x03");
+    assert!(child.wait().expect("child wait").success());
+    let output = pty.read_all_output();
+    assert!(output.contains("mouse") && output.contains("teclado"));
+    assert!(!output.contains("**mouse**") && !output.contains("`teclado`"));
+    let stored = std::fs::read_dir(temp.path().join("note-it/notes"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("md"))
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .unwrap();
+    assert!(stored.contains("- [x] **mouse**") && stored.contains("- [x] `teclado`"));
 }
 
 #[test]

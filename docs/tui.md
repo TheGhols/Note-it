@@ -1418,3 +1418,93 @@ aparece se o texto registrou; os glifos desenhados são afirmados com
 revision lida, conflito sem sobrescrita e com três saídas, pendências nunca
 perdidas em silêncio, e a fidelidade de Markdown da 5.0D.1 intacta na leitura.
 Fases 5.0D.3 e 5.0E não iniciadas.**
+
+## 15. Fase 5.0D.3 — polimento, mouse e formatação inline
+
+A interface usa o título durável **NOTE-IT — Interface de Terminal**, sem número
+de fase. Em menos de 60 colunas exibe somente o painel focado; abaixo de 35×6
+mostra um estado mínimo determinístico. A matriz automatizada cobre 40×12,
+80×24 e 140×34, inclusive editor, menu de formatação, Unicode e texto longo.
+O leitor mantém wrapping sem aparar espaços e a seleção usa `REVERSED`,
+preservando foreground, background e modificadores semânticos.
+
+O mouse é capturado somente durante a tela alternativa. Clique nas quatro
+regiões semânticas do cabeçalho abre Notas Recentes, Tarefas Pendentes, Lixeira
+ou Busca; clique numa linha visível usa a mesma seleção/abertura da navegação
+por teclado. A roda atua no painel sob o ponteiro. Uma troca iniciada por mouse
+com rascunho pendente passa pela mesma pergunta salvar/descartar/continuar.
+Teclado permanece disponível (`1`–`3`, `/`, setas, `j`/`k`, `Enter`). Seleção
+de texto com mouse não faz parte desta fase.
+
+No editor, **Alt+F** ou clique no comando do rodapé abre o menu de formatação,
+navegável por setas/Enter e clique. Com seleção, a ação é aplicada imediatamente
+à faixa já selecionada. Sem seleção, a mesma ação configura o estilo transitório
+da digitação seguinte: cor do texto e marca-texto podem ser combinados, trocados
+ou limpos independentemente, e o título do editor indica, de forma compacta, o
+estado ativo. Alterar esse estado sozinho não suja o rascunho nem cria histórico;
+cancelar o menu é uma operação nula. A
+paleta vem de `ui/src/ui/palettes.ts`: texto Cinza `#64748B`, Vermelho
+`#DC2626`, Laranja `#C2410C`, Amarelo `#A16207`, Verde `#15803D`, Azul
+`#2563EB`, Roxo `#7C3AED` e Rosa `#DB2777`; marca-texto Amarelo `#FDE68A`
+(padrão), Verde `#BBF7D0`, Azul `#BFDBFE`, Rosa `#FBCFE8` e Roxo `#DDD6FE`.
+Limpar cor e limpar marca-texto são ações próprias. A persistência usa
+`<span data-note-it-color="…" style="color:…">` e
+`<mark data-note-it-highlight="…" style="background-color:…">`.
+
+Formatar é mutação do `Draft`: preserva Unicode e múltiplas linhas, cria um
+passo de undo/redo, marca pendência e só chega ao store por `Ctrl+S`,
+`authority::perform_at` e a revision originalmente lida. Conflitos continuam
+sem sobrescrita. A limpeza remove apenas wrappers canônicos completos dentro da
+seleção; HTML desconhecido ou tag incompleta permanece intacto. Seleção futura
+por mouse e demais comandos rich-text ficam adiados.
+
+Na correção 5.0D.3.R1, a digitação estilizada agrupa caracteres adjacentes com
+semântica idêntica em um único wrapper canônico e mantém cor e marca-texto em
+aninhamento compatível com a GUI e o leitor. Backspace, Delete, Enter, Unicode e
+undo/redo passam pelo mesmo `Draft`; limites de tag não são atravessados por uma
+remoção destrutiva.
+
+O rodapé é contextual e escolhe variantes inteiras por largura, sem cortar um
+atalho no meio. A matriz cobre 40, 50, 60, 70, 80, 100, 120 e 140 colunas;
+Salvar, Formatar e Sair continuam descobríveis no editor em larguras práticas.
+Avisos transitórios são limpos na próxima ação significativa, troca de foco,
+nota ou painel, conclusão/cancelamento da formatação e interação com tarefa.
+
+Em Tarefas Pendentes, o texto é apresentado pelo mesmo renderer inline seguro
+do leitor: delimitadores Markdown e wrappers canônicos não vazam. `Space`
+alterna a tarefa selecionada; clicar exatamente em `☐`/`☑` executa a mesma ação,
+enquanto clicar no restante da linha abre a nota. A mutação continua usando o
+`TaskRef` e a revision carregada pela autoridade transacional do Core; conflito
+preserva a edição externa e produz aviso determinístico. O editor nativo segue
+mostrando o Markdown/HTML fonte, pois ali ele é o conteúdo editável. Nenhuma
+parte da Fase 5.0E foi iniciada.
+
+### 15.1 Fechamento e descoberta arquitetural da R2
+
+A 5.0D.3/R1 está encerrada dentro do escopo aprovado. Hoje a TUI oferece edição
+nativa da **fonte Markdown/HTML canônica**, navegação por mouse, formatação de
+uma seleção, cor e marca-texto para digitação futura com reset e indicador
+visível, rodapé contextual responsivo e tarefas renderizadas com checkbox
+acionável por mouse ou `Space`. O editor não deve ser descrito como visual: nele,
+os delimitadores Markdown e os wrappers canônicos de cor e marca-texto continuam
+visíveis e editáveis.
+
+A revisão arquitetural 5.0D.3.R2 não invalidou mouse, formatação, tarefas nem
+responsividade. Ela estabeleceu que ocultar markup enquanto se edita não é um
+polimento seguro sobre o `Draft` atual: cursor e seleção são indexados na fonte
+persistida, enquanto o renderer do leitor descarta delimitadores sem produzir um
+mapeamento reversível. Esconder trechos por regex ou ajustar offsets como texto
+solto poderia corromper conteúdo. Por isso, permanecem inexistentes na TUI:
+
+- edição visual/WYSIWYM verdadeira;
+- mapeamento bidirecional fonte↔visual para cursor, seleção e mutações;
+- alternância entre editor Visual e editor Markdown;
+- avaliação matemática com a mesma semântica do editor gráfico;
+- extração e apresentação semântica de flashcards equivalente à GUI.
+
+Esses itens foram separados em fases futuras: a 5.0D.4A define e aprova primeiro
+a arquitetura sem perdas; a 5.0D.4B só então implementa os modos Visual e
+Markdown; e a 5.0D.5 trata a paridade semântica de matemática e flashcards sem
+criar parsers divergentes e ingênuos. Até lá, a fonte canônica permanece
+inteiramente acessível no editor atual, e o Core, o formato persistido e os
+fluxos transacionais não mudam.

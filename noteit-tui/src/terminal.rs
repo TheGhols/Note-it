@@ -1,6 +1,6 @@
 use crossterm::{
     cursor::{Hide, Show},
-    event::DisableMouseCapture,
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -101,7 +101,7 @@ impl TerminalGuard {
         self.restore()?;
         self.state = State::Uncertain;
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, Hide, EnableMouseCapture)?;
         self.state = State::Active;
         Ok(())
     }

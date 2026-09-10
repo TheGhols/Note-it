@@ -241,17 +241,31 @@ impl Tui {
     ///
     /// Since Fase 5.0D.2 `Enter` opens the note in the native editor and `Esc`
     /// steps out of it, so reaching the reader takes both. Each step waits for
-    /// something that is on screen *only* after it: the reader's own title is
-    /// drawn from the first frame and would answer a wait before the key that
-    /// should have caused it, whereas the reader's footer is not. Nothing is
-    /// cleared here, so a caller counting escape sequences still counts every
-    /// one the application emitted. The lone `Esc` is written by itself:
+    /// something emitted *after* the key that should have caused it. Ratatui's
+    /// differential renderer may rewrite a footer in disjoint ANSI fragments,
+    /// so the durable reader title is observed only in bytes appended after
+    /// `Esc`; an earlier title cannot answer the wait. Nothing is cleared here,
+    /// so a caller counting escape sequences still counts every one the
+    /// application emitted. The lone `Esc` is written by itself:
     /// bundled with the next byte it would be read as `Alt`.
     pub fn leave_native_editor(&mut self) {
         self.input(b"\r");
         self.wait_text("Edição:");
+        let reader_transition = self.output.len();
         self.input(b"\x1b");
-        self.wait_text("[Space] Tarefa");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            self.drain();
+            if String::from_utf8_lossy(&self.output[reader_transition..]).contains("Leitura:") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout reader transition: {}",
+                String::from_utf8_lossy(&self.output[reader_transition..])
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// The whole way from the list to a running `$EDITOR`.

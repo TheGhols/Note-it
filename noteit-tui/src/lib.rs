@@ -2,6 +2,7 @@ pub mod app;
 pub mod document;
 pub mod draft;
 pub mod editor;
+pub mod formatting;
 pub mod inline;
 pub mod markdown;
 pub mod terminal;

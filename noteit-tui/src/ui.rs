@@ -3,14 +3,15 @@
 //! Renders a side-by-side view with navigation panels (Recent Notes, Pending Tasks, Trash),
 //! quick search results, and a formatted read-only Markdown reader.
 
-use crate::app::{ActivePanel, App, EditorPrompt, Focus};
+use crate::app::{ActivePanel, App, EditorPrompt, Focus, FormatMenu};
 use crate::draft::Position;
+use crate::formatting;
 use crate::markdown;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -48,6 +49,154 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_header(frame, app, chunks[0]);
     render_body(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
+    if app.format_menu.is_some() {
+        render_format_menu(frame, app);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitTarget {
+    None,
+    Panel(ActivePanel),
+    Search,
+    List,
+    ListRow(usize),
+    TaskCheckbox(usize),
+    Reader,
+    Editor,
+    FormatControl,
+    FormatItem(usize),
+}
+
+fn body_area(area: Rect, app: &App) -> Rect {
+    let footer = if app.notice.is_empty()
+        && app.discard_confirmation.is_none()
+        && app.editor_prompt.is_none()
+    {
+        1
+    } else {
+        4
+    };
+    Rect::new(
+        area.x,
+        area.y.saturating_add(3),
+        area.width,
+        area.height.saturating_sub(3 + footer),
+    )
+}
+
+fn panes(area: Rect, app: &App) -> (Rect, Rect) {
+    let body = body_area(area, app);
+    if body.width < 60 {
+        return (body, body);
+    }
+    let split = body.width * 38 / 100;
+    (
+        Rect::new(body.x, body.y, split, body.height),
+        Rect::new(body.x + split, body.y, body.width - split, body.height),
+    )
+}
+
+pub fn hit_test(area: Rect, app: &App, x: u16, y: u16) -> HitTarget {
+    if app.format_menu.is_some() {
+        let menu = format_menu_area(area, app);
+        if contains(menu, x, y) && y > menu.y && y < menu.y + menu.height - 1 {
+            return HitTarget::FormatItem((y - menu.y - 1) as usize);
+        }
+        return HitTarget::None;
+    }
+    if app.focus == Focus::Editor && y + 1 == area.y + area.height {
+        return HitTarget::FormatControl;
+    }
+    if y == area.y + 1 {
+        let quarter = area.width.max(4) / 4;
+        return match ((x.saturating_sub(area.x)) / quarter).min(3) {
+            0 => HitTarget::Panel(ActivePanel::RecentNotes),
+            1 => HitTarget::Panel(ActivePanel::PendingTasks),
+            2 => HitTarget::Panel(ActivePanel::Trash),
+            _ => HitTarget::Search,
+        };
+    }
+    let (list, right) = panes(area, app);
+    if contains(list, x, y)
+        && (area.width >= 60 || matches!(app.focus, Focus::List | Focus::Search))
+    {
+        if y > list.y && y < list.y + list.height - 1 {
+            let visible = (list.height.saturating_sub(2) as usize / 2).max(1);
+            let selected = match app.panel {
+                ActivePanel::RecentNotes => app.recent_selected,
+                ActivePanel::PendingTasks => app.tasks_selected,
+                ActivePanel::Trash => app.trash_selected,
+            };
+            let start = if selected >= visible {
+                selected - visible + 1
+            } else {
+                0
+            };
+            let index = start + ((y - list.y - 1) / 2) as usize;
+            if app.panel == ActivePanel::PendingTasks
+                && (y - list.y - 1).is_multiple_of(2)
+                && x >= list.x + 3
+                && x < list.x + 5
+            {
+                return HitTarget::TaskCheckbox(index);
+            }
+            return HitTarget::ListRow(index);
+        }
+        return HitTarget::List;
+    }
+    if contains(right, x, y) {
+        if app.focus == Focus::Editor && y == right.y + right.height.saturating_sub(1) {
+            return HitTarget::FormatControl;
+        }
+        return if app.focus == Focus::Editor {
+            HitTarget::Editor
+        } else {
+            HitTarget::Reader
+        };
+    }
+    HitTarget::None
+}
+
+fn contains(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
+}
+
+/// Keeps fixed-height list rows honest: content that cannot fit ends in an
+/// ellipsis instead of being silently clipped by the terminal edge.
+fn fit_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| fit_line(line, width))
+        .collect()
+}
+
+fn fit_line(line: Line<'static>, width: usize) -> Line<'static> {
+    if line.width() <= width || width == 0 {
+        return line;
+    }
+    let budget = width.saturating_sub(1);
+    let mut used = 0;
+    let mut out = Vec::new();
+    for span in line.spans {
+        let mut text = String::new();
+        for character in span.content.chars() {
+            let cell_width = Span::raw(character.to_string()).width();
+            if used + cell_width > budget {
+                break;
+            }
+            text.push(character);
+            used += cell_width;
+        }
+        if !text.is_empty() {
+            out.push(Span::styled(text, span.style));
+        }
+        if used >= budget {
+            break;
+        }
+    }
+    out.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    Line::from(out)
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -90,7 +239,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(" NOTE-IT — Interface de Terminal (Fase 5.0B / 5.0C) ")
+        .title(" NOTE-IT — Interface de Terminal ")
         .title_alignment(Alignment::Center);
 
     let tab_style = |panel: ActivePanel| {
@@ -111,9 +260,11 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let tabs_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
+    let inner = header_block.inner(area);
+    frame.render_widget(header_block, area);
+    let tabs = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(inner);
+    let labels = [
+        (
             format!(
                 "{} [1] Notas Recentes ({})",
                 indicator(ActivePanel::RecentNotes),
@@ -121,8 +272,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             ),
             tab_style(ActivePanel::RecentNotes),
         ),
-        Span::styled("   │   ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
+        (
             format!(
                 "{} [2] Tarefas Pendentes ({})",
                 indicator(ActivePanel::PendingTasks),
@@ -130,8 +280,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             ),
             tab_style(ActivePanel::PendingTasks),
         ),
-        Span::styled("   │   ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
+        (
             format!(
                 "{} [3] Lixeira ({})",
                 indicator(ActivePanel::Trash),
@@ -139,14 +288,14 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             ),
             tab_style(ActivePanel::Trash),
         ),
-        Span::styled("   │   ", Style::default().fg(Color::DarkGray)),
-        Span::styled("[/] Buscar", Style::default().fg(Color::Cyan)),
-    ]);
-
-    let p = Paragraph::new(tabs_line)
-        .block(header_block)
-        .alignment(Alignment::Center);
-    frame.render_widget(p, area);
+        ("[/] Buscar".into(), Style::default().fg(Color::Cyan)),
+    ];
+    for (area, (label, style)) in tabs.iter().zip(labels) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(label, style)).alignment(Alignment::Center),
+            *area,
+        );
+    }
 }
 
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
@@ -284,7 +433,7 @@ fn render_recent_notes_list(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    let p = Paragraph::new(lines);
+    let p = Paragraph::new(fit_lines(lines, area.width as usize));
     frame.render_widget(p, area);
 }
 
@@ -350,7 +499,7 @@ fn render_pending_tasks_list(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    let p = Paragraph::new(lines);
+    let p = Paragraph::new(fit_lines(lines, area.width as usize));
     frame.render_widget(p, area);
 }
 
@@ -413,7 +562,7 @@ fn render_trash_list(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    let p = Paragraph::new(lines);
+    let p = Paragraph::new(fit_lines(lines, area.width as usize));
     frame.render_widget(p, area);
 }
 
@@ -480,7 +629,7 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    let p = Paragraph::new(lines);
+    let p = Paragraph::new(fit_lines(lines, area.width as usize));
     frame.render_widget(p, area);
 }
 
@@ -492,13 +641,15 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
 /// disagree with it. What a person edits is what the file holds.
 fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     let pending = app.pending_text().is_some();
-    let title = match &app.current_note {
-        Some(note) => format!(
+    let active = active_style_label(app);
+    let title = match (&app.current_note, active) {
+        (_, Some(active)) => format!(" Edição{} · {active} ", if pending { " ●" } else { "" }),
+        (Some(note), None) => format!(
             " Edição: {}{} ",
             noteit_core::search::label_for(&note.content),
             if pending { " ●" } else { "" }
         ),
-        None => " Edição ".to_string(),
+        (None, None) => " Edição ".to_string(),
     };
 
     let block = Block::default()
@@ -718,9 +869,12 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let note_title = if let Some(doc) = &app.current_note {
+        let total = doc.content.lines().count().max(1);
         format!(
-            " Leitura: {} ",
-            noteit_core::search::label_for(&doc.content)
+            " Leitura: {} · {}/{} ",
+            noteit_core::search::label_for(&doc.content),
+            app.reader_cursor.min(total - 1) + 1,
+            total
         )
     } else {
         " Leitura de Nota ".to_string()
@@ -773,7 +927,7 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
             .unwrap_or(0);
         if is_focused {
             if let Some(line) = rendered.lines.get_mut(cursor_line) {
-                line.style = line.style.bg(Color::DarkGray);
+                line.style = line.style.add_modifier(Modifier::REVERSED);
             }
         }
         // Start at the selected source line when navigating. Wrapping remains
@@ -824,29 +978,130 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         );
         return;
     }
-    let shortcuts = match app.focus {
-        Focus::Editor => {
-            " [Ctrl+S] Salvar  [Ctrl+Z] Desfazer  [Ctrl+Y] Refazer  [Ctrl+A] Tudo  [Shift+↑↓←→] Selecionar  [Esc] Sair da edição "
-        }
-        Focus::Search => " [Enter] Abrir Nota  [↑↓] Selecionar  [Esc] Cancelar Busca ",
-        Focus::Reader => {
-            " [Enter/i] Editar  [↑↓/jk] Cursor  [Space] Tarefa  [e] $EDITOR  [d] Lixeira  [r] Restaurar  [Esc] Voltar  [q] Sair "
-        }
-        Focus::List => {
-            " [Tab/1-3] Painéis  [n] Nova  [r] Restaurar  [/] Buscar  [↑↓/jk] Navegar  [Enter] Ler  [q] Sair "
-        }
-    };
-
-    let line = Line::from(vec![
-        Span::styled(
-            " Note-it TUI ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(shortcuts, Style::default().fg(Color::White)),
-    ]);
+    let shortcuts = footer_shortcuts(app, area.width);
+    let line = Line::from(Span::styled(shortcuts, Style::default().fg(Color::White)));
 
     let p = Paragraph::new(line).alignment(Alignment::Left);
     frame.render_widget(p, area);
+}
+
+fn footer_shortcuts(app: &App, width: u16) -> &'static str {
+    match app.focus {
+        Focus::Editor if width >= 140 => " [Ctrl+S] Salvar  [Ctrl+Z] Desfazer  [Ctrl+Y] Refazer  [Ctrl+A] Tudo  [Shift+setas] Selecionar  [Alt+F] Formatar  [Esc] Sair ",
+        Focus::Editor if width >= 100 => {
+            " [Ctrl+S] Salvar  [Ctrl+Z] Undo  [Ctrl+Y] Redo  ⇧Setas  [Alt+F] Formatar  [Esc] Sair "
+        }
+        Focus::Editor if width >= 65 => {
+            " ^S Salvar  ^Z Undo  ^Y Redo  ⇧Setas  Alt+F Formatar  Esc Sair "
+        }
+        Focus::Editor => " ^S Salvar  Alt+F Formatar  Esc Sair ",
+        Focus::Search if width >= 65 => " Enter Abrir nota  ↑↓ Selecionar  Esc Cancelar busca ",
+        Focus::Search => " Enter Abrir  ↑↓ Selecionar  Esc Sair ",
+        Focus::Reader if width >= 80 => " Enter/i Editar  ↑↓/jk Cursor  [Space] Tarefa  e $EDITOR  d Lixeira  r Restaurar  Esc Voltar  q Sair ",
+        Focus::Reader => " Enter Editar  ↑↓ Rolar  Space Tarefa  Esc Voltar  q Sair ",
+        Focus::List if app.panel == ActivePanel::PendingTasks && width >= 70 => " Space Alternar tarefa  Enter Abrir  ↑↓ Navegar  Tab Painéis  / Buscar  q Sair ",
+        Focus::List if app.panel == ActivePanel::PendingTasks => " Space Alternar  Enter Abrir  ↑↓ Navegar  q Sair ",
+        Focus::List if width >= 80 => " Tab/1-3 Painéis  n Nova  r Restaurar  / Buscar  ↑↓/jk Navegar  Enter Abrir  q Sair ",
+        Focus::List => " Tab Painéis  / Buscar  ↑↓ Navegar  Enter Abrir  q Sair ",
+    }
+}
+
+fn active_style_label(app: &App) -> Option<String> {
+    let color = app.active_text_color.and_then(|value| {
+        formatting::TEXT_COLORS
+            .iter()
+            .find(|(_, hex)| *hex == value)
+            .map(|(label, _)| *label)
+    });
+    let highlight = app.active_highlight.and_then(|value| {
+        formatting::HIGHLIGHT_COLORS
+            .iter()
+            .find(|(_, hex)| *hex == value)
+            .map(|(label, _)| *label)
+    });
+    match (color, highlight) {
+        (Some(color), Some(mark)) => Some(format!("Cor: {color} · Marca: {mark}")),
+        (Some(color), None) => Some(format!("Cor: {color}")),
+        (None, Some(mark)) => Some(format!("Marca: {mark}")),
+        (None, None) => None,
+    }
+}
+
+fn format_menu_area(area: Rect, app: &App) -> Rect {
+    let rows = match app.format_menu {
+        Some(FormatMenu::Root) => 4,
+        Some(FormatMenu::TextColor) => formatting::TEXT_COLORS.len() + 1,
+        Some(FormatMenu::Highlight) => formatting::HIGHLIGHT_COLORS.len() + 1,
+        None => 0,
+    } as u16;
+    let width = area.width.clamp(1, 38);
+    let height = (rows + 2).min(area.height).max(1);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn render_format_menu(frame: &mut Frame, app: &App) {
+    let area = format_menu_area(frame.area(), app);
+    frame.render_widget(Clear, area);
+    let (title, entries): (&str, Vec<String>) = match app.format_menu {
+        Some(FormatMenu::Root) => (
+            " Formatar seleção ",
+            vec![
+                "Cor do texto".into(),
+                "Marca-texto".into(),
+                "Limpar cor do texto".into(),
+                "Limpar marca-texto".into(),
+            ],
+        ),
+        Some(FormatMenu::TextColor) => (
+            " Cor do texto ",
+            std::iter::once("Padrão (limpar)".into())
+                .chain(
+                    formatting::TEXT_COLORS
+                        .iter()
+                        .map(|(label, _)| (*label).into()),
+                )
+                .collect(),
+        ),
+        Some(FormatMenu::Highlight) => (
+            " Marca-texto ",
+            std::iter::once("Sem marca-texto".into())
+                .chain(
+                    formatting::HIGHLIGHT_COLORS
+                        .iter()
+                        .map(|(label, _)| (*label).into()),
+                )
+                .collect(),
+        ),
+        None => return,
+    };
+    let lines = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let style = if index == app.format_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            Line::from(Span::styled(format!(" {label}"), style))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(title),
+        ),
+        area,
+    );
 }
