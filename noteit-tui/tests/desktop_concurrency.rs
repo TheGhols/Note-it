@@ -63,7 +63,7 @@ fn real_tui_and_isolated_desktop_enforce_revision_socket_and_pointwise_lease() {
         command.env("EDITOR", &editor);
     });
     tui.wait_text("R1 original");
-    tui.input(b"\re");
+    tui.open_external_editor();
     tui.wait_text("Edição salva");
     assert_eq!(core.read_note(&id).unwrap().content, "R1 local");
     let lease = WriterLease::try_acquire(&coordination)

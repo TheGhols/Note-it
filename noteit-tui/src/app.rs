@@ -3,7 +3,13 @@
 //! Provides interactive navigation across recent notes, pending tasks, and trash,
 //! with quick search (/) using noteit-core in-process.
 
-use crate::{document::LoadedDocument, editor, terminal::TerminalGuard, ui};
+use crate::{
+    document::LoadedDocument,
+    draft::{Draft, Motion},
+    editor,
+    terminal::TerminalGuard,
+    ui,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use noteit_core::Uuid;
 use noteit_core::{
@@ -17,6 +23,7 @@ use noteit_core::{
     NoteItCore, StorePaths,
 };
 use ratatui::{backend::Backend, backend::CrosstermBackend, Terminal};
+use std::cell::Cell;
 use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -58,12 +65,26 @@ impl ActivePanel {
 }
 
 /// Active input/focus mode in the TUI.
+///
+/// `Reader` and `Editor` are the two halves of the right pane, and they are
+/// never ambiguous: the reader renders the note, the editor holds its source
+/// and every printable key is text. `Esc` steps outwards one level at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
     #[default]
     List,
     Reader,
+    Editor,
     Search,
+}
+
+/// A question the editor must have answered before it can go on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorPrompt {
+    /// Leaving with text that is not in the store yet.
+    Pending,
+    /// The store moved under the draft; nothing was overwritten.
+    Conflict,
 }
 
 /// The interactive TUI application state.
@@ -97,6 +118,19 @@ pub struct App {
     pub notice: String,
     pub discard_confirmation: Option<LoadedDocument>,
     editor_requested: bool,
+
+    // Native editor state
+    /// The note body being edited, present exactly while `focus` is `Editor`.
+    pub draft: Option<Draft>,
+    pub editor_prompt: Option<EditorPrompt>,
+    /// Set when the open question was raised by somebody asking to leave, so
+    /// answering it finishes the exit instead of returning to the reader.
+    exit_requested: bool,
+    /// Viewport bookkeeping the renderer owns: only drawing knows how tall and
+    /// wide the pane turned out to be, and the cursor must stay inside it.
+    pub(crate) editor_scroll: Cell<usize>,
+    pub(crate) editor_column: Cell<usize>,
+    pub(crate) editor_viewport: Cell<usize>,
 
     // Lifecycle
     pub should_quit: bool,
@@ -134,6 +168,12 @@ impl App {
             notice: String::new(),
             discard_confirmation: None,
             editor_requested: false,
+            draft: None,
+            editor_prompt: None,
+            exit_requested: false,
+            editor_scroll: Cell::new(0),
+            editor_column: Cell::new(0),
+            editor_viewport: Cell::new(1),
             should_quit: false,
             term_flag,
         };
@@ -226,8 +266,18 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return self.should_quit;
         }
-        // Ctrl+C always terminates the application immediately
+        // Ctrl+C is somebody asking to leave, and in raw mode it is a key, not
+        // a signal — there is a screen to ask on and somebody there to answer.
+        // So it goes through the same question every other user-initiated exit
+        // goes through, and only leaves at once when there is nothing to lose.
+        // An externally delivered SIGINT is a different thing entirely and
+        // keeps its own path: nobody can be asked, so the draft is preserved.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            if self.focus == Focus::Editor && self.pending_text().is_some() {
+                self.exit_requested = true;
+                self.editor_prompt = Some(EditorPrompt::Pending);
+                return self.should_quit;
+            }
             self.should_quit = true;
             return true;
         }
@@ -247,12 +297,16 @@ impl App {
         match self.focus {
             Focus::Search => self.handle_key_search(key),
             Focus::Reader => self.handle_key_reader(key),
+            Focus::Editor => self.handle_key_editor(key),
             Focus::List => self.handle_key_list(key),
         }
 
         // Selection changes load a canonical trash snapshot for preview and
         // subsequent restore. Restore itself never refreshes its precondition.
-        if self.panel == ActivePanel::Trash && self.focus != Focus::Search {
+        // Editing is never a selection change, and a draft must never be
+        // replaced by a preview under it.
+        if self.panel == ActivePanel::Trash && !matches!(self.focus, Focus::Search | Focus::Editor)
+        {
             self.load_selected_trash(false);
         }
 
@@ -382,22 +436,24 @@ impl App {
                 }
             },
 
-            // Open / switch focus to Reader
+            // Opening a note is opening it to be worked on: the right pane
+            // starts editing, with no second key. Selecting one with the
+            // arrows keeps showing the rendered reader.
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => match self.panel {
                 ActivePanel::RecentNotes => {
                     if let Some(note) = self.recent_notes.get(self.recent_selected) {
                         self.load_note(note.id);
-                        self.focus = Focus::Reader;
+                        self.start_editing();
                     }
                 }
                 ActivePanel::PendingTasks => {
                     if let Some(task) = self.pending_tasks.get(self.tasks_selected) {
                         self.load_note(task.note_id);
-                        self.focus = Focus::Reader;
+                        self.start_editing();
                     }
                 }
                 ActivePanel::Trash => {
-                    // Trash note preview
+                    // A note in the trash is read, never edited.
                     self.focus = Focus::Reader;
                 }
             },
@@ -413,6 +469,10 @@ impl App {
                 self.discard_confirmation = self.current_note.clone().filter(|note| !note.in_trash);
             }
             KeyCode::Char('e') if self.panel != ActivePanel::Trash => self.editor_requested = true,
+            // Back into the editor without a detour through the list.
+            KeyCode::Enter | KeyCode::Char('i') if self.panel != ActivePanel::Trash => {
+                self.start_editing()
+            }
             KeyCode::Char('r') if self.panel == ActivePanel::Trash => self.restore_selected(),
             // Return to list focus
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
@@ -479,6 +539,245 @@ impl App {
         }
     }
 
+    /// Every printable key is text here.
+    ///
+    /// That is not a detail: `Tab`, `/`, `d` and `q` navigate elsewhere in the
+    /// application, and inside the editor they are characters. It leaves the
+    /// editor exactly one door — `Esc` — which is the door the pending-changes
+    /// question is asked at, so "switching note, panel, search or discarding
+    /// with unsaved text" cannot happen behind the question's back.
+    fn handle_key_editor(&mut self, key: KeyEvent) {
+        if let Some(prompt) = self.editor_prompt.take() {
+            self.answer_prompt(prompt, key);
+            return;
+        }
+
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+        let page = self.editor_viewport.get().max(1);
+
+        if control || alt {
+            match key.code {
+                KeyCode::Char('s') => self.save_draft(),
+                KeyCode::Char('z') if extend => self.edit(|draft| {
+                    draft.redo();
+                }),
+                KeyCode::Char('z' | 'Z') => self.edit(|draft| {
+                    draft.undo();
+                }),
+                KeyCode::Char('y') => self.edit(|draft| {
+                    draft.redo();
+                }),
+                KeyCode::Char('a') => self.edit(Draft::select_all),
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => self.leave_editor(),
+            KeyCode::Char(character) => self.edit(|draft| draft.insert_char(character)),
+            // A note body is Markdown, where indentation is spaces. Storing a
+            // tab whose width nothing agrees on would be storing a surprise.
+            KeyCode::Tab => self.edit(|draft| draft.insert_str("    ")),
+            KeyCode::Enter => self.edit(Draft::newline),
+            KeyCode::Backspace => self.edit(Draft::backspace),
+            KeyCode::Delete => self.edit(Draft::delete),
+            KeyCode::Left => self.edit(|draft| draft.move_cursor(Motion::Left, extend)),
+            KeyCode::Right => self.edit(|draft| draft.move_cursor(Motion::Right, extend)),
+            KeyCode::Up => self.edit(|draft| draft.move_cursor(Motion::Up, extend)),
+            KeyCode::Down => self.edit(|draft| draft.move_cursor(Motion::Down, extend)),
+            KeyCode::Home => self.edit(|draft| draft.move_cursor(Motion::LineStart, extend)),
+            KeyCode::End => self.edit(|draft| draft.move_cursor(Motion::LineEnd, extend)),
+            KeyCode::PageUp => self.edit(|draft| draft.move_cursor(Motion::PageUp(page), extend)),
+            KeyCode::PageDown => {
+                self.edit(|draft| draft.move_cursor(Motion::PageDown(page), extend))
+            }
+            _ => {}
+        }
+    }
+
+    fn edit(&mut self, change: impl FnOnce(&mut Draft)) {
+        if let Some(draft) = self.draft.as_mut() {
+            change(draft);
+        }
+    }
+
+    /// Answers the question the editor is currently holding.
+    fn answer_prompt(&mut self, prompt: EditorPrompt, key: KeyEvent) {
+        match (prompt, key.code) {
+            (EditorPrompt::Pending, KeyCode::Char('s' | 'S')) => {
+                self.save_draft();
+                // A conflict asks its own question; only a settled save leaves.
+                if self.editor_prompt.is_none() {
+                    self.leave_after_answer();
+                } else {
+                    // A request to leave does not survive a conflict: that is a
+                    // new situation to decide, and asking again costs one key.
+                    self.exit_requested = false;
+                }
+            }
+            (EditorPrompt::Pending, KeyCode::Char('d' | 'D')) => {
+                self.leave_after_answer();
+                self.notice = "Alterações descartadas".into();
+            }
+            (EditorPrompt::Conflict, KeyCode::Char('p' | 'P')) => self.preserve_and_reread(),
+            (EditorPrompt::Conflict, KeyCode::Char('r' | 'R')) => {
+                self.reread_into_editor();
+                self.notice = "Nota relida; o rascunho anterior foi descartado".into();
+            }
+            (_, KeyCode::Esc) => {
+                // Continuing to edit also cancels the exit that asked.
+                self.exit_requested = false;
+                self.notice = match prompt {
+                    EditorPrompt::Pending => "Edição retomada".into(),
+                    EditorPrompt::Conflict => "Rascunho mantido no editor; nada foi escrito".into(),
+                };
+            }
+            // Anything else is not an answer: keep asking.
+            _ => self.editor_prompt = Some(prompt),
+        }
+    }
+
+    /// Opens the loaded note in the right pane for editing.
+    fn start_editing(&mut self) {
+        let Some(note) = self.current_note.as_ref().filter(|note| !note.in_trash) else {
+            self.focus = Focus::Reader;
+            return;
+        };
+        self.draft = Some(Draft::new(&note.content));
+        self.editor_prompt = None;
+        self.editor_scroll.set(0);
+        self.editor_column.set(0);
+        self.focus = Focus::Editor;
+    }
+
+    /// Leaves editing for reading, asking first when text would be lost.
+    fn leave_editor(&mut self) {
+        if self.pending_text().is_some() {
+            self.editor_prompt = Some(EditorPrompt::Pending);
+            return;
+        }
+        self.close_editor();
+    }
+
+    fn close_editor(&mut self) {
+        self.draft = None;
+        self.editor_prompt = None;
+        self.focus = Focus::Reader;
+    }
+
+    /// Closes the editor and, when the question was raised by a request to
+    /// leave, finishes leaving.
+    fn leave_after_answer(&mut self) {
+        let leaving = std::mem::take(&mut self.exit_requested);
+        self.close_editor();
+        self.should_quit |= leaving;
+    }
+
+    /// The draft, when it says something the store does not already say.
+    ///
+    /// The question is asked through `editor::mutation_for`, the same function
+    /// the external editor decides with, so "pending" means exactly one thing
+    /// in this application: a change the canonical model would persist. A body
+    /// that differs only by trailing newlines is not pending, and is not
+    /// written, in either editor.
+    pub fn pending_text(&self) -> Option<String> {
+        let note = self.current_note.as_ref()?;
+        let text = self.draft.as_ref()?.text();
+        editor::mutation_for(&note.content, &text).map(|_| text)
+    }
+
+    /// Writes the draft through the Core with the revision that was read.
+    fn save_draft(&mut self) {
+        let Some(note) = self.current_note.as_ref().filter(|note| !note.in_trash) else {
+            return;
+        };
+        let Some(text) = self.pending_text() else {
+            self.notice = "Sem alteração canônica; nenhuma escrita".into();
+            return;
+        };
+        let Some(mutation) = editor::mutation_for(&note.content, &text) else {
+            return;
+        };
+        let id = note.id;
+        let operation = WriteOperation::MutateNote {
+            selector: id.to_string(),
+            mutation,
+            // No reread, no retry: this is the revision the pane was opened on.
+            expected_revision: Some(note.revision.clone()),
+        };
+        match authority::perform_at(&self.paths, &operation) {
+            Ok(_) => {
+                let cursor = self.draft.as_ref().map(Draft::cursor);
+                self.reload_all();
+                self.reload_note(id);
+                // The saved text is now the note; the draft continues from it
+                // with the new revision underneath and the cursor where it was.
+                self.reseat_draft(cursor);
+                self.notice = "Edição salva".into();
+            }
+            Err(WriteError::RevisionConflict { .. }) => {
+                // Nothing was overwritten and nothing is thrown away: the draft
+                // stays on screen until its owner says what to do with it.
+                self.editor_prompt = Some(EditorPrompt::Conflict);
+            }
+            Err(error) => self.notice = format!("Edição não confirmada: {error}"),
+        }
+    }
+
+    /// Rebuilds the draft from the note as it is now, keeping `cursor`.
+    fn reseat_draft(&mut self, cursor: Option<crate::draft::Position>) {
+        let Some(note) = self.current_note.as_ref() else {
+            self.draft = None;
+            return;
+        };
+        let mut draft = Draft::new(&note.content);
+        if let Some(cursor) = cursor {
+            draft.restore_cursor(cursor);
+        }
+        self.draft = Some(draft);
+    }
+
+    fn reread_into_editor(&mut self) {
+        let Some(id) = self.current_note.as_ref().map(|note| note.id) else {
+            return;
+        };
+        let cursor = self.draft.as_ref().map(Draft::cursor);
+        self.reload_all();
+        self.reload_note(id);
+        self.reseat_draft(cursor);
+    }
+
+    /// Puts the refused draft where it can be found again, then rereads.
+    fn preserve_and_reread(&mut self) {
+        match self.preserve_draft() {
+            Some(Ok(path)) => {
+                self.reread_into_editor();
+                self.notice = format!("Rascunho preservado em {}; nota relida", path.display());
+            }
+            Some(Err(error)) => {
+                // Preservation failed, so the draft is the only copy there is
+                // and it is not touched.
+                self.editor_prompt = Some(EditorPrompt::Conflict);
+                self.notice = format!("Falha ao preservar o rascunho: {error}");
+            }
+            None => self.notice = "Nada pendente para preservar".into(),
+        }
+    }
+
+    /// Writes the pending draft to the recovery directory, if there is one.
+    ///
+    /// The directory comes from the store's own `state_dir`, which is
+    /// `$XDG_STATE_HOME/note-it` — the same place the external editor writes.
+    fn preserve_draft(&mut self) -> Option<io::Result<std::path::PathBuf>> {
+        let text = self.pending_text()?;
+        let id = self.current_note.as_ref()?.id;
+        let directory = self.paths.state_dir.join(editor::RECOVERY_DIRECTORY);
+        Some(editor::preserve_draft(&directory, id, text.as_bytes()))
+    }
+
     fn handle_key_search(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -491,7 +790,7 @@ impl App {
                 // Open highlighted search result
                 if let Some(res) = self.search_results.get(self.search_selected) {
                     self.load_note(res.note_id);
-                    self.focus = Focus::Reader;
+                    self.start_editing();
                 } else {
                     self.focus = Focus::List;
                 }
@@ -638,7 +937,7 @@ impl App {
             Ok(write) => {
                 self.reload_all();
                 self.load_note(write.outcome.note_id);
-                self.focus = Focus::Reader;
+                self.start_editing();
                 self.notice = "Nota criada".into();
             }
             Err(error) => self.notice = format!("Não foi possível criar a nota: {error}"),
@@ -760,8 +1059,42 @@ impl App {
         Ok(())
     }
 
-    /// Main interactive event loop.
+    /// Runs the interactive session and then settles anything it left pending.
+    ///
+    /// The shutdown half is deliberately outside the loop *and* outside its
+    /// `?`: quitting, `Ctrl+C`, a signal and a frame that failed to reach a
+    /// terminal that is no longer there all end up here. The last of those is
+    /// not hypothetical — the usual companion of a `SIGHUP` is the very write
+    /// that discovers the terminal is gone — and whether the process noticed
+    /// the signal or the broken write first must not decide whether somebody's
+    /// unsaved text survives.
     pub fn run(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        guard: &mut TerminalGuard,
+    ) -> io::Result<()> {
+        let outcome = self.event_loop(terminal, guard);
+
+        // A signal cannot be asked a question, so text that never reached the
+        // store is written where it can be found again and its path is printed
+        // on the restored terminal. The file is the guarantee; the message is a
+        // courtesy, and a terminal that can no longer be written to must not
+        // suppress either.
+        if let Some(preserved) = self.preserve_draft() {
+            let message = match preserved {
+                Ok(path) => format!("Rascunho não salvo preservado em {}", path.display()),
+                Err(error) => format!("Rascunho não salvo NÃO pôde ser preservado: {error}"),
+            };
+            let suspended = guard.suspend();
+            eprintln!("{message}");
+            // The loop's own failure, if there was one, is the one reported.
+            return outcome.and(suspended);
+        }
+
+        outcome
+    }
+
+    fn event_loop(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
         guard: &mut TerminalGuard,

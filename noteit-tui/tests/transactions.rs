@@ -146,12 +146,13 @@ fn task_cursor_uses_source_lines_and_ignores_fenced_task_text() {
 }
 
 #[test]
-fn create_empty_note_opens_reader_with_canonical_revision() {
+fn create_empty_note_opens_the_editor_with_canonical_revision() {
     let mut f = Fixture::new("original");
     let old = f.app.current_note_id;
     f.app.focus = Focus::List;
     f.key('n');
-    assert_eq!(f.app.focus, Focus::Reader);
+    // A new note exists to be written in, so it opens editing (Fase 5.0D.2).
+    assert_eq!(f.app.focus, Focus::Editor);
     assert_ne!(f.app.current_note_id, old);
     let note = f.app.current_note.as_ref().unwrap();
     assert_eq!(note.content, "");

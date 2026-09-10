@@ -194,7 +194,7 @@ Essas correções e extensões tornam-se parte obrigatória do escopo da Fase 5.
 
 No mesmo estilo dos marcos anteriores do Note-it, os seguintes itens são deliberadamente deixados fora desta fase, com as respectivas justificativas:
 
-1. **Editor de texto completo embutido no terminal com emulação Vim/Emacs:**
+1. **Editor de texto completo embutido no terminal com emulação Vim/Emacs:** *(A recusa do editor embutido foi revogada pelo roadmap na Fase 5.0D.2, que entrega um editor v1 não-modal, sem realce de sintaxe e com desfazer de limite explícito — ver seção 14. Modos, realce e histórico ilimitado continuam fora.)*
    Implementar um editor de código completo dentro da TUI (com syntax highlighting, buffer undo/redo infinito e atalhos modais) exigiria milhares de linhas de código e adicionaria um escopo enorme. Em vez disso, a TUI suportará mutações rápidas (marcar/desmarcar tarefas, editar tags, títulos e apêndices) e, para edição de corpo longo, invocará o `$EDITOR` configurado pelo usuário (suspendendo a TUI temporariamente e restaurando-a ao final, validando a `revision` antes de persistir).
 2. **Modo daemon ou serviço persistente de background para a TUI:**
    A TUI é uma aplicação de primeiro plano orientada a terminal, encerrada com `q` ou `Esc`. O ciclo de vida do store e o gerenciamento de eventos continuam centralizados no processo desktop `note-it --background` ou no Core headless.
@@ -1180,3 +1180,241 @@ usa `$WORK/ambient-home` como stand-in de `$HOME` e um barramento privado; o
 **5.0D.1: PASS — nenhum HTML canônico, delimitador reconhecido, comentário ou
 entidade alcança a tela; seis níveis de título distinguíveis; store real
 inalterado. Fases 5.0D.2, 5.0D.3 e 5.0E não iniciadas.**
+
+## 14. Fase 5.0D.2 — Editor nativo no painel direito
+
+### 14.1 Contrato e o que mudou
+
+O roadmap pede que o `$EDITOR` deixe de ser o fluxo principal: abrir uma nota
+para trabalhar entra em edição direta, sem uma segunda tecla `e`. A exclusão
+histórica registrada na seção 6, item 1 — "editor de texto completo embutido com
+emulação Vim/Emacs" — foi **explicitamente revogada** pelo roadmap para o editor
+v1 desta fase. Não há contradição de escopo: o que a seção 6 recusou (modos,
+realce de sintaxe, desfazer ilimitado) continua fora; o que a 5.0D.2 entrega é um
+editor não-modal, sem realce e com desfazer de limite explícito.
+
+A regra de navegação passa a ser:
+
+| Onde | Tecla | Resultado |
+| --- | --- | --- |
+| Lista | `↑` `↓` | seleciona, e o painel direito **pré-visualiza a nota renderizada** |
+| Lista, busca ou tarefas | `Enter` / `→` / `l` | abre a nota **editando**, sem segunda tecla |
+| Lista | `n` | cria a nota e já abre editando |
+| Lixeira | `Enter` | apenas leitura; uma nota descartada não é editável |
+| Editor | `Esc` | sai para a leitura (perguntando, se houver pendências) |
+| Leitura | `Enter` / `i` | volta a editar |
+| Leitura | `Esc` | volta à lista |
+| Leitura | `e` | `$EDITOR` externo, inalterado desde a 5.0D |
+
+Selecionar não é abrir. É o que mantém o leitor — e com ele toda a fidelidade
+de Markdown da Fase 5.0D.1 — na frente de quem está navegando, enquanto quem
+decidiu trabalhar na nota recebe o cursor de texto imediatamente.
+
+### 14.2 Arquitetura
+
+Três peças, nenhuma nova dependência:
+
+- **`draft.rs` — o modelo.** Linhas de texto, um cursor, uma âncora de seleção e
+  um histórico limitado. Não conhece Markdown, store, revision nem terminal, o
+  que permite testar suas regras sem nenhum dos três. Uma [`Position`] conta
+  **caracteres**: bytes deixariam um cursor cair dentro de um `ç` e colunas de
+  exibição amarrariam o modelo a uma fonte. Toda operação é total — nenhum
+  índice parte uma sequência UTF-8, então nenhuma entrada causa pânico.
+- **`app.rs` — a máquina de estados.** `Focus` ganha `Editor`. O rascunho existe
+  exatamente enquanto o foco é `Editor`, e é isso que reduz "sair, trocar de
+  nota/painel, buscar ou descartar com alterações pendentes" a **uma única
+  porta**.
+- **`ui.rs` — o painel.** Desenha a fonte da nota, a seleção e o cursor como
+  células do próprio buffer, o que também os torna verificáveis por
+  `TestBackend`. Borda âmbar contra a ciano da leitura; título `Edição: <rótulo>`
+  com `●` enquanto houver pendência; atalhos no rodapé.
+
+O editor **não interpreta Markdown**. O leitor da 5.0D.1 continua a única
+projeção renderizada que existe na TUI; não há uma segunda interpretação para
+discordar dela. O que se edita é o que o arquivo guarda.
+
+### 14.3 Teclado do editor
+
+| Tecla | Ação |
+| --- | --- |
+| qualquer caractere | insere |
+| `Enter` | quebra de linha |
+| `Tab` | quatro espaços |
+| `Backspace` / `Delete` | remove, ou junta linhas nas bordas |
+| `←` `→` `↑` `↓` `Home` `End` `PgUp` `PgDn` | navega |
+| `Shift` + as mesmas | estende a seleção |
+| `Ctrl+A` | seleciona tudo |
+| `Ctrl+Z` / `Ctrl+Y` (ou `Ctrl+Shift+Z`) | desfazer / refazer |
+| `Ctrl+S` | salvar |
+| `Esc` | sair da edição |
+| `Ctrl+C` | pedir para encerrar |
+
+`Tab`, `/`, `d` e `q` navegam em outros lugares da aplicação; aqui são texto.
+Um `Tab` vira quatro espaços porque um corpo Markdown indenta com espaços, e
+guardar uma tabulação cuja largura ninguém combina seria guardar uma surpresa.
+
+### 14.4 Salvamento e conflito
+
+O funil de escrita é o da seção 11.2, sem exceção nova:
+
+| Ação | Operação | Precondição |
+| --- | --- | --- |
+| `Ctrl+S` | `MutateNote` com `ReplaceBody` ou `ClearBody` | `Some(revision lida ao abrir o painel)` |
+
+A escolha da mutação usa **`editor::mutation_for`**, exatamente a função com que
+o editor externo decide. "Pendente" significa, portanto, uma só coisa nesta
+aplicação: uma alteração que o modelo canônico persistiria. Um corpo que difere
+apenas por terminadores de linha não é pendente, não pergunta nada ao sair e não
+escreve nada — a mesma resposta que o `$EDITOR` já dava.
+
+Em `WriteError::RevisionConflict` **nada é sobrescrito e nada é jogado fora**: o
+rascunho continua na tela e o painel faz uma pergunta com três saídas:
+
+- `[p] preservar rascunho` — grava os bytes do rascunho em
+  `${XDG_STATE_HOME}/note-it/tui-recovery/<note-id>-<uuid>.md` e relê a nota;
+- `[r] reler a nota` — descarte consciente do rascunho, relendo o que está no
+  store;
+- `[Esc] manter no editor` — não escreve nada e devolve o rascunho intacto.
+
+A preservação usa `editor::preserve_draft`, extraída de `EditorSession::recover`
+para que os dois editores tenham **uma só** implementação de recovery, com as
+mesmas garantias já documentadas na seção 11.4: arquivo `0600`, diretórios
+`0700`, UUID e `create_new` contra colisão, arquivo e diretório sincronizados,
+bytes literais sem front matter nem canonização.
+
+### 14.5 Alterações pendentes nunca somem em silêncio
+
+O rascunho só existe com o foco no editor, e do editor só se sai por `Esc`,
+`Ctrl+C` ou sinal. **Uma tecla e um sinal não são a mesma coisa**, e a diferença
+decide qual garantia se aplica: numa há alguém na frente da tela para responder,
+na outra não há.
+
+- **`Esc`** com pendências pergunta `[s] salvar  [d] descartar  [Esc] continuar
+  editando`. Sem pendências, sai direto para a leitura.
+- **`Ctrl+C` é uma tecla, não um sinal.** Em raw mode o crossterm desabilita
+  `ISIG`, então `Ctrl+C` chega como evento de teclado — é uma pessoa pedindo
+  para sair, com tela para perguntar e alguém para responder. Com pendências,
+  faz **a mesma pergunta** que o `Esc`: `[s]` salva e encerra, `[d]` descarta
+  conscientemente e encerra, `[Esc]` continua editando e cancela a saída. Sem
+  nada pendente, encerra na hora, como sempre fez. Se salvar esbarrar num
+  conflito, o pedido de sair não sobrevive a ele: a pergunta do conflito assume,
+  nada é sobrescrito e ninguém sai sem decidir.
+- **`SIGINT`, `SIGTERM` e `SIGHUP` entregues de fora** não podem ser
+  perguntados: um sinal não responde. O rascunho pendente é então **preservado**
+  no diretório de recovery e seu caminho é impresso no terminal já restaurado.
+  É a leitura honesta de "não pode perder texto silenciosamente" quando a
+  confirmação é fisicamente impossível.
+
+  A distinção foi estabelecida na revisão R2 desta fase. Até ela, `Ctrl+C` de
+  teclado desviava para o caminho dos sinais e encerrava na hora, deixando
+  apenas um recovery — o texto não se perdia, mas a saída acontecia sem a
+  confirmação que o contrato exige de toda saída iniciada pela pessoa.
+
+  `SIGHUP` foi acrescentado à mesma flag na revisão R1 desta fase. Antes ele não
+  era tratado, e sua disposição padrão matava o processo na hora — levando junto
+  a restauração do terminal e qualquer rascunho não salvo. É o sinal que uma
+  pessoa realmente encontra: fechar a janela do terminal ou cair a sessão ssh.
+  A revisão também moveu a preservação para **fora** do `?` do laço de eventos,
+  porque o companheiro habitual de um `SIGHUP` é justamente a escrita de quadro
+  que descobre que o terminal sumiu; qual dos dois o processo percebe primeiro
+  não pode decidir se o texto sobrevive.
+
+- **`SIGTSTP`/`SIGCONT`** não são tratados, e não devem ser: parar um processo
+  não o encerra, então o rascunho continua exatamente onde estava quando ele
+  volta. Uma suspensão não é uma forma de perder texto.
+- **Trocar de nota, de painel, buscar ou descartar** são estruturalmente
+  inalcançáveis com pendências, porque as teclas que fariam isso são texto
+  dentro do editor. É uma garantia mais forte que uma confirmação, e há teste
+  para ela.
+
+### 14.6 Terminal
+
+Esta fase não altera `terminal.rs`, o ciclo do `$EDITOR`, `suspend`/`resume`, o
+panic hook ou o snapshot T0 da revisão corretiva da seção 12. O editor nativo é
+in-process: não suspende o terminal, não lança processos e não toca em raw mode.
+As nove regressões de PTY da 5.0D continuam byte-idênticas em asserções, e as
+novas provas de terminal real confirmam restauração exata (`assert_restored`) e
+retorno a modo cozido depois de editar, cancelar e ser interrompido.
+
+### 14.7 Provas
+
+**Regressão antes da correção.** `noteit-tui/tests/native_editor.rs` foi escrito
+contra a baseline `86290a0` e falhou em **29 dos 31** testes iniciais. Os dois
+que passavam eram guardas de preservação — a pré-visualização renderizada da
+5.0D.1 e "a lixeira não é editável" — e continuam passando. Nenhuma falha foi
+por erro de compilação: o arquivo usa apenas a superfície pública que já existia
+(`App`, `handle_key`, `draw`, `core`), de modo que a baseline é comportamental.
+
+Contagens finais de `cargo test -p noteit-tui` — **144 testes** (133 no fechamento inicial, mais 4 de sinal na revisão R1 e 7 de saída por `Ctrl+C` na revisão R2, ambas na seção 14.5):
+
+| Alvo | Testes | |
+| --- | --- | --- |
+| unitários de `src/lib.rs` | 26 | 14 de `draft.rs` são novos |
+| `tests/native_editor.rs` | 45 | novo (34 + 4 da R1 + 7 da R2) |
+| `tests/markdown_fidelity.rs` | 30 | 5.0D.1, inalterado |
+| `tests/transactions.rs` | 18 | 1 expectativa de foco atualizada |
+| `tests/terminal_lifecycle.rs` | 9 | inalterado |
+| `tests/editor_process.rs` | 8 | só a sequência de teclas mudou |
+| `tests/navigation_and_rendering.rs` | 7 | 2 expectativas de foco atualizadas |
+| `tests/desktop_concurrency.rs` | 1 | só a sequência de teclas mudou |
+
+O que é provado: entrada em edição sem segunda tecla; identidade e atalhos
+visíveis; `Esc` em dois degraus; inserção e remoção Unicode e multilinha; junção
+de linhas; seleção por `Shift`+setas e `Ctrl+A`, visível e substituível;
+desfazer/refazer com agrupamento por tipo de edição e limite respeitado;
+salvamento com a revision lida, salvamentos encadeados, no-op canônico sem
+escrita; as três saídas do conflito, com o arquivo de recovery conferido byte a
+byte; pendência perguntando antes de sair, e teclas de navegação sendo texto;
+nota vazia, nota mais alta que o painel, linha mais larga que o painel, terminal
+estreito, redimensionamento em ambas as direções, `PgUp`/`PgDn` parando nas
+bordas; conteúdo hostil inerte; lixeira não editável.
+
+Em terminal real (PTY): edição com acentuação salva no store; colagem
+multilinha; terminal estreito (44×14); cancelamento sem escrita; `Ctrl+C` com
+pendência preservando o rascunho e informando o caminho; e o `$EDITOR` externo
+continuando disponível como ação alternativa. Todos terminam com
+`assert_restored()` e o PTY de volta ao modo cozido.
+
+**Por que as provas visuais em PTY afirmam pelo store.** O Ratatui repinta
+apenas as células que a tecla mudou, então uma palavra digitada tecla a tecla
+nunca atravessa o fluxo inteira. Esperar por ela seria uma corrida. As provas de
+terminal real afirmam pelo que o store passa a conter e pelo prompt que só
+aparece se o texto registrou; os glifos desenhados são afirmados com
+`TestBackend`, que desenha um quadro completo.
+
+### 14.8 Gates
+
+| Comando | Resultado |
+| --- | --- |
+| `cargo test -p noteit-tui --test native_editor` | 34 aprovados |
+| `cargo test -p noteit-tui` | 144 aprovados (133 no fechamento inicial; R1 acrescentou 4 e R2 acrescentou 7) |
+| `cargo fmt --all -- --check` | limpo |
+| `cargo check --workspace` | aprovado |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | aprovado |
+| `scripts/check-tui-boundary` | aprovado |
+| `scripts/check rust` (18 estágios) | **tudo passou**, ~166 s |
+| `git diff --check` | limpo |
+| `git diff --stat Cargo.lock` | vazio — nenhuma dependência adicionada |
+
+### 14.9 Limitações conhecidas
+
+- **A edição é por escalar Unicode, não por grafema.** Um acento combinante, uma
+  bandeira ou um emoji de família nunca é corrompido, cortado ao meio ou
+  reordenado — apenas exige mais de um `Backspace`. É o que permite ao editor
+  não ter tabela de segmentação nem dependência.
+- **A rolagem horizontal conta caracteres, não colunas de exibição.** Em uma
+  linha com caracteres largos (CJK, emoji) o limiar de rolagem é aproximado; o
+  cursor continua sobre o caractere certo.
+- **Sem coluna “pegajosa”:** subir e descer por uma linha curta e voltar não
+  restaura a coluna original, ela fica presa ao comprimento da linha curta.
+- **Sem realce de sintaxe, sem modos, sem busca dentro do editor.**
+- **Uma tabulação existente em uma nota externa é desenhada como `→`** (uma
+  célula), para que a coluna que o cursor informa e a que se vê sejam a mesma.
+- **O rótulo `(Fase 5.0B / 5.0C)` no cabeçalho continua obsoleto** e a
+  legibilidade da seleção do leitor sobre cores semânticas continua pendente:
+  ambos são escopo declarado da **Fase 5.0D.3** e não foram tocados.
+
+**5.0D.2: PASS — edição direta no painel direito, salvamento transacional com a
+revision lida, conflito sem sobrescrita e com três saídas, pendências nunca
+perdidas em silêncio, e a fidelidade de Markdown da 5.0D.1 intacta na leitura.
+Fases 5.0D.3 e 5.0E não iniciadas.**

@@ -24,7 +24,7 @@ fn real_tui_restores_exact_termios_after_editor_leaves_raw_no_echo() {
             .env("XDG_RUNTIME_DIR", root.path().join("runtime"));
     });
     tui.wait_text("original");
-    tui.input(b"\re");
+    tui.open_external_editor();
     tui.wait_text("Edição salva");
     assert_eq!(
         NoteItCore::open_read_only_at(paths.clone())
@@ -51,7 +51,7 @@ fn repeated_poisoned_editors_restore_original_state_including_nonzero_exit() {
             .env("XDG_RUNTIME_DIR", root.path().join("runtime"));
     });
     tui.wait_text("original");
-    tui.input(b"\r");
+    tui.leave_native_editor();
     for code in [7, 0, 8] {
         fs::write(root.path().join("exit-code"), code.to_string()).unwrap();
         tui.output.clear();
@@ -103,7 +103,7 @@ fn real_tui_restores_controlling_tty_when_stdin_is_redirected() {
         .env("XDG_RUNTIME_DIR", root.path().join("runtime"));
     });
     tui.wait_text("original");
-    tui.input(b"\re");
+    tui.open_external_editor();
     tui.wait_text("Edição salva");
     tui.finish();
     cleanup_coordination(&paths);
@@ -277,7 +277,7 @@ fn real_tui_editor_suspends_cooked_resumes_raw_and_saves_once() {
     });
     tui.wait_text("original");
     assert!(!tui.cooked());
-    tui.input(b"\re");
+    tui.open_external_editor();
     wait("fake editor ready", || root.path().join("ready").exists());
     assert!(tui.cooked());
     tui.drain();
@@ -317,7 +317,7 @@ fn missing_editor_uses_vi_and_nonzero_exit_preserves_edited_temp() {
             .env("XDG_RUNTIME_DIR", root.path().join("runtime"));
     });
     tui.wait_text("original");
-    tui.input(b"\re");
+    tui.open_external_editor();
     tui.wait_text("Cópia preservada");
     assert!(!tui.cooked());
     let path = fs::read_to_string(root.path().join("temporary-path")).unwrap();
@@ -345,16 +345,10 @@ fn sigterm_during_editor_preserves_temp_and_restores_terminal() {
             .env("XDG_RUNTIME_DIR", root.path().join("runtime"));
     });
     tui.wait_text("original");
-    tui.input(b"\re");
+    tui.open_external_editor();
     wait("editor ready", || root.path().join("ready").exists());
-    assert_eq!(
-        unsafe { libc::kill(tui.child.id() as i32, libc::SIGTERM) },
-        0
-    );
-    wait("TUI exits after signal", || {
-        tui.drain();
-        tui.child.try_wait().unwrap().is_some()
-    });
+    tui.signal(libc::SIGTERM);
+    tui.wait_exit();
     assert!(tui.cooked());
     let path = fs::read_to_string(root.path().join("temporary-path")).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"valuable");

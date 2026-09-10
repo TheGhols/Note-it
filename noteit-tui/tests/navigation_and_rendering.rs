@@ -274,10 +274,12 @@ fn test_pending_tasks_extraction_and_opening() {
         .iter()
         .any(|t| t.text == "Validar conformidade de empacotamento"));
 
-    // Press Enter to open the task's parent note into reader
+    // Enter opens the task's parent note to be worked on: since Fase 5.0D.2
+    // that is the native editor, with no second key.
     app.handle_key(KeyEvent::from(KeyCode::Enter));
-    assert_eq!(app.focus, Focus::Reader);
+    assert_eq!(app.focus, Focus::Editor);
     assert!(app.current_note.is_some());
+    assert!(app.draft.is_some());
 }
 
 #[test]
@@ -317,9 +319,9 @@ fn test_quick_search_delegates_to_core() {
     assert_eq!(app.search_results.len(), 1);
     assert_eq!(app.search_results[0].note_id, fixture.note1_id);
 
-    // Press Enter to select and open matching note
+    // Press Enter to select and open matching note, which opens it for work.
     app.handle_key(KeyEvent::from(KeyCode::Enter));
-    assert_eq!(app.focus, Focus::Reader);
+    assert_eq!(app.focus, Focus::Editor);
     assert_eq!(app.current_note_id, Some(fixture.note1_id));
 }
 

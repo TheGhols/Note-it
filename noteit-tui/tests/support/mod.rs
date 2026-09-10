@@ -71,11 +71,23 @@ impl Tui {
         program: &Path,
         configure: impl FnOnce(&mut Command),
     ) -> Self {
+        Self::spawn_sized(root, program, 160, 32, configure)
+    }
+
+    /// The same pseudoterminal at a chosen size, so a narrow terminal is a
+    /// dimension a test can ask for rather than a constant.
+    pub fn spawn_sized(
+        root: &Path,
+        program: &Path,
+        columns: u16,
+        rows: u16,
+        configure: impl FnOnce(&mut Command),
+    ) -> Self {
         let mut master = 0;
         let mut slave = 0;
         let size = libc::winsize {
-            ws_row: 32,
-            ws_col: 160,
+            ws_row: rows,
+            ws_col: columns,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
@@ -127,6 +139,34 @@ impl Tui {
             bytes.len() as isize
         );
     }
+    // Cargo compiles `tests/support` separately into every test binary, so a
+    // helper only two of them need is dead code in the third. That is a
+    // property of the build, not of the harness.
+    #[allow(dead_code)]
+    /// Sends a signal to *this* child and nobody else.
+    ///
+    /// The PID comes from the process this harness itself spawned, so there is
+    /// no pattern, no name and no way for the signal to reach a Note-it the
+    /// person running the tests actually cares about.
+    pub fn signal(&self, signal: libc::c_int) {
+        assert_eq!(
+            unsafe { libc::kill(self.child.id() as libc::pid_t, signal) },
+            0,
+            "kill({signal}) on pid {}",
+            self.child.id()
+        );
+    }
+
+    /// Waits for the child to leave on its own after a signal.
+    #[allow(dead_code)]
+    pub fn wait_exit(&mut self) {
+        wait("TUI exit after signal", || {
+            self.drain();
+            self.child.try_wait().unwrap().is_some()
+        });
+        self.child.wait().unwrap();
+    }
+
     pub fn cooked(&self) -> bool {
         let mut state = std::mem::MaybeUninit::<libc::termios>::uninit();
         assert_eq!(
@@ -197,6 +237,29 @@ impl Tui {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+    /// Walks from the list to the reader, which is where `$EDITOR` lives.
+    ///
+    /// Since Fase 5.0D.2 `Enter` opens the note in the native editor and `Esc`
+    /// steps out of it, so reaching the reader takes both. Each step waits for
+    /// something that is on screen *only* after it: the reader's own title is
+    /// drawn from the first frame and would answer a wait before the key that
+    /// should have caused it, whereas the reader's footer is not. Nothing is
+    /// cleared here, so a caller counting escape sequences still counts every
+    /// one the application emitted. The lone `Esc` is written by itself:
+    /// bundled with the next byte it would be read as `Alt`.
+    pub fn leave_native_editor(&mut self) {
+        self.input(b"\r");
+        self.wait_text("Edição:");
+        self.input(b"\x1b");
+        self.wait_text("[Space] Tarefa");
+    }
+
+    /// The whole way from the list to a running `$EDITOR`.
+    pub fn open_external_editor(&mut self) {
+        self.leave_native_editor();
+        self.input(b"e");
+    }
+
     pub fn finish(&mut self) {
         self.input(b"q");
         wait("TUI exit", || {

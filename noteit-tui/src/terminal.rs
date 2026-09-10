@@ -149,9 +149,21 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Registers SIGINT and SIGTERM handlers that set the provided atomic flag to true.
+/// Registers the termination signals that set the provided atomic flag to true.
+///
+/// `SIGHUP` belongs here for the same reason the other two do, and it is the
+/// one a person actually meets: closing the terminal window or dropping an ssh
+/// session. Its default disposition kills the process outright, which would
+/// take the terminal's restoration and any unsaved draft with it. On the flag,
+/// it becomes an ordinary request to stop, and the shutdown path — restore the
+/// terminal, preserve what was never written — runs like it does for the rest.
 pub fn install_signal_handlers(term_flag: Arc<AtomicBool>) -> io::Result<()> {
-    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term_flag))?;
-    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_flag))?;
+    for signal in [
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGHUP,
+    ] {
+        signal_hook::flag::register(signal, Arc::clone(&term_flag))?;
+    }
     Ok(())
 }

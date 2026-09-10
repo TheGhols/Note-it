@@ -3,7 +3,8 @@
 //! Renders a side-by-side view with navigation panels (Recent Notes, Pending Tasks, Trash),
 //! quick search results, and a formatted read-only Markdown reader.
 
-use crate::app::{ActivePanel, App, Focus};
+use crate::app::{ActivePanel, App, EditorPrompt, Focus};
+use crate::draft::Position;
 use crate::markdown;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -32,7 +33,10 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(
-                if app.notice.is_empty() && app.discard_confirmation.is_none() {
+                if app.notice.is_empty()
+                    && app.discard_confirmation.is_none()
+                    && app.editor_prompt.is_none()
+                {
                     1
                 } else {
                     4
@@ -148,10 +152,10 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
     // If area width is constrained, show single pane
     if area.width < 60 {
-        if app.focus == Focus::Reader {
-            render_reader_pane(frame, app, area);
-        } else {
-            render_list_pane(frame, app, area);
+        match app.focus {
+            Focus::Editor => render_editor_pane(frame, app, area),
+            Focus::Reader => render_reader_pane(frame, app, area),
+            _ => render_list_pane(frame, app, area),
         }
         return;
     }
@@ -163,7 +167,11 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     render_list_pane(frame, app, horizontal[0]);
-    render_reader_pane(frame, app, horizontal[1]);
+    if app.focus == Focus::Editor {
+        render_editor_pane(frame, app, horizontal[1]);
+    } else {
+        render_reader_pane(frame, app, horizontal[1]);
+    }
 }
 
 fn render_list_pane(frame: &mut Frame, app: &App, area: Rect) {
@@ -476,6 +484,153 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(p, area);
 }
 
+/// The editing pane: the note's Markdown source, a cursor and a selection.
+///
+/// This pane deliberately shows *source*. The reader next door is the one
+/// rendered projection of a note (Fase 5.0D.1) and it stays the only one;
+/// nothing here parses Markdown, so there is no second interpretation to
+/// disagree with it. What a person edits is what the file holds.
+fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
+    let pending = app.pending_text().is_some();
+    let title = match &app.current_note {
+        Some(note) => format!(
+            " Edição: {}{} ",
+            noteit_core::search::label_for(&note.content),
+            if pending { " ●" } else { "" }
+        ),
+        None => " Edição ".to_string(),
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        // A colour of its own: reading is cyan, editing is amber, and which
+        // one has the keyboard is never a guess.
+        .border_style(Style::default().fg(Color::Rgb(0xFF, 0xCC, 0x66)))
+        .title(title);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(draft) = app.draft.as_ref() else {
+        return;
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let height = inner.height as usize;
+    let width = inner.width as usize;
+    app.editor_viewport.set(height);
+
+    // Only drawing knows the pane's size, so this is where the viewport is
+    // moved to contain the cursor — vertically by line and horizontally by
+    // character. Both keep their previous position when the cursor is already
+    // inside, so the text does not jump under a reader who is only typing.
+    let cursor = draft.cursor();
+    let mut top = app.editor_scroll.get();
+    top = top.min(cursor.line);
+    if cursor.line >= top + height {
+        top = cursor.line + 1 - height;
+    }
+    top = top.min(draft.lines().len().saturating_sub(1));
+    app.editor_scroll.set(top);
+
+    let mut left = app.editor_column.get();
+    left = left.min(cursor.column);
+    if cursor.column >= left + width {
+        left = cursor.column + 1 - width;
+    }
+    app.editor_column.set(left);
+
+    let selection = draft.selection();
+    let lines: Vec<Line<'static>> = draft
+        .lines()
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(height)
+        .map(|(row, text)| editor_line(text, row, left, width, cursor, selection))
+        .collect();
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Base, selected and cursor styles of the editing pane.
+const EDITOR_TEXT: Style = Style::new().fg(Color::White);
+const EDITOR_SELECTION: Color = Color::Rgb(0x33, 0x3D, 0x52);
+
+/// One visible line, with its selection painted and its cursor reversed.
+///
+/// Every character of the note occupies exactly one cell here, which is what
+/// keeps the column a cursor reports and the column a reader sees the same
+/// number. A control character therefore becomes a visible placeholder rather
+/// than disappearing (which would shift the line) or being emitted (which a
+/// terminal would obey): a note is data on this screen too.
+fn editor_line(
+    text: &str,
+    row: usize,
+    left: usize,
+    width: usize,
+    cursor: Position,
+    selection: Option<(Position, Position)>,
+) -> Line<'static> {
+    let selected = |column: usize| {
+        selection.is_some_and(|(start, end)| {
+            let position = Position { line: row, column };
+            position >= start && position < end
+        })
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut run_style: Option<Style> = None;
+    let flush = |run: &mut String, style: Option<Style>, spans: &mut Vec<Span<'static>>| {
+        if !run.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(run),
+                style.unwrap_or(EDITOR_TEXT),
+            ));
+        }
+    };
+
+    for (column, character) in (left..).zip(text.chars().skip(left).take(width)) {
+        let mut style = EDITOR_TEXT;
+        if selected(column) {
+            style = style.bg(EDITOR_SELECTION);
+        }
+        if row == cursor.line && column == cursor.column {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        if run_style != Some(style) {
+            flush(&mut run, run_style, &mut spans);
+            run_style = Some(style);
+        }
+        run.push(editor_cell(character));
+    }
+    flush(&mut run, run_style, &mut spans);
+
+    // The caret past the last character is a cell of its own, so an empty line
+    // and the end of a line both show where typing would land.
+    if row == cursor.line && cursor.column >= text.chars().count() {
+        spans.push(Span::styled(
+            " ",
+            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
+        ));
+    }
+
+    Line::from(spans)
+}
+
+/// The single cell a stored character is drawn as.
+fn editor_cell(character: char) -> char {
+    match character {
+        '\t' => '\u{2192}',
+        '\u{0}'..='\u{1F}' | '\u{7F}'..='\u{9F}' => '\u{00B7}',
+        other => other,
+    }
+}
+
 fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == Focus::Reader;
     let border_color = if is_focused {
@@ -650,11 +805,16 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    if app.discard_confirmation.is_some() || !app.notice.is_empty() {
-        let text = if app.discard_confirmation.is_some() {
-            "Mover para a lixeira? [y/N]"
-        } else {
-            &app.notice
+    if app.editor_prompt.is_some() || app.discard_confirmation.is_some() || !app.notice.is_empty() {
+        let text = match app.editor_prompt {
+            Some(EditorPrompt::Pending) => {
+                "Alterações não salvas nesta nota. [s] salvar  [d] descartar  [Esc] continuar editando"
+            }
+            Some(EditorPrompt::Conflict) => {
+                "Conflito de revision; nada foi sobrescrito. [p] preservar rascunho  [r] reler a nota  [Esc] manter no editor"
+            }
+            None if app.discard_confirmation.is_some() => "Mover para a lixeira? [y/N]",
+            None => &app.notice,
         };
         frame.render_widget(
             Paragraph::new(text)
@@ -665,9 +825,12 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let shortcuts = match app.focus {
+        Focus::Editor => {
+            " [Ctrl+S] Salvar  [Ctrl+Z] Desfazer  [Ctrl+Y] Refazer  [Ctrl+A] Tudo  [Shift+↑↓←→] Selecionar  [Esc] Sair da edição "
+        }
         Focus::Search => " [Enter] Abrir Nota  [↑↓] Selecionar  [Esc] Cancelar Busca ",
         Focus::Reader => {
-            " [↑↓/jk] Cursor  [Space] Tarefa  [e] Editor  [d] Lixeira  [r] Restaurar  [Esc] Voltar  [q] Sair "
+            " [Enter/i] Editar  [↑↓/jk] Cursor  [Space] Tarefa  [e] $EDITOR  [d] Lixeira  [r] Restaurar  [Esc] Voltar  [q] Sair "
         }
         Focus::List => {
             " [Tab/1-3] Painéis  [n] Nova  [r] Restaurar  [/] Buscar  [↑↓/jk] Navegar  [Enter] Ler  [q] Sair "

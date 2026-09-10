@@ -25,6 +25,35 @@ pub fn editor_program(configured: Option<OsString>) -> OsString {
         .unwrap_or_else(|| "vi".into())
 }
 
+/// The single name under the store's state directory where refused text goes.
+pub const RECOVERY_DIRECTORY: &str = "tui-recovery";
+
+/// Writes `bytes` where they can be found again, and returns where.
+///
+/// One implementation for both editors: the external one preserves what a
+/// `$EDITOR` returned, the native one preserves the draft still on screen, and
+/// both must land in the same place with the same guarantees — `0600` file,
+/// `0700` directories, a fresh UUID so nothing existing is overwritten, and
+/// file *and* directory synchronized before the caller is told it worked.
+/// These bytes are exactly what was refused: no front matter, no serialization,
+/// no canonicalization, and a zero-byte file when the text was emptied.
+pub fn preserve_draft(directory: &Path, note_id: Uuid, bytes: &[u8]) -> io::Result<PathBuf> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(directory)?;
+    let path = directory.join(format!("{note_id}-{}.md", Uuid::new_v4()));
+    let mut file = private_file(&path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    File::open(directory)?.sync_all()?;
+    Ok(path)
+}
+
 pub fn recovery_directory(state: Option<OsString>, home: Option<OsString>) -> io::Result<PathBuf> {
     let base = match state.filter(|s| !s.is_empty()) {
         Some(path) => PathBuf::from(path),
@@ -36,7 +65,7 @@ pub fn recovery_directory(state: Option<OsString>, home: Option<OsString>) -> io
     if !base.is_absolute() {
         return Err(io::Error::other("Diretório de recovery deve ser absoluto"));
     }
-    Ok(base.join("note-it/tui-recovery"))
+    Ok(base.join("note-it").join(RECOVERY_DIRECTORY))
 }
 
 fn private_file(path: &Path) -> io::Result<File> {
@@ -239,22 +268,9 @@ impl EditorSession {
         }
     }
 
+    /// The original temporary is not deleted until both the contents and the
+    /// recovery directory entry are synchronized successfully.
     fn recover(&self, directory: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(directory)?;
-        let path = directory.join(format!("{}-{}.md", self.original.id, Uuid::new_v4()));
-        let mut file = private_file(&path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        // The original temporary is not deleted until both contents and the
-        // recovery directory entry are synchronized successfully.
-        File::open(directory)?.sync_all()?;
-        Ok(path)
+        preserve_draft(directory, self.original.id, bytes)
     }
 }
