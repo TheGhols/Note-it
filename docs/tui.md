@@ -3769,3 +3769,60 @@ interface e o desenho do cursor visual — **não** faz parte de B.3 e não foi 
 O que existe é o motor: projeção, mapa, planner, transação e autoridade do `Draft`,
 com cobertura própria. A interface entra depois de B.4 fechar as fronteiras de bloco,
 para que a tecla `Enter` não precise mudar de contrato no meio da integração.
+
+## 33. Fase 5.0D.4B.4 — headings e fronteiras de bloco
+
+### 33.1 Escopo entregue
+
+`Enter`, `Backspace` e `Delete` deixam de ser inserção e passam a ser estrutura.
+Três comandos novos em `visual_edit.rs`: `SplitBlock`, `JoinBackward` e
+`JoinForward`, cada um implementando a célula correspondente da matriz do §26.9
+completada pelo §28.2.
+
+| Construção | Enter início | Enter meio | Enter fim | Boundary |
+|---|---|---|---|---|
+| parágrafo | parágrafo vazio antes | dois parágrafos | parágrafo vazio depois | une os dois; uma transação |
+| heading | parágrafo antes, heading fica inteiro | dois headings do mesmo nível | parágrafo depois | Backspace no início: `Refusal`; Delete no fim, com parágrafo à frente: puxa o texto para dentro do heading preservando o nível |
+| heading + heading | — | — | — | `Refusal` |
+| vizinho Opaque/SourceVisible/fence | — | — | — | `Refusal` em ambas as direções |
+| início/fim do documento | — | — | — | no-op: nenhum patch, nenhuma history, nenhum aviso |
+
+O no-op tem valor próprio, `Refusal::NothingToDo`, precisamente para que a interface
+possa ficar calada sobre ele e ainda dizer algo útil sobre uma recusa de verdade.
+
+### 33.2 Convenção de line ending
+
+`local_line_ending` implementa a cascata ordenada do §27.13/§28.3: o ending do bloco
+atual, depois o imediatamente anterior, depois o primeiro do documento, depois `LF`.
+A regra da R2 não tinha resposta para o último bloco de um documento CRLF, que é
+exatamente o caso em que um `LF` seria escrito num arquivo que nunca teve um. Há
+teste com `ab\r\n\r\ncd`.
+
+### 33.3 Dois defeitos encontrados ao executar a matriz
+
+1. **O fim do bloco incluía o line ending.** `content_end` era o fim do último
+   grapheme projetado, e o line ending é um deles, então um Join removia só um dos
+   dois `\n` e produzia `ab\ncd` em vez de `abcd`. `content_end` passou a ser o fim
+   do último grapheme **que não é line ending** — o ending pertence ao bloco (§28.2)
+   mas não é conteúdo, e um caret depois dele seria um caret no vão entre blocos.
+2. **O caret escapava de uma região opaca pelo line ending.** Numa nota
+   `<custom>x</custom>\n\npara`, o primeiro bloco é um parágrafo cujo conteúdo
+   inteiro é opaco. A busca por "vizinho editável" encontrava o line ending final —
+   que não está dentro do range Opaque, porque ranges são semiabertos — e criava um
+   slot. Com isso o bloco parecia editável e o Join era permitido. A busca passou a
+   ignorar line endings: são quebras, não conteúdo.
+
+Ambos são a mesma classe de erro que a §30.3 já havia registrado, agora numa
+posição diferente, e ambos foram encontrados por teste e não por inspeção.
+
+### 33.4 Limitação registrada: não existe "bloco vazio"
+
+A matriz do §26.9 tem uma linha "bloco vazio". Este modelo não tem um bloco vazio
+para pôr nela: uma sequência de linhas em branco é o **separador** entre blocos, não
+um bloco, de modo que nenhum node a cobre e nenhum caret pode ser posto ali. A
+limitação fica registrada em vez de ser disfarçada, e o que o modelo faz em seu lugar
+é testado: `ab\n\n\n\ncd` tem dois blocos, o vão não tem caret, e um Join entre eles
+remove o vão inteiro sem deixar nenhum `\n` órfão.
+
+Representar parágrafos vazios como nodes próprios é uma decisão de projeto que
+pertence a B.7, junto de listas e citações, e não foi tomada aqui.

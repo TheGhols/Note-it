@@ -34,7 +34,7 @@
 //! no interior caret; they become invisible only when B.5 and B.6 grant the
 //! capabilities that make hiding them honest.
 
-use crate::projection::{project, LexemeKind, NodeId, Projection};
+use crate::projection::{project, LexemeKind, NodeId, NodeKind, Projection};
 use crate::source_map::{Generation, GraphemeIndex, SourceOffset, SourceRange};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -76,8 +76,13 @@ pub struct VisualBlock {
     pub node: NodeId,
     /// The source span this block projects.
     pub coverage: SourceRange,
-    /// The offset just past the block's last projected byte, which is where a
-    /// caret at the end of the block lives.
+    /// The offset just past the block's last projected byte that is not a line
+    /// ending — the end of its *text*, and where a caret at the end lives.
+    ///
+    /// The trailing line ending is deliberately outside it. It belongs to this
+    /// block (§28.2) but it is not content: a caret after it would be a caret
+    /// in the gap between blocks, and a Join that started before it would
+    /// leave one of the two line endings behind.
     pub content_end: usize,
     /// How many graphemes it projects.
     pub graphemes: usize,
@@ -307,6 +312,61 @@ impl VisualDocument {
             .is_some_and(|slot| !self.offset_is_protected(slot.source_offset))
     }
 
+    /// Whether a grapheme's bytes are a line ending.
+    fn is_line_ending(&self, range: SourceRange) -> bool {
+        matches!(range.slice(&self.source), "\n" | "\r\n" | "\r")
+    }
+
+    /// The source this document was projected from.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The heading level of a block, when it is one.
+    pub fn heading_level(&self, block: BlockId) -> Option<u8> {
+        match self.projection.node(self.block(block).node).kind {
+            NodeKind::Heading(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    /// The offset of the block's first caret, which is where its content
+    /// begins — after any invisible prefix.
+    pub fn first_caret_offset(&self, block: BlockId) -> Option<usize> {
+        self.slots
+            .iter()
+            .find(|slot| slot.block == block)
+            .map(|slot| slot.source_offset.get())
+    }
+
+    /// Whether a block may take part in a Join at all.
+    ///
+    /// B.4 grants Join to paragraphs and, in the forward direction only, to
+    /// headings. Everything else — fenced code, comments, opaque regions,
+    /// lists, tasks, quotes and callouts — is `SourceVisible` until B.7, and an
+    /// absent capability is a denial (property 27).
+    pub fn block_is_joinable(&self, block: BlockId) -> bool {
+        let node = self.block(block).node;
+        if !self
+            .projection
+            .effective_classification(node)
+            .admits_interior_caret()
+        {
+            return false;
+        }
+        if !matches!(
+            self.projection.node(node).kind,
+            NodeKind::Paragraph | NodeKind::Heading(_)
+        ) {
+            return false;
+        }
+        // A paragraph whose entire content is an opaque region is a paragraph
+        // by node kind and uneditable in fact: it publishes no caret. Joining
+        // into it would move text next to bytes the editor refuses to touch,
+        // so having somewhere for a caret to be is the real test.
+        self.slots.iter().any(|slot| slot.block == block)
+    }
+
     /// Whether `start..end` touches a lexeme that may never be partly rewritten.
     ///
     /// Clause (iii) of §28.2's block-scope rule, broadened by the review from
@@ -348,7 +408,9 @@ impl VisualDocument {
             let id = BlockId(self.blocks.len() as u32);
             let cells = self.cells_of(node);
             let content_end = cells
-                .last()
+                .iter()
+                .rev()
+                .find(|(range, _)| !self.is_line_ending(*range))
                 .map_or(coverage.start(), |(range, _)| range.end());
 
             self.blocks.push(VisualBlock {
@@ -408,12 +470,33 @@ impl VisualDocument {
             }
 
             let cells = &self.cells[block.id.0 as usize];
-            for index in 0..=cells.len() {
-                let offset = match cells.get(index) {
-                    Some((range, _)) => range.start(),
+            // A caret sits before each grapheme of content, plus once at the
+            // end. A line ending is a break rather than content, so it carries
+            // no caret of its own.
+            let positions: Vec<usize> = cells
+                .iter()
+                .enumerate()
+                .filter(|(_, (range, _))| !self.is_line_ending(*range))
+                .map(|(index, _)| index)
+                .collect();
+
+            for (ordinal, index) in positions
+                .iter()
+                .copied()
+                .map(Some)
+                .chain(std::iter::once(None))
+                .enumerate()
+            {
+                let offset = match index {
+                    Some(index) => cells[index].0.start(),
                     None => block.content_end,
                 };
+                let index = index.unwrap_or(cells.len());
+                let _ = ordinal;
                 let offset = SourceOffset::trusted(offset);
+                // The end-of-block caret can coincide with the last content
+                // caret when the block ends in a line ending; one boundary is
+                // one caret.
                 if self.offset_is_protected(offset) {
                     continue;
                 }
@@ -424,14 +507,27 @@ impl VisualDocument {
                 // floating at the end of something uneditable. Requiring an
                 // editable neighbour is the fail-closed reading, and it keeps
                 // `<x>abc</x>` with no caret at all.
-                let editable_neighbour = [index.checked_sub(1), Some(index)]
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|at| cells.get(at))
-                    .any(|(range, _)| {
+                // Line endings are skipped when looking for a neighbour: they
+                // are breaks, not content, and an editable line ending at the
+                // end of a wholly opaque block would otherwise smuggle a caret
+                // back in through the side door.
+                let previous = cells[..index]
+                    .iter()
+                    .rev()
+                    .find(|(range, _)| !self.is_line_ending(*range));
+                let next = cells[index..]
+                    .iter()
+                    .find(|(range, _)| !self.is_line_ending(*range));
+                let editable_neighbour =
+                    [previous, next].into_iter().flatten().any(|(range, _)| {
                         !self.offset_is_protected(SourceOffset::trusted(range.start()))
                     });
                 if !editable_neighbour {
+                    continue;
+                }
+                if slots.last().is_some_and(|last: &CaretSlot| {
+                    last.source_offset == offset && last.block == block.id
+                }) {
                     continue;
                 }
                 slots.push(CaretSlot {

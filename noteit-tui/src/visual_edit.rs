@@ -53,6 +53,14 @@ pub enum Refusal {
     BlockBoundary,
     /// The offsets do not name a position in this document.
     InvalidPosition,
+    /// There was nothing to do — Backspace at the start of the document, or
+    /// Delete at its end.
+    ///
+    /// Not an error and **not a refusal to announce**: §28.2 makes this case a
+    /// no-op with no patch, no history entry and no notice. It is a distinct
+    /// value precisely so the interface can stay silent about it while still
+    /// saying something useful about a real refusal.
+    NothingToDo,
 }
 
 /// One replacement of a byte range.
@@ -105,8 +113,20 @@ pub enum VisualCommand {
         head: SourceOffset,
         text: String,
     },
-    /// Not granted in B.3. Present so the denial is explicit and testable
-    /// rather than an operation nobody thought to forbid.
+    /// Enter: split the block at this caret (B.4).
+    SplitBlock {
+        at: SourceOffset,
+    },
+    /// Backspace at the start of a block: join it to the one above (B.4).
+    JoinBackward {
+        at: SourceOffset,
+    },
+    /// Delete at the end of a block: pull the one below into it (B.4).
+    JoinForward {
+        at: SourceOffset,
+    },
+    /// Not granted in B.3 or B.4. Present so the denial is explicit and
+    /// testable rather than an operation nobody thought to forbid.
     ToggleStrong {
         anchor: SourceOffset,
         head: SourceOffset,
@@ -141,9 +161,13 @@ pub fn plan(
         VisualCommand::ReplaceSelection { anchor, head, text } => {
             replace_selection(document, anchor, head, &text)
         }
-        // §26.5 and property 27: B.3's matrix has no Format row, and an absent
-        // capability is a denial. It is spelled out here so that granting it in
-        // B.5 is a deliberate edit to this file and not an accident.
+        VisualCommand::SplitBlock { at } => split_block(document, at),
+        VisualCommand::JoinBackward { at } => join(document, at, Side::Before),
+        VisualCommand::JoinForward { at } => join(document, at, Side::After),
+        // §26.5 and property 27: neither B.3's nor B.4's matrix has a Format
+        // row, and an absent capability is a denial. It is spelled out here so
+        // that granting it in B.5 is a deliberate edit to this file and not an
+        // accident.
         VisualCommand::ToggleStrong { .. } => Err(Refusal::MissingCapability),
     }
 }
@@ -285,6 +309,162 @@ fn replace_selection(
         }],
         envelope: range,
         resulting_cursor: start.get() + text.len(),
+    })
+}
+
+// -- B.4: block boundaries ---------------------------------------------------
+
+/// The line ending a new break should use, by §27.13's ordered fallback.
+///
+/// The current block's own ending first, then the one before it, then the
+/// document's first, then `LF`. The R2 rule had no answer for the last block
+/// of a CRLF document, which is exactly the case that would silently write an
+/// LF into a file that had never contained one.
+fn local_line_ending(source: &str, block_end: usize) -> &'static str {
+    let after = &source[block_end.min(source.len())..];
+    if after.starts_with("\r\n") {
+        return "\r\n";
+    }
+    if after.starts_with('\n') {
+        return "\n";
+    }
+    let before = &source[..block_end.min(source.len())];
+    if before.contains("\r\n") {
+        return "\r\n";
+    }
+    if source.contains("\r\n") {
+        return "\r\n";
+    }
+    "\n"
+}
+
+/// `Enter`: the split rules of the §26.9 matrix.
+fn split_block(document: &VisualDocument, at: SourceOffset) -> Result<SourceTransaction, Refusal> {
+    if at.get() > document.source_len() {
+        return Err(Refusal::InvalidPosition);
+    }
+    if document.offset_is_protected(at) || !caret_is_legal(document, at) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    let Some(block) = block_of(document, at) else {
+        return Err(Refusal::InvalidPosition);
+    };
+
+    let source = document.source();
+    let visual = document.block(block);
+    let ending = local_line_ending(source, visual.content_end);
+    let separator = format!("{ending}{ending}");
+
+    // The heading rules differ from the paragraph ones in one place only: a
+    // split in the *middle* of a heading produces two headings of the same
+    // level, because the level is an attribute of the block and losing it would
+    // be a silent demotion. At either end the matrix asks for a paragraph.
+    let content_start = document
+        .first_caret_offset(block)
+        .unwrap_or(visual.coverage.start());
+    let at_start = at.get() == content_start;
+    let at_end = at.get() == visual.content_end;
+
+    let replacement = match document.heading_level(block) {
+        Some(level) if !at_start && !at_end => {
+            format!("{separator}{} ", "#".repeat(level as usize))
+        }
+        _ => separator,
+    };
+
+    // At the start of a block with an invisible prefix, the new paragraph goes
+    // *before* the prefix — a heading keeps its `# ` and moves down whole.
+    // Splitting at the caret would put the break between the marker and its
+    // text and leave `# ` orphaned on a line of its own.
+    let insert_at = if at_start {
+        visual.coverage.start()
+    } else {
+        at.get()
+    };
+
+    let range = SourceRange::trusted(insert_at, insert_at);
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![SourcePatch {
+            range,
+            replacement: replacement.clone(),
+        }],
+        envelope: range,
+        // §12: Enter at the start of a block leaves the caret in the new empty
+        // paragraph above; everywhere else it follows the text it just moved.
+        resulting_cursor: if at_start {
+            insert_at
+        } else {
+            at.get() + replacement.len()
+        },
+    })
+}
+
+/// `Backspace` at a block start, or `Delete` at a block end.
+fn join(
+    document: &VisualDocument,
+    at: SourceOffset,
+    side: Side,
+) -> Result<SourceTransaction, Refusal> {
+    if at.get() > document.source_len() {
+        return Err(Refusal::InvalidPosition);
+    }
+    let Some(block) = block_of(document, at) else {
+        return Err(Refusal::InvalidPosition);
+    };
+
+    let blocks = document.blocks();
+    let index = block.0 as usize;
+    let (first, second) = match side {
+        Side::Before => (index.checked_sub(1), Some(index)),
+        Side::After => (
+            Some(index),
+            index.checked_add(1).filter(|i| *i < blocks.len()),
+        ),
+    };
+
+    // §28.2: at the edges of the document there is no pair, and that is a
+    // no-op rather than a refusal — nothing to do, and nothing to say.
+    let (Some(first), Some(second)) = (first, second) else {
+        return Err(Refusal::NothingToDo);
+    };
+    let (first, second) = (blocks[first], blocks[second]);
+
+    // The key only acts from the edge it belongs to.
+    let expected = match side {
+        Side::Before => document.first_caret_offset(second.id),
+        Side::After => Some(first.content_end),
+    };
+    if expected != Some(at.get()) {
+        return Err(Refusal::NothingToDo);
+    }
+
+    // Both blocks must grant Join, and neither may be a construction whose
+    // prefix is Protected. A heading may be joined *forward into* — its level
+    // survives and the paragraph's text moves in — but never backward, because
+    // that would consume the `# ` no caret can reach (§28.2).
+    if !document.block_is_joinable(first.id) || !document.block_is_joinable(second.id) {
+        return Err(Refusal::BlockBoundary);
+    }
+    if document.heading_level(second.id).is_some() {
+        return Err(Refusal::BlockBoundary);
+    }
+
+    // The bytes between the two blocks: the line endings that separate them,
+    // which §28.2 assigns to the block before.
+    let range = SourceRange::trusted(first.content_end, second.coverage.start());
+    if range.start() > range.end() {
+        return Err(Refusal::InvalidPosition);
+    }
+
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![SourcePatch {
+            range,
+            replacement: String::new(),
+        }],
+        envelope: range,
+        resulting_cursor: first.content_end,
     })
 }
 
