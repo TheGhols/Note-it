@@ -39,6 +39,59 @@ use crate::source_map::{Generation, GraphemeIndex, SourceOffset, SourceRange};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Which inline constructions the current sub-phase may edit.
+///
+/// `docs/tui.md` §26.5 makes every capability absent from the current matrix a
+/// denial, and §26.14 requires B.5 to enable Strong, Emphasis, Strike and
+/// InlineCode **individually** — "nenhum é liberado em lote". This struct is
+/// that rule made executable: a gate constructs exactly the set it has proved,
+/// and a construction whose flag is off stays `SourceVisible`, delimiters and
+/// all, exactly as it was in B.4.
+///
+/// Underline, colour and highlight are deliberately absent. They are canonical
+/// HTML, and §27.19 moved them to B.6 behind the pre-HTML gate — enabling them
+/// here would be editing HTML one gate before the gate that authorises editing
+/// HTML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Capabilities {
+    pub strong: bool,
+    pub emphasis: bool,
+    pub strike: bool,
+    pub inline_code: bool,
+}
+
+impl Capabilities {
+    /// What B.1 through B.4 grant: nothing inline.
+    pub const NONE: Self = Self {
+        strong: false,
+        emphasis: false,
+        strike: false,
+        inline_code: false,
+    };
+
+    /// Everything B.5 ends up granting, once each has been proved on its own.
+    pub const INLINE: Self = Self {
+        strong: true,
+        emphasis: true,
+        strike: true,
+        inline_code: true,
+    };
+
+    /// Whether this node's delimiters may be hidden and its text edited.
+    fn allows(self, kind: &NodeKind) -> bool {
+        match kind {
+            NodeKind::Strong => self.strong,
+            NodeKind::Emphasis => self.emphasis,
+            // A composite run is one node with a single ownership (§26.5), so
+            // it needs both of the marks it stands for.
+            NodeKind::StrongEmphasis => self.strong && self.emphasis,
+            NodeKind::Strike => self.strike,
+            NodeKind::InlineCode => self.inline_code,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(pub u32);
 
@@ -155,11 +208,27 @@ pub struct VisualDocument {
     /// Grapheme ranges per block, as `(source range, width)`.
     cells: Vec<Vec<(SourceRange, usize)>>,
     slots: Vec<CaretSlot>,
+    capabilities: Capabilities,
+    /// One entry per node: the span of its content, delimiters excluded.
+    ///
+    /// Precomputed in a single pass. Deriving it per query made the seam walk
+    /// `O(cells x nodes x lexemes)`, which stopped being a theoretical concern
+    /// the first time the performance suite ran and hung.
+    content_ranges: Vec<Option<(usize, usize)>>,
 }
 
 impl VisualDocument {
-    /// Projects `source` for `generation`.
+    /// Projects `source` for `generation`, granting nothing inline.
+    ///
+    /// This is what B.1 through B.4 see, and it stays the default so that a
+    /// caller who has not thought about capabilities gets the conservative
+    /// answer rather than the permissive one.
     pub fn project(source: &str, generation: Generation) -> Self {
+        Self::project_with(source, generation, Capabilities::NONE)
+    }
+
+    /// Projects `source` granting exactly `capabilities`.
+    pub fn project_with(source: &str, generation: Generation, capabilities: Capabilities) -> Self {
         let projection = project(source, generation);
         let mut document = Self {
             generation,
@@ -168,9 +237,20 @@ impl VisualDocument {
             blocks: Vec::new(),
             cells: Vec::new(),
             slots: Vec::new(),
+            capabilities,
+            content_ranges: Vec::new(),
         };
         document.build();
         document
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        self.capabilities
+    }
+
+    /// Whether `node` is a mark this document may edit.
+    pub fn mark_is_editable(&self, node: NodeId) -> bool {
+        self.capabilities.allows(&self.projection.node(node).kind)
     }
 
     pub fn generation(&self) -> Generation {
@@ -327,6 +407,141 @@ impl VisualDocument {
             .is_some_and(|slot| !self.offset_is_protected(slot.source_offset))
     }
 
+    /// Whether this lexeme is syntax belonging to a mark the reader may edit.
+    ///
+    /// Only the delimiters of an enabled mark are hidden. The delimiters of a
+    /// disabled one are still shown, and text is never hidden by anything.
+    fn lexeme_is_hidden_syntax(&self, kind: LexemeKind, owner: Option<NodeId>) -> bool {
+        if !matches!(
+            kind,
+            LexemeKind::MarkOpen | LexemeKind::MarkClose | LexemeKind::CodeDelimiter
+        ) {
+            return false;
+        }
+        let Some(owner) = owner else {
+            return false;
+        };
+        // An ancestor that is not editable dominates: a Strong inside an
+        // opaque region keeps its asterisks visible however enabled Strong is.
+        self.projection
+            .effective_classification(owner)
+            .admits_interior_caret()
+            || self.capabilities.allows(&self.projection.node(owner).kind)
+    }
+
+    /// The inline marks containing `byte`, outermost first.
+    ///
+    /// This is the "inline-mark path" the selection algebra of §26.6 is stated
+    /// over. Block nodes are deliberately not in it: block scope is rule 0's
+    /// business, and mixing the two is what let a selection across a heading
+    /// look like plain text to every rule.
+    pub fn mark_path(&self, byte: usize) -> Vec<NodeId> {
+        let mut path: Vec<NodeId> = self
+            .projection
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.kind,
+                    NodeKind::Strong
+                        | NodeKind::Emphasis
+                        | NodeKind::StrongEmphasis
+                        | NodeKind::Strike
+                        | NodeKind::InlineCode
+                        | NodeKind::Underline
+                        | NodeKind::Color(_)
+                        | NodeKind::Highlight(_)
+                ) && node.coverage.start() <= byte
+                    && byte < node.coverage.end()
+            })
+            .map(|node| node.id)
+            .collect();
+        path.sort_by_key(|id| std::cmp::Reverse(self.projection.node(*id).coverage.len()));
+        path
+    }
+
+    /// The visual content range of a mark: its bytes minus its delimiters.
+    pub fn mark_content_range(&self, node: NodeId) -> Option<(usize, usize)> {
+        self.content_ranges.get(node.0 as usize).copied().flatten()
+    }
+
+    /// Computes every node's content range in one pass over the lexemes.
+    fn compute_content_ranges(&mut self) {
+        let mut ranges: Vec<Option<(usize, usize)>> = vec![None; self.projection.nodes().len()];
+
+        for lexeme in self.projection.lexemes() {
+            if matches!(
+                lexeme.kind,
+                LexemeKind::MarkOpen
+                    | LexemeKind::MarkClose
+                    | LexemeKind::CodeDelimiter
+                    | LexemeKind::HtmlOpenTag
+                    | LexemeKind::HtmlCloseTag
+                    | LexemeKind::BlockPrefix
+                    | LexemeKind::Metadata
+            ) {
+                continue;
+            }
+            // A lexeme's content belongs to its owner and to every ancestor of
+            // its owner, so the range widens on the way up the tree.
+            let mut current = lexeme.owner;
+            while let Some(node) = current {
+                let slot = &mut ranges[node.0 as usize];
+                *slot = Some(match *slot {
+                    Some((start, end)) => (
+                        start.min(lexeme.source.start()),
+                        end.max(lexeme.source.end()),
+                    ),
+                    None => (lexeme.source.start(), lexeme.source.end()),
+                });
+                current = self.projection.node(node).parent;
+            }
+        }
+
+        self.content_ranges = ranges;
+    }
+
+    /// The graphemes fully inside `start..end`, across every block.
+    pub fn selected_cells(&self, start: usize, end: usize) -> Vec<SourceRange> {
+        self.blocks
+            .iter()
+            .flat_map(|block| {
+                self.graphemes_of(block.id)
+                    .filter(|cell| cell.source.start() >= start && cell.source.end() <= end)
+                    .map(|cell| cell.source)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The projected text between two source offsets.
+    ///
+    /// `CopyVisualSelection` (§26.6) is the one command that never needs
+    /// ownership: it does not mutate, so it succeeds for every valid selection
+    /// — including one that crosses half a mark, which Delete, Replace and
+    /// Format all refuse. Copying gives back exactly what the reader saw:
+    /// hidden delimiters contribute nothing, and a `SourceVisible` region
+    /// contributes its literal spelling.
+    pub fn copy_visual(&self, anchor: SourceOffset, head: SourceOffset) -> Option<String> {
+        let (start, end) = if anchor <= head {
+            (anchor.get(), head.get())
+        } else {
+            (head.get(), anchor.get())
+        };
+        if end > self.source.len() {
+            return None;
+        }
+        let mut copied = String::new();
+        for block in &self.blocks {
+            for cell in self.graphemes_of(block.id) {
+                if cell.source.start() >= start && cell.source.end() <= end {
+                    copied.push_str(cell.text);
+                }
+            }
+        }
+        Some(copied)
+    }
+
     /// Whether a grapheme's bytes are a line ending.
     fn is_line_ending(&self, range: SourceRange) -> bool {
         matches!(range.slice(&self.source), "\n" | "\r\n" | "\r")
@@ -403,12 +618,70 @@ impl VisualDocument {
     }
 
     /// Whether an offset falls inside a region no caret may enter.
+    ///
+    /// A mark the current sub-phase has enabled counts as editable even though
+    /// the projector marks every mark `SourceVisible`: B.1 classifies what the
+    /// grammar proved, and the capability matrix decides what may be done with
+    /// it. Keeping those separate is why enabling Strong is one flag here and
+    /// not a change to the parser.
     pub fn offset_is_protected(&self, offset: SourceOffset) -> bool {
         let node = self.projection.node_at(offset.get());
-        !self
+        if self
             .projection
             .effective_classification(node)
             .admits_interior_caret()
+        {
+            return false;
+        }
+        // Walk out to the nearest ancestor that decides the question. An
+        // enabled mark makes its own content editable; anything above it that
+        // is opaque or protected still dominates.
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let kind = &self.projection.node(id).kind;
+            if matches!(kind, NodeKind::Opaque) {
+                return true;
+            }
+            if self.capabilities.allows(kind) {
+                // Its ancestors must still admit it.
+                return self
+                    .projection
+                    .node(id)
+                    .parent
+                    .is_some_and(|parent| self.node_is_protected(parent));
+            }
+            if !matches!(
+                kind,
+                NodeKind::Strong
+                    | NodeKind::Emphasis
+                    | NodeKind::StrongEmphasis
+                    | NodeKind::Strike
+                    | NodeKind::InlineCode
+            ) {
+                return true;
+            }
+            current = self.projection.node(id).parent;
+        }
+        true
+    }
+
+    fn node_is_protected(&self, node: NodeId) -> bool {
+        if self
+            .projection
+            .effective_classification(node)
+            .admits_interior_caret()
+        {
+            return false;
+        }
+        let kind = &self.projection.node(node).kind;
+        if self.capabilities.allows(kind) {
+            return self
+                .projection
+                .node(node)
+                .parent
+                .is_some_and(|parent| self.node_is_protected(parent));
+        }
+        true
     }
 
     // -- construction -------------------------------------------------------
@@ -422,11 +695,19 @@ impl VisualDocument {
             let coverage = self.projection.node(node).coverage;
             let id = BlockId(self.blocks.len() as u32);
             let cells = self.cells_of(node);
-            let content_end = cells
+            // The end of the block's text, including any trailing syntax that
+            // is hidden but still owned — the outer caret after `**abc**` is
+            // at byte 7, past the closing asterisks, not at 5 (§26.11).
+            let content_end = self
+                .projection
+                .lexemes()
                 .iter()
-                .rev()
-                .find(|(range, _)| !self.is_line_ending(*range))
-                .map_or(coverage.start(), |(range, _)| range.end());
+                .filter(|lexeme| {
+                    coverage.covers(lexeme.source) && lexeme.kind != LexemeKind::LineEnding
+                })
+                .map(|lexeme| lexeme.source.end())
+                .max()
+                .unwrap_or(coverage.start());
 
             self.blocks.push(VisualBlock {
                 id,
@@ -438,6 +719,7 @@ impl VisualDocument {
             self.cells.push(cells);
         }
 
+        self.compute_content_ranges();
         self.build_slots();
     }
 
@@ -458,6 +740,14 @@ impl VisualDocument {
             if !projects_graphemes(lexeme.kind) {
                 continue;
             }
+            // A mark whose capability is granted becomes *projected*: its
+            // delimiters stop reaching the screen and only its content does.
+            // Until then it is SourceVisible, delimiters and all — hiding
+            // syntax the editor cannot yet edit would tell the reader a lie
+            // about what they can do with it.
+            if self.lexeme_is_hidden_syntax(lexeme.kind, lexeme.owner) {
+                continue;
+            }
             let text = lexeme.source.slice(&self.source);
             let base = lexeme.source.start();
             for (offset, grapheme) in text.grapheme_indices(true) {
@@ -473,104 +763,194 @@ impl VisualDocument {
     }
 
     fn build_slots(&mut self) {
-        let mut slots = Vec::new();
+        let mut slots: Vec<CaretSlot> = Vec::new();
 
         for block in &self.blocks {
-            let classification = self.projection.effective_classification(block.node);
-            // A block the reader may not edit publishes no caret at all. Its
-            // bytes are still projected — hiding them would imply they could be
-            // edited — but there is nowhere in it for a cursor to be.
-            if !classification.admits_interior_caret() {
+            if !self
+                .projection
+                .effective_classification(block.node)
+                .admits_interior_caret()
+            {
                 continue;
             }
 
-            let cells = &self.cells[block.id.0 as usize];
-            // A caret sits before each grapheme of content, plus once at the
-            // end. A line ending is a break rather than content, so it carries
-            // no caret of its own.
-            let positions: Vec<usize> = cells
-                .iter()
-                .enumerate()
-                .filter(|(_, (range, _))| !self.is_line_ending(*range))
-                .map(|(index, _)| index)
-                .collect();
-
-            for (ordinal, index) in positions
+            let cells: Vec<(SourceRange, usize)> = self.cells[block.id.0 as usize]
                 .iter()
                 .copied()
-                .map(Some)
-                .chain(std::iter::once(None))
-                .enumerate()
-            {
-                let offset = match index {
-                    Some(index) => cells[index].0.start(),
+                .filter(|(range, _)| !self.is_line_ending(*range))
+                .collect();
+
+            for boundary in 0..=cells.len() {
+                // The seam region: everything between the visible grapheme
+                // before this boundary and the visible grapheme after it. It
+                // holds the hidden syntax, and every lexeme edge inside it is a
+                // caret position of its own — the outer one before a `**` and
+                // the inner one after it (§26.11, §26.4).
+                let lo = match boundary.checked_sub(1).and_then(|index| cells.get(index)) {
+                    Some((range, _)) => range.end(),
+                    None => block.coverage.start(),
+                };
+                let hi = match cells.get(boundary) {
+                    Some((range, _)) => range.start(),
                     None => block.content_end,
                 };
-                let index = index.unwrap_or(cells.len());
-                let _ = ordinal;
-                let offset = SourceOffset::trusted(offset);
-                // The end-of-block caret can coincide with the last content
-                // caret when the block ends in a line ending; one boundary is
-                // one caret.
-                if self.offset_is_protected(offset) {
-                    continue;
-                }
-                // A boundary is a caret only when a grapheme the reader may
-                // edit touches it. The end of a block whose whole content is
-                // opaque has an offset outside the opaque range — half-open
-                // ranges make it so — and would otherwise become a caret
-                // floating at the end of something uneditable. Requiring an
-                // editable neighbour is the fail-closed reading, and it keeps
-                // `<x>abc</x>` with no caret at all.
-                // Line endings are skipped when looking for a neighbour: they
-                // are breaks, not content, and an editable line ending at the
-                // end of a wholly opaque block would otherwise smuggle a caret
-                // back in through the side door.
-                let previous = cells[..index]
-                    .iter()
-                    .rev()
-                    .find(|(range, _)| !self.is_line_ending(*range));
-                let next = cells[index..]
-                    .iter()
-                    .find(|(range, _)| !self.is_line_ending(*range));
-                let editable_neighbour =
-                    [previous, next].into_iter().flatten().any(|(range, _)| {
-                        !self.offset_is_protected(SourceOffset::trusted(range.start()))
+
+                for offset in self.seam_offsets(lo, hi) {
+                    let offset = SourceOffset::trusted(offset);
+                    if self.offset_is_protected(offset) {
+                        continue;
+                    }
+                    if !self.seam_is_legal(offset) {
+                        continue;
+                    }
+                    if !self.boundary_has_editable_neighbour(&cells, boundary) {
+                        continue;
+                    }
+                    if slots
+                        .last()
+                        .is_some_and(|last| last.source_offset == offset)
+                    {
+                        continue;
+                    }
+                    slots.push(CaretSlot {
+                        id: CaretSlotId(slots.len() as u32),
+                        generation: self.generation,
+                        block: block.id,
+                        grapheme: GraphemeIndex(boundary),
+                        source_offset: offset,
+                        context_path: self.path_of_seam(offset.get()),
                     });
-                if !editable_neighbour {
-                    continue;
                 }
-                if slots.last().is_some_and(|last: &CaretSlot| {
-                    last.source_offset == offset && last.block == block.id
-                }) {
-                    continue;
-                }
-                slots.push(CaretSlot {
-                    id: CaretSlotId(slots.len() as u32),
-                    generation: self.generation,
-                    block: block.id,
-                    grapheme: GraphemeIndex(index),
-                    source_offset: offset,
-                    context_path: self.path_of(offset.get()),
-                });
             }
         }
 
         self.slots = slots;
     }
 
-    /// The nodes containing `byte`, outermost first, excluding the document.
-    fn path_of(&self, byte: usize) -> Vec<NodeId> {
-        let mut path = Vec::new();
+    /// Every lexeme edge in `lo..=hi`, in order.
+    fn seam_offsets(&self, lo: usize, hi: usize) -> Vec<usize> {
+        if hi < lo {
+            return Vec::new();
+        }
+        // Lexemes tile the source, so they are sorted by start: bisect to the
+        // seam and walk the handful that fall inside it — usually none,
+        // sometimes one delimiter. Scanning all of them was `O(cells x
+        // lexemes)` and hung the performance suite outright.
+        let lexemes = self.projection.lexemes();
+        let from = lexemes.partition_point(|lexeme| lexeme.source.start() < lo);
+
+        let mut offsets = vec![lo, hi];
+        for lexeme in &lexemes[from..] {
+            if lexeme.source.start() > hi {
+                break;
+            }
+            if lexeme.source.end() <= hi {
+                offsets.push(lexeme.source.end());
+            }
+        }
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets
+    }
+
+    /// Whether a seam offset is a place a caret may be.
+    ///
+    /// Inline syntax gives two carets, one on each side: before `**` and after
+    /// it. A *block* prefix does not — `# ` is structural, and a caret before
+    /// it would be a caret that types outside the heading it is editing. So a
+    /// seam at the start of a `BlockPrefix` or `Metadata` lexeme is refused
+    /// while a seam at its end is allowed.
+    fn seam_is_legal(&self, offset: SourceOffset) -> bool {
+        let lexemes = self.projection.lexemes();
+        let index = lexemes.partition_point(|lexeme| lexeme.source.start() <= offset.get());
+        match index.checked_sub(1).and_then(|index| lexemes.get(index)) {
+            Some(lexeme) => {
+                !(matches!(lexeme.kind, LexemeKind::BlockPrefix | LexemeKind::Metadata)
+                    && offset.get() < lexeme.source.end())
+            }
+            None => true,
+        }
+    }
+
+    /// Whether an editable grapheme touches this boundary.
+    fn boundary_has_editable_neighbour(
+        &self,
+        cells: &[(SourceRange, usize)],
+        boundary: usize,
+    ) -> bool {
+        let previous = boundary.checked_sub(1).and_then(|index| cells.get(index));
+        let next = cells.get(boundary);
+        [previous, next]
+            .into_iter()
+            .flatten()
+            .any(|(range, _)| !self.offset_is_protected(SourceOffset::trusted(range.start())))
+    }
+
+    /// The node path of a seam, counting a node as containing its own edges.
+    ///
+    /// A plain `node_at` would put the seam after `**abc**`'s closing
+    /// asterisks outside the Strong, which is right, and the seam before them
+    /// inside it, which is also right — this simply makes both answerable from
+    /// one place.
+    fn path_of_seam(&self, byte: usize) -> Vec<NodeId> {
+        // Walk up from the innermost node covering the byte. Nesting is bounded
+        // at 32, so this is bounded work; scanning every node was linear in the
+        // document once per seam.
+        let mut candidates = Vec::new();
         let mut current = Some(self.projection.node_at(byte));
         while let Some(id) = current {
-            if id != NodeId(0) {
-                path.push(id);
-            }
+            candidates.push(id);
             current = self.projection.node(id).parent;
         }
+        // A node that *begins* exactly here contains the seam but not the byte,
+        // so `node_at` misses it. It is the one extra candidate worth testing.
+        let nodes = self.projection.nodes();
+        let from = nodes.partition_point(|node| node.coverage.start() < byte);
+        if let Some(node) = nodes.get(from).filter(|node| node.coverage.start() == byte) {
+            candidates.push(node.id);
+            let mut current = node.parent;
+            while let Some(id) = current {
+                candidates.push(id);
+                current = self.projection.node(id).parent;
+            }
+        }
+
+        let mut path = Vec::new();
+        for node in candidates.iter().map(|id| self.projection.node(*id)) {
+            if node.id == NodeId(0) {
+                continue;
+            }
+            // For a mark, "inside" means inside its *content*, not its
+            // coverage: the seam before `**` is at the coverage start and is
+            // outside the mark, while the seam after `**` is at the content
+            // start and is inside it. Using coverage here would make the two
+            // slots indistinguishable and destroy the whole point of having
+            // both.
+            let inside = match self.mark_content_range(node.id) {
+                Some((start, end)) if self.is_mark(node.id) => start <= byte && byte <= end,
+                _ => node.coverage.start() <= byte && byte <= node.coverage.end(),
+            };
+            if inside && !path.contains(&node.id) {
+                path.push(node.id);
+            }
+        }
+        path.sort_by_key(|id| self.projection.node(*id).coverage.len());
         path.reverse();
         path
+    }
+
+    fn is_mark(&self, node: NodeId) -> bool {
+        matches!(
+            self.projection.node(node).kind,
+            NodeKind::Strong
+                | NodeKind::Emphasis
+                | NodeKind::StrongEmphasis
+                | NodeKind::Strike
+                | NodeKind::InlineCode
+                | NodeKind::Underline
+                | NodeKind::Color(_)
+                | NodeKind::Highlight(_)
+        )
     }
 }
 

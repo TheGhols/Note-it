@@ -3867,3 +3867,81 @@ dentro de uma região protegida de uma nota grande.
 A asserção de P2 passou a ser absoluta em vez de razão: a esses tempos a razão mede
 o relógio, não o código, e o que tem significado é que uma tecla numa nota de meio
 megabyte planeje muito abaixo de um quadro.
+
+## 35. Fase 5.0D.4B.5 — capacidades Markdown inline
+
+### 35.1 Uma capability por vez, de verdade
+
+O §26.14 exige que Strong, Emphasis, Strike e InlineCode sejam liberados
+**individualmente** — "nenhum é liberado em lote". Isso virou tipo: `Capabilities`
+tem um booleano por construção, `VisualDocument::project_with` recebe o conjunto
+exato que o gate provou, e `project()` continua entregando `Capabilities::NONE`,
+para que quem não pensou no assunto receba a resposta conservadora.
+
+Uma mark cuja capability está concedida torna-se **projetada**: seus delimitadores
+deixam de chegar à tela e seu conteúdo passa a ter caret. Enquanto não está, ela
+continua `SourceVisible` com os delimitadores visíveis — esconder sintaxe que o
+editor ainda não sabe editar diria ao leitor uma mentira sobre o que ele pode fazer
+com ela. Há teste para cada combinação: com apenas Strong, `**forte** e *ênfase*`
+projeta `forte e *ênfase*`; com apenas Emphasis, `**forte** e ênfase`.
+
+`Underline` não está aqui. É HTML canônico, e o §27.19 o moveu para B.6 atrás do
+gate P3: liberá-lo em B.5 seria editar HTML um gate antes do gate que autoriza
+editar HTML.
+
+### 35.2 N slots por fronteira, finalmente alcançável
+
+Com marks projetadas, o caso "N slots" do §26.15.8 deixa de ser hipotético. Em
+`**abc**` há **seis** posições de caret, exatamente as que o §26.11 enumera: 0 e 2
+antes de `a` — externa e interna — depois 3, 4, 5, e 7 depois de `c`. O par
+externo/interno é o que permite ao caret estar visualmente no mesmo lugar e
+semanticamente dentro ou fora da mark, e é o que faz digitar no começo de um trecho
+em negrito continuar em negrito.
+
+Isso exigiu reconstruir a geração de slots em torno de **seams**: entre dois
+graphemes visíveis há uma região de sintaxe escondida, e cada aresta de lexeme
+dentro dela é uma posição de caret. Um `BlockPrefix` é a exceção — `# ` é estrutural,
+e um caret antes dele seria um caret que digita fora do heading que está editando —
+então a aresta anterior a um prefixo de bloco é recusada e a posterior é aceita.
+
+A ordenação segue o §26.4: do exterior para o interior na abertura, do interior para
+o exterior no fechamento. O teste verifica monotonicidade em uma direção ou na
+outra, não ascendente sempre, porque ascendente sempre é a regra errada.
+
+### 35.3 A álgebra de seleção de marks
+
+`check_mark_boundaries` implementa as regras 3 e 4 do §27.18/§28.3 sem discrição:
+
+- todo grapheme selecionado precisa ter exatamente o mesmo inline-mark path;
+- path vazio — texto plano num único bloco — é permitido em qualquer extensão,
+  inclusive o bloco inteiro, porque um bloco não tem delimitadores a limpar (N1);
+- path não vazio é permitido apenas para um **subconjunto próprio** do conteúdo
+  visual da mark. Selecionar todo o conteúdo é o caso whole-leaf, que exige contrato
+  explícito de cleanup dos delimitadores, e nenhuma subfase até B.5 tem um — então
+  recusa, em vez de deixar `****`, que o §26.11 diz não ser um Strong vazio e sim
+  texto literal protegido. Apagar três caracteres converteria um construto editável
+  num não editável.
+
+Provas: `x **ab**` selecionando `x a` recusa; `**ab** x` selecionando `b x` recusa;
+`**a *bc* d**` entrando parcialmente no Emphasis recusa; `**abc**` selecionando `ab`
+é permitido e dá `**c**`; selecionando `abc` inteiro recusa com
+`MissingCapability`. E `CopyVisualSelection` sucede em todos eles, porque não muta —
+essa assimetria é o ponto.
+
+### 35.4 Uma quadrática introduzida e removida no mesmo gate
+
+A primeira implementação de seams varria **todos** os lexemes para cada fronteira e
+**todos** os nodes para cada seam, e derivava o content range de uma mark varrendo
+lexemes de novo. Isso é `O(cells × nodes × lexemes)`. A suíte de performance deixou
+de terminar — não ficou lenta, travou.
+
+Três correções: os content ranges passaram a ser calculados uma vez, numa única
+passada que alarga o range de cada ancestral; `seam_offsets` e `seam_is_legal`
+viraram bisseção sobre a lista de lexemes, que é ordenada porque ladrilha a fonte; e
+`path_of_seam` passou a subir a partir do node mais interno em vez de varrer todos,
+o que é trabalho limitado porque o aninhamento é limitado a 32.
+
+Depois disso a suíte de performance voltou a 2,5 s, 1 MB projeta em 13,22 ms e
+planejar uma tecla continua constante. Vale registrar o padrão: as três quadráticas
+encontradas até aqui (§34.2 e esta) foram todas achadas por um gate de performance
+que roda de verdade, e nenhuma por leitura do código.

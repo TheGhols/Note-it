@@ -297,6 +297,9 @@ fn replace_selection(
         return Err(Refusal::ProtectedRegion);
     }
 
+    // Rules 3 and 4 (§27.18, §28.3): the inline-mark algebra.
+    check_mark_boundaries(document, start.get(), end.get())?;
+
     let range = SourceRange::trusted(start.get(), end.get());
     Ok(SourceTransaction {
         generation: document.generation(),
@@ -463,6 +466,57 @@ fn join(
         envelope: range,
         resulting_cursor: first.content_end,
     })
+}
+
+/// The inline-mark rules of §26.6, as corrected by §27.18 and §28.3.
+///
+/// A mutating selection that crosses *part* of a mark is always a `Refusal`
+/// (property 26). The rules are evaluated in order and have no discretion:
+///
+/// - every selected grapheme must share exactly one inline-mark path;
+/// - an empty path — plain text in one block — is permitted at any extent,
+///   including the whole block, because a block has no delimiters to clean up;
+/// - a non-empty path is permitted only for a *proper subset* of the mark's
+///   visual content. Selecting all of it is the whole-leaf case, which needs an
+///   explicit cleanup contract for the mark's delimiters, and no sub-phase up
+///   to B.5 has one — so it refuses rather than leaving `****` behind, which
+///   §26.11 says is not an empty Strong but literal, protected text.
+fn check_mark_boundaries(
+    document: &VisualDocument,
+    start: usize,
+    end: usize,
+) -> Result<(), Refusal> {
+    let cells = document.selected_cells(start, end);
+    if cells.is_empty() {
+        return Ok(());
+    }
+
+    let first = document.mark_path(cells[0].start());
+    for cell in &cells[1..] {
+        if document.mark_path(cell.start()) != first {
+            return Err(Refusal::PartialMarkBoundary);
+        }
+    }
+
+    let Some(innermost) = first.last().copied() else {
+        // Plain text: §28.3/N1 permits any extent within one block.
+        return Ok(());
+    };
+
+    if !document.mark_is_editable(innermost) {
+        return Err(Refusal::ProtectedRegion);
+    }
+
+    let Some((content_start, content_end)) = document.mark_content_range(innermost) else {
+        return Err(Refusal::PartialMarkBoundary);
+    };
+    if start <= content_start && end >= content_end {
+        // The whole leaf. Permitted only with a cleanup contract, which does
+        // not exist yet.
+        return Err(Refusal::MissingCapability);
+    }
+
+    Ok(())
 }
 
 fn block_of(document: &VisualDocument, offset: SourceOffset) -> Option<BlockId> {
