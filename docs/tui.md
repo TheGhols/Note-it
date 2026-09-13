@@ -3595,3 +3595,68 @@ máquina, enquanto uma razão sobrevive a ser executada noutra.
 P0 é informativo quanto aos números e obrigatório quanto à sua existência; ele não
 substitui P1, que é o gate que precisa excluir os cinco modos de falha do §26.13
 antes de B.3.
+
+## 30. Fase 5.0D.4B.2 — source map visual somente leitura
+
+### 30.1 Escopo entregue
+
+B.2 acrescenta visão, não mãos. O módulo novo `noteit-tui/src/visual.rs` traz
+`VisualDocument` (derivado, imutável, válido para uma única `Generation`),
+`GraphemeCell`, `VisualBlock`, `CaretSlot`, `RawBookmark` e `Direction`. Nenhum
+método devolve mutação, e o `Draft` continua sendo tocado apenas pelo editor raw.
+
+Marks e HTML canônico continuam `SourceVisible` neste gate: seus delimitadores são
+projetados literalmente e não têm caret interno. Eles só se tornam invisíveis quando
+B.5 e B.6 concederem as capabilities que tornam honesto escondê-los — projetar um
+delimitador como invisível antes disso afirmaria ao leitor que ele pode editá-lo.
+
+### 30.2 Dependência Unicode — autorização e auditoria
+
+`unicode-segmentation 1.13.3` e `unicode-width 0.2.2` passam a ser dependências
+diretas de `noteit-tui`. A autorização condicional do §26.12 exige auditoria, e ela é:
+
+- **Licença:** `MIT OR Apache-2.0` em ambas, compatível com o MIT do projeto.
+- **Árvore transitiva:** `unicode-segmentation` tem **zero** dependências próprias;
+  `unicode-width` também. Nenhuma rede, nenhum I/O, nenhum runtime.
+- **MSRV:** 1.85.0 e 1.66, ambos abaixo do 1.89 declarado pelo workspace.
+- **Impacto no lock:** nenhum crate novo foi resolvido e nenhuma versão mudou. As
+  duas já estavam no `Cargo.lock` transitivamente, via `ratatui-core`,
+  `unicode-truncate` e `crossterm → derive_more → convert_case`. O diff inteiro do
+  lock são **duas linhas**, acrescentando-as à lista de dependências deste pacote.
+- **Necessidade:** provada por teste. `e` + U+0301, `👨‍👩‍👧‍👦`, `🇧🇷` e `👍🏽` são
+  um EGC cada e vários escalares cada; um cursor que conta `char` pousa dentro de
+  todos eles. Escrever um segmentador próprio é proibido pelo §26.12.
+- **Proibição específica:** `ratatui::text::Span::styled_graphemes` não pode ser o
+  segmentador do source map (§27.17). Ele filtra
+  `!g.contains(char::is_control)`, descartando TAB, o que deslocaria em um todo
+  índice de EGC posterior. Há teste de regressão para isso: `a\tb` projeta três
+  graphemes.
+
+### 30.3 Regra de slot descoberta ao implementar
+
+A especificação diz que não existe caret dentro de `Protected`/`Opaque`, mas ranges
+são semiabertos: numa nota que é inteiramente `<x>abc</x>`, o offset do fim do bloco
+cai **fora** do range Opaque e produziria um caret flutuando ao fim de algo não
+editável. A regra implementada, e agora documentada, é mais estreita e falha fechada:
+
+> Uma fronteira só é caret quando um grapheme que o leitor pode editar a toca — o
+> anterior ou o seguinte. Assim `<x>abc</x>` não tem caret algum, `# T` tem
+> exatamente dois (antes e depois do `T`, nunca dentro de `# `), e um parágrafo tem
+> um por fronteira.
+
+### 30.4 Provas
+
+Os 17 testes de `noteit-tui/tests/visual_source_map.rs` foram escritos primeiro e
+falharam na baseline pelo motivo esperado — o módulo não existia. Cobrem: EGC nunca
+partido (NFC, NFD, marcas combinantes empilhadas, ZWJ, bandeiras, tom de pele, CJK);
+TAB preservado; largura de célula separada da contagem de graphemes; todo slot numa
+fronteira de EGC; nenhum slot dentro de região protegida; prefixo de heading sem
+caret; zero/um/N slots com ordenação por profundidade; slot canônico total para as
+três direções; round-trip de todo slot pelo seu offset; ponte escalar↔byte através de
+Unicode; recusa de objeto de outra generation; bookmark exato quando intacto e
+recusado quando consumido; troca de modo repetida sem mudar byte nem history; e
+região sem slots ainda projetando sua fonte para o leitor.
+
+A cardinalidade N>1 de slots por fronteira só é alcançável com duas marks
+**projetadas** aninhadas, o que existe a partir de B.6; o §27.21/m8 já registra isso.
+O que B.2 prova é a regra de ordenação e os casos zero e um.

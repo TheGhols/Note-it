@@ -9,3 +9,4 @@ pub mod projection;
 pub mod source_map;
 pub mod terminal;
 pub mod ui;
+pub mod visual;
