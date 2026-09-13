@@ -10,3 +10,4 @@ pub mod source_map;
 pub mod terminal;
 pub mod ui;
 pub mod visual;
+pub mod visual_edit;

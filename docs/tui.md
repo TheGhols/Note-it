@@ -3709,3 +3709,63 @@ um, e sim reconhecer que build de debug não mede nada útil: os números desta 
 prova as mesmas formas e devolve a máquina aos testes que precisam de um terminal
 respondendo a tempo. Cinco execuções consecutivas da suíte completa passaram depois
 disso.
+
+## 32. Fase 5.0D.4B.3 — edição visual mínima
+
+### 32.1 Escopo entregue
+
+O módulo novo `noteit-tui/src/visual_edit.rs` é o único lugar da TUI que converte
+intenção visual em bytes. `plan()` é **puro**: lê uma projeção imutável e devolve
+`SourceTransaction` ou `Refusal`, e não pode alterar nada em nenhum dos dois casos.
+Essa separação é o que transforma "uma recusa preserva todo estado observável" de
+promessa em propriedade — não há nada a desfazer, porque nada foi feito.
+
+`SourceTransaction` carrega `generation`, `patches`, `envelope` e
+`resulting_cursor`. O `envelope` é **declarado**, não inferido, conforme o §27.12:
+sem ele a propriedade 12 seria satisfeita vacuamente por um único patch cobrindo o
+documento inteiro.
+
+B.3 concede exatamente três operações sobre texto plano de parágrafo — `Insert`,
+`DeleteInside` e `ReplaceSelection`. Todo o resto é `Refusal` com motivo tipado
+(`StaleGeneration`, `ProtectedRegion`, `PartialMarkBoundary`, `MissingCapability`,
+`BlockBoundary`, `InvalidPosition`), para que a aplicação possa nomear a causa e
+oferecer o modo Markdown em vez de uma tecla que não faz nada em silêncio.
+
+### 32.2 `Generation` por sessão
+
+O §27.2 exige um contador de sessão, estritamente monotônico, que avança em **toda**
+mutação. `draft.rs` ganhou um `AtomicU64` estático e `Draft::generation()`; toda
+mutação passa por `touch()`, inclusive undo, redo e cada tecla de um agrupamento de
+inserção. Um agrupamento é um passo de **undo** e ainda assim muitas versões do
+texto: um objeto medido antes da terceira tecla não pode ser aceito depois dela.
+
+Nenhum `EditorSnapshot` armazena generation, de modo que restaurar não pode mover o
+contador para trás.
+
+`Draft::apply_transaction` é a última linha de defesa, não a primeira: o planner já
+provou que os patches são ordenados, disjuntos e válidos; o `Draft` prova que a
+generation ainda é aquela em que foram medidos. O §26.15.22 faz do `Draft` o único
+lugar onde uma mutação visual pode pousar, portanto é também o único lugar onde uma
+pode ser barrada.
+
+### 32.3 Provas
+
+Os 21 testes de `noteit-tui/tests/visual_editing.rs` foram escritos primeiro e
+falharam na baseline pelo motivo esperado. Cobrem: patches estritamente ordenados e
+sem compartilhar offset; todo patch dentro do envelope declarado; envelope local que
+não alcança bloco vizinho; bytes fora do envelope idênticos; inserção, remoção de
+grapheme inteiro (família ZWJ de 25 bytes vai inteira ou não vai) e substituição de
+seleção; parágrafo inteiro apagável (§28.3/N1); recusa em região protegida; recusa de
+generation antiga; recusa de seleção multibloco em `# T\n\npara` e em `ab\n\ncd`;
+recusa de seleção que cruza parcialmente uma mark; recusa de formatação por ausência
+de capability; um comando igual a um passo de undo; generation avançando em transação,
+undo, redo e tecla raw; transação stale recusada pelo próprio `Draft`; e o slot
+canônico decidindo onde o texto digitado pousa.
+
+### 32.4 Limitação registrada
+
+A integração com `app.rs` e `ui.rs` — a tecla real, a alternância de modo na
+interface e o desenho do cursor visual — **não** faz parte de B.3 e não foi feita.
+O que existe é o motor: projeção, mapa, planner, transação e autoridade do `Draft`,
+com cobertura própria. A interface entra depois de B.4 fechar as fronteiras de bloco,
+para que a tecla `Enter` não precise mudar de contrato no meio da integração.

@@ -28,7 +28,30 @@
 //! one character at a time.
 
 use crate::formatting::{self, Kind};
+use crate::source_map::Generation;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The session's generation counter.
+///
+/// Session-scoped and strictly monotonic, which `docs/tui.md` §27.2 requires
+/// and which a per-`Draft` counter cannot give: `app.rs` builds a brand new
+/// `Draft` after every save, conflict, recovery and reload, and a counter that
+/// restarted there would let a `VisualDocument` cached before the reseat be
+/// "generation-correct" against a different revision's bytes. Undo and redo
+/// advance it too, for the same reason — restoring an older generation would
+/// make an object captured in the undone state acceptable against the redone
+/// one.
+static GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> Generation {
+    let mut generation = Generation::first();
+    let raw = GENERATION.fetch_add(1, Ordering::Relaxed);
+    for _ in 0..raw {
+        generation = generation.next();
+    }
+    generation
+}
 
 /// How many undo steps a draft keeps. The oldest is dropped past this.
 pub const UNDO_LIMIT: usize = 200;
@@ -98,6 +121,8 @@ pub struct Draft {
     undo: VecDeque<Snapshot>,
     redo: Vec<Snapshot>,
     grouping: Option<Grouping>,
+    /// Which version of these bytes this is. Never stored in a snapshot.
+    generation: Generation,
 }
 
 impl Draft {
@@ -114,7 +139,38 @@ impl Draft {
             undo: VecDeque::new(),
             redo: Vec::new(),
             grouping: None,
+            generation: next_generation(),
         }
+    }
+
+    /// Which version of the text this is.
+    ///
+    /// Any object carrying offsets into this draft carries this value, and
+    /// handing back a stale one is a refusal rather than a silent write at the
+    /// wrong byte.
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    /// Advances the generation. Called by every mutation, without exception.
+    fn touch(&mut self) {
+        self.generation = next_generation();
+    }
+
+    /// Replaces the whole body as one undoable step, putting the cursor at
+    /// `cursor_byte`.
+    ///
+    /// This is how a planned `SourceTransaction` lands: the patches were
+    /// already applied to a copy of the text, and what arrives here is the
+    /// result plus where the caret belongs. One checkpoint, so one command is
+    /// one undo (§26.15.14).
+    pub fn replace_all_as_one_step(&mut self, text: &str, cursor_byte: usize) {
+        self.checkpoint(Grouping::Discrete);
+        self.lines = text.split('\n').map(str::to_owned).collect();
+        self.anchor = None;
+        self.cursor = position_of_byte(text, cursor_byte);
+        self.clamp();
+        self.touch();
     }
 
     /// The body as it would be stored right now.
@@ -478,11 +534,20 @@ impl Draft {
         self.anchor = snapshot.anchor;
         self.grouping = None;
         self.clamp();
+        // §27.2: undo and redo advance the counter like any other mutation.
+        // A snapshot never carries one, so there is nothing to restore here
+        // and nothing that could move the generation backwards.
+        self.touch();
     }
 
     /// Records the state an undo would return to, unless this edit continues
     /// the run the last one started.
     fn checkpoint(&mut self, grouping: Grouping) {
+        // Every mutation advances the generation, grouped or not (§27.2). A
+        // run of insertions is one *undo step* and still many versions of the
+        // text: an object measured before the third keystroke must not be
+        // accepted after it.
+        self.touch();
         self.redo.clear();
         if grouping != Grouping::Discrete && self.grouping == Some(grouping) {
             return;
@@ -573,6 +638,22 @@ impl Draft {
         }
         self.cursor.line = self.cursor.line.min(self.lines.len() - 1);
         self.cursor.column = self.cursor.column.min(self.line_length(self.cursor.line));
+    }
+}
+
+/// The `(line, scalar column)` position of a byte offset in `text`.
+fn position_of_byte(text: &str, byte: usize) -> Position {
+    let byte = byte.min(text.len());
+    let byte = (0..=byte)
+        .rev()
+        .find(|at| text.is_char_boundary(*at))
+        .unwrap_or(0);
+    let before = &text[..byte];
+    Position {
+        line: before.matches('\n').count(),
+        column: before[before.rfind('\n').map_or(0, |index| index + 1)..]
+            .chars()
+            .count(),
     }
 }
 

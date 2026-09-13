@@ -307,6 +307,26 @@ impl VisualDocument {
             .is_some_and(|slot| !self.offset_is_protected(slot.source_offset))
     }
 
+    /// Whether `start..end` touches a lexeme that may never be partly rewritten.
+    ///
+    /// Clause (iii) of §28.2's block-scope rule, broadened by the review from
+    /// "partially contained" to "intersected, wholly or partly": a heading's
+    /// `# `, a task's completion metadata and any protected syntax may not end
+    /// up inside a patch at all. Line endings are deliberately exempt — §28.4
+    /// says so explicitly, because forbidding them would make every multi-block
+    /// selection impossible and leave the rule that follows it dead code.
+    pub fn range_touches_protected_lexeme(&self, block: BlockId, start: usize, end: usize) -> bool {
+        let coverage = self.projection.node(self.block(block).node).coverage;
+        self.projection.lexemes().iter().any(|lexeme| {
+            if !coverage.covers(lexeme.source) {
+                return false;
+            }
+            let protected = matches!(lexeme.kind, LexemeKind::BlockPrefix | LexemeKind::Metadata);
+            let intersects = lexeme.source.start() < end && start < lexeme.source.end();
+            protected && intersects
+        })
+    }
+
     /// Whether an offset falls inside a region no caret may enter.
     pub fn offset_is_protected(&self, offset: SourceOffset) -> bool {
         let node = self.projection.node_at(offset.get());
