@@ -303,19 +303,23 @@ impl Projection {
     }
 
     /// The innermost node whose coverage contains `byte`.
+    ///
+    /// Nodes are built in pre-order — a parent before its children, and
+    /// siblings in source order — so their `coverage.start()` is
+    /// non-decreasing and the innermost node containing a byte is the *last*
+    /// one in that order that contains it. Bisecting to the last candidate and
+    /// walking back beats scanning every node, which is consulted once per
+    /// protection check and so once per keystroke.
     pub fn node_at(&self, byte: usize) -> NodeId {
-        let mut best = NodeId(0);
-        let mut best_len = usize::MAX;
-        for node in &self.nodes {
-            if node.coverage.start() <= byte
-                && byte < node.coverage.end()
-                && node.coverage.len() <= best_len
-            {
-                best = node.id;
-                best_len = node.coverage.len();
+        let upper = self
+            .nodes
+            .partition_point(|node| node.coverage.start() <= byte);
+        for node in self.nodes[..upper].iter().rev() {
+            if byte < node.coverage.end() {
+                return node.id;
             }
         }
-        best
+        NodeId(0)
     }
 }
 

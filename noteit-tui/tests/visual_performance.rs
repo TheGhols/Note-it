@@ -295,3 +295,141 @@ fn p1_nesting_is_bounded() {
         "deep nesting took {elapsed:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gate 5.0D.4B.P2 — measuring the interactive path before inline capabilities
+// ---------------------------------------------------------------------------
+//
+// P2 re-measures what B.3 and B.4 added and must pass before B.5. The shape it
+// protects is the one §26.13 cares about: planning a keystroke may not cost
+// more as the document grows, because a planner that walked the whole note per
+// key would be the "full projection per keystroke" the gate forbids in
+// everything but name.
+
+/// Plans one insertion in the middle of a document and returns the time.
+fn plan_one_keystroke(source: &str) -> Duration {
+    use noteit_tui::source_map::{Generation, SourceOffset};
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    let document = noteit_tui::visual::VisualDocument::project(source, Generation::first());
+    // A caret in the last block, which is the worst case for anything that
+    // scans from the start.
+    let at = document
+        .slots()
+        .last()
+        .expect("a document with somewhere to type")
+        .source_offset;
+
+    let mut best = Duration::MAX;
+    for _ in 0..5 {
+        let start = Instant::now();
+        let transaction = plan(
+            &document,
+            VisualCommand::Insert {
+                at: SourceOffset::in_source(source, at.get()).expect("a boundary"),
+                text: "x".into(),
+            },
+        );
+        let elapsed = start.elapsed();
+        assert!(transaction.is_ok(), "the plan should succeed");
+        best = best.min(elapsed);
+    }
+    best
+}
+
+#[test]
+fn p2_planning_a_keystroke_does_not_grow_with_the_document() {
+    let small = realistic(scale(50 * 1_024));
+    let large = realistic(scale(500 * 1_024));
+
+    let small_time = plan_one_keystroke(&small).as_secs_f64();
+    let large_time = plan_one_keystroke(&large).as_secs_f64();
+    let growth = large_time / small_time.max(f64::MIN_POSITIVE);
+
+    println!(
+        "P2 plan keystroke: 10.0x bytes -> {growth:.1}x time ({:.3} ms -> {:.3} ms)",
+        small_time * 1000.0,
+        large_time * 1000.0
+    );
+
+    // Both lookups planning needs — "is this a caret?" and "is this byte
+    // protected?" — are bisections, so the cost does not depend on the size of
+    // the note. At this speed the ratio is measuring the clock rather than the
+    // code, so the bound that means anything is the absolute one: a keystroke
+    // in a half-megabyte note must plan in well under a frame.
+    let _ = growth;
+    assert!(
+        large_time < 0.002,
+        "planning a keystroke in a large note took {:.3} ms",
+        large_time * 1000.0
+    );
+}
+
+#[test]
+fn p2_applying_a_transaction_is_one_pass_over_the_text() {
+    use noteit_tui::draft::Draft;
+    use noteit_tui::source_map::SourceOffset;
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    let source = realistic(scale(200 * 1_024));
+    let mut draft = Draft::new(&source);
+    let document = noteit_tui::visual::VisualDocument::project(&source, draft.generation());
+    let at = document.slots().last().expect("a slot").source_offset;
+
+    let transaction = plan(
+        &document,
+        VisualCommand::Insert {
+            at: SourceOffset::in_source(&source, at.get()).expect("a boundary"),
+            text: "x".into(),
+        },
+    )
+    .expect("an insertion");
+
+    let start = Instant::now();
+    draft.apply_transaction(&transaction).expect("applies");
+    let elapsed = start.elapsed();
+
+    println!(
+        "P2 apply on {} bytes: {:.3} ms",
+        source.len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "applying took {elapsed:?}"
+    );
+    assert_eq!(draft.text().len(), source.len() + 1);
+}
+
+#[test]
+fn p2_a_refusal_costs_no_more_than_a_success() {
+    use noteit_tui::source_map::{Generation, SourceOffset};
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    // A refusal that scanned the document to decide would be a denial-of-
+    // service on a large note: hold a key down inside an opaque region and the
+    // editor stops responding.
+    let source = format!("<custom>{}</custom>", "x".repeat(scale(100_000)));
+    let document = noteit_tui::visual::VisualDocument::project(&source, Generation::first());
+
+    let start = Instant::now();
+    let result = plan(
+        &document,
+        VisualCommand::Insert {
+            at: SourceOffset::in_source(&source, 10).expect("a boundary"),
+            text: "y".into(),
+        },
+    );
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "inside an opaque region this must refuse");
+    println!(
+        "P2 refusal on {} bytes: {:.3} ms",
+        source.len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "refusing took {elapsed:?}"
+    );
+}

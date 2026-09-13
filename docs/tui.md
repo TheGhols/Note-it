@@ -3826,3 +3826,44 @@ remove o vão inteiro sem deixar nenhum `\n` órfão.
 
 Representar parágrafos vazios como nodes próprios é uma decisão de projeto que
 pertence a B.7, junto de listas e citações, e não foi tomada aqui.
+
+## 34. Fase 5.0D.4B.P2 — gate pré-inline
+
+### 34.1 O que P2 mede
+
+P2 remede o que B.3 e B.4 acrescentaram e tem de passar antes de B.5. A forma que
+ele protege é a do §26.13: planejar uma tecla não pode custar mais conforme a nota
+cresce, porque um planner que varresse a nota inteira a cada tecla seria a "full
+projection por tecla" proibida em tudo menos no nome.
+
+| Medida (release) | Resultado |
+|---|---|
+| planejar uma tecla em 50 KB | 0,000 ms (abaixo da resolução do relógio) |
+| planejar uma tecla em 500 KB | 0,000 ms |
+| aplicar a transação em 200 KB | 0,92 ms |
+| recusar dentro de região opaca de 100 KB | 0,001 ms |
+
+### 34.2 Uma quadrática escondida, encontrada por P2
+
+A primeira medição deu 16,5x de tempo para 10x de bytes ao planejar uma tecla. Duas
+consultas eram varreduras lineares: `caret_is_legal`, sobre a lista de slots, e
+`Projection::node_at`, sobre a lista de nodes. Ambas são feitas uma vez por tecla, e
+`node_at` era feita **uma vez por grapheme** ao construir os slots da B.2 — isto é,
+a construção do `VisualDocument` era `O(graphemes × nodes)`.
+
+As duas viraram bisseção. Slots são construídos bloco a bloco e, dentro do bloco, em
+ordem crescente de grapheme, portanto a lista está ordenada por offset. Nodes são
+construídos em pré-ordem — pai antes dos filhos, irmãos em ordem de fonte — logo
+`coverage.start()` é não decrescente e o node mais interno que contém um byte é o
+**último** dessa ordem que o contém: bisseta-se até o último candidato e caminha-se
+para trás.
+
+O efeito medido: planejar uma tecla caiu de 0,183 ms para tempo constante abaixo da
+resolução do relógio, e a suíte de performance inteira caiu de 10,95 s para 0,69 s.
+A recusa dentro de uma região opaca também é constante, o que importa porque uma
+recusa que varresse o documento seria negação de serviço: basta segurar uma tecla
+dentro de uma região protegida de uma nota grande.
+
+A asserção de P2 passou a ser absoluta em vez de razão: a esses tempos a razão mede
+o relógio, não o código, e o que tem significado é que uma tecla numa nota de meio
+megabyte planeje muito abaixo de um quadro.

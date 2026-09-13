@@ -284,7 +284,7 @@ impl VisualDocument {
         offset: SourceOffset,
         direction: Direction,
     ) -> Option<&CaretSlot> {
-        if let Some(exact) = self.slots.iter().find(|slot| slot.source_offset == offset) {
+        if let Some(exact) = self.slot_at_offset(offset) {
             return Some(exact);
         }
 
@@ -299,6 +299,21 @@ impl VisualDocument {
             };
             (distance, tie, slot.source_offset.get())
         })
+    }
+
+    /// Whether a caret may sit exactly at `offset`.
+    ///
+    /// Slots are built block by block and, within a block, in ascending
+    /// grapheme order, so the list is sorted by source offset and this is a
+    /// bisection. It is consulted once per keystroke, and a linear scan here
+    /// made planning cost 16.5x for 10x the bytes — growth that outpaces the
+    /// document is the shape P1 and P2 exist to keep out.
+    pub fn slot_at_offset(&self, offset: SourceOffset) -> Option<&CaretSlot> {
+        let index = self
+            .slots
+            .binary_search_by(|slot| slot.source_offset.cmp(&offset))
+            .ok()?;
+        self.slots.get(index)
     }
 
     /// Whether a slot may be used for editing. Every slot B.2 publishes may.

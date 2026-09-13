@@ -179,10 +179,7 @@ enum Side {
 
 /// Whether a caret may sit at `offset` at all.
 fn caret_is_legal(document: &VisualDocument, offset: SourceOffset) -> bool {
-    document
-        .slots()
-        .iter()
-        .any(|slot| slot.source_offset == offset)
+    document.slot_at_offset(offset).is_some()
 }
 
 fn insert(
