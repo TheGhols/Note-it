@@ -388,7 +388,11 @@ fn a_region_with_no_slots_still_projects_its_source_for_the_reader() {
 
 #[test]
 fn the_projection_of_a_large_document_is_produced_once_and_is_stable() {
-    let source = "parágrafo com acentuação e 日本語\n\n".repeat(500);
+    let source = "parágrafo com acentuação e 日本語\n\n".repeat(if cfg!(debug_assertions) {
+        50
+    } else {
+        500
+    });
     let first = document(&source);
     let second = document(&source);
 

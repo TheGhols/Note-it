@@ -3660,3 +3660,52 @@ região sem slots ainda projetando sua fonte para o leitor.
 A cardinalidade N>1 de slots por fronteira só é alcançável com duas marks
 **projetadas** aninhadas, o que existe a partir de B.6; o §27.21/m8 já registra isso.
 O que B.2 prova é a regra de ordenação e os casos zero e um.
+
+## 31. Fase 5.0D.4B.P1 — gate pré-interativo
+
+### 31.1 O que P1 tem de excluir
+
+O §26.13, corrigido pelo §27.21/m5, proíbe **cinco** formas, não quatro. B.3 não pode
+começar enquanto qualquer uma existir. Cada uma tem agora um teste que falharia se
+ela estivesse presente, em `noteit-tui/tests/visual_performance.rs`:
+
+| Modo proibido | Como está excluído | Prova |
+|---|---|---|
+| comportamento O(n²) / prefix scan repetido | consulta de regiões literais por bisseção, não varredura | crescimento de 10x bytes para 4,0x–8,9x tempo no documento realista e 9,6x–12,7x na linha única |
+| source map por célula de terminal | as células são por grapheme e carregam largura apenas para layout | `日本語` são 3 células de largura 2, não 6 entradas |
+| reparse ligado à viewport | `project()` recebe `(source, generation)` e nada mais | não há parâmetro de largura, altura ou scroll a passar |
+| history sem budget | `HISTORY_BYTE_BUDGET` de 16 MiB ao lado de `UNDO_LIMIT` | 50 edições numa nota de 200 KB ficam dentro do budget |
+| nesting sem limite | `NESTING_BUDGET` de 32, dentro do algoritmo pelo passo 4a | 52 níveis continuam rápidos e falham fechados |
+
+### 31.2 O budget de bytes do histórico
+
+Um limite de passos não é um limite de memória: 200 snapshots de uma nota de 1 MB são
+200 MB. `draft.rs` ganhou `HISTORY_BYTE_BUDGET` (16 MiB) e `history_bytes()`, e a
+evicção remove snapshots **inteiros** mais antigos — meia história não é um estado a
+que alguém possa voltar.
+
+O piso do §27.10 está implementado e testado: o texto vivo nunca é contado nem
+removido, e nenhuma edição é recusada por falta de histórico. Numa nota maior que o
+budget inteiro, a história fica vazia, `undo()` devolve `false` como no-op anunciado,
+e a edição prossegue — recusar a edição para preservar o registro dela seria perder o
+trabalho do usuário para salvar sua anotação.
+
+### 31.3 Uma regressão real, causada por este gate
+
+Ao acrescentar os cenários de performance, o teste
+`a_sigterm_with_a_pending_draft_preserves_it_and_restores_the_terminal` passou a
+falhar de forma intermitente — uma vez em três execuções da suíte completa, nunca
+isoladamente.
+
+A causa foi investigada e não é flakiness do teste: os cenários novos projetam 1 MB e
+1.000 KB em build de debug, saturando os 8 núcleos da máquina, e o teste de sinal
+espera texto de um pseudoterminal real dentro de um prazo. Rodar as duas coisas juntas
+tirava dele o tempo de CPU de que precisa. A prova é direta — com os testes de
+performance fora da invocação, três execuções limpas; com eles, uma falha em três.
+
+A correção não foi aumentar o prazo, que esconderia um deadlock se algum dia houvesse
+um, e sim reconhecer que build de debug não mede nada útil: os números desta seção e da
+§29.4 vêm de `--release`. Em debug, cada cenário roda a décima parte do tamanho —
+prova as mesmas formas e devolve a máquina aos testes que precisam de um terminal
+respondendo a tempo. Cinco execuções consecutivas da suíte completa passaram depois
+disso.

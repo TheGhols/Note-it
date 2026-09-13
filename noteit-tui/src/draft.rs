@@ -33,6 +33,19 @@ use std::collections::VecDeque;
 /// How many undo steps a draft keeps. The oldest is dropped past this.
 pub const UNDO_LIMIT: usize = 200;
 
+/// How many bytes of undo history a draft keeps, across all its snapshots.
+///
+/// A step limit alone is not a memory limit. Two hundred snapshots of a one
+/// megabyte note is two hundred megabytes, which is why `docs/tui.md` §26.8
+/// requires a byte budget beside the step count and §27.10 gives it a floor:
+/// the live text is never counted and never evicted, and no edit is ever
+/// refused for want of history. When a single previous snapshot will not fit,
+/// the history is simply empty and undo is an announced no-op.
+///
+/// Sixteen megabytes holds a deep history of an ordinary note and still bounds
+/// the pathological one.
+pub const HISTORY_BYTE_BUDGET: usize = 16 * 1024 * 1024;
+
 /// A place in the text: which line, and how many characters into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Position {
@@ -67,6 +80,13 @@ struct Snapshot {
     lines: Vec<String>,
     cursor: Position,
     anchor: Option<Position>,
+}
+
+impl Snapshot {
+    /// The text this snapshot is holding on to, in bytes.
+    fn bytes(&self) -> usize {
+        self.lines.iter().map(String::len).sum::<usize>() + self.lines.len()
+    }
 }
 
 /// The note body being edited.
@@ -258,6 +278,18 @@ impl Draft {
     /// How many undo steps are currently held. Never above [`UNDO_LIMIT`].
     pub fn history_depth(&self) -> usize {
         self.undo.len()
+    }
+
+    /// How many bytes of text the undo and redo stacks are holding.
+    ///
+    /// The live text is deliberately not counted: it is not history, and
+    /// counting it would let a large note evict the very state it is.
+    pub fn history_bytes(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .map(Snapshot::bytes)
+            .sum()
     }
 
     pub fn finish_edit_group(&mut self) {
@@ -456,10 +488,28 @@ impl Draft {
             return;
         }
         self.undo.push_back(self.snapshot());
+        self.evict_to_budget();
+        self.grouping = Some(grouping);
+    }
+
+    /// Drops the oldest whole snapshots until both limits are satisfied.
+    ///
+    /// Whole snapshots, never partial ones: half a history state is not a
+    /// state anyone can return to. If the newest snapshot alone is over
+    /// budget, the history ends up empty — §27.10's floor — and the edit that
+    /// pushed it still stands, because refusing an edit for lack of undo would
+    /// be losing the user's work to save a record of it.
+    fn evict_to_budget(&mut self) {
         while self.undo.len() > UNDO_LIMIT {
             self.undo.pop_front();
         }
-        self.grouping = Some(grouping);
+        while self.history_bytes() > HISTORY_BYTE_BUDGET && !self.undo.is_empty() {
+            self.undo.pop_front();
+        }
+        if self.history_bytes() > HISTORY_BYTE_BUDGET {
+            // Only redo entries are left and they still do not fit.
+            self.redo.clear();
+        }
     }
 
     fn split_line(&mut self) {
