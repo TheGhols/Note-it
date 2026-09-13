@@ -20,4 +20,23 @@ if grep -En '(serde_yaml|std::fs::read_dir)' noteit-tui/src/*.rs >/dev/null 2>&1
   exit 1
 fi
 
-printf '%s\n' "TUI boundary OK: noteit-tui has no desktop GUI, network or async runtime dependencies, and delegates store operations to noteit-core."
+# docs/tui.md property 23 (§27.20), made mechanical.
+#
+# The presentational renderer discards delimiters, decodes entities and stops a
+# link destination at the first `)`. Those are right for showing a note and
+# wrong for editing one, so the lossless projector may not be built on them —
+# and "may not" is worth nothing unless something fails when it happens.
+PROJECTOR_MODULES=(projection.rs source_map.rs visual.rs visual_edit.rs)
+LEGACY_RENDERER='crate::(markdown|inline|formatting)|super::(markdown|inline|formatting)'
+
+for module in "${PROJECTOR_MODULES[@]}"; do
+  path="noteit-tui/src/$module"
+  [ -f "$path" ] || continue
+  if grep -En "$LEGACY_RENDERER" "$path" >/dev/null 2>&1; then
+    printf '%s\n' "TUI boundary violation: $module references the presentational renderer (markdown.rs, inline.rs or formatting.rs). The lossless projector must not be founded on the reader's parser — see docs/tui.md §26.16 and property 23." >&2
+    grep -En "$LEGACY_RENDERER" "$path" >&2
+    exit 1
+  fi
+done
+
+printf '%s\n' "TUI boundary OK: noteit-tui has no desktop GUI, network or async runtime dependencies, delegates store operations to noteit-core, and the lossless projector does not reference the presentational renderer."

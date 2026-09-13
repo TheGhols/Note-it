@@ -5,5 +5,7 @@ pub mod editor;
 pub mod formatting;
 pub mod inline;
 pub mod markdown;
+pub mod projection;
+pub mod source_map;
 pub mod terminal;
 pub mod ui;
