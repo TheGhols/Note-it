@@ -1508,3 +1508,2090 @@ Markdown; e a 5.0D.5 trata a paridade semântica de matemática e flashcards sem
 criar parsers divergentes e ingênuos. Até lá, a fonte canônica permanece
 inteiramente acessível no editor atual, e o Core, o formato persistido e os
 fluxos transacionais não mudam.
+
+## Relatório de arquitetura — Fase 5.0D.4A
+
+### 1. Estado inicial
+
+O gate foi conferido em 2026-09-10 antes de qualquer alteração. A branch era
+`main`, o working tree estava limpo e `HEAD` e `origin/main` apontavam para
+`04532f19af1d06da377575468a5610eee2e9b2be` (`feat(tui): complete phase
+5.0D.3 polish`). A Fase 5.0D.3 consta como concluída em `docs/roadmap.md`. O CI
+remoto do mesmo SHA, run `34519476358`, estava `completed/success`. Portanto o
+gate permitiu esta análise.
+
+### 2. Arquitetura atual
+
+O fluxo atual é:
+
+```text
+NoteDocument.content + revision
+          |
+          +--> leitor: markdown.rs -> inline.rs -> Lines/Spans Ratatui
+          |
+          +--> editor: Draft(lines, Position escalar, seleção, snapshots)
+                           |
+                           +--> mutation_for -> ReplaceBody/ClearBody
+                                   |
+                                   +--> authority::perform_at(expected_revision)
+```
+
+`Draft` é corretamente ignorante de Markdown e possui a única cópia mutável do
+corpo durante a edição. Suas posições são `(linha, coluna)` em valores escalares
+Unicode; o texto é reconstruído sem perder quebras internas. O histórico tem no
+máximo 200 snapshots integrais e agrupa inserções e remoções consecutivas.
+Formatação de cor e marca-texto, entretanto, hoje altera diretamente substrings
+da fonte e usa buscas locais de wrappers; isso é adequado apenas no editor raw.
+
+`app.rs` mantém o snapshot carregado com sua revision, detecta pendência pela
+mesma canonicalização do Core, salva uma única vez pela autoridade e nunca faz
+retry após conflito. Sinais preservam os bytes do rascunho em `tui-recovery`.
+Esses contratos não pertencem à projeção visual e não serão mudados.
+
+`markdown.rs` reconhece blocos linha a linha: fences, comentários, citações,
+callouts, headings, separadores, tarefas e listas. `inline.rs` faz uma varredura
+segura e limitada para ênfase, links, código inline, entidades e o pequeno
+subconjunto HTML da GUI. Ela produz apresentação, não tokens com intervalos; em
+particular descarta delimitadores, destinos, comentários e tags. O vetor
+`sources` de `RenderedMarkdown` só associa uma linha renderizada a uma linha da
+fonte, portanto não é um source map editável.
+
+A GUI usa Tiptap/ProseMirror e `@tiptap/markdown`. Extensões próprias serializam
+underline como `<u>`, cor e tamanho como `<span data-note-it-...>`, highlight
+como `<mark data-note-it-highlight=...>`, além de tarefas, callouts, comentários,
+código, imagens, matemática e flashcards. A árvore da GUI é normalizada e sua
+serialização pode mudar uma grafia equivalente; logo ela informa o vocabulário
+canônico suportado, mas não pode servir como round-trip lossless da TUI.
+
+O Core persiste `NoteDocument.content` como Markdown canônico, preserva campos
+desconhecidos do front matter, condiciona mutações a `NoteRevision` e expõe
+`visible_text` para busca/apresentação. Esse helper também é deliberadamente
+lossy e não é base de edição. Não há parser Markdown Rust nem rope diretamente
+declarado pelo crate TUI. `unicode-segmentation` e `unicode-width` existem no
+lock por dependências transitivas, mas não são API direta disponível sem uma
+decisão posterior de dependência — proibida nesta fase.
+
+### 3. Problema estrutural
+
+Uma posição visual é uma fronteira entre unidades semânticas; uma posição da
+fonte é uma fronteira de bytes/escalares que também atravessa delimitadores e
+atributos invisíveis. A relação não é bijetiva: em `**abc**`, várias fronteiras
+da fonte colapsam na fronteira visual anterior a `a` ou posterior a `c`.
+Entidades têm ainda cardinalidade diferente (`&amp;` vira `&`). Assim, ocultar
+caracteres e reaproveitar offsets do `Draft` tornaria cursor, seleção e remoção
+ambíguos e poderia cortar sintaxe invisível.
+
+### 4. Invariantes obrigatórias
+
+A arquitetura adota como contratos verificáveis:
+
+1. `Draft.text()` é a única fonte mutável e a única candidata a persistência.
+2. `VisualDocument` é transitório, derivado e descartável; nunca é salvo.
+3. Todo segmento projetado aponta para intervalos de bytes UTF-8 válidos da
+   revisão exata da fonte da qual foi derivado.
+4. Todo caret visual editável tem uma afinidade determinística com uma fronteira
+   da fonte; posições sem resposta única não são editáveis.
+5. Tokens invisíveis existem explicitamente no mapa, inclusive com largura
+   visual zero.
+6. Uma edição substitui apenas intervalos explicitamente possuídos pelo nó; bytes
+   desconhecidos fora deles são copiados literalmente.
+7. Inserção, Backspace, Delete e Enter são operações semânticas, não aritmética
+   cega sobre offsets.
+8. Seleções multilinha são decompostas por fronteiras de bloco e só executadas
+   se todo o intervalo for mutável sem atravessar região protegida.
+9. Formatação produz um patch de fonte validado e normalizado, nunca wrappers
+   por caractere.
+10. Cada comando visual é uma transação única no histórico existente.
+11. o modo Markdown raw continua integral e sempre pode representar a fonte.
+12. alternar modo só reprojeta e mapeia a seleção; não cria patch nem pendência.
+13. revision, conflito, autoridade, canonicalização, recovery e sinais continuam
+    exatamente acima do editor.
+14. Core, formato de storage e front matter não mudam.
+15. falha ou ambiguidade é fail-closed: preserva a fonte e oferece modo Markdown.
+
+### 5. Alternativas avaliadas
+
+| Critério | A — tokens/AST lossless | B — rope/piece table anotada | C — árvore incremental | D — WYSIWYM controlado |
+|---|---|---|---|---|
+| Complexidade inicial | alta: lexer, ranges e regras de patch | muito alta: buffer e metadados móveis | muito alta: gramática incremental e adaptação | média se apoiado em A e escopo pequeno |
+| Memória | fonte + nós/ranges, linear | fonte fragmentada + árvore + anotações | árvore, cache e fonte, linear com constante maior | fonte + projeção apenas do subconjunto |
+| Atualização por tecla | reparse de bloco/linha; full parse como fallback | patches baratos, anotações difíceis de reparar | incremental natural, porém integração complexa | reparse local nos nós editáveis; opacos não mudam |
+| Cursor/seleção | ranges e carets explícitos resolvem | âncoras estáveis ajudam, semântica ainda necessária | offsets reversíveis se a gramática os preservar | simples e seguro dentro do subconjunto; bloqueado fora |
+| Inserção/remoção | resolvida por ownership de delimitadores | eficiente, mas o rope sozinho não define limites | resolvida pela árvore se sem erros ambíguos | regras explícitas por construção suportada |
+| Formatação/multilinha | patches estruturais e validação | exige camada estrutural adicional | transformações da árvore mais serializer lossless | somente combinações comprovadas; expansão gradual |
+| Unicode | pode mapear bytes, escalares, grafemas e células | rope escolhido pode impor unidade inconveniente | depende da biblioteca | grafema no visual, byte range na fonte |
+| Desconhecido/malformado | tokens `Opaque` preservam bytes | bytes preservados, comportamento semântico ausente | error nodes variam por parser | atômico/source-visible/raw, sempre preservado |
+| Fences/código | blocos atômicos ou conteúdo literal mapeado | possíveis, ainda requer parser | bons se a gramática é robusta | inicialmente source-visible/atômico |
+| HTML/tags Note-it | lexer dedicado pode preservar tags exatas | anotações complexas aninhadas | HTML embutido costuma ser o caso difícil | tags canônicas suportadas; demais opacas |
+| Aninhamento, tarefas e callouts | representáveis com ownership aninhado | viáveis com segunda árvore | bons quando a gramática cobre extensões | liberados construção a construção |
+| Matemática/flashcards | decorações anexas a ranges | anotações naturais, mas caras de manter | queries na árvore | decoração não persistida sobre ranges |
+| Undo/redo | patch/snapshot da fonte | operações do piece table | operações de árvore precisam serializer | comandos viram um patch/snapshot da fonte |
+| Preservação da fonte | forte se o serializer só toca ranges | muito forte para bytes não tocados | incerta se a árvore normaliza ao serializar | forte, pois regiões não suportadas não são reescritas |
+| Compatibilidade com Draft | boa como camada acima | exigiria trocar seu armazenamento | exigiria novo modelo já no início | ótima; `Draft` permanece dono da fonte |
+| Testabilidade | excelente por propriedades de ranges | boa, porém estado interno amplo | depende da biblioteca/gramática | excelente matriz por capability e fail-closed |
+| Adoção incremental | boa | baixa | média | melhor: começa estreito sem prometer WYSIWYG total |
+
+Opção A isolada tenderia a liberar cedo demais operações sobre toda a árvore.
+Opção B otimiza edição antes de resolver a semântica e duplicaria o papel atual
+do `Draft`. Opção C não pode ser aprovada sem selecionar e provar um parser que
+preserve ranges, extensões e erros; nenhum existe hoje na TUI. A decisão é a
+**Opção D implementada sobre a infraestrutura lossless da Opção A**: WYSIWYM
+controlado, com capability explícita por nó. Isso é uma única arquitetura, não
+duas fontes de verdade.
+
+### 6. Arquitetura recomendada
+
+```text
+App / revision / recovery
+          |
+       Draft  <----- histórico de estados da fonte
+   (fonte canônica)
+          |
+   LosslessProjector ----> VisualDocument (cache derivado)
+          |                     |
+   tokens + ranges          blocos, runs, carets,
+   inclusive trivia        estilos e regiões opacas
+                                |
+                         VisualCommand
+                                |
+                    EditPlanner -> SourcePatch
+                                |
+                    validar ranges/UTF-8/ownership
+                                |
+                         aplicar no Draft
+```
+
+`VisualDocument` guarda a identidade/geração do texto que projetou. Um comando
+com geração antiga é rejeitado e reprojetado. `EditPlanner` é o único componente
+capaz de converter intenção visual em patch; o renderer nunca modifica fonte.
+Após qualquer patch, a fonte do `Draft` muda primeiro e a projeção afetada é
+recriada. Não existe sincronização bidirecional entre dois documentos.
+
+Capabilities mínimas:
+
+| Construção | Política inicial no Visual |
+|---|---|
+| texto, parágrafo | totalmente editável |
+| heading H1–H6 | texto editável; nível é atributo de bloco |
+| bold, italic, underline, strike | editável e formatável quando balanceado/canônico |
+| cor e highlight canônicos | editáveis; atributos validados; aninhamento conhecido |
+| links | rótulo editável; destino é metadado atômico, alterável só por comando próprio futuro ou raw |
+| entidades reconhecidas | visual e atômica como um grafema; editar substitui a entidade inteira por texto escapado canônico |
+| inline code | visual, conteúdo literal editável; delimitadores pertencem ao nó; formatação interna proibida |
+| fenced code | source-visible inicialmente; bloco atômico para seleção visual externa |
+| listas simples | conteúdo editável; marcador é atributo/prefixo atômico; transformação estrutural só quando especificada |
+| tarefas | conteúdo editável; checkbox atômico; metadado `note-it:` protegido |
+| blockquote/callout | visual, mas prefixos/marker atômicos; Enter estrutural somente após testes próprios |
+| tabela, se encontrada | source-visible/read-only até haver gramática e regras de células |
+| HTML desconhecido/malformado, comentários | região opaca e source-visible; raw obrigatório para alterar |
+| matemática e delimitadores de flashcard | texto comum nesta fase; apenas âncoras para decoração futura |
+
+Quando um documento contiver regiões opacas, o restante continua editável. Uma
+seleção que as atravesse é recusada com ação para ir ao modo Markdown; não se
+faz edição parcial silenciosa.
+
+### 7. Modelo de source map
+
+Todos os offsets de fonte são **bytes**, sempre em fronteiras UTF-8. O modelo
+conceitual é:
+
+```text
+VisualDocument {
+  source_generation,
+  source_len,
+  blocks: [VisualBlock],
+  segments: [Segment],
+  carets: [CaretMap],
+  decorations: [TransientDecoration]
+}
+
+Segment {
+  id,
+  parent,
+  source: ByteRange,
+  visual: GraphemeRange,
+  role: Text | OpenSyntax | CloseSyntax | BlockPrefix | Metadata |
+        Entity | Opaque | LineBreak,
+  semantic: Plain | Heading(level) | Strong | Emphasis | Underline |
+            Strike | Color(hex) | Highlight(hex) | Link | InlineCode | ...,
+  capability: EditableText | Atomic | Protected | SourceVisible,
+  ownership: node_id,
+  style_stack,
+}
+
+CaretMap {
+  visual_boundary,
+  left_source_boundary,
+  right_source_boundary,
+  default_affinity: Left | Right,
+  allowed_operations,
+}
+```
+
+`OpenSyntax`, `CloseSyntax`, `BlockPrefix` e `Metadata` têm range visual vazio,
+mas range de fonte não vazio. Texto pode ter mapeamento interno por fronteiras
+de grafemas. Entidades são um segmento visual de um grafema para vários bytes.
+Uma quebra visual causada apenas por wrapping tem range de fonte vazio e não é
+um caret lógico; `\n` real é `LineBreak`.
+
+Ranges são semiabertos. Após um patch `[start,end) -> replacement`, todos os
+ranges anteriores à edição permanecem; os posteriores deslocam pelo delta e o
+menor bloco delimitado que contém a edição é reparseado. Se seu novo limite não
+for demonstrável, reprojeta-se o documento todo. Nenhum range velho é usado após
+incrementar `source_generation`.
+
+Em `**abc**`, o open `0..2` e close `5..7` são invisíveis; o texto `2..5` ocupa
+visual `0..3`. O caret visual inicial tem afinidade interna/right e resolve em
+fonte 2; o final tem afinidade interna/left e resolve em 5. Inserir no início ou
+fim insere dentro do strong. Backspace antes de `a` e Delete depois de `c` não
+tocam delimitadores: operam no vizinho visual exterior ou não fazem nada nos
+limites do documento. Backspace depois de `a` remove somente `a`; Delete antes
+de `c` remove somente `c`. Se o conteúdo ficar vazio, a operação estrutural
+remove o par completo `****`, produzindo texto vazio, em um patch único.
+
+### 8. Cursor
+
+O cursor visual é `(block_id, grapheme_boundary, affinity)`, nunca célula do
+terminal nem offset cru. Setas esquerda/direita percorrem grafemas; cima/baixo
+usam a coluna visual desejada medida em células apenas para escolher outro
+caret, sem armazenar a célula como posição textual. Home/End usam o conteúdo
+visual do bloco. Carets não são criados dentro de syntax/protected/opaque.
+
+Ao reparsear, o cursor é restaurado por uma âncora: primeiro a fronteira da fonte
+resultante do patch, depois contexto `(node kind, bytes vizinhos, afinidade)`.
+Se ela desapareceu, escolhe-se deterministicamente o caret editável mais próximo,
+preferindo o lado indicado. Nunca se clampa para dentro de tag.
+
+### 9. Seleção
+
+Anchor e head usam carets visuais e preservam direção. A tradução produz uma
+lista ordenada de `OwnedSlice`, não simplesmente o intervalo entre o menor e o
+maior offset. Delimitadores totalmente contidos podem ser incluídos apenas pela
+operação estrutural que os possui; delimitadores de ancestrais não são apagados
+por uma seleção parcial. Uma seleção multilinha inclui `LineBreak` reais e
+prefixos apenas segundo regras dos blocos envolvidos.
+
+Antes de mutar, o planner prova: mesma geração, ranges válidos e ordenados, toda
+a área coberta por capabilities compatíveis e resultado parseável no subconjunto
+pretendido. Ao atravessar `Protected`, `Opaque` ou `SourceVisible`, recusa tudo.
+Copiar pode retornar texto visual; uma ação futura explícita pode copiar fonte.
+
+### 10. Inserção / remoção
+
+Inserção resolve o caret com afinidade. Texto digitado é escapado apenas quando
+o contexto exige (`&`, `<`, `>` dentro dos wrappers HTML canônicos); Markdown
+comum continua texto literal conforme a regra local. Colagem é um comando único
+e pode cair para inserção raw escapada se contiver sintaxe não representável.
+
+Backspace e Delete escolhem primeiro o grafema visual adjacente. Cada grafema
+aponta para seu range de fonte inteiro, logo um emoji ZWJ ou `&amp;` é removido de
+uma vez. Ao esvaziar uma mark, remove-se também o par de delimitadores que ela
+possui. Nunca se remove metade de tag, destino de link, fence ou metadado. Join
+de blocos só existe quando há regra explícita para o par; caso contrário a tecla
+é recusada ou requer raw.
+
+Exemplo aninhado:
+
+```html
+<mark data-note-it-highlight="#FDE68A" style="background-color:#FDE68A"><span data-note-it-color="#DC2626" style="color:#DC2626">abc</span></mark>
+```
+
+Há nós `Highlight(Color(Text("abc")))`. Os carets antes de `a`, entre `a/b` e
+depois de `c` mapeiam, respectivamente, logo após a abertura de `span`, entre os
+bytes de `a`/`b` e imediatamente antes de `</span>`; as tags de `mark` continuam
+ancestrais invisíveis.
+
+- Inserir `X` em qualquer desses carets insere dentro de ambos os estilos:
+  `Xabc`, `aXbc` ou `abcX`, sem criar wrapper novo.
+- Backspace antes de `a` não entra nas tags e atua no conteúdo visual anterior;
+  inexistindo-o, não faz nada. Entre `a/b` remove `a`. Depois de `c` remove `c`.
+- Delete antes de `a` remove `a`; entre `a/b` remove `b`; depois de `c` atua no
+  próximo conteúdo visual ou não faz nada. Nunca apaga `</span></mark>`.
+- Selecionar `ab` gera o slice exato dos dois caracteres, mantendo os quatro
+  wrappers fora da seleção.
+- Trocar a cor foreground de `ab` divide/coalesce o nó de cor e resulta
+  conceitualmente em um `span` novo para `ab` e no span vermelho para `c`, ambos
+  dentro do mesmo `mark`; a serialização usa wrappers canônicos máximos, nunca
+  um por caractere. Se a nova cor for vermelha, é no-op.
+- Limpar highlight com `ab` selecionado divide o highlight: `ab` permanece no
+  span de cor sem `mark`; `c` permanece no trecho vermelho destacado. Os runs
+  adjacentes semanticamente iguais são coalescidos.
+- Enter entre `a/b` divide o bloco em dois. Inline marks não atravessam a quebra:
+  fecha `span`/`mark` antes do `\n` e reabre wrappers canônicos no segundo bloco,
+  produzindo dois trechos bem formados. É uma transação/undo. Se o contexto de
+  bloco não admitir split, a operação é recusada, nunca escrita como tag partida.
+
+### 11. Formatação
+
+O estilo efetivo do caret é derivado da pilha de ancestrais. `active_style` é
+estado explícito para digitação futura e começa como o estilo efetivo ao mover o
+cursor, salvo override consciente do usuário. Seleção homogênea mostra seu
+estilo; seleção mista mostra estado misto. Alterar apenas `active_style` não suja
+nem cria histórico.
+
+Aplicar/limpar bold, italic, underline, strike, cor ou highlight calcula runs
+semânticos máximos, divide apenas nas fronteiras da seleção, remove wrappers
+vazios e coalesce vizinhos com a mesma pilha. Ordem canônica de marks para novo
+texto deve ser única (por exemplo highlight externo, cor interna, depois marks
+Markdown), mas wrappers preexistentes fora do patch mantêm seus bytes e sua
+ordem. Não se normaliza o documento inteiro. Inline code rejeita formatação
+interna. Link preserva destino. Uma mudança produz um patch composto aplicado
+do fim para o começo como um único checkpoint.
+
+### 12. Blocos Markdown
+
+Em `# Meu título`, `# ` é `BlockPrefix` invisível possuído por
+`Heading(level=1)`; não é caret e o conteúdo começa em fonte byte 2. O nível é
+atributo projetado. Pode haver uma ação estrutural futura para mudar nível, mas
+digitação comum não edita o marcador.
+
+- Enter no início: cria um parágrafo vazio antes e mantém `# Meu título` como
+  heading; o caret vai ao novo parágrafo.
+- Enter no meio: divide em `# Meu` e `# título`; ambos são headings do mesmo
+  nível, regra determinística escolhida para não perder o atributo.
+- Enter no fim: cria um parágrafo vazio abaixo, não outro heading, seguindo a
+  expectativa de encerramento do título.
+
+Parágrafo vira heading somente por comando estrutural explícito ou pela fonte
+raw; typing de `# ` no meio de texto não reclassifica magicamente nesta primeira
+entrega. Listas, tarefas, quotes e callouts terão contratos próprios de Enter e
+join antes de ganhar `EditableText`; até lá podem ser visuais-atômicos ou
+source-visible conforme a tabela da seção 6.
+
+### 13. Sintaxe desconhecida/malformada
+
+`<custom-widget foo="bar">hello</custom-widget>` vira um único `Opaque` com os
+bytes exatos. A política inicial é mostrá-lo source-visible com estilo de região
+protegida; não mostrar apenas `hello`, pois isso sugeriria falsamente que o
+wrapper pode ser preservado durante qualquer edição interna. Não há caret dentro
+dele e Raw Markdown é obrigatório para alterá-lo. Edições antes/depois deslocam
+seu range, mas copiam seus bytes literalmente.
+
+Uma extensão futura só poderá exibir `hello` e manter wrapper opaco se provar
+matching lossless, oferecer carets apenas num child explicitamente seguro e
+definir escaping e split; isso não é premissa da 5.0D.4B. HTML malformado,
+comentários, tags desconhecidas e nesting excedente seguem fail-closed. Fonte
+inválida nunca é descartada, reparada ou normalizada implicitamente.
+
+### 14. Unicode
+
+Bytes continuam sendo a unidade de ranges da fonte e posições escalares podem
+continuar dentro do `Draft` raw para preservar os testes 5.0D.2. O editor Visual
+deve usar **grapheme clusters estendidos** como unidade de movimento, seleção e
+remoção. Isso impede separar acento combinante, emoji ZWJ e bandeiras. CJK e emoji
+podem ocupar duas células; células servem apenas ao layout via largura Unicode.
+
+A migração é por adaptadores: `SourceOffset(byte)` converte para posições do
+`Draft`; `GraphemeIndex` indexa cada run visual; `DisplayColumn` é calculado no
+renderer. Primeiro, testes com segmentação implementada/provada sem mudar Draft;
+depois, uma dependência direta só poderá ser proposta em 5.0D.4B se os gates de
+licença, MSRV e lock forem aceitos. Não se deve escrever segmentador próprio.
+
+### 15. Undo/redo
+
+Na adoção inicial, o histórico mantém **snapshots da fonte** porque é a unidade
+que já prova round-trip/recovery e limita-se a 200 passos. Cada `VisualCommand`
+gera uma transação, mesmo que contenha múltiplos patches. A projeção nunca entra
+no histórico; após undo/redo é recriada da fonte e o cursor é restaurado por
+âncora.
+
+Operações estruturais ou projetadas sozinhas seriam frágeis diante de parser
+novo. Patches de fonte reduziriam memória, mas exigiriam inversão e retenção dos
+bytes removidos. Para 1 MB, 200 snapshots podem chegar a cerca de 200 MB mais
+overhead; portanto 5.0D.4B deve medir e pode evoluir internamente para patches
+reversíveis com checkpoint periódico, sem alterar o contrato observável nem o
+limite. Nunca se guarda apenas a string visual.
+
+### 16. Transição Visual ↔ Markdown
+
+Visual → Markdown: mapeia anchor/head pelos `CaretMap` e afinidades para offsets
+da fonte atual, converte-os às posições escalares do Draft e troca somente o
+modo. Uma seleção que cobre entidade ou nó atômico seleciona seu range fonte
+inteiro. Não há patch, canonicalização ou novo histórico.
+
+Markdown → Visual: captura offsets e afinidade raw, reprojeta a fonte literal e
+busca o caret visual cujo range contém/limita cada offset. Offset dentro de
+sintaxe invisível vai para a fronteira visual externa segundo afinidade; dentro
+de `Opaque/SourceVisible` permanece selecionável nesse bloco source-visible. Se
+a fonte raw introduziu sintaxe inválida, ela vira texto literal ou `Opaque`; não
+é descartada nem corrigida.
+
+Se alguma parte não puder ser projetada, o documento visual abre com a região
+source-visible protegida e um aviso. Se nem os limites de bloco puderem ser
+determinados com segurança (por exemplo fence não fechado abrangendo o resto),
+todo o trecho afetado é um bloco raw, e o modo Markdown permanece disponível.
+Alternar repetidamente sem editar deve manter `Draft.text()` byte-idêntico,
+selection round-trip definida e zero pendência.
+
+### 17. Integração futura de matemática
+
+`TransientDecoration { kind, anchor: SourceRange/NodeId, placement, payload,
+generation }` pertence ao `VisualDocument`, nunca ao `Draft`. Linhas `= 10 + 20`
+e `preco := 100` continuam segmentos de texto editáveis e persistem literalmente.
+Na 5.0D.5, um analisador poderá anexar resultado ao fim da linha como decoração
+zero-source, não selecionável e sem caret. Editar a linha invalida a decoração;
+resultado assíncrono de geração antiga é descartado. Copiar, salvar, undo e
+source map ignoram a decoração.
+
+### 18. Integração futura de flashcards
+
+`Pergunta :: Resposta` e `Termo ::: Definição` continuam fonte comum nesta fase.
+O projetor reserva semantic annotations não proprietárias sobre ranges: pergunta,
+delimitador e resposta podem ser extraídos sem reescrever bytes. Em uma futura
+visualização, `::`/`:::` pode ser uma decoração/segmento atômico ainda ancorado
+ao range literal; Backspace/Delete não o atravessam sem comando explícito. A
+extração de cards inline e em bloco lê a mesma geração da fonte e não muda o
+documento. Sintaxe ambígua fica texto comum/raw. Nenhum resultado de estudo ou
+ID transitório entra no Markdown por essa arquitetura.
+
+### 19. Performance
+
+| Entrada | Estratégia aceitável inicial | Limite esperado |
+|---|---|---|
+| 1 KB | parse integral por tecla | irrelevante em prática |
+| 100 KB | reparse do bloco/linha; integral como fallback medido | alvo interativo; evitar clone extra por frame |
+| 1 MB | indexação linear inicial e invalidação localizada | parse integral por tecla não é aceitável |
+| 20.000 linhas | índice de inícios de linha + blocos; viewport renderiza janela | navegação não deve varrer tudo a cada frame |
+| linha única muito longa | runs/chunks e cálculo de largura só na janela | nunca criar uma célula/cache pesado por coluna invisível |
+
+O parser lossless inicial pode ser O(n) ao abrir/trocar modo. Por tecla, invalida
+do início do bloco seguro anterior ao primeiro limite de bloco estável posterior;
+fences, HTML multilinha ou alteração de delimitador podem ampliar a janela. Um
+fallback O(n) é correto, mas deve ser raro e instrumentável. A arquitetura não
+exige rope agora; se medições mostrarem movimentação de `String` patológica, o
+storage interno do Draft poderá mudar sem criar segunda fonte canônica.
+
+### 20. Estratégia incremental de migração
+
+1. Introduzir tipos puros `SourceOffset`, `SourceRange`, `VisualPosition`, tokens
+   lossless, capabilities e projeção, sem ligar à UI nem ao Core.
+2. Provar parse/round-trip e source maps para texto, parágrafo e headings; regiões
+   restantes ficam `SourceVisible`.
+3. Criar `VisualDocument` transitório **acima** de `Draft`; Raw continua sendo o
+   editor 5.0D.2 sem mudanças comportamentais.
+4. Ligar renderer visual e transição de modos sem mutação.
+5. Liberar edição de plain text e headings; depois marks balanceadas e HTML
+   canônico, uma capability por vez, cada qual com testes de boundary.
+6. Só depois avaliar listas/tarefas/callouts e code; desconhecido continua raw.
+
+Não se substitui `Draft` na 5.0D.4B. Ele pode ganhar uma API pública de patch
+transacional e conversão segura de offsets, mas seus testes existentes de fonte,
+cursor, seleção, history e round-trip permanecem válidos. `app.rs` continua
+obtendo `draft.text()` para pending/save/recovery. Uma substituição por rope só
+pode ser decisão posterior baseada em benchmark e com a mesma interface.
+
+### 21. Estratégia de testes da 5.0D.4B
+
+A pirâmide proposta:
+
+1. Unitários do lexer/projetor: todo token cobre ranges contíguos, ordenados,
+   sem overlap/gap; concatenação dos slices reproduz a fonte byte a byte.
+2. Unitários do mapa: todo caret editável mapeia ida/volta com afinidade; zero-
+   width nunca recebe cursor; ranges sempre caem em fronteira UTF-8/grafema.
+3. Property tests: fontes arbitrárias UTF-8, `project(source).source == source`,
+   monotonicidade de offsets e `visual -> source -> visual` nas posições válidas.
+   Se o projeto não quiser adicionar framework, gerador determinístico em teste;
+   fuzz target só após decisão explícita de tooling.
+4. Tabelas de mutação: insert/delete/backspace/replace/Enter em cada boundary,
+   nested marks, entidades, links, seleção multilinha e regiões protegidas.
+5. Round-trip Visual↔Raw com cursor/seleção e zero alteração/pending/history.
+6. Unicode: NFC/NFD, combining marks, skin tone, ZWJ, bandeiras, CJK, emoji de
+   largura dupla, variação e linha muito longa.
+7. Malformados/adversariais: tags/fences/comments sem fechamento, nesting alto,
+   controle terminal, HTML desconhecido e delimitadores aleatórios; sempre
+   fail-closed e bytes preservados.
+8. `TestBackend`: estilo, cursor físico, seleção, wrapping, scroll e blocos
+   source-visible em larguras da matriz existente.
+9. Integração App/Core isolada: salvar uma única fonte, no-op de modo, conflito,
+   undo/redo, recovery e sinais, reutilizando os testes 5.0D.2/5.0D.3.
+10. PTY real: alternância de modo, acento composto/emoji, edição nested,
+    terminal estreito/redimensionamento, Ctrl+C/SIGINT/SIGTERM/SIGHUP e restauração
+    exata de termios.
+
+Invariantes machine-checked obrigatórias: cobertura exata da fonte; nenhuma
+posição no meio de UTF-8/grafema/tag; mapa monotônico; patches disjuntos e dentro
+do ownership; fonte externa a patches byte-idêntica; operação recusada não muda
+fonte/history/cursor; uma ação igual a um undo; reparse independente da viewport;
+modo não muda conteúdo; save continua revisionado; decoração nunca serializa.
+
+### 22. Riscos
+
+- **Parser próprio divergir da GUI:** limitar o vocabulário, fixtures cruzadas
+  da serialização GUI e fallback raw; não prometer CommonMark completo.
+- **Ambiguidade em delimitadores:** capability fail-closed e token `Opaque`.
+- **Normalização excessiva:** patch mínimo e proibição de resserializar a árvore
+  inteira; comparar bytes fora do patch em testes.
+- **Explosão de casos de boundary:** matriz explícita por construção e property
+  tests antes de habilitá-la.
+- **Unicode/células:** tipos separados para byte, grapheme e display column.
+- **Snapshots grandes:** benchmark e eventual patch history, sem reduzir safety.
+- **Reparse O(n):** invalidação por bloco e budget/telemetria de teste.
+- **Cursor após reparse:** âncoras com afinidade e testes de estabilidade.
+- **HTML hostil:** jamais executar; source-visible e rendering inert continuam.
+- **Falsa aparência de suporte:** sinalizar visualmente regiões protegidas e
+  oferecer atalho claro para Markdown.
+
+### 23. Arquivos/módulos previstos para 5.0D.4B
+
+Sem implementação agora. A revisão independente pode autorizar, no máximo:
+
+- novos módulos TUI `visual.rs` (documento/capabilities), `source_map.rs`
+  (tipos/mapeamento), `projection.rs` (lexer/projetor lossless) e
+  `visual_edit.rs` (planner/patches);
+- ajustes controlados em `draft.rs` para patch transacional/conversão de offset,
+  `app.rs` para modo/cache/comandos e `ui.rs` para render/cursor;
+- possível refatoração compartilhada de reconhecimento em `markdown.rs`,
+  `inline.rs` e `formatting.rs`, mantendo o renderer atual e suas fixtures;
+- novos testes unitários e integrações em `noteit-tui/tests/`.
+
+Ficam explicitamente fora: alterações no Core, schema/migration, storage, GUI,
+matemática 5.0D.5, semântica de flashcards 5.0D.5 e qualquer 5.0E. Dependência
+nova exige decisão separada durante a autorização da implementação.
+
+### 24. Git
+
+Esta fase alterou somente esta documentação de arquitetura. Nenhum código de
+produção, Core, schema, migration ou dependência foi alterado. Não houve commit,
+push, tag nem release; 5.0D.4B, 5.0D.5 e 5.0E não foram iniciadas.
+
+### 25. Veredito
+
+A arquitetura está suficientemente especificada para revisão independente: há
+uma única fonte mutável, source map concreto, semântica de limites, fallback
+lossless, migração incremental e critérios machine-checkable. A aprovação não
+autoriza implementação automaticamente.
+
+**5.0D.4A APPROVED DESIGN — arquitetura suficientemente definida para revisão independente antes de autorizar a implementação 5.0D.4B.**
+
+## 26. Fase 5.0D.4A.R1 — correção normativa após revisão independente
+
+### 26.1 Status e precedência
+
+A revisão independente bloqueou o desenho original. Esta R1 conserva sua decisão
+fundamental, mas substitui qualquer regra anterior incompatível pelos contratos
+desta seção. O fluxo normativo passa a ser:
+
+```text
+Draft source
+  -> lossless projection
+  -> immutable VisualDocument
+  -> VisualCommand
+  -> plan(command, visual_document, draft_generation)
+  -> Result<SourceTransaction, Refusal>
+  -> Draft
+```
+
+`Draft.text()` é a única fonte mutável e a única candidata a persistência.
+`VisualDocument` é um valor derivado, imutável e válido para uma única
+`Generation`; widgets recebem somente acesso de leitura e nem widget nem
+`EditPlanner` podem alterá-lo. Não há edição otimista autoritativa da projeção.
+Somente o `Draft` aplica `SourceTransaction`.
+
+Depois de uma transação bem-sucedida, nesta ordem: o `Draft` muda; sua generation
+incrementa; o `VisualDocument` anterior fica stale; a projeção afetada é
+reconstruída; cursor e seleção são restaurados por âncoras de fonte e contexto.
+Comando, slot ou documento de generation antiga é recusado sem mudar estado.
+
+### 26.2 Representação física, semântica e visual
+
+As três camadas são tipos distintos; nenhuma pode desempenhar o papel da outra.
+
+#### Lexeme
+
+`Lexeme` é a partição física da fonte:
+
+```text
+Lexeme {
+  id: LexemeId,                 // estável somente dentro da Generation
+  generation: Generation,
+  source: SourceRange,
+  kind: LexemeKind,
+  owner: Option<NodeId>
+}
+```
+
+Lexemes são ordenados, contíguos, não sobrepostos e cobrem exatamente
+`0..source_len`. A propriedade lossless normativa é:
+
+```text
+concat(source[lexeme.source] para cada Lexeme em ordem) == source.as_bytes()
+```
+
+Somente `Lexeme` participa dessa propriedade. Todo byte pertence exatamente a
+um lexeme, inclusive texto visível, delimitador Markdown, open/close tag HTML,
+nome/valor/separador de atributo, entidade, whitespace, tab, line ending,
+escape, comentário, prefixo de bloco, metadata protegida, sintaxe desconhecida
+e fonte opaca. Um token HTML pode ter lexemes internos de atributo sem deixar de
+pertencer a um node protegido; a partição continua plana e sem duplicação.
+
+Âncoras virtuais de source range vazio podem existir para layout/decoration,
+mas não são `Lexeme`, não possuem bytes e não participam da cobertura física.
+
+#### Node
+
+`Node` é a árvore semântica. Nodes podem ter ranges de cobertura aninhados ou
+sobrepostos por ancestralidade; nunca duplicam nem armazenam texto persistido.
+Podem possuir lexemes e filhos. O vocabulário inclui `Paragraph`, `Heading`,
+`Strong`, `Emphasis`, `Strike`, `Underline`, `Color`, `Highlight`, `Link`,
+`InlineCode`, `ListItem`, `Task`, `Blockquote`, `Callout` e `Opaque`.
+
+Sobreposição entre nodes só é válida por relação ancestral ou por annotations
+não proprietárias explicitamente declaradas. Dois nodes proprietários irmãos
+não podem possuir o mesmo lexeme. O ancestor mais restritivo domina todas as
+capabilities dos descendentes.
+
+#### ProjectionRun
+
+`ProjectionRun` é saída visual derivada:
+
+```text
+ProjectionRun {
+  lexemes: [LexemeId],
+  semantic_path: [NodeId],
+  graphemes: derived visible sequence,
+  style: derived style,
+  protection: derived capability summary
+}
+```
+
+Ele referencia identidades, não possui fonte persistida e não pode ser editado.
+Wrapping pode dividir um run para desenho, mas não muda graphemes, source map ou
+nodes. A projeção é independente da viewport.
+
+### 26.3 Tipos e line endings
+
+São tipos normativamente incompatíveis:
+
+- `Generation(u64)` identifica uma versão do `Draft`;
+- `SourceOffset` é byte UTF-8 em uma generation;
+- `SourceRange` é `[start,end)`, com ambos os limites em `is_char_boundary`;
+- `ScalarPosition` é `(linha, coluna escalar)` compatível com o Draft raw;
+- `GraphemeIndex` é índice EGC dentro de um run/bloco identificado;
+- `DisplayColumn` é largura de célula terminal, somente para layout;
+- `BlockId`, `NodeId` e `CaretSlotId` são identidades da generation.
+
+Não haverá conversão implícita/genérica entre esses tipos nem `From<usize>`.
+Funções nomeadas e validadas fazem `ScalarPosition -> SourceOffset`,
+`SourceOffset -> ScalarPosition`, `SourceOffset -> CaretSlot` e
+`GraphemeIndex -> CaretSlot`. A ponte do Draft soma os bytes das linhas anteriores
+mais `\n` e localiza a fronteira escalar com `char_indices`; a volta valida UTF-8
+antes de contar escalares. Nenhuma API aceita offset sem generation.
+
+Line endings são lexemes físicos. `LF` e `CRLF` permanecem byte-idênticos e não
+são normalizados pela projeção, transição de modo ou patch não relacionado. Para
+layout, ambos representam uma quebra lógica; para source map, `LF` ocupa um byte
+e `CRLF` dois. Um patch que cria nova quebra usa a convenção local determinística:
+o line ending do bloco atual; se o documento ainda não possui quebra, `LF`.
+Misturas preexistentes são preservadas. A canonicalização final já existente no
+Core para terminadores finais continua fora da projeção e não é redesenhada.
+
+### 26.4 CaretSlot e RawBookmark
+
+Afinidade binária deixa de ser o modelo. Uma fronteira visual contém zero, um ou
+N slots ordenados:
+
+```text
+CaretSlot {
+  id: CaretSlotId,
+  generation: Generation,
+  visual_boundary: (BlockId, GraphemeIndex),
+  source_offset: SourceOffset,
+  context_path: [NodeId],
+  insertion_context: SemanticStyle,
+  stickiness: Before | InsideStart | InsideEnd | After,
+  capabilities: OperationCapabilities
+}
+```
+
+A ordenação é do contexto exterior para o interior na abertura e do interior
+para o exterior no fechamento. Left/Right navega entre fronteiras de grapheme e
+seleciona o **slot canônico de texto**: o slot mais interno que contém o run
+visível adjacente na direção do movimento. Isso mantém o estilo ao digitar no
+começo/fim de um run. Um comando estrutural pode escolher explicitamente outro
+slot; operação comum nunca adivinha profundidade pela coluna de display.
+
+Em `<mark ...><span ...>abc</span></mark>`, antes de `a` existem, na mesma célula:
+
+1. antes de `<mark>`, path vazio;
+2. depois do open de `mark`, antes de `<span>`, path `[Highlight]`;
+3. depois do open de `span`, antes de `a`, path `[Highlight, Color]`.
+
+O terceiro é o slot canônico ao navegar para `a`; inserção herda highlight e
+color. Backspace/Delete primeiro escolhem o grapheme visual adjacente e usam seu
+ownership; formatting usa os nodes cobertos pela seleção, não a display column.
+
+`RawBookmark` preserva posições que Visual não pode expor:
+
+```text
+RawBookmark {
+  generation: Generation,
+  anchor: SourceOffset,
+  head: SourceOffset,
+  direction,
+  snapped_visual_anchor: Option<CaretSlotId>,
+  snapped_visual_head: Option<CaretSlotId>
+}
+```
+
+Markdown -> Visual guarda offsets raw exatos, inclusive dentro de delimitador,
+tag, atributo, entidade, destino de URL, metadata ou opaque. O cursor visual faz
+snap para o slot legal determinístico mais próximo, preferindo o lado da direção
+de navegação e depois o anterior em empate. Visual -> Markdown sem mutação e na
+mesma generation restaura anchor/head raw exatos. Toda mutação do Draft invalida
+o bookmark; depois dela a volta usa os slots canônicos correntes. A mesma regra
+vale para seleção. Trocar modo não toca Draft, history, pending nem active style,
+e nunca normaliza a fonte.
+
+### 26.5 Capabilities e gramática inicial
+
+Capabilities são por operação:
+
+```text
+Insert | DeleteInside | DeleteBoundary | ReplaceSelection | Format |
+Split | Join | ChangeAttribute | ToggleAtomicState
+```
+
+`Recognized`, `Projected`, `Atomic`, `Protected`, `SourceVisible` e `Opaque` são
+classificações separadas. O perfil inicial é conservador:
+
+Toda capability ausente da matriz da subfase corrente é normativamente negada.
+Não existe concessão implícita por reconhecimento, projeção, tipo de node,
+capability da GUI nem comportamento do editor raw. Uma capability concedida a
+um node também não habilita outra operação ou seus descendentes. Em particular,
+editar o texto de um Heading em B.4 não habilita Strong, Emphasis, Color,
+Highlight nem outro Format dentro dele; cada mark só passa a operar depois de
+seu gate B.5/B.6 e de permissão explícita para aquele contexto.
+
+| Construção | Reconhecida/projetada | Operações visuais iniciais |
+|---|---|---|
+| texto de parágrafo | sim/sim | Insert, DeleteInside, ReplaceSelection, Split e Join |
+| heading ATX H1-H6 | sim/sim; prefixo Protected | texto: Insert/DeleteInside/ReplaceSelection em B.4; Split/Join conforme §26.9; Format somente após o gate B.5/B.6 da capability inline e permissão explícita no contexto |
+| `*abc*` emphasis | após prova B.5 | inicialmente SourceVisible/Protected; depois Insert/DeleteInside/Replace/Format |
+| `**abc**` strong | após prova B.5 | idem |
+| `***abc***` strong+emphasis | reconhecido só pela regra abaixo | inicialmente SourceVisible/Protected; habilitação própria B.5 |
+| `~~abc~~` strike | vocabulário conhecido | SourceVisible/Protected até B.5 |
+| `<u>abc</u>` underline canônico | vocabulário GUI verificado | SourceVisible/Protected até B.5 |
+| inline code | reconhecido | SourceVisible/Protected; sem Split/Format até contrato de delimiter próprio |
+| link | reconhecido somente se grammar provar label/destino | SourceVisible/Protected até B.7; destino sempre Protected |
+| color/highlight HTML canônicos | reconhecidos | SourceVisible/Protected até B.6 |
+| font size canônico | vocabulário GUI verificado | SourceVisible/Protected; sem ChangeAttribute nesta fase |
+| imagem | vocabulário GUI verificado | Atomic, Protected, SourceVisible; nenhuma edição nesta fase |
+| comentário | reconhecido | Protected e SourceVisible |
+| fenced code | reconhecido | bloco Protected e SourceVisible |
+| lista/task | reconhecida | SourceVisible/Protected até contratos B.7; checkbox sem toggle inicial |
+| metadata de conclusão de task | reconhecida | invisível na leitura, mas Protected/SourceVisible no editor seguro |
+| blockquote/callout | reconhecido | SourceVisible/Protected até B.7 |
+| HTML desconhecido/malformado | não semântico | Opaque, Protected e SourceVisible |
+
+Reconhecimento da GUI prova vocabulário, nunca editabilidade ou round-trip. Não
+se declara `<strong>` como sintaxe canônica: `<u><strong>abc</strong></u>` fica
+Opaque/SourceVisible até evidência e contrato próprios.
+
+#### Delimiter runs suportados
+
+O subconjunto de B.5 só reconhece runs balanceados na mesma linha, fora de code,
+HTML, escape e opaque, sem whitespace logo dentro dos delimitadores:
+
+- `*abc*` -> `Emphasis`;
+- `**abc**` -> `Strong`;
+- `***abc***` -> um node composto com ownership único do run e semantic path
+  `[Strong, Emphasis]`; não são dois pares editáveis independentes;
+- `\*` e `\**` permanecem texto escapado, com backslash lexeme;
+- marks adjacentes são nodes irmãos, mesmo quando semanticamente iguais;
+- nesting só é habilitado quando a tokenização interna produz árvore balanceada
+  e ownership único;
+- `****`, runs vazios, width acima de três, mismatch, unbalanced e casos cuja
+  precedência não seja decidida por estas regras ficam literais SourceVisible.
+
+Isso não pretende implementar CommonMark completo. Ambiguidade falha fechada.
+
+Links exigem label com escapes/nesting reconhecido e destino com parênteses
+balanceados e escapes, por isso `[a **bold** label](https://example.com/a_(b))`
+tem label semanticamente editável somente em B.7 e destino Protected. O parser
+atual de `inline.rs`, que termina no primeiro `)`, não satisfaz esse contrato.
+
+### 26.6 Planejamento de seleção e SourceTransaction
+
+Seleção visual resolve primeiro anchor/head em slots e produz `SelectionPlan`
+com slices de conteúdo, nodes proprietários, delimitadores relacionados e
+rewrite envelope candidato. Planejamento não muda estado. Só depois um comando
+produz todos os patches:
+
+O intervalo visual de uma seleção não vazia é semiaberto `[start,end)`, em ordem
+de EGCs do `VisualDocument`; `start = min(anchor,head)` e
+`end = max(anchor,head)`, preservando a direção separadamente. Ambos precisam ser
+fronteiras EGC válidas da mesma `Generation`. EGC que termina exatamente em
+`start` e EGC que começa exatamente em `end` não estão selecionados. Os
+`CaretSlotId` exatos de anchor/head são preservados para contexto, mas não mudam
+quais EGCs pertencem ao intervalo.
+
+Para decisão mutante, cada EGC selecionado fornece seu `semantic_path` de marks
+inline e sua protection efetiva. O resultado é calculado nesta ordem, sem
+discrição do planner:
+
+1. qualquer EGC/range selecionado Protected, Opaque, SourceVisible ou metadata
+   sem ownership -> `Refusal`;
+2. boundary que não é EGC, generation stale ou ownership inconsistente ->
+   `Refusal`;
+3. todos os EGCs selecionados têm exatamente o mesmo inline-mark path -> operação
+   permitida somente se cada node/contexto concede explicitamente a capability;
+4. caso especial whole-leaf-node: seleção coincide exatamente com o visual range
+   de um único mark sem boundary de mark descendente e a capability possui
+   contrato explícito de cleanup de seus open/close lexemes -> permitido;
+5. qualquer outro conjunto de paths, inclusive plain+mark, marks adjacentes,
+   tipos diferentes, parte de nested stack ou outer mark contendo descendant
+   marcado -> `Refusal`.
+
+Um endpoint que apenas toca uma fronteira não conta como cruzamento: valem
+somente os EGCs em `[start,end)`. Seleção vazia (`start == end`) não é
+`DeleteSelection`, `ReplaceSelection` nem `FormatSelection`; vira comando de
+caret e usa o `CaretSlot` escolhido e sua capability. Não há caret dentro de
+grapheme multi-code-point, portanto esta álgebra nunca seleciona parte de EGC.
+
+| Caso na arquitetura inicial | Delete/Replace | Format | Copy visual |
+|---|---|---|---|
+| somente plain text, capability concedida | permite | somente mark cujo gate foi concedido | permite |
+| parte de um único mark, path constante e capability concedida | permite | permite segundo capability | permite |
+| exatamente um mark leaf inteiro, cleanup concedido | permite com cleanup atômico | permite segundo capability | permite |
+| começa fora e termina dentro de mark | recusa | recusa | permite |
+| começa dentro e termina fora de mark | recusa | recusa | permite |
+| plain + mark inteiro + plain | recusa | recusa | permite |
+| dois marks adjacentes, iguais ou diferentes | recusa | recusa | permite |
+| outer mark com apenas parte de descendant nested | recusa | recusa | permite |
+| outer mark inteiro contendo descendant mark | recusa sem capability futura de subtree | recusa | permite |
+| endpoint toca boundary, mas EGCs selecionados têm um único path | aplica a regra desse path | aplica a regra desse path | permite |
+| seleção contém Protected/Opaque/SourceVisible/raw | recusa | recusa | permite para toda seleção EGC válida, copiando a projeção exata |
+| caret vazio exatamente em boundary com N slots | não é seleção; comando usa slot atual | altera active override somente se concedido | texto vazio |
+
+```text
+SourceTransaction {
+  generation: Generation,
+  patches: [SourcePatch],        // ordenados, disjuntos, UTF-8 válidos
+  resulting_cursor_anchor,
+  resulting_selection_anchor,
+  history_group: OneCommand
+}
+```
+
+- `DeleteSelection`: remove conteúdo visível e somente cleanup estrutural
+  obrigatório (por exemplo wrapper que ficaria sem conteúdo).
+- `ReplaceSelection`: plano validado de delete mais slot determinístico de
+  inserção e estilo herdado do head na direção da seleção; é uma transação só.
+- `FormatSelection`: mantém conteúdo e só transforma wrappers dentro do envelope.
+- `CopyVisualSelection`: para toda seleção EGC válida da generation corrente,
+  concatena exatamente os graphemes dos `ProjectionRun` em `[start,end)` e
+  sucede; não exige ownership. Em SourceVisible copia os caracteres efetivamente
+  projetados, inclusive spelling raw visível; lexeme invisível contribui zero
+  grapheme. Somente generation/boundary inválida produz `Refusal`.
+- cópia raw/source é um comando futuro explícito.
+
+Uma seleção mutante que cruza parcialmente uma fronteira de mark inline é sempre
+`Refusal` na arquitetura inicial. Isso inclui começar fora e terminar dentro,
+começar dentro e terminar fora, entrar/sair de apenas parte de uma pilha nested
+ou reunir contextos sem selecionar boundaries completos compatíveis. A regra
+vale para `DeleteSelection`, `ReplaceSelection`, `FormatSelection` e qualquer
+comando mutante futuro baseado nesta seleção. Não há exceção dependente da
+capacidade do planner: uma transformação para uma classe exata de boundary só
+pode ser introduzida por capability posterior, normativa e separadamente
+autorizada. `CopyVisualSelection` continua permitido porque não muta fonte.
+
+Seleção integralmente contida em um único contexto semântico editável pode ser
+mutada quando a capability correspondente está ativa. Selecionar todo o conteúdo
+visual de um único mark também pode ser mutado quando seu contrato possui ambos
+os delimitadores e aplica cleanup dentro do rewrite envelope. Na ausência de
+regra explícita para múltiplos nodes irmãos completos, a mutação é recusada.
+`ReplaceSelection` aceita herança pelo slot canônico do head somente depois que
+essas regras aprovarem a seleção; nunca usa união de estilos.
+
+Exemplos normativos: em `x **ab**`, selecionar `x a` recusa Delete, Replace e
+Format; em `**ab** x`, selecionar `b x` produz a mesma recusa. Copy sucede nos
+dois casos. Em `**a *bc* d**`, seleção que contém conteúdo apenas Strong e entra
+ou sai parcialmente de Emphasis também recusa. Em `**abc**`, selecionar apenas
+`b` é permitido quando Strong estiver autorizado; selecionar todo `abc` pode
+remover conteúdo e delimitadores possuídos em uma SourceTransaction.
+
+Se qualquer mutação intersecta `Protected`, `Opaque`, `SourceVisible`, metadata
+sem ownership comprovado ou boundary parcial proibido, a operação inteira é
+`Refusal`. Refusal preserva Draft, history, cursor, seleção e active style
+byte/valor-idênticos.
+
+Todo patch é validado antes do checkpoint. O Draft aplica do maior offset para o
+menor como uma operação atômica; falha de qualquer validação aplica zero patches.
+
+### 26.7 Rewrite envelope e ordem canônica
+
+A precedência normativa é:
+
+1. preservar todo byte fora do rewrite envelope aprovado;
+2. escolher o menor ancestral semântico que contenha todos e somente os nodes
+   que precisam de mudança estrutural;
+3. normalizar somente dentro dele;
+4. nunca ampliá-lo só para embelezar/coalescer sintaxe equivalente;
+5. equivalência fora do envelope não autoriza reescrita.
+
+Para apply/clear de mark, o envelope é o menor conjunto de runs intersectados e
+seus delimitadores possuídos. Para change/clear color ou highlight, é o menor
+node da espécie que intersecta a seleção mais os splits indispensáveis. Apagar o
+último grapheme usa o node vazio e seus open/close lexemes como envelope de
+cleanup. Um sibling não intersectado permanece fora.
+
+Assim, em `<span red>a</span><span red>b</span>`, editar apenas o primeiro node
+mantém o segundo byte-idêntico. “Wrapper máximo” significa máximo **dentro do
+envelope**, nunca global. Adjacent equal marks fora dele não são coalescidas.
+
+Para fonte recém-gerada ou integralmente reconstruída dentro do envelope, a ordem
+externa -> interna é: `Highlight`, `Color`, `Underline`, `Strike`, `Strong`,
+`Emphasis`. Essa ordem é convenção Note-it da TUI para fonte nova, não afirmação
+de CommonMark. InlineCode é exclusivo e não combina com essas marks. Fonte
+preexistente fora do envelope conserva ordem/grafia. Seleção com ordem mista é
+reescrita só se um único envelope local balanceado for provado; caso contrário a
+formatação é recusada.
+
+### 26.8 Active typing style e undo/redo
+
+`effective_style` vem do `context_path` do slot. `active_style_override` é estado
+transitório explícito escolhido pelo usuário; não é fonte nem parte do histórico.
+
+- digitar sem override usa effective style;
+- selecionar formato sem seleção define/substitui o override;
+- Left/Right dentro do mesmo run preserva override; cruzar para outro semantic
+  path, clicar outro caret, trocar bloco ou entrar em SourceVisible limpa-o;
+- troca Visual/Markdown suspende o override e o restaura apenas se volta na mesma
+  generation e mesmo context path; mutação raw o invalida;
+- typing-over-selection herda o slot canônico do head, salvo override explícito;
+- seleção mista mostra `Mixed`; uma ação explícita aplica/remover mark por
+  envelope, mas `Mixed` sozinho não muda override;
+- ação semanticamente no-op não cria patch, history ou pending.
+
+Undo/redo restaura `EditorSnapshot`: fonte, `ScalarPosition` raw de cursor,
+seleção raw e âncoras de source/context visual. O modo de edição não faz parte do
+history e permanece o modo corrente; a projeção é refeita e slots são resolvidos.
+O active override também não faz parte: após undo/redo ele é limpo e o estilo é
+recalculado do slot. Isso evita estado parcialmente histórico.
+
+Um `VisualCommand` produz exatamente um entry, ainda que tenha vários patches.
+Além de no máximo 200 entradas, history tem budget configurável de bytes; ao
+exceder qualquer limite, remove snapshots mais antigos completos. O estado atual
+e o passo imediatamente anterior, quando houver memória para a operação, não são
+removidos no meio de uma transação. B.3 deve medir notas grandes e propor o valor
+numérico antes de produção; nenhuma implementação pode manter sem limite
+`200 * note_size`.
+
+### 26.9 Split, Join e boundaries
+
+| Construção inicial | Enter início | Enter meio | Enter fim | Join/Backspace/Delete de boundary |
+|---|---|---|---|---|
+| parágrafo | parágrafo vazio antes | dois parágrafos | parágrafo vazio depois | une dois parágrafos; uma transação |
+| heading | parágrafo antes; heading fica | dois headings do mesmo nível | parágrafo depois | só B.4: heading+paragraph e heading+heading por regras testadas |
+| mark inline habilitada | slot externo no extremo não herda; slot interno herda | fecha antes da quebra e reabre no segundo bloco | slot interno fecha e cria próximo bloco sem mark; externo não toca mark | não remove delimitador isolado; cleanup por ownership |
+| inline code | sem Split | sem Split | sem Split | SourceVisible/Protected |
+| lista/task/quote/callout | sem Split inicial | sem Split inicial | sem Split inicial | SourceVisible/Protected até B.7 |
+| Opaque/SourceVisible | nenhum Enter visual | nenhum | nenhum | nenhum |
+
+Em parágrafo, styles ativos no caret podem ser reabertos no segundo parágrafo
+somente para marks habilitadas e balanceadas. Marks Markdown não atravessam line
+ending: a transaction insere closers, line ending e openers canônicos. Em heading
+meio, ambos mantêm o nível. Heading início/fim segue a regra acima. DeleteInside
+nunca implica DeleteBoundary; boundary exige capability própria.
+
+### 26.10 Unknown e malformed
+
+Fail-closed é normativo:
+
+#### Algoritmo normativo de limite HTML
+
+O reconhecimento e os limites dependem somente dos bytes da mesma `Generation`.
+Offsets abaixo são `SourceOffset` UTF-8; nenhuma decisão consulta renderer,
+viewport, estilo visual ou heurística de linha.
+
+1. Um candidato HTML começa no byte `<`. `<!--` inicia comentário. Fora desse
+   caso, open/close tag exige nome começando por letra ASCII e continuando apenas
+   com ASCII alfanumérico, `-`, `:`, `_` ou `.`. Close tag lexical é exatamente
+   `</`, nome, zero ou mais whitespace ASCII e `>`; qualquer outro tail torna o
+   close malformed. `<` cujo byte seguinte não seja letra ASCII, `/` seguido de
+   letra ASCII ou `!` de `<!--` é texto literal.
+2. O scanner de tag percorre bytes nos estados `Unquoted`, `SingleQuoted` e
+   `DoubleQuoted`. Aspa abre/fecha somente seu próprio estado; `>` encerra o tag
+   somente em `Unquoted`. Portanto `>` dentro de atributo quoted não encerra o
+   token. Line ending não encerra token. Se um candidato não alcança `>` antes
+   de EOF, o span protegido é `[candidate_start, source_len)`.
+3. Nome de tag é comparado por ASCII lowercase. Open tag é autocontido se o
+   último byte não whitespace ASCII anterior ao `>` for `/` em `Unquoted`, ou
+   se o nome pertencer ao allowlist de void elements `area`,
+   `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `param`,
+   `source`, `track`, `wbr`. Esses dois casos não exigem close.
+4. Para open tag não autocontido, a busca do close é document-bounded, do fim do
+   opener até EOF, com o mesmo lexer quote-aware. Uma pilha contém todo open tag
+   não void/autocontido encontrado. Close tag só desempilha quando seu nome
+   ASCII-lowercase é exatamente o nome no topo. Comentários completos são um
+   token e seu conteúdo não participa da pilha. Texto, Markdown, delimitadores,
+   fences e sequências `<...>` que não sejam tags lexicais não têm significado
+   para matching HTML.
+5. O close do candidato inicial é provado somente quando a pilha bem formada
+   volta a ficar vazia. O span do elemento é então `[candidate_start,
+   matching_close_end)`, incluindo o `>` final. Para elemento desconhecido, esse
+   span inteiro é um único ancestor Opaque. Para elemento canônico, só a grammar
+   canônica própria pode atribuir semântica/editabilidade dentro do mesmo span.
+6. Close divergente do topo, close órfão, atributo quoted não terminado, opener
+   interno não terminado ou EOF com pilha não vazia torna o candidato inicial
+   não fechado: seu span é `[candidate_start, source_len)`. Um close órfão fora
+   de qualquer candidato inicia por si uma região malformed
+   `[orphan_close_start, source_len)`.
+7. Dentro de região Opaque nenhum byte é reclassificado como Markdown, mark,
+   descendant editável ou novo bloco. Lexemes ainda particionam todos os bytes,
+   mas as capabilities efetivas de todos os descendentes são Protected.
+
+O algoritmo é total: dado o mesmo byte string e `Generation`, produz o mesmo
+início e o mesmo fim. Scanning é sempre document-bounded; line ending nunca é
+condição de parada.
+
+| Fonte UTF-8 | Span Opaque/Protected normativo | Razão |
+|---|---|---|
+| `<x>abc</x>` | `[0,10)` | unknown balanceado single-line, incluindo close |
+| `<x>a\nb</x>` | `[0,10)` | unknown balanceado multiline; newline não encerra |
+| `<x>a\n# h` | `[0,8)` = `[0,source_len)` | open sem close; Markdown posterior não é semântico |
+| `<x><y>z</y></x>` | `[0,15)` | nested bem formado; close exterior esvazia a pilha |
+| `<x><y></x>` | `[0,10)` = `[0,source_len)` | close diverge do topo; toda a região falha fechada |
+| `<x a=">">ok` | `[0,11)` = `[0,source_len)` | `>` quoted não fecha opener; não há `</x>` |
+| `<x>**b**</x>` | `[0,12)` | Markdown-looking permanece bytes internos opacos |
+| `pré <x>ç **b**</x> pós` | `[5,20)` | offsets são bytes; Unicode externo/interno é preservado |
+| `<span data-note-it-color="#DC2626">x` | `[0,source_len)` | canonical opener sem close provado |
+
+Nos dois primeiros casos o span termina exatamente no byte após `>` do close.
+Nos casos não fechados termina exatamente em `source_len`, isto é, EOF.
+
+- HTML desconhecido balanceado: do open ao close correspondente é um único
+  ancestor `Opaque`; descendente canônico não recupera editabilidade;
+- HTML desconhecido ou canônico com open tag reconhecido lexicalmente, mas sem
+  close correspondente provado pela grammar lossless: um único ancestor
+  Opaque/SourceVisible/Protected começa no primeiro byte do open tag e segue até
+  EOF. Não existe limite por linha, inferência de provável linha única nem
+  comportamento do renderer capaz de encurtar a região; descendente canônico
+  não recupera editabilidade;
+- HTML canônico malformado: aplica a mesma regra até EOF, sem reparo, close
+  sintético ou normalização;
+- budget de nesting do projetor: 32. Ao tentar abrir o nível 33, o ancestor que
+  começou a região não resolvida até seu close comprovado, ou EOF, vira Opaque;
+- comentário `<!--` sem `-->`: Protected/SourceVisible até EOF;
+- fence sem fechamento: Protected/SourceVisible da abertura até EOF;
+- entidade só decodifica o allowlist provado (`amp`, `lt`, `gt`, `quot`, `apos`,
+  `nbsp` inicialmente); desconhecida permanece texto literal e editável somente
+  como seus caracteres visíveis;
+- `<`/`>` que não formam tag pela grammar são texto literal, nunca ocultados.
+
+Princípio comum: para construção suportada cuja grammar admite continuação em
+mais de uma linha e exige fechamento, a ausência de close provado fixa EOF como
+único limite seguro. Isso também rege comentário e fence não terminados. Em
+contraste, caracteres `<` e `>` que não formam open tag conforme a grammar
+lexical permanecem texto literal e não tornam o restante opaco.
+
+Logo, `<custom-widget>hello\nparagraph` sem `</custom-widget>` e
+`<span data-note-it-color="#DC2626">hello\nparagraph` sem `</span>` são
+Opaque/SourceVisible/Protected desde `<` até EOF; `paragraph` não é editável.
+Não há reparo ou close sintético. Já um custom element com close correspondente
+provado é Opaque somente do open ao close exterior, ainda dominando descendentes
+canônicos. O texto `2 < 3 and 4 > 1` não contém open tag lexical e permanece
+literal.
+
+Em `<custom-widget foo="bar"><span data-note-it-color="#DC2626">hello</span></custom-widget>`,
+os lexemes cobrem tudo, o node Opaque exterior possui a região e domina o Color:
+todo o trecho é source-visible sem slot editável interno.
+
+### 26.11 Exemplos normativos
+
+Para `**abc**`:
+
+```text
+Lexemes: StrongOpen[0..2], Text[2..5], StrongClose[5..7]
+Node: Strong coverage[0..7], owns open/close, child Text
+ProjectionRun: "abc", path[Strong], lexeme Text
+```
+
+Antes de `a` há slot externo offset 0 e interno offset 2; após `c`, interno
+offset 5 e externo offset 7. Navegação pelo texto escolhe internos. Ao apagar o
+último grapheme, o envelope cobre open, conteúdo e close; uma única transaction
+substitui `[0,7)` por vazio. `****` já existente não é Strong vazio: é literal
+SourceVisible.
+
+`***abc***` usa um node composto de ownership único somente após B.5 provar a
+regra; até lá é SourceVisible. `&amp;` é um lexeme fonte de cinco bytes, um
+grapheme visual e carets somente antes/depois; Delete remove os cinco bytes, e
+nenhuma edição preserva uma metade.
+
+No nested mark/color do §26.4 existem os três slots enumerados. Selecionar `ab`
+escolhe somente lexeme Text correspondente. Mudar color cria splits dentro do
+menor Color envelope; limpar highlight inclui somente o Highlight necessário.
+
+No link `[a **bold** label](https://example.com/a_(b))`, label e destino têm
+owners distintos; destination e delimitadores são Protected. Antes de B.7, todo
+link é SourceVisible. Depois, label pode receber carets e destination continua
+sem slots visuais.
+
+`e` + U+0301 e `👨‍👩‍👧‍👦` são cada um um EGC: podem ter vários escalares/bytes,
+mas apenas carets nas pontas e remoção integral. Não há normalização NFC/NFD.
+CRLF é lexeme de dois bytes e permanece CRLF. Cursor raw dentro de um atributo
+HTML vira `RawBookmark` exato e caret visual snapped; voltar sem mutação restaura
+o byte exato.
+
+Uma seleção que começa fora e termina dentro de Strong pode ser copiada
+visualmente, mas Delete/Replace/Format são sempre `Refusal` nesta arquitetura.
+O mesmo vale no sentido dentro -> fora e para entrada/saída parcial de mark
+nested. Seleção inteiramente dentro de Strong pode ser mutada depois de B.5;
+selecionar seu conteúdo visual inteiro pode incluir cleanup dos delimitadores
+possuídos em uma transação. Wrappers de color iguais adjacentes não são unidos
+se o segundo estiver fora do rewrite envelope.
+
+Fence ou comentário não terminado são SourceVisible/Protected até EOF, sem caret
+visual interno e com round-trip físico exato.
+
+### 26.12 Dependência Unicode
+
+Cursor Visual requer implementação correta de extended grapheme clusters; criar
+algoritmo próprio é proibido. B.1 não expõe cursor de grapheme e não precisa de
+dependência nova. B.2 pode propor dependências diretas `unicode-segmentation` e,
+se Ratatui não expuser o necessário, `unicode-width`, somente com autorização
+explícita contendo versões exatas, licença, compatibilidade MSRV, impacto no lock
+e justificativa. A presença transitiva atual não é autorização nem API estável.
+
+### 26.13 Gates de performance
+
+B.1 pode reprojetar integralmente por correção, pois não é interativo. Antes de
+ampliar edição interativa, benchmarks devem registrar tempo, alocações/memória,
+bytes/nodes reprocessados e número de fallbacks integrais para:
+
+- documentos de 1 KB, 100 KB e 1 MB;
+- 20.000 linhas;
+- uma linha de 100.000 caracteres;
+- séries de insert/delete no início, meio e fim;
+- alternância repetida Visual/Markdown;
+- 200 undo/redo;
+- nesting no limite e inputs adversariais;
+- quantidade de full projections durante uma série de typing.
+
+É proibido: full projection incondicional por tecla em documento grande; source
+map por célula terminal em linha enorme; prefix scan repetido O(n²); nesting sem
+limite; history sem budget. Invalidação local deve registrar seu safe block e
+ampliação; fallback integral é correto em ambiguity, mas mensurado. Valores
+numéricos de latência/memória só serão aceitos após baseline reprodutível em B.P.
+
+Performance é gate recorrente, não fechamento adiado. Ao concluir B.1, o
+relatório registra baseline informativo de projeção para 1 KB, 100 KB, 1 MB,
+20.000 linhas, linha de 100.000 caracteres e nesting adversarial; full projection
+continua permitida porque não há edição interativa. Antes de autorizar B.3, um
+gate obrigatório demonstra que a arquitetura interativa proposta não depende
+de full projection incondicional por tecla em notas grandes, prefix rescanning
+O(n²), mapa por célula ou history sem limite. B.3 não começa se qualquer desses
+modos de falha permanecer.
+
+Antes de ampliar B.5, B.6 ou B.7, as medições se repetem após cada aumento
+material de complexidade. Cada relatório registra tamanho, operação, tempo,
+memória quando mensurável, bytes/nodes reprocessados e contagem de fallbacks para
+projeção integral. B.P permanece fechamento agregado de performance, regressão
+e production readiness; **B.P não substitui nenhum gate anterior**.
+
+### 26.14 Sequência obrigatória da 5.0D.4B
+
+Sem alterar o roadmap, a implementação deve ser autorizada separadamente:
+
+1. **5.0D.4B.1 — Lossless projection foundation:** tipos de source/generation,
+   Lexemes, Nodes, cobertura, grammar e opaque; round-trip exato; nenhuma UI
+   visual editável e nenhuma dependência de grapheme.
+2. **5.0D.4B.P0 — Baseline de projeção:** imediatamente depois de B.1, registra
+   os cenários informativos do §26.13. Não bloqueia B.2, que continua read-only.
+3. **5.0D.4B.2 — Read-only visual source map:** EGC, CaretSlots, paths,
+   RawBookmarks, VisualDocument imutável e transição de modos; nenhuma mutação
+   visual. É o primeiro gate que pode pedir dependência Unicode.
+4. **5.0D.4B.P1 — Gate pré-interativo:** obrigatório depois de B.2 e antes de
+   autorizar B.3; precisa excluir os quatro modos de falha proibidos do §26.13.
+5. **5.0D.4B.3 — Minimal visual editing:** plain text/parágrafo,
+   SourceTransaction, insert/delete/replace e integração atômica com history.
+6. **5.0D.4B.4 — Heading/block boundaries:** heading, Enter, Split/Join e
+   Backspace/Delete de boundary.
+7. **5.0D.4B.P2 — Gate pré-inline:** mede B.3/B.4 e deve passar antes de B.5.
+8. **5.0D.4B.5 — Markdown inline capabilities:** Strong, Emphasis, Strike,
+   Underline e InlineCode individualmente; nenhum é liberado em lote.
+9. **5.0D.4B.P3 — Gate pré-HTML:** mede o aumento de B.5 e deve passar antes de
+   B.6.
+10. **5.0D.4B.6 — Canonical HTML formatting:** Color, Highlight, envelopes,
+    ordem canônica, splits e coalescing local.
+11. **5.0D.4B.P4 — Gate pré-blocos estruturados:** mede B.6 e deve passar antes
+    de B.7.
+12. **5.0D.4B.7 — Structured blocks:** links, listas, tasks, blockquotes e
+    callouts apenas com contratos próprios.
+13. **5.0D.4B.P — Performance closure:** depois de B.7, consolida resultados,
+    budget, invalidação incremental e regressões; não substitui P0-P4.
+14. **5.0D.4B.R — Adversarial/regression closure:** properties, malformed,
+    Unicode, TestBackend, PTY, conflito, recovery, sinais e terminal.
+
+Cada P1-P4 é pré-condição formal da etapa seguinte indicada: essa etapa não pode
+ser autorizada, iniciada nem considerada conforme enquanto o gate estiver
+pendente ou falhar. Uma subfase concluída não autoriza automaticamente a
+seguinte, e cada checkpoint também exige autorização separada.
+
+### 26.15 Contrato de testes corrigido
+
+5.0D.4B deve provar por máquina:
+
+1. ranges físicos de Lexeme são ordenados;
+2. ranges físicos de Lexeme nunca se sobrepõem;
+3. ranges físicos de Lexeme não têm gaps;
+4. Lexemes cobrem exatamente `0..source_len`;
+5. concatenar seus slices reconstrói os bytes originais exatos;
+6. todo limite de SourceRange é uma fronteira UTF-8 válida;
+7. todo CaretSlot visual cai em uma fronteira EGC;
+8. uma fronteira visual aceita zero, um ou N slots ordenados;
+9. nenhum slot editável existe dentro de Protected/Opaque;
+10. ancestor desconhecido impede editabilidade de todo descendente;
+11. patches de SourceTransaction são generation-correct, UTF-8 válidos,
+    ordenados e disjuntos;
+12. bytes fora do rewrite envelope são idênticos;
+13. Refusal preserva Draft, history, cursor, seleção e active style;
+14. um comando cria exatamente uma transação de undo;
+15. troca de modo sem edit não muda source, history ou pending;
+16. RawBookmark restaura offsets e direção exatos na mesma generation;
+17. remoção de grapheme nunca corta um cluster;
+18. CRLF, LF, whitespace, escapes e grafia da fonte não são normalizados;
+19. decorations nunca serializam;
+20. VisualDocument, CaretSlot e SourceTransaction stale são recusados;
+21. a projeção independe da viewport;
+22. nenhuma mutação visual bypassa Draft;
+23. o parser apresentacional atual nunca é usado como prova de editabilidade;
+24. open tag HTML canônico/desconhecido sem close provado protege do open até EOF;
+25. texto `2 < 3 and 4 > 1` não cria região Opaque;
+26. seleção mutante que cruza parcialmente boundary de mark tem resultado único:
+    `Refusal`, sem mudança de Draft, history, cursor, seleção ou active style;
+27. a ausência de uma capability na matriz da subfase equivale a deny.
+
+Fixtures obrigatórias incluem delimiter runs, nesting, entities, links com
+parênteses balanceados, unknown/malformed HTML, fences/comments não terminados,
+NFC/NFD, ZWJ, flags, CJK, line endings mistos e limites de tamanho. Property
+tests geram UTF-8 e verificam cobertura/round-trip; TestBackend e PTY entram
+somente quando há UI.
+
+As tabelas R2 obrigatórias incluem:
+
+- `<custom-widget>hello\nparagraph` e o `span` canônico equivalente sem close:
+  Opaque começa no `<`, termina em EOF e a segunda linha não é editável;
+- `2 < 3 and 4 > 1`: todo o texto é literal, sem Opaque;
+- em `x **ab**`, seleção visual `x a`: Delete, Replace e Format recusam; Copy
+  sucede;
+- em `**ab** x`, seleção visual `b x`: a mesma matriz de recusa/cópia;
+- em `**abc**`, seleção `b`: mutação apenas com Strong autorizada; seleção de
+  todo `abc`: cleanup integral apenas com contrato Strong ativo.
+- HTML quote-aware e matching: single/multiline balanceado, `>` quoted, nesting
+  bem formado, close divergente, Unicode antes/dentro/depois e Markdown-looking
+  interno devem produzir exatamente os spans da tabela do §26.10;
+- seleção deve cobrir todas as linhas da tabela do §26.6, inclusive marks
+  adjacentes iguais/diferentes, outer+nested, boundary apenas tocado, caret vazio
+  e EGC multi-code-point.
+
+### 26.16 Separação do parser legado e fronteiras preservadas
+
+`markdown.rs`, `inline.rs` e as buscas textuais atuais de `formatting.rs` são
+renderer apresentacional/helpers do editor raw. Não são fundação autorizada do
+projector lossless. A incapacidade atual de `inline.rs` balancear parênteses no
+destino de link é evidência concreta. Primitivas só poderão ser compartilhadas
+depois de equivalência e losslessness provadas, nunca por semelhança de saída.
+
+Persistência permanece fora do desenho: `Draft.text()`, `mutation_for`,
+`ReplaceBody`/`ClearBody`, canonical no-op, revision original,
+`authority::perform_at`, ausência de retry, conflict, recovery, sinais e terminal
+lifecycle não mudam. Core, GUI, schemas, migrations e formato persistido ficam
+intocados. Raw Markdown é fallback integral permanente.
+
+### 26.17 Mapeamento dos bloqueios da revisão
+
+| Bloqueio independente | Correção normativa R1 |
+|---|---|
+| ranges físicos vs. semânticos | Lexeme/Node/ProjectionRun separados (§26.2) |
+| afinidade binária | N CaretSlots com context path (§26.4) |
+| cursor raw perdido | RawBookmark por generation (§26.4) |
+| unidades misturadas/CRLF | newtypes, conversões nomeadas e line-ending policy (§26.3) |
+| grammar/capability ampla | matriz conservadora por operação (§26.5) |
+| delimiter runs | subconjunto normativo/fail-closed (§26.5) |
+| OwnedSlice insuficiente | SelectionPlan e comandos separados (§26.6) |
+| patch mínimo vs. coalescing | rewrite envelope e precedência (§26.7) |
+| ordem de marks | ordem completa para fonte nova (§26.7) |
+| active style | lifecycle e recomputação (§26.8) |
+| Enter/Join | matriz por construção (§26.9) |
+| malformed/unknown | safe limits e ancestor dominance (§26.10) |
+| sintaxe GUI omitida | classificação explícita Protected/SourceVisible (§26.5) |
+| Unicode | gate de dependência em B.2 (§26.12) |
+| undo/memória | snapshot lógico e budget por bytes (§26.8) |
+| performance vaga | cenários/métricas/proibições (§26.13) |
+| dual authority implícita | VisualDocument formalmente imutável (§26.1) |
+| renderer usado como parser | rejeição explícita (§26.16) |
+| 5.0D.4B ampla | nove gates separados (§26.14) |
+
+### 26.18 Status da arquitetura
+
+Esta R1 corrige documentação somente. Não implementa nenhuma subfase, não aprova
+a própria arquitetura e não autoriza código. O veredito cabe a nova revisão
+independente.
+
+**5.0D.4A.R1 READY FOR INDEPENDENT RE-REVIEW**
+
+## Correção final de arquitetura — Fase 5.0D.4A.R2
+
+Esta R2 é estreita e normativa. Ela substitui apenas as quatro ambiguidades
+remanescentes: HTML aberto sem close agora protege invariavelmente até EOF;
+seleção mutante que cruza parcialmente mark agora recusa invariavelmente;
+capability não concedida é deny; e performance passa a checkpoints P0-P4
+intercalados antes da edição interativa e de cada ampliação, mantendo B.P como
+fechamento agregado.
+
+Permanecem inalterados todos os demais contratos aceitos da R1: fonte única no
+Draft, VisualDocument imutável por generation, Lexeme/Node/ProjectionRun,
+cobertura byte-exact, tipos de posição, RawBookmark, N CaretSlots, stale
+rejection, delimiter grammar, rewrite envelope, ordem canônica, active style,
+Split/Join, Unicode, undo/history budget, proibição do parser legado,
+revision/authority/conflict/recovery/terminal, fallback raw e fronteiras futuras
+de matemática e flashcards.
+
+Esta correção não implementa B.1 nem qualquer etapa posterior e não aprova a
+própria arquitetura. O veredito permanece reservado à revisão independente.
+
+**5.0D.4A.R2 READY FOR FINAL INDEPENDENT RE-REVIEW**
+
+## 27. Fase 5.0D.4A.R3 — correção normativa após revisão independente final
+
+### 27.1 Status e precedência
+
+A revisão independente final bloqueou a R2 com 3 BLOCKERs, 21 MAJORs e 13 MINORs.
+Ela confirmou, por rastreamento manual linha a linha, que as nove linhas da tabela
+normativa do §26.10 são reproduzidas exatamente pelos passos 1–7 como escritos, e
+que a disciplina de pilha do passo 4 é consistente com o passo 6. Os defeitos estão
+nos casos que a tabela não alcança e em contratos vizinhos.
+
+Esta R3 conserva toda a arquitetura aceita da R1/R2 — fonte única no `Draft`,
+`VisualDocument` imutável por generation, `Lexeme`/`Node`/`ProjectionRun`, cobertura
+byte-exact, tipos de posição, `RawBookmark`, N `CaretSlot`s, stale rejection,
+rewrite envelope, ordem canônica, active style, Split/Join, Unicode, budget de
+history, proibição do parser legado, revision/authority/conflict/recovery/terminal,
+fallback raw e fronteiras de matemática e flashcards. Ela **substitui** os contratos
+listados nas seções seguintes; onde R3 e R1/R2 divergirem, R3 prevalece.
+
+O histórico R1 e R2 permanece no documento como registro. As seções 1–25 do
+relatório original (a partir de "Relatório de arquitetura — Fase 5.0D.4A") são
+**históricas** sempre que a R1, a R2 ou esta R3 restatem o mesmo contrato; em
+particular o esboço `Segment`/`CaretMap` da seção 7, a seleção por `OwnedSlice` da
+seção 9 e o modelo de afinidade binária da seção 14 estão superados e não são
+implementáveis. Uma referência a "a tabela da seção 6" naquele relatório significa a
+seção 6 **do relatório**, não a seção 6 deste documento.
+
+### 27.2 B1 — `Generation` é monotônica por sessão
+
+A R2 amarrava o incremento a um único evento, a `SourceTransaction` bem-sucedida.
+`app.rs::reseat_draft` constrói um `Draft` novo após cada save, conflito, recovery ou
+recarga; um contador por instância reinicia e um `VisualDocument` em cache passa a ser
+"generation-correto" contra bytes de outra revisão. Undo que restaurasse uma
+generation armazenada produz a mesma falha em quatro teclas.
+
+> `Generation` é estritamente crescente e monotônica durante toda a sessão do
+> editor, independentemente da origem da mudança. Incrementa em **toda** mutação
+> dos bytes do `Draft`: `SourceTransaction`, tecla do editor raw, undo, redo,
+> `insert_str`/paste, e substituição do `Draft` por um novo (reseat após save,
+> após conflito, após recovery ou após recarga da nota). Undo e redo **nunca**
+> restauram uma generation anterior: avançam o contador como qualquer outra
+> mutação. O contador pertence à sessão, não à instância de `Draft`; construir um
+> novo `Draft` não o reinicia. Nenhum `EditorSnapshot` armazena uma generation.
+
+### 27.3 B2 — precedência de contexto antes de qualquer candidato HTML
+
+Nada na R2 dizia se um fence ou um code span suprime a **iniciação** de um candidato
+HTML, e o passo 4 apontava para o lado errado ao retirar dos fences todo significado
+para matching. Consequência literal: uma nota com um bloco ```` ```html ```` contendo
+`<div class="card">`, ou um parágrafo com `` `<div>` ``, torna Opaque/Protected todo
+byte daquele `<` até EOF — em B.1, antes de qualquer capability de edição.
+
+Novo passo 0 do §26.10, antes do passo 1:
+
+> 0. Precedência de contexto. O lexer resolve, nesta ordem e antes de qualquer
+>    candidato HTML: (i) fenced code — um fence aberto consome todos os bytes até
+>    seu fence de fechamento correspondente ou, na ausência dele, até EOF;
+>    (ii) code span inline com delimitador balanceado na mesma linha; (iii) escape
+>    `\<`. Um byte `<` dentro de fenced code, de code span balanceado ou escapado
+>    **não inicia candidato HTML** e é texto literal para todos os efeitos deste
+>    algoritmo. Um `<` dentro de um code span cujo delimitador não fecha na mesma
+>    linha não está protegido por esta regra e volta a ser candidato. Fora desses
+>    três contextos, a varredura de candidatos segue nos passos 1–7.
+
+Fixtures obrigatórias acrescentadas ao §26.15:
+
+> - fence ```` ```html ```` contendo `<div class="card">` sem `</div>`: o bloco de
+>   código é Protected/SourceVisible até seu fence de fechamento, e o parágrafo
+>   seguinte permanece editável; nenhuma região Opaque é criada;
+> - `` Use `<div>` aqui. ``: o code span é Protected/SourceVisible, o resto do
+>   parágrafo permanece editável.
+
+### 27.4 B3 — escopo de bloco na álgebra de seleção
+
+As cinco regras do §26.6 são exaustivas por construção e estavam enunciadas somente
+sobre inline-mark paths. Em `# T\n\npara`, uma seleção do interior do heading ao
+interior do parágrafo tem path vazio em todos os EGCs selecionados: a regra 1 não
+enxerga o prefixo `# ` porque ele é Protected mas **invisível** e não contribui EGC,
+e a regra 3 **permite** a operação. O mesmo vale em B.3 para `ab\n\ncd`.
+
+Nova regra 0 do §26.6, antes da regra 1, com as demais renumeradas:
+
+> 0. Escopo de bloco. Se `start` e `end` não pertencem ao mesmo `BlockId`, a
+>    seleção é multibloco. Uma seleção multibloco só é mutável quando **todos** os
+>    seguintes valem, e é `Refusal` caso contrário: (i) cada bloco atravessado
+>    concede a capability pedida; (ii) cada fronteira de bloco interna à seleção
+>    concede `Join` ou `DeleteBoundary` para o par exato de construções envolvido,
+>    segundo a matriz do §26.9; (iii) nenhum lexeme `BlockPrefix`, `Metadata` ou
+>    `Protected` fica parcialmente contido na união dos ranges de fonte resultantes.
+>    Os bytes de line ending entre blocos pertencem ao envelope apenas quando (ii)
+>    autoriza o Join daquela fronteira, e então integralmente (CRLF é indivisível).
+>    Na arquitetura inicial nenhum par com prefixo Protected concede (ii), logo toda
+>    seleção multibloco que atravesse um heading, lista, task, quote, callout, fence
+>    ou região Opaque é `Refusal`.
+
+### 27.5 Correções do algoritmo de limite HTML
+
+**M1 — span de candidato autocontido e de close malformed.** O passo 5 definia span
+só para close provado e o passo 6 só para falha; `<br>abc` e `<x/>abc` não caíam em
+nenhum dos dois. Acrescenta-se ao passo 3:
+
+> Quando o candidato inicial é ele próprio autocontido — void do allowlist ou `/`
+> imediatamente antes do `>` em `Unquoted` — o span do elemento é exatamente
+> `[candidate_start, tag_end)`, onde `tag_end` é o byte seguinte ao `>`. Não há
+> busca de close, a pilha permanece vazia e os bytes seguintes voltam à varredura
+> normal.
+
+e ao passo 6:
+
+> Um close lexicalmente malformed — `</` seguido de nome e de qualquer tail que não
+> seja apenas whitespace ASCII e `>` — é tratado como close órfão: inicia por si uma
+> região malformed `[malformed_close_start, source_len)`.
+
+**M2 — o teste de autocontenção era fail-open.** Um valor de atributo não quoted
+terminado em `/` satisfazia o teste posicional, e
+`<custom-widget data-src=a/>hello</custom-widget>` tornava `hello` texto editável
+dentro de um elemento desconhecido. Substitui-se a primeira cláusula do passo 3:
+
+> Open tag é autocontido se, em estado `Unquoted`, existir um byte `/` que seja o
+> último byte não whitespace ASCII antes do `>` **e** que não faça parte de um valor
+> de atributo não quoted — isto é, o byte imediatamente anterior a esse `/` deve ser
+> whitespace ASCII, o último byte do nome do tag, ou a aspa que fechou um valor
+> quoted. Um `/` que apenas termina um valor de atributo não quoted (`a=x/`) não
+> torna o tag autocontido. A segunda condição, independente, é o nome pertencer ao
+> allowlist de void elements.
+
+**M3 — o budget de nesting passa a ser parte do algoritmo.** O bullet do §26.10 fica
+revogado e vira o passo 4a:
+
+> 4a. Budget de nesting. A profundidade contada é exclusivamente a da pilha de open
+>     tags do passo 4. Ao encontrar um open tag não void/autocontido com a pilha já
+>     em 32 elementos, o matching é abandonado imediatamente: o candidato inicial é
+>     declarado não fechado e seu span é `[candidate_start, source_len)`, pela mesma
+>     regra do passo 6. Não se continua a varredura para tentar provar um close. O
+>     limite de aninhamento de nodes do projetor fora de HTML — marks Markdown e
+>     blocos — é igualmente 32 e sua ultrapassagem torna literal SourceVisible o
+>     node mais externo que excedeu, sem afetar HTML.
+
+**M4 — comentário não terminado dentro de uma busca de close.** Substitui a frase
+"Comentários completos são um token…":
+
+> Comentários participam da varredura como token único. Um comentário completo
+> (`<!--` … `-->`) é um token e seu conteúdo não participa da pilha. Um `<!--` sem
+> `-->` consome todos os bytes até EOF: nenhum close tag dentro dele desempilha,
+> e o candidato inicial em andamento termina com a pilha não vazia, recaindo no
+> passo 6.
+
+**m1 — o candidato inicial é empilhado.** O passo 4 passa a dizer explicitamente que
+a pilha começa contendo o nome do candidato inicial; sem isso, somente a linha
+`pré <x>ç **b**</x> pós` da tabela desambigua o algoritmo.
+
+**m12 — sinal visível.** `if a <b and c> d` continua, corretamente, Opaque até EOF
+pelo princípio comum, mas é caso de fixture obrigatória e a aplicação deve nomear a
+região protegida ao abrir a nota, nunca silenciar.
+
+### 27.6 M6 — as classificações são três eixos ortogonais
+
+`Recognized`, `Projected`, `Atomic`, `Protected`, `SourceVisible` e `Opaque` eram
+nomeados e nunca definidos, e a matriz os escrevia ora em pares, ora em triplas. Sem
+definição, uma implementação passa as 27 propriedades e ainda assim torna `**abc**`
+simultaneamente portador de caret e inselecionável.
+
+> As classificações são três eixos ortogonais, e todo node/lexeme carrega os três:
+> - **Reconhecimento**: `Recognized` (a grammar lossless atribuiu semântica) ou
+>   `Opaque` (não atribuiu; os bytes são preservados sem interpretação);
+> - **Visibilidade**: `Projected` (os delimitadores/atributos são invisíveis e só o
+>   conteúdo é projetado) ou `SourceVisible` (a grafia literal da fonte é projetada
+>   como graphemes, inclusive delimitadores);
+> - **Proteção**: `Editable` (as capabilities concedidas na matriz da subfase valem),
+>   `Atomic` (existe caret apenas nas pontas; a unidade é removida inteira ou não é
+>   removida) ou `Protected` (nenhum slot editável interno; nenhuma mutação).
+>
+> `Opaque` implica `SourceVisible` e `Protected` em si e em todos os descendentes.
+> `Protected` domina todos os descendentes. Nenhum node pode ser `Projected` e
+> `Protected` ao mesmo tempo em B.1–B.7: toda região protegida é mostrada como
+> fonte, para que o usuário veja o que não pode editar.
+
+### 27.7 M7 — entidades entram na matriz de capabilities
+
+`formatting.rs::escaped_typed` já grava `&amp;`, `&lt;` e `&gt;` na fonte quando o
+usuário digita `&`, `<` ou `>` dentro de um trecho colorido ou marcado, de modo que
+notas produzidas pela própria 5.0D.3 contêm entidades. O §26.11 mandava que Delete
+removesse os cinco bytes; o §26.5 mais a propriedade 27 negavam a operação por
+ausência de linha na matriz. Acrescentam-se duas linhas:
+
+| Construção | Reconhecida/projetada | Operações visuais iniciais |
+|---|---|---|
+| entidade do allowlist (`amp`, `lt`, `gt`, `quot`, `apos`, `nbsp`) | sim/sim; um grapheme projetado, lexeme de N bytes | `Atomic` desde B.3: sem slot interno; `DeleteInside` e `ReplaceSelection` removem ou substituem o lexeme inteiro; `Insert` só nas pontas; `Format` segue o contexto do node pai; `Split` proibido |
+| entidade fora do allowlist (`&foo;`, `&#65;`) | não decodificada | texto literal comum; cada caractere é um EGC editável pelas capabilities do contexto |
+
+**m9 — um único allowlist.** Existiam três listas divergentes: seis nomes nesta
+especificação, seis nomes mais entidades numéricas em `inline.rs`, e três em
+`draft.rs`. O allowlist do **projetor** é normativamente o dos seis nomes; entidade
+numérica é texto literal para o projetor. O renderer legado pode continuar a decodificar
+mais do que isso, porque apresentar não é editar, e essa divergência é registrada
+aqui em vez de ser corrigida em silêncio.
+
+### 27.8 M8 — o slot canônico de texto é uma função total
+
+A regra anterior só decidia quando o caret chegava por Left/Right e existia run
+visível daquele lado. `End`, clique, Up/Down, `resulting_cursor_anchor` e undo não
+tinham resposta, e em `**abc**` digitar após `c` produzia `**abcX**` ou `**abc**X`
+conforme a implementação.
+
+> Left/Right navega entre fronteiras de grapheme e seleciona o **slot canônico de
+> texto** da fronteira alcançada. A escolha é uma função total de
+> `(fronteira, direção)`, onde `direção ∈ {FromLeft, FromRight, Absoluta}`:
+> 1. se `direção` é `FromLeft`/`FromRight` e existe run visível adjacente do lado
+>    para o qual o movimento se deu, o slot canônico é o mais interno que contém
+>    esse run;
+> 2. caso contrário — extremo de bloco ou de documento, ou `direção` `Absoluta`
+>    (Home, End, Up/Down, clique, `resulting_cursor_anchor` após transação,
+>    undo/redo, snap de `RawBookmark`) — o slot canônico é o mais interno que contém
+>    o run visível adjacente do lado oposto;
+> 3. se não há run visível de nenhum lado, é o slot mais externo, isto é, o de
+>    `context_path` mais curto.
+>
+> Isso mantém o estilo ao digitar no começo/fim de um run e torna `End` seguido de
+> digitação equivalente a chegar por Right.
+
+**m10 — a métrica do snap.** "Slot legal mais próximo" mede distância em
+`SourceOffset` (bytes), não em EGC; empate resolve pelo lado da direção de navegação
+e depois pelo anterior, como já dizia a R1.
+
+### 27.9 M9 — `RawBookmark` não desfaz a navegação do usuário
+
+Só mutação invalidava o bookmark. Navegar três vezes para a direita no modo Visual e
+voltar ao Markdown reposicionava o cursor onde ele estava antes, para trás do próprio
+movimento do usuário — e a propriedade 16 congelava esse comportamento.
+
+> O bookmark vale enquanto estiver intacto: nenhuma mutação do `Draft` e nenhum
+> movimento de cursor ou seleção no modo Visual desde a entrada no modo. Intacto e
+> na mesma generation, Visual -> Markdown restaura anchor/head raw exatos. Qualquer
+> mutação ou qualquer movimento visual o consome; a partir daí a volta deriva os
+> offsets do `source_offset` do slot canônico corrente de anchor e head, preservando
+> a direção. A mesma regra vale para seleção.
+
+### 27.10 M10 e M21 — histórico sem identidades de generation e com piso
+
+> Undo/redo restaura `EditorSnapshot`, que contém apenas valores independentes de
+> generation: a fonte, a `ScalarPosition` raw de cursor, a seleção raw e uma âncora
+> visual estrutural `(SourceOffset, [NodeKind] do caminho, stickiness)`. Nenhuma
+> identidade de generation — `BlockId`, `NodeId`, `CaretSlotId`, `LexemeId`,
+> `Generation` — é armazenada no histórico. Após restaurar, a projeção é refeita e o
+> slot é resolvido casando primeiro o `SourceOffset`, depois o caminho de
+> `NodeKind`, depois a stickiness; se o casamento falhar, aplica-se a regra 2/3 do
+> slot canônico do §27.8.
+
+E o budget ganha piso e consequência definida:
+
+> O estado corrente do `Draft` nunca é contabilizado no budget nem removido: o budget
+> governa apenas as entradas de undo/redo. Ao exceder o limite de entradas ou de
+> bytes, removem-se snapshots mais antigos, inteiros, até caber. Se um único snapshot
+> anterior já não couber no budget, o histórico fica vazio: undo torna-se no-op
+> anunciado ao usuário, a edição prossegue normalmente e nada é descartado da fonte.
+> Nenhuma transação é recusada por falta de budget de histórico.
+
+### 27.11 M11 — ordenação estrita de patches
+
+Dois ranges vazios no mesmo offset são disjuntos por qualquer leitura de conjuntos, e
+"do maior offset para o menor" não os ordena entre si — exatamente o que Enter dentro
+de `**ab**` emite.
+
+> `patches` é estritamente ordenado por `start` crescente e, para `i < j`, vale
+> `patches[i].end < patches[j].start`. Consequências: dois patches nunca partilham
+> um offset, nenhum patch de range vazio coincide com o `start` ou o `end` de outro,
+> e todo conjunto de inserções no mesmo offset deve ser fundido em **um único**
+> patch cujo `replacement` já está na ordem final dos bytes. O `Draft` aplica do
+> maior offset para o menor; com esta ordenação o resultado independe da ordem de
+> aplicação.
+
+### 27.12 M12 — o envelope passa a ser declarado e comparado
+
+A propriedade 12 era vacuamente verdadeira: um único patch cobrindo o documento
+inteiro não deixa byte algum "fora do envelope". `SourceTransaction` ganha o campo
+`envelope: SourceRange`, todo patch está contido nele, e a propriedade passa a
+comparar o envelope declarado com o envelope mínimo esperado por fixture — incluindo
+`<span red>a</span><span red>b</span>` com edição só no primeiro node, `**abc** xyz`
+com format dentro do Strong, e uma inserção de um caractere em 100 KB cujo envelope
+deve ser O(bloco) e não O(documento).
+
+### 27.13 M13 — convenção de line ending sem buraco
+
+> Um patch que cria nova quebra usa a convenção local determinística, nesta ordem:
+> (i) o line ending que termina o bloco atual; (ii) se o bloco atual não termina em
+> line ending, o line ending imediatamente anterior ao bloco no documento; (iii) se
+> não houver nenhum antes, o primeiro line ending do documento; (iv) se o documento
+> não possui nenhum line ending, `LF`. Misturas preexistentes são preservadas.
+
+E a propriedade 18 passa a declarar seu escopo em vez de ser falsa hoje:
+
+> 18. nenhuma projeção, transição de modo ou `SourceTransaction` normaliza CRLF, LF,
+>     whitespace, escapes ou grafia da fonte; um `SourcePatch` nunca intersecta
+>     parcialmente um lexeme de line ending. **Nota de escopo:** o editor raw
+>     5.0D.2 trata `\r` como caractere comum e sua tecla Enter escreve `LF`; essa
+>     divergência conhecida fica fora da prova até que B.3 a alinhe ou a documente
+>     como limitação explícita.
+
+### 27.14 M14 e M15 — capabilities de parágrafo e matriz de boundary
+
+A linha de parágrafo era a única sem rótulo de gate e concedia `Split`/`Join` já na
+subfase corrente, contra o §26.14, além de omitir `DeleteBoundary`. Passa a ser:
+
+| Construção | Reconhecida/projetada | Operações visuais iniciais |
+|---|---|---|
+| texto de parágrafo | sim/sim | `Insert`, `DeleteInside`, `ReplaceSelection` em B.3; `Split`, `Join` e `DeleteBoundary` em B.4 |
+
+E o §26.9 ganha, depois de "DeleteInside nunca implica DeleteBoundary":
+
+> Backspace no início de um bloco e Delete no fim de um bloco exigem, cumulativamente,
+> `Join` concedido em ambos os blocos do par e `DeleteBoundary` concedido ao bloco que
+> possui os lexemes de line ending consumidos. Sem ambos, a tecla é `Refusal`.
+
+A matriz do §26.9 recebe a célula de heading corrigida e três linhas novas:
+
+| Construção | Enter início | Enter meio | Enter fim | Join/Backspace/Delete de boundary |
+|---|---|---|---|---|
+| heading | parágrafo antes; heading fica | dois headings do mesmo nível | parágrafo depois | B.4: Backspace no início do texto de um heading cujo bloco anterior é parágrafo ou heading é `Refusal` enquanto o prefixo for `Protected`; Delete no fim de um heading cujo próximo bloco é parágrafo move o texto do parágrafo para dentro do heading, preservando o nível, em uma transação; heading+heading é `Refusal` em B.4 |
+| fronteira com bloco Opaque/SourceVisible vizinho | — | — | — | `Refusal` em ambas as direções |
+| início do documento (Backspace) / fim do documento (Delete) | — | — | — | no-op: nenhum patch, nenhuma entrada de history, nenhum aviso de recusa |
+| bloco vazio | Enter cria outro bloco vazio | — | idem | Backspace remove o bloco vazio e junta, quando `Join`+`DeleteBoundary` do par existem |
+
+### 27.15 M16 — procedimento explícito de delimiter runs
+
+O subconjunto descrevia propriedades de um resultado, não um procedimento, e o
+catch-all "casos cuja precedência não seja decidida por estas regras" herdava a
+indefinição: `*a**b*` e `**a*b**` eram decididos por uma implementação e não por
+outra.
+
+> O reconhecimento de runs é uma varredura única da esquerda para a direita, por
+> linha, fora de code, HTML, escape e opaque. Um *run* é uma sequência maximal de
+> 1 a 3 bytes `*` (respectivamente `~`), e runs de largura 4 ou mais são literais.
+> Um run é **abridor** se for precedido por início de linha, whitespace ou
+> pontuação, e seguido por um byte que não seja whitespace; é **fechador** se for
+> precedido por um byte que não seja whitespace e seguido por fim de linha,
+> whitespace ou pontuação. Um par é reconhecido quando um abridor é seguido, na
+> mesma linha, pelo primeiro fechador de largura **idêntica**, sem que exista entre
+> os dois qualquer run de `*` de largura diferente. Qualquer outra configuração —
+> incluindo um run que seja abridor e fechador ao mesmo tempo, larguras
+> divergentes, runs vazios, `****` e pares que se cruzariam — é literal
+> SourceVisible, e nenhum de seus bytes recebe semântica.
+>
+> "Qualquer outra configuração" refere-se ao **par candidato examinado**, não ao
+> restante da linha: um run que falha em parear fica literal e a varredura
+> prossegue a partir do **fim daquele run**, nunca de um byte dentro dele, já
+> que um run é maximal por definição. Assim `*a**b*` e `**a*b**` não produzem
+> node algum: no primeiro, o run `**` não fecha dentro do intervalo e o `*`
+> final é precedido por letra; no segundo, o `*` interno é precedido pela letra
+> `a` e não satisfaz a regra de abridor. O resultado é único em ambos, que é o
+> que o M16 exige; e nenhum desses bytes ganha editabilidade em B.1, porque todo
+> mark reconhecido nasce SourceVisible.
+
+**m11 — `***abc***`.** O node composto de ownership único entra explicitamente na
+enumeração de B.5; sem isso a negação por omissão o deixaria permanentemente negado.
+
+### 27.16 M17 — digitação não pode proteger o documento
+
+Em B.3, digitar `<` e depois `b` no fim de um parágrafo criava a região
+`[5, source_len)` Opaque, e o snap expulsava o cursor para antes do `<`: a partir dali
+toda tecla inseria antes do que o usuário acabara de escrever, sem saída além de undo
+ou modo raw.
+
+> Regra de digitação. Em contexto de texto plano editável, um `<` digitado é gravado
+> escapado como `&lt;` e um `&` digitado como `&amp;`; o `>` é gravado literal.
+> Assim nenhuma digitação normal cria candidato HTML, e a entrada de HTML literal
+> permanece possível apenas pelo modo Markdown raw ou por colagem, que é comando
+> próprio. Se, ainda assim, uma transação fizer com que a posição resultante do
+> cursor caia dentro de região `Protected`/`Opaque` recém-criada, o cursor é
+> reposicionado pelo snap do §27.8 **e** a aplicação exibe aviso nomeando a região
+> protegida e oferecendo o modo Markdown; o silêncio é proibido.
+
+### 27.17 M18 — o segmentador do source map deve ser total
+
+`ratatui::text::Span::styled_graphemes` existe e é público, e um implementador o
+encontraria ao ler "se Ratatui não expuser o necessário". Ele filtra
+`!g.contains(char::is_control)`, descartando todo grapheme com caractere de controle
+— inclusive TAB, que o §26.2 lista explicitamente entre os bytes que precisam ser
+cobertos. Um TAB no parágrafo deslocaria todo índice de EGC posterior.
+
+> O segmentador usado pelo source map deve ser total: itera todos os EGCs, sem
+> filtrar, reordenar ou substituir nenhum, e a concatenação dos seus EGCs reproduz a
+> string de entrada byte a byte. `ratatui::text::Span::styled_graphemes` e
+> `Line::styled_graphemes` são explicitamente **proibidos** como segmentador do
+> source map: são helpers de renderização e descartam todo grapheme que contenha
+> caractere de controle (inclusive TAB). Podem continuar a ser usados apenas para
+> desenhar. A frase "se Ratatui não expuser o necessário" refere-se somente a
+> largura de célula (`unicode-width`), nunca a segmentação.
+
+### 27.18 M5 e M20 — regras de seleção e herança de estilo
+
+A regra 4 da R2 era inalcançável: sua pré-condição implica a da regra 3, e as regras
+são avaliadas em ordem. Pior, a regra 3 autorizava apagar todo `abc` em `**abc**` sem
+cleanup, produzindo `****`, que o §26.11 declara **não** ser um Strong vazio e sim
+literal SourceVisible — o usuário converteria um construto editável em literal
+protegido apagando três caracteres. As duas regras trocam de lugar e a de path
+constante é estreitada:
+
+> 3. caso whole-leaf-node: a seleção coincide exatamente com o visual range de um
+>    único mark, sem boundary de mark descendente -> permitido **somente** se a
+>    capability pedida possui contrato explícito de cleanup dos open/close lexemes
+>    possuídos por esse mark; sem esse contrato, `Refusal`;
+> 4. todos os EGCs selecionados têm exatamente o mesmo inline-mark path e a seleção
+>    é um subconjunto próprio do conteúdo visual do node mais interno desse path ->
+>    operação permitida somente se cada node/contexto concede explicitamente a
+>    capability. Se a operação esvaziaria o conteúdo do node mais interno, aplica-se
+>    a regra 3 e o mesmo requisito de contrato de cleanup.
+
+E `ReplaceSelection` deixa de herdar um estilo cujos delimitadores a mesma transação
+apaga:
+
+> A herança é calculada sobre o `insertion_context` do slot canônico do head **antes**
+> do delete. Se o plano de delete aprovado inclui cleanup dos open/close lexemes de
+> um mark, esse mark é removido do contexto herdado: a inserção é feita no contexto
+> do node pai. Assim, substituir todo o conteúdo de um mark o elimina, e substituir
+> parte dele o preserva. Um `active_style_override` explícito prevalece sobre ambos.
+
+### 27.19 M19 — `Underline` pertence a B.6
+
+`<u>abc</u>` é HTML: editá-lo exige o matching de close do §26.10, a dominância de
+ancestral, a regra de proteção até EOF e a ordem canônica de serialização — tudo o
+que o gate P3 existe para liberar. O item 8 do §26.14 passa a ler:
+
+> Strong, Emphasis, Strike e InlineCode individualmente; nenhum é liberado em lote.
+> `Underline` (`<u>`) é sintaxe HTML canônica e pertence a B.6, atrás do gate P3,
+> junto de Color e Highlight.
+
+e o item 10 acrescenta `Underline` à lista de B.6.
+
+### 27.20 Propriedades corrigidas
+
+As 27 propriedades do §26.15 permanecem, com estas substituições e uma adição:
+
+- **8** deixa de ser vacuosa ("zero, um ou N" é toda cardinalidade possível): para a
+  fixture `<mark …><span …>abc</span></mark>`, a fronteira anterior a `a` tem
+  exatamente 3 slots, com `context_path` `[]`, `[Highlight]`, `[Highlight, Color]` e
+  `source_offset` estritamente crescentes; em toda fronteira, os slots são ordenados
+  por profundidade de `context_path` crescente na abertura e decrescente no
+  fechamento.
+- **9** acrescenta `SourceVisible`: nenhum slot editável existe dentro de
+  `Protected`, `Opaque` **ou** `SourceVisible`.
+- **12** passa a ser a propriedade de envelope declarado do §27.12.
+- **16** passa a ser a do bookmark intacto do §27.9.
+- **18** passa a ser a do §27.13, com nota de escopo do editor raw.
+- **19** (decorations nunca serializam) é verdadeira por vacuidade em B.1–B.7 porque
+  decorations são 5.0D.5. Fica registrada como **diferida**: não conta como gate
+  aprovado da 5.0D.4B e é provada na 5.0D.5.
+- **23** deixa de ser prosa e vira teste mecânico: nenhum módulo do projector
+  (`projection.rs`, `source_map.rs`, `visual.rs`, `visual_edit.rs`) referencia
+  `markdown.rs`, `inline.rs` ou `formatting.rs`; um teste de dependência verifica a
+  ausência desses `use` e o gate de fronteira falha se aparecerem.
+- **28** (nova): seleção mutante multibloco é `Refusal` sempre que qualquer fronteira
+  atravessada não conceda `Join`/`DeleteBoundary` explicitamente; nenhum
+  `SourcePatch` jamais intersecta parcialmente um lexeme `BlockPrefix`, `Metadata`
+  ou `Protected`.
+
+### 27.21 Correções menores
+
+- **m2** — lexemes são normativamente **não vazios**. Âncoras virtuais de range vazio
+  continuam existindo para layout/decoration e continuam não sendo lexemes.
+- **m3** — `GraphemeIndex` carrega seu `BlockId`: `(BlockId, GraphemeIndex)` é a
+  unidade, e um índice nu não atravessa blocos.
+- **m4** — `Refusal` carrega motivo tipado (`StaleGeneration`, `ProtectedRegion`,
+  `PartialMarkBoundary`, `MissingCapability`, `BlockBoundary`), para que a aplicação
+  possa nomear a causa e oferecer o modo Markdown em vez de falhar em silêncio.
+- **m5** — são **cinco** os modos de falha proibidos do §26.13, não quatro: full
+  projection incondicional por tecla, source map por célula, prefix scan O(n²),
+  history sem budget e nesting sem limite. O gate P1 exclui os cinco.
+- **m6** — o §26.17 fala em "nove gates separados"; são **catorze** desde a R2.
+- **m8** — o exemplo de três slots de `<mark><span>` é inalcançável antes de B.6 e
+  serve como fixture de B.2 somente sobre fonte preexistente, nunca como prova de
+  editabilidade.
+
+### 27.22 Status da arquitetura
+
+Esta R3 corrige documentação. Ela não implementa subfase alguma e não aprova a si
+mesma. Com B1, B2 e B3 fechados, a revisão independente declarou que B.1 pode
+começar, com M1–M4, M6, M16, M18, m1 e m2 incorporados ao trabalho de B.1/B.2 por
+serem regras do próprio projetor; M5, M7, M8, M10–M15, M17, M19–M21 valem cada um
+antes do gate nomeado em seu título e nenhum bloqueia B.1.
+
+Como a R1 e a R2, esta R3 **não emite o próprio veredito**: a concessão da revisão
+anterior era condicional aos três BLOCKERs, e o veredito cabe à revisão independente.
+
+**5.0D.4A.R3 READY FOR RE-REVIEW**
+
+## 28. Fase 5.0D.4A.R4 — fechamento após a segunda revisão independente
+
+### 28.1 Status
+
+A segunda revisão independente confirmou **B1 e B2 fechados** e 17 dos 21 MAJORs
+fechados, manteve **B3 aberto** e apontou oito defeitos novos introduzidos pela
+própria R3. Esta R4 fecha B3, os três blockers novos (N1, N2, N3) e os MAJORs
+restantes, com a redação mínima proposta pela revisão. Onde R4 e R3 divergirem, R4
+prevalece; onde R4 e R1/R2 divergirem, R4 prevalece.
+
+### 28.2 B3 e N3 — seleção multibloco versus teclas de boundary
+
+A R3 fechou o §27.4 com "nenhum par com prefixo Protected concede (ii) … logo … é
+`Refusal`", mas o §27.14 concedeu o join heading→parágrafo. Em `# T\n\npara` as duas
+frases davam respostas opostas e ambas eram R3, de modo que a cláusula de precedência
+do §27.1 não arbitrava. A frase final da regra 0 do §27.4 passa a ser:
+
+> Esta regra governa apenas seleções multibloco; teclas de boundary em caret vazio
+> seguem a matriz do §26.9. Na arquitetura inicial nenhum par que envolva prefixo
+> `Protected` concede (ii) **para fins de seleção multibloco**, logo toda seleção
+> multibloco que atravesse um heading, lista, task, quote, callout, fence ou região
+> Opaque é `Refusal`, ainda que a matriz do §26.9 conceda a tecla de boundary
+> correspondente.
+
+E na cláusula (iii) da mesma regra, "fica parcialmente contido" passa a ser
+"é intersectado, total ou parcialmente,": a contenção **total** de um lexeme
+`BlockPrefix`, `Metadata` ou `Protected` também é proibida, não só a parcial.
+
+A célula de capabilities da linha de heading do §26.5 passa a ser:
+
+> texto: `Insert`/`DeleteInside`/`ReplaceSelection` em B.4; `Split`, `Join` e
+> `DeleteBoundary` em B.4 nos pares que o §26.9 concede; `Format` somente após o
+> gate B.5/B.6 da capability inline e permissão explícita no contexto
+
+E o §26.2 ganha a regra de propriedade que a regra de boundary pressupunha:
+
+> Um lexeme de line ending entre dois blocos pertence ao bloco **anterior**.
+
+### 28.3 N1 — apagar um parágrafo inteiro não é `Refusal`
+
+O estreitamento do §27.18 ("subconjunto **próprio** do conteúdo visual do node mais
+interno") foi escrito para paths de mark não vazios. Texto plano tem path vazio, de
+modo que selecionar um parágrafo inteiro e apagá-lo caía na regra de whole-leaf e
+exigia um contrato de cleanup que um `Paragraph` nunca pode ter. A regra 4 passa a
+ser:
+
+> 4. todos os EGCs selecionados têm exatamente o mesmo inline-mark path e, quando
+>    esse path é não vazio, a seleção é um subconjunto próprio do conteúdo visual do
+>    node mais interno dele -> operação permitida somente se cada node/contexto
+>    concede explicitamente a capability. Path vazio (texto plano de um único bloco)
+>    satisfaz esta regra para qualquer extensão da seleção, inclusive o conteúdo
+>    inteiro do bloco, porque um bloco não possui delimitadores a limpar. Se a
+>    operação esvaziaria o conteúdo do node mais interno de um path **não vazio**,
+>    aplica-se a regra 3 e o mesmo requisito de contrato de cleanup.
+
+E a regra 0 deixa de ser um beco sem saída:
+
+> Uma seleção multibloco aprovada pela regra 0 é classificada pelas regras 1–5
+> aplicadas ao conjunto de inline-mark paths dos EGCs selecionados, ignorando a
+> fronteira de bloco; os bytes de line ending já estão no envelope pela regra 0.
+
+### 28.4 N2 — os três eixos passam a ser totais
+
+O §27.6 não atribuía visibilidade a lexeme de range visual vazio, e a própria
+justificativa do B3 depende de `# ` ser Protected **e invisível** — o que a frase
+"nenhum node pode ser `Projected` e `Protected`" proibia. Com a propriedade 9
+emendada para incluir `SourceVisible`, a lacuna significaria que nada é editável.
+Acrescenta-se ao §27.6:
+
+> A visibilidade é atribuída apenas a lexemes com range visual não vazio. Um lexeme
+> de range visual vazio (`OpenSyntax`, `CloseSyntax`, `BlockPrefix`, `Metadata` de
+> node `Projected`) é `Protected` e **invisível**: não projeta grapheme algum, não
+> contribui EGC e não é `SourceVisible`. `SourceVisible` designa exclusivamente o
+> node ou lexeme cuja própria sintaxe — delimitadores, tags, atributos, prefixo — é
+> projetada literalmente; texto sem sintaxe própria é sempre `Projected`. A proibição
+> de `Projected` + `Protected` vale para o **node**, nunca para seus lexemes de
+> sintaxe invisíveis, que é o que permite a `# ` de um heading ser Protected e
+> invisível.
+>
+> A enumeração entre parênteses é **fechada e por espécie de lexeme**:
+> `OpenSyntax`, `CloseSyntax`, `BlockPrefix` e `Metadata`. Um lexeme
+> `LineEnding` **não** pertence a ela e nunca é `Protected` por esta regra —
+> sem isso, a cláusula (iii) do §28.2 proibiria intersectar qualquer line
+> ending, a regra 0 não aprovaria seleção multibloco alguma e o parágrafo
+> seguinte do §28.3 seria código morto. Line endings entre blocos entram no
+> envelope exatamente quando a cláusula (ii) autoriza o Join daquela fronteira,
+> e então integralmente.
+
+E a propriedade 9 passa a ler: nenhum slot editável existe dentro de `Protected`,
+`Opaque`, ou de um **node** `SourceVisible` — node, não lexeme.
+
+### 28.5 N4 — aninhamento volta a ser representável
+
+A cláusula "sem que exista entre os dois qualquer run de largura diferente" tornava
+`**a *b* c**` irreconhecível, contradizendo a ordem canônica do §26.7 que o §27.1
+diz preservar: aplicar Emphasis dentro de um Strong emitiria `**a*b*c**`, que
+reprojetaria como literal inelutável. A cláusula de par passa a ser:
+
+> Um par é reconhecido quando um abridor é seguido, na mesma linha, pelo primeiro
+> fechador de largura idêntica, sem que exista entre os dois nenhum run de largura
+> diferente **que não forme ele próprio um par balanceado inteiramente contido no
+> intervalo**. Pares assim contidos produzem nodes aninhados na ordem canônica do
+> §26.7; qualquer run de largura diferente que não feche dentro do intervalo torna
+> o par externo literal.
+
+Os exemplos do §27.15 permanecem válidos e nenhum deles produz node: em `*a**b*` o
+run `**` não fecha dentro do intervalo e o par externo fica literal; em `**a*b**` o
+`*` interno é precedido por letra e nem abridor é. Como o run é maximal, a varredura
+retoma no fim do run que falhou, de modo que o segundo asterisco de um `**` nunca é
+lido como abridor de um par de largura 1.
+
+### 28.6 N5 — o slot canônico é total também para `Absoluta`
+
+A regra 2 do §27.8 dizia "lado oposto" sem referente quando a direção é `Absoluta` e
+há run visível dos dois lados — clique ou Up/Down em `xy**abc**`. Sua cauda passa a
+ser:
+
+> … o slot canônico é o mais interno que contém o run visível adjacente do lado
+> oposto ao extremo alcançado; quando a direção é `Absoluta` e existe run visível
+> dos dois lados, o slot canônico é o mais interno que contém o run visível **à
+> esquerda** da fronteira.
+
+### 28.7 N7 — um delimitador recém-digitado nunca fica preso
+
+O §27.16 escapava `<` e `&` mas não `*` nem `~`: um `*` digitado sozinho vira run
+literal `SourceVisible`, e a regra 1 mais a propriedade 9 emendada o tornariam
+inapagável — exatamente a armadilha que o M17 existe para matar. Acrescenta-se:
+
+> A mesma regra vale para qualquer byte que, digitado isoladamente, produziria um
+> run de delimiter literal `SourceVisible`: enquanto um `*` ou `~` digitado não
+> formar par reconhecido, seus bytes permanecem `Editable` como texto comum e podem
+> ser apagados; a classificação `SourceVisible` do §27.15 nunca torna
+> inselecionável um run que a própria sessão acabou de digitar.
+
+### 28.8 N6, N8, N10, N11 — vocabulário e resíduos
+
+- **N6.** `NodeKind` e `LexemeKind` passam a ser enumerações declaradas no §26.2.
+  `NodeKind` é o discriminante **sem payload**: nível de heading e valor de cor não
+  fazem parte dele, o que é o que torna a âncora estrutural do §27.10
+  (`SourceOffset`, `[NodeKind]`, stickiness) bem definida. `LexemeKind` inclui
+  `BlockPrefix` e `Metadata`, que a R3 usava normativamente e só existiam no esboço
+  da seção 7 declarado superado.
+- **N8.** A redação do §27.19 para o item 8 do §26.14 acrescenta "o node composto
+  `***abc***`, com ownership único", que o m11 exigia e a R3 havia deixado cair.
+- **N10.** No passo 4 do §26.10, "fences" passa a ler "fences já resolvidos pelo
+  passo 0 são opacos à busca de close: nenhum `</nome>` dentro deles desempilha".
+- **N11.** Para `~`, apenas a largura 2 tem vocabulário (`Strike`); larguras 1 e 3
+  são literais, e `~~~` em início de linha é fence, resolvido no passo 0 antes de
+  qualquer varredura de run.
+
+### 28.9 N12 — a regra de escape e os consumidores do Core
+
+Escrever `&lt;` onde o usuário digitou `<` muda os bytes persistidos que CLI, MCP e
+GUI leem. Isso é deliberado e já é o comportamento da 5.0D.3
+(`formatting.rs::escaped_typed`), e o `visible_text` do Core decodifica entidades
+para busca e apresentação. Fica registrado como consequência conhecida: a regra vale
+somente para digitação em contexto de texto plano editável do **editor Visual**; o
+editor Markdown raw continua gravando o byte literal, e nenhuma nota existente é
+reescrita.
+
+### 28.10 Status da arquitetura
+
+Esta R4 corrige documentação. Não implementa subfase alguma e, como a R1, a R2 e a
+R3, **não emite o próprio veredito**.
+
+**5.0D.4A.R4 READY FOR FINAL RE-REVIEW**
+
+## 29. Fase 5.0D.4B.1 e 5.0D.4B.P0 — fundação de projeção lossless e baseline
+
+### 29.1 Escopo entregue
+
+B.1 entrega a partição física e a árvore semântica, sem UI visual, sem cursor, sem
+mutação e sem dependência de grapheme, exatamente como o §26.14 exige. Dois módulos
+novos:
+
+- `noteit-tui/src/source_map.rs` — os tipos do §26.3 (`Generation`, `SourceOffset`,
+  `SourceRange`, `ScalarPosition`, `GraphemeIndex`, `DisplayColumn`) sem
+  `From<usize>`, sem `Deref` e sem aritmética entre espécies, mais as duas
+  conversões nomeadas e validadas `offset_of_scalar` e `scalar_of_offset`, que são a
+  ponte para o `Draft` raw.
+- `noteit-tui/src/projection.rs` — `Lexeme`, `LexemeKind`, `Node`, `NodeKind`,
+  `Classification` (os três eixos do §27.6/§28.4) e `project()`.
+
+Nenhuma dependência nova; `Cargo.lock` byte-idêntico. O `Draft`, o `app.rs`, o
+renderer e o Core não foram tocados.
+
+### 29.2 Provas
+
+Os 30 testes de `noteit-tui/tests/visual_projection.rs` foram escritos primeiro e
+falharam na baseline `04532f1` pelo motivo esperado — os módulos não existiam
+(`unresolved import noteit_tui::projection`). As seis propriedades de cobertura
+(§26.15.1–6) são verificadas por um helper único aplicado a toda fixture, a todo
+caso gerado e a todo prefixo de um documento hostil.
+
+As nove linhas da tabela normativa do §26.10 são reproduzidas exatamente. Também são
+provados: `2 < 3 and 4 > 1` literal sem Opaque; open tag sem close protegendo até
+EOF; close órfão e close malformed até EOF; void e self-closing autocontidos;
+Markdown dentro de Opaque nunca reclassificado; dominância de ancestral; budget de
+nesting em 32; CRLF e LF preservados como lexemes distintos; entidade atômica de
+cinco bytes; lexemes nunca vazios; e projeção independente da viewport.
+
+Os property tests são determinísticos e locais, sem framework novo: um LCG de semente
+fixa compõe 4.000 fontes a partir de 50 fragmentos escolhidos para colidir
+(delimitadores junto de tags, tags junto de entidades, Unicode junto de tudo), e todo
+prefixo UTF-8 válido de um documento adversarial é projetado. Uma falha aqui é
+reproduzível na próxima máquina, que é a única espécie de falha de propriedade que
+vale num gate.
+
+A propriedade 23 deixou de ser prosa: `scripts/check-tui-boundary` falha se
+`projection.rs`, `source_map.rs`, `visual.rs` ou `visual_edit.rs` referenciarem
+`markdown.rs`, `inline.rs` ou `formatting.rs`. O gate foi verificado por injeção de
+violação — falha com exit 1 e volta a passar quando removida.
+
+### 29.3 Defeitos encontrados e corrigidos durante B.1
+
+Três defeitos reais apareceram ao executar os testes, e não por inspeção:
+
+1. **CRLF virava dois lexemes.** `line_end` apontava para o `\n`, deixando o `\r` no
+   texto da linha. Corrigido: a linha termina antes do `\r`, e o CRLF é um lexeme de
+   dois bytes.
+2. **Lexeme retrocedendo.** Uma região HTML que escapasse de um construto inline
+   delimitado (mark, code span, link) fazia o emissor andar para trás e quebrava a
+   partição. Corrigido com `html_escapes`: o construto delimitado perde para a
+   região HTML e fica literal, que é a leitura fail-closed.
+3. **Regra de run ambígua.** `*a**b*` e `**a*b**` foram encontrados pela própria
+   redação do M16 e resolvidos no §27.15/§28.5; o resultado documentado foi corrigido
+   depois que o teste mostrou que `**a*b**` não produz node algum — o `*` interno é
+   precedido por letra e não é abridor.
+
+### 29.4 P0 — baseline de projeção
+
+Medido em release nesta máquina, melhor de três execuções por cenário:
+
+| Cenário | Bytes | Tempo | Lexemes | Nodes |
+|---|---|---|---|---|
+| 1 KB realista | 1.110 | 0,01 ms | 156 | 40 |
+| 100 KB realista | 102.490 | 1,36 ms | 14.404 | 3.602 |
+| 1 MB realista | 1.048.580 | 11,77 ms | 147.368 | 36.843 |
+| 20.000 linhas | 420.000 | 4,30 ms | 40.000 | 2 |
+| uma linha de 100.000 | 100.000 | 0,49 ms | 1 | 2 |
+| nesting adversarial (31 níveis) | 217 | 0,01 ms | 1 | 3 |
+| Unicode denso (ZWJ/CJK) | 600.000 | 1,82 ms | 1 | 2 |
+| HTML adversarial (2.000 candidatos) | 12.000 | 0,07 ms | — | — |
+
+Crescimento medido: 10x bytes custam 8,9x tempo no documento realista e 9,6x na linha
+única — linear nos dois eixos que o §26.13 proíbe serem quadráticos.
+
+**Um defeito de performance real foi encontrado e corrigido aqui.** A primeira
+medição deu 31,4x para 10x bytes, porque a consulta às regiões literais do passo 0
+era uma varredura linear feita uma vez por byte candidato. Trocada por bisseção
+sobre a lista já ordenada, o crescimento caiu para 8,9x e 1 MB passou de 48,53 ms
+para 11,77 ms. Os testes de P0 afirmam a **forma** — razões de crescimento — e não
+leituras de cronômetro, porque um limiar em milissegundos é a opinião de uma
+máquina, enquanto uma razão sobrevive a ser executada noutra.
+
+P0 é informativo quanto aos números e obrigatório quanto à sua existência; ele não
+substitui P1, que é o gate que precisa excluir os cinco modos de falha do §26.13
+antes de B.3.
