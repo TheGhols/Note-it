@@ -2,18 +2,27 @@
 #
 # Daily-driver package, pinned to a commit rather than to a tag.
 #
-# There is no `v0.1.0` tag in this repository and inventing one would be
+# There is still no tag in this repository and inventing one would be
 # publishing a release nobody decided to make, so this builds from an exact
 # commit instead. `pkgver` follows the Arch convention for a VCS package —
 # `<version>.r<commits>.g<short sha>` — which sorts correctly against a future
 # tagged release and says out loud that this is a build of a commit.
 #
-# To move it forward: set _commit to the SHA you want, and _revision to
-# `git rev-list --count <SHA>`.
+# `_appver` is the application version of ADR-062 — `0.MINOR.PATCH`, moving
+# `0.1.100` to `0.2.0` — and it is deliberately *not* SemVer. It belongs to the
+# workspace `Cargo.toml`, which is the one canonical place it is decided; the
+# value below is the same number written where makepkg can read it before the
+# sources exist, and `pkgver()` replaces it with the one taken from the
+# checkout, so a stale copy here cannot survive a build. `pkgrel` is for
+# rebuilding this same source, never for shipping a new one.
+#
+# To move it forward: set _commit to the SHA you want and _revision to
+# `git rev-list --count <SHA>`. `_appver` follows `Cargo.toml` on its own.
 pkgname=note-it
 _commit=159fe2df4f29e15dd5a076f708c4179a3a95d1e8
 _revision=214
-pkgver=0.1.0.r${_revision}.g${_commit:0:8}
+_appver=0.1.1
+pkgver=${_appver}.r${_revision}.g${_commit:0:8}
 pkgrel=1
 pkgdesc="Minimalist sticky notes for Linux Wayland"
 arch=('x86_64' 'aarch64')
@@ -39,8 +48,17 @@ sha256sums=('SKIP')
 
 pkgver() {
   # Derived from the checkout rather than restated, so the two can never drift.
+  # That now includes the application version itself: it is read out of the
+  # workspace `Cargo.toml` of the exact commit being packaged, so the package
+  # cannot claim a version the binaries inside it do not have.
   cd "$srcdir/Note-it"
-  printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=8 HEAD)"
+  local appver
+  appver="$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' Cargo.toml)"
+  if [[ -z $appver ]]; then
+    echo "PKGBUILD: no version in [workspace.package] of Cargo.toml" >&2
+    return 1
+  fi
+  printf '%s.r%s.g%s' "$appver" "$(git rev-list --count HEAD)" "$(git rev-parse --short=8 HEAD)"
 }
 
 build() {

@@ -2,7 +2,46 @@
 
 Todas as alterações notáveis ​​neste projeto serão documentadas neste arquivo.
 
-O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), e este projeto segue [Versionamento Semântico](https://semver.org/spec/v2.0.0.html).
+O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). O versionamento é o do próprio Note-it, definido na ADR-062: `0.MINOR.PATCH`, avançando `0.1.100` para `0.2.0`, e **deliberadamente não** [Versionamento Semântico](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.1] — 2026-09-14
+
+Primeira versão a andar desde `0.1.0`. A política que a fez andar está na
+ADR-062: a versão do aplicativo é `0.MINOR.PATCH`, avança quando uma unidade
+funcional fecha com PASS, e "concluído" passa a incluir a instalação diária
+atualizada e um smoke test nela.
+
+### Corrigido
+- **O painel de atalhos abre na nota, não na fila de botões.** O botão INFO abria
+  um painel de 20 px com cerca de 1.700 px de conteúdo dentro. A causa era o
+  elemento em que ele era montado: `.note-shortcuts` tem a geometria de
+  `.note-trash` — `left` e `right` fixos sem largura própria e
+  `max-height: calc(100% - …)` — e essa régua mede o bloco contentor. A lixeira,
+  a busca e o localizar montam em `#app`, cujo bloco contentor é a nota; o painel
+  de atalhos montava em `#note-controls-left`, que tem 26 px de altura e a
+  largura dos botões. `calc(100% - 28px - 16px)` dava −18 px, preso em zero.
+  Medido no WebKitGTK real: a 220x300, 420x360 e 760x560 o painel mostrava 0,9%,
+  1,2% e 1,1% do conteúdo; depois da correção, 200,9x252,2, 397,9x311,3 e
+  732,8x508,3 — a largura da nota menos as margens e toda a altura disponível,
+  rolando o resto.
+
+### Documentação
+- **Fase 6 planejada e auditada** contra o repositório real: sete macrofases,
+  cerca de quarenta subfases, as 22 features do escopo mestre classificadas com
+  uma etiqueta cada (0 existentes, 6 parciais, 13 ausentes, 2 BLOCKED, 1
+  precisando de auditoria mais profunda) e nove conflitos registrados, entre eles
+  a nota não ter título, a ADR-027 ter recusado índice e não existir operação
+  transacional entre duas notas. Nada foi implementado.
+- **ADR-061** — a GUI é a experiência principal, o Core continua a autoridade do
+  domínio, CLI/TUI/MCP seguem complementares de primeira classe, e paridade
+  semântica é obrigatória enquanto paridade visual não é. `docs/vision.md`
+  recebeu a emenda mínima correspondente.
+- **ADR-062** — versionamento `0.MINOR.PATCH` e o gate de promoção até a
+  instalação diária, com retenção de dois pacotes.
+- **Histórico reconciliado** — 5.0D.R5, 5.0D.R6, 5.0E-GUI e 5.1A passaram a
+  constar no roadmap, a partir do git, de `docs/tui.md` e de
+  `docs/second-brain.md`. A linha-mãe da 4.3 foi corrigida de `[ ]` para `[x]`.
+  Nenhuma fase foi renumerada.
 
 ## [Não lançado]
 
