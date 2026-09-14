@@ -13,3 +13,4 @@ pub mod terminal;
 pub mod ui;
 pub mod visual;
 pub mod visual_edit;
+pub mod visual_layout;
