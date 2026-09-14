@@ -639,28 +639,54 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
 /// rendered projection of a note (Fase 5.0D.1) and it stays the only one;
 /// nothing here parses Markdown, so there is no second interpretation to
 /// disagree with it. What a person edits is what the file holds.
+/// The editor pane's title, sized to the pane it has to fit in.
+///
+/// Which editor has the keyboard is never a guess, and neither mode may be the
+/// unlabelled one: R6 §4 makes Visual the editor a note opens in, and the raw
+/// mode names itself "Markdown/Fonte" precisely because it is the surface
+/// where `<span>` and `<mark>` are legitimately visible.
+///
+/// The mode comes first, so it is not the part truncation takes; and when the
+/// whole title will not fit, the parts are dropped in order of what a reader
+/// can least afford to lose — the note's own label is already on the list
+/// beside it, and the armed colour is not written anywhere else.
+fn editor_title(app: &App, pending: bool, active: Option<String>, width: u16) -> String {
+    let (mode, short) = match app.editor_mode {
+        crate::app::EditorMode::Markdown => ("Markdown/Fonte", "Fonte"),
+        crate::app::EditorMode::Visual => ("Visual", "Visual"),
+    };
+    let marker = if pending { " ●" } else { "" };
+    let tail = match (&app.current_note, &active) {
+        (_, Some(active)) => format!("Edição{marker} · {active}"),
+        (Some(note), None) => format!(
+            "Edição: {}{marker}",
+            noteit_core::search::label_for(&note.content)
+        ),
+        (None, None) => format!("Edição{marker}"),
+    };
+    // Whatever a rounded border leaves for a title.
+    let room = width.saturating_sub(2) as usize;
+    let brief = active.clone().unwrap_or_else(|| format!("Edição{marker}"));
+    [
+        format!(" {mode} · {tail} "),
+        format!(" {short} · {tail} "),
+        format!(" {short} · {brief} "),
+        format!(" {short} "),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.chars().count() <= room)
+    .unwrap_or_else(|| format!(" {short} "))
+}
+
 fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     let pending = app.pending_text().is_some();
     let active = active_style_label(app);
-    // Which editor has the keyboard is never a guess. Markdown is the mode a
-    // note opens in and the title it has always had; Visual announces itself,
-    // because it is the one that hides something.
-    let mode = match app.editor_mode {
-        crate::app::EditorMode::Markdown => String::new(),
-        crate::app::EditorMode::Visual => " · Visual".to_string(),
-    };
-    let title = match (&app.current_note, active) {
-        (_, Some(active)) => format!(
-            " Edição{}{mode} · {active} ",
-            if pending { " ●" } else { "" }
-        ),
-        (Some(note), None) => format!(
-            " Edição: {}{}{mode} ",
-            noteit_core::search::label_for(&note.content),
-            if pending { " ●" } else { "" }
-        ),
-        (None, None) => format!(" Edição{mode} "),
-    };
+    // Which editor has the keyboard is never a guess, and neither mode is
+    // allowed to be the unlabelled one. R6 §4 makes Visual the editor a note
+    // opens in; the raw mode names itself "Markdown/Fonte" precisely because
+    // it is the surface where `<span>` and `<mark>` are legitimately visible,
+    // and a reader who sees them must be able to tell that is why.
+    let title = editor_title(app, pending, active, area.width);
 
     let block = Block::default()
         .borders(Borders::ALL)

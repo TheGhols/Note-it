@@ -1721,7 +1721,44 @@ impl App {
         self.active_highlight = None;
         self.editor_scroll.set(0);
         self.editor_column.set(0);
+        self.visual_scroll
+            .set(crate::visual_layout::RowCoord::default());
         self.focus = Focus::Editor;
+        self.enter_visual_by_default();
+    }
+
+    /// Opens in the visual editor whenever the note has a usable projection.
+    ///
+    /// The product contract of R6 §4: Visual is the editor, and Markdown/Fonte
+    /// is the advanced mode for editing the canonical representation. A person
+    /// formatting a note should never have to know that `<span>` and `<mark>`
+    /// are how a colour is stored — and before this, the normal path through
+    /// the interface put them in front of them.
+    ///
+    /// A note the visual editor has nowhere to put a caret — one that is
+    /// entirely fenced code, or an unterminated comment — stays in Markdown.
+    /// Opening it into a mode that refuses every key would be worse than
+    /// showing the source, which is what that note *is*.
+    fn enter_visual_by_default(&mut self) {
+        if self.editor_mode == EditorMode::Visual {
+            return;
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            return;
+        };
+        let document = VisualDocument::project_with(
+            &draft.text(),
+            draft.generation(),
+            Self::visual_capabilities(),
+        );
+        let usable = document.is_blank()
+            || document
+                .blocks()
+                .iter()
+                .any(|block| !document.slots_of_block(block.id).is_empty());
+        if usable {
+            self.toggle_editor_mode();
+        }
     }
 
     /// Leaves editing for reading, asking first when text would be lost.
@@ -1739,7 +1776,9 @@ impl App {
         self.focus = Focus::Reader;
         // The visual caret is a position in a projection that is about to stop
         // existing, so it is dropped rather than carried into the next note.
-        // Markdown is the mode a note opens in, always.
+        // The mode goes back to Markdown here only so that the next note is
+        // opened fresh by `start_editing`, which chooses Visual when the note
+        // has a projection to show.
         self.editor_mode = EditorMode::Markdown;
         self.visual_cursor = None;
         self.visual_bookmark = None;

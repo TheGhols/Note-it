@@ -64,12 +64,17 @@ impl Fixture {
         }
     }
 
-    /// Opens the note and switches to the visual editor.
+    /// Opens the note in the visual editor.
+    ///
+    /// Since R6 that is where `Enter` lands; `Alt+V` is pressed only for a
+    /// note the visual editor had nowhere to put a caret in.
     fn open_visual(&mut self) {
         self.app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(self.app.focus, Focus::Editor);
-        self.app
-            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        if self.app.editor_mode != EditorMode::Visual {
+            self.app
+                .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        }
         assert_eq!(self.app.editor_mode, EditorMode::Visual);
     }
 
@@ -326,10 +331,11 @@ fn hostile_notes_open_in_the_visual_editor_without_panicking_or_losing_a_byte() 
         fixture.type_text("Z");
         fixture.key(KeyCode::Right);
         fixture.key(KeyCode::Backspace);
+        let before = fixture.app.editor_mode;
         fixture
             .app
             .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
-        assert_eq!(fixture.app.editor_mode, EditorMode::Markdown);
+        assert_ne!(fixture.app.editor_mode, before, "Alt+V changes the mode");
 
         // Whatever happened, the note in the store is untouched until a save.
         assert_eq!(fixture.stored(), stored, "{source:?} reached the store");
@@ -413,6 +419,11 @@ fn the_markdown_editor_is_exactly_what_it_was() {
     // affected by the existence of a second mode.
     let mut fixture = Fixture::new("um **negrito** com ç");
     fixture.app.handle_key(KeyEvent::from(KeyCode::Enter));
+    // R6 §4 makes Visual the mode a note opens in; Alt+V is how the source
+    // editor is reached, and it is otherwise exactly what it was.
+    fixture
+        .app
+        .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
     assert_eq!(fixture.app.editor_mode, EditorMode::Markdown);
 
     let screen = fixture.screen();
@@ -421,6 +432,10 @@ fn the_markdown_editor_is_exactly_what_it_was() {
         "the Markdown editor shows the source: {screen}"
     );
     assert!(screen.contains("Edição:"), "with the title it always had");
+    assert!(
+        screen.contains("Markdown/Fonte"),
+        "and it says which editor it is: {screen}"
+    );
 }
 
 #[test]

@@ -29,6 +29,17 @@ fn alt(character: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(character), KeyModifiers::ALT)
 }
 
+/// Puts the application in the visual editor, wherever it started.
+///
+/// Since R6 §4 a note opens there, so this is usually nothing at all; before
+/// it, it was the `Alt+V` every one of these tests began with.
+fn enter_visual(app: &mut App) {
+    if app.editor_mode != EditorMode::Visual {
+        app.handle_key(alt('v'));
+    }
+    assert_eq!(app.editor_mode, EditorMode::Visual);
+}
+
 /// Everything on screen, as one string.
 fn rendered(app: &App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -53,13 +64,17 @@ fn alt_v_opens_the_visual_editor_and_alt_v_leaves_it() {
 
     assert_eq!(
         app.editor_mode,
-        EditorMode::Markdown,
-        "notes open in Markdown"
+        EditorMode::Visual,
+        "R6 §4: an editable note opens in the visual editor"
     );
     app.handle_key(alt('v'));
-    assert_eq!(app.editor_mode, EditorMode::Visual);
+    assert_eq!(
+        app.editor_mode,
+        EditorMode::Markdown,
+        "Alt+V reaches the source"
+    );
     app.handle_key(alt('v'));
-    assert_eq!(app.editor_mode, EditorMode::Markdown);
+    assert_eq!(app.editor_mode, EditorMode::Visual, "and Alt+V comes back");
 }
 
 #[test]
@@ -68,22 +83,28 @@ fn the_title_says_which_editor_has_the_keyboard() {
     let mut app = editing(root.path(), "texto");
 
     // The footer names the mode switch in both modes, so the title is what
-    // distinguishes them: Markdown keeps exactly the title it always had.
-    let markdown = rendered(&app, 80, 20);
+    // distinguishes them — and R6 §4 makes both of them say so, because the
+    // unlabelled one was the surface where `<span>` and `<mark>` showed up in
+    // front of somebody who thought they were formatting visually.
+    let visual = rendered(&app, 80, 20);
     assert!(
-        markdown.contains("Edição:"),
-        "the Markdown title is unchanged"
+        visual.contains("Visual"),
+        "the visual editor announces itself in the title: {visual}"
     );
     assert!(
-        !markdown.contains("· Visual"),
-        "and does not claim to be the visual editor"
+        !visual.contains("Markdown/Fonte"),
+        "and does not claim to be the source editor: {visual}"
     );
 
     app.handle_key(alt('v'));
-    let visual = rendered(&app, 80, 20);
+    let markdown = rendered(&app, 80, 20);
     assert!(
-        visual.contains("· Visual"),
-        "the visual editor announces itself in the title: {visual}"
+        markdown.contains("Edição:"),
+        "the title still names the note"
+    );
+    assert!(
+        markdown.contains("Markdown/Fonte"),
+        "and the source editor names itself: {markdown}"
     );
 }
 
@@ -108,18 +129,23 @@ fn switching_modes_without_typing_changes_no_byte_and_no_history() {
 }
 
 #[test]
-fn leaving_the_editor_returns_to_markdown_for_the_next_note() {
+fn leaving_the_editor_reopens_the_next_note_in_the_visual_editor() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "texto");
+    // Step out to the source editor, so what is asserted below is the mode a
+    // *fresh* open chooses and not the one left behind.
     app.handle_key(alt('v'));
-    assert_eq!(app.editor_mode, EditorMode::Visual);
+    assert_eq!(app.editor_mode, EditorMode::Markdown);
 
     app.handle_key(KeyEvent::from(KeyCode::Esc));
     assert_eq!(app.focus, Focus::Reader);
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.focus, Focus::Editor);
     assert_eq!(
         app.editor_mode,
-        EditorMode::Markdown,
-        "a note always opens in Markdown"
+        EditorMode::Visual,
+        "R6 §4: every open starts in the visual editor again"
     );
 }
 
@@ -132,13 +158,15 @@ fn the_visual_editor_hides_the_markup_it_can_edit() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "um **negrito** e um *itálico*");
 
+    // The source editor is one Alt+V away, and shows the asterisks.
+    app.handle_key(alt('v'));
     let markdown = rendered(&app, 80, 20);
     assert!(
         markdown.contains("**negrito**"),
         "Markdown shows the asterisks"
     );
 
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
     let visual = rendered(&app, 80, 20);
     assert!(visual.contains("negrito"), "the word is still there");
     assert!(
@@ -154,7 +182,7 @@ fn the_visual_editor_still_shows_what_it_cannot_edit() {
     // It stays visible, and it carries no caret, at every gate.
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "```rust\nfn main() {}\n```\n");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let visual = rendered(&app, 120, 20);
     assert!(visual.contains("```"), "the fence stays visible: {visual}");
@@ -167,7 +195,7 @@ fn a_link_shows_its_label_and_hides_its_destination() {
     // attribute they never type into by accident.
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "veja [o site](https://example.com/a_(b))");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let visual = rendered(&app, 120, 20);
     assert!(visual.contains("o site"), "the label is drawn: {visual}");
@@ -181,7 +209,7 @@ fn a_link_shows_its_label_and_hides_its_destination() {
 fn a_task_shows_a_checkbox_rather_than_its_markup() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "- [ ] comprar pão\n- [x] já feito\n");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let visual = rendered(&app, 80, 20);
     assert!(visual.contains('☐'), "an unticked box is drawn: {visual}");
@@ -198,7 +226,7 @@ fn a_colour_is_drawn_as_a_colour_and_its_tag_is_not_drawn() {
         root.path(),
         "<span data-note-it-color=\"#DC2626\">vermelho</span>",
     );
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let visual = rendered(&app, 120, 20);
     assert!(visual.contains("vermelho"), "the word is there");
@@ -223,7 +251,7 @@ fn a_colour_is_drawn_as_a_colour_and_its_tag_is_not_drawn() {
 fn a_heading_shows_its_text_without_its_hashes() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "## Meu título");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let visual = rendered(&app, 80, 20);
     assert!(visual.contains("Meu título"));
@@ -241,7 +269,7 @@ fn a_heading_shows_its_text_without_its_hashes() {
 fn typing_in_the_visual_editor_changes_the_same_draft() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "abc");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     app.handle_key(KeyEvent::from(KeyCode::Char('X')));
     assert_eq!(app.draft.as_ref().unwrap().text(), "Xabc");
@@ -256,7 +284,7 @@ fn typing_in_the_visual_editor_changes_the_same_draft() {
 fn typing_inside_a_hidden_mark_stays_inside_it() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "**abc**");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     // The caret snapped to the first legal slot, which is inside the mark.
     app.handle_key(KeyEvent::from(KeyCode::Char('X')));
@@ -273,7 +301,7 @@ fn typing_inside_a_hidden_mark_stays_inside_it() {
 fn enter_in_the_visual_editor_splits_the_block() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "abcd");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
     app.handle_key(KeyEvent::from(KeyCode::Right));
     app.handle_key(KeyEvent::from(KeyCode::Right));
     app.handle_key(KeyEvent::from(KeyCode::Enter));
@@ -285,7 +313,7 @@ fn enter_in_the_visual_editor_splits_the_block() {
 fn backspace_removes_one_whole_grapheme() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "a👨\u{200D}👩\u{200D}👧\u{200D}👦b");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     // Move past the emoji, then remove it in one press.
     app.handle_key(KeyEvent::from(KeyCode::Right));
@@ -299,7 +327,7 @@ fn backspace_removes_one_whole_grapheme() {
 fn undo_after_a_visual_edit_restores_the_whole_command() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "abc");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
     app.handle_key(KeyEvent::from(KeyCode::Char('X')));
     assert_eq!(app.draft.as_ref().unwrap().text(), "Xabc");
 
@@ -315,7 +343,7 @@ fn undo_after_a_visual_edit_restores_the_whole_command() {
 fn a_refused_edit_says_so_and_changes_nothing() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "<custom>protegido</custom>");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     let before = app.draft.as_ref().unwrap().text();
     app.handle_key(KeyEvent::from(KeyCode::Char('X')));
@@ -340,7 +368,7 @@ fn a_refused_edit_says_so_and_changes_nothing() {
 fn a_note_that_is_entirely_protected_says_so_on_entry() {
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "<custom>tudo protegido</custom>");
-    app.handle_key(alt('v'));
+    enter_visual(&mut app);
 
     assert!(
         !app.notice.is_empty(),

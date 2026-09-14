@@ -1,3 +1,5 @@
+mod support;
+
 use noteit_core::{
     authority::perform_at,
     write::{NoteDraft, WriteOperation},
@@ -427,18 +429,42 @@ fn test_real_pty_future_color_and_highlight_compose_without_selection() {
     };
     assert!(status.success());
     let output = pty.read_all_output();
-    assert!(output.contains("Cor: Vermelho") && output.contains("Marca: Amarelo"));
+    // The screen the terminal ended up showing, not the bytes that produced
+    // it: Ratatui redraws only what changed, so the title reaches the wire in
+    // fragments separated by cursor jumps.
+    let screen = support::replay_screen(&output, 80, 24).join("\n");
+    assert!(
+        screen.contains("Cor: Vermelho") && screen.contains("Marca: Amarelo"),
+        "both armed styles must be on screen:\n{screen}"
+    );
     let stored = std::fs::read_dir(temp.path().join("note-it/notes"))
         .unwrap()
         .filter_map(Result::ok)
         .find(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("md"))
         .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
         .unwrap();
-    assert!(stored.contains(">abc</span>"));
+    // The visual editor is what a note opens in since R6, and it composes the
+    // two wrappers by nesting the one that was armed second *inside* the run
+    // that already carries the first — rather than wrapping the whole run
+    // again, which is what the source editor does. Both are canonical and both
+    // are well formed; this asserts the one the default path produces. The
+    // source editor's own layout is still asserted, in Markdown/Fonte, by
+    // `future_color_highlight_compose_switch_and_reset_in_canonical_runs`.
     assert!(
-        stored.contains("data-note-it-highlight=\"#FDE68A\"")
-            && stored.contains(">def</span></mark>")
+        stored.contains(
+            "<span data-note-it-color=\"#DC2626\" style=\"color:#DC2626\">abc<mark \
+             data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">def</mark>\
+             </span>nota pelo mouse"
+        ),
+        "STORED>>>{stored}<<<"
     );
+    // Well formed, and closed in the order it was opened: a `</span></mark>`
+    // here would be the nesting inverted.
+    assert!(!stored.contains("</span></mark>"), "{stored}");
+    assert_eq!(stored.matches("<span").count(), 1, "{stored}");
+    assert_eq!(stored.matches("</span>").count(), 1, "{stored}");
+    assert_eq!(stored.matches("<mark").count(), 1, "{stored}");
+    assert_eq!(stored.matches("</mark>").count(), 1, "{stored}");
 }
 
 #[test]

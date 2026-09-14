@@ -65,6 +65,18 @@ fn alt_f(app: &mut App) {
 fn enter(app: &mut App) {
     app.handle_key(KeyEvent::from(KeyCode::Enter));
 }
+
+/// Opens the note and steps into Markdown/Fonte.
+///
+/// Since R6 a note opens in the visual editor. These 5.0D.3 tests describe the
+/// source editor's styled typing — the exact canonical bytes it writes and the
+/// undo grouping it uses — so they name the editor they are about. The visual
+/// editor's own styled typing is covered by the R5 and R6 canaries.
+fn enter_source(app: &mut App) {
+    enter(app);
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+    assert_eq!(app.editor_mode, noteit_tui::app::EditorMode::Markdown);
+}
 fn down(app: &mut App) {
     app.handle_key(KeyEvent::from(KeyCode::Down));
 }
@@ -185,7 +197,7 @@ fn future_styled_typing_undoes_and_redoes_as_normal_draft_history() {
     let runtime = root.path().join("runtime");
     let (paths, _) = store(root.path(), &runtime, "");
     let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
-    enter(&mut app);
+    enter_source(&mut app);
     choose_red(&mut app);
     for c in "ação".chars() {
         app.handle_key(KeyEvent::from(KeyCode::Char(c)));
@@ -334,7 +346,7 @@ fn future_color_highlight_compose_switch_and_reset_in_canonical_runs() {
     let runtime = root.path().join("runtime");
     let (paths, _) = store(root.path(), &runtime, "");
     let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
-    enter(&mut app);
+    enter_source(&mut app);
     choose_red(&mut app);
     choose_yellow_highlight(&mut app);
     for c in "abc".chars() {

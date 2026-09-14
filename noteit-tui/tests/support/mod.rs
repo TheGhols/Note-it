@@ -303,3 +303,293 @@ impl Drop for Tui {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The screen harness (Fase 5.0D.R6 §8)
+// ---------------------------------------------------------------------------
+//
+// R5 passed its suite and failed the person using it. The reason is written in
+// the shape of the old tests: they proved a `SourceTransaction` was right and
+// never looked at the screen. This harness exists so a regression can be
+// stated the way the reader states it — "after Down the caret is on the row
+// below" — by driving the real `App` through real key events and reading the
+// real rendered buffer back.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use noteit_tui::app::{App, EditorMode, Focus};
+use ratatui::{backend::TestBackend, style::Modifier, Terminal};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+/// One rendered frame, read back as text plus the cells drawn reversed.
+pub struct Frame {
+    pub width: u16,
+    pub height: u16,
+    pub rows: Vec<String>,
+    /// Every reversed cell as `(column, row, symbol)`. Nothing but the caret is
+    /// reversed when there is no selection, so this *is* the caret.
+    pub carets: Vec<(u16, u16, String)>,
+}
+
+impl Frame {
+    /// The whole screen as one string, rows separated by newlines.
+    pub fn text(&self) -> String {
+        self.rows.join("\n")
+    }
+
+    /// The one caret, or a failure naming how many there were instead.
+    pub fn caret(&self) -> (u16, u16) {
+        assert_eq!(
+            self.carets.len(),
+            1,
+            "exactly one caret must be drawn, found {:?} in:\n{}",
+            self.carets,
+            self.text()
+        );
+        (self.carets[0].0, self.carets[0].1)
+    }
+
+    /// The row the caret is on, as text.
+    pub fn caret_row(&self) -> String {
+        let (_, row) = self.caret();
+        self.rows[row as usize].clone()
+    }
+
+    /// Fails when any of `needles` appears anywhere on screen.
+    pub fn assert_hides(&self, needles: &[&str], context: &str) {
+        let text = self.text();
+        for needle in needles {
+            assert!(
+                !text.contains(needle),
+                "{context}: `{needle}` must never be visible in the visual editor:\n{text}"
+            );
+        }
+    }
+}
+
+/// Canonical markup the visual editor must never put in front of a reader.
+pub const CANONICAL_MARKUP: &[&str] = &[
+    "<span",
+    "</span",
+    "<mark",
+    "</mark",
+    "data-note-it-",
+    "style=\"",
+];
+
+/// A real `App`, a real store and a real terminal buffer.
+pub struct Screen {
+    pub app: App,
+    pub width: u16,
+    pub height: u16,
+    root: tempfile::TempDir,
+}
+
+impl Screen {
+    /// A note with `content`, open in the editor at 80x24.
+    pub fn open(content: &str) -> Self {
+        Self::open_sized(content, 80, 24)
+    }
+
+    pub fn open_sized(content: &str, width: u16, height: u16) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        let (paths, _) = store(root.path(), &runtime, content);
+        let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Editor, "Enter opens the editor");
+        let mut screen = Self {
+            app,
+            width,
+            height,
+            root,
+        };
+        // A frame before the first key: the viewport is the renderer's, and a
+        // test that never drew has no viewport at all.
+        screen.frame();
+        screen
+    }
+
+    pub fn store_root(&self) -> &std::path::Path {
+        self.root.path()
+    }
+
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.width = width;
+        self.height = height;
+        self.frame();
+    }
+
+    /// Renders at the current size and reads the buffer back.
+    pub fn frame(&mut self) -> Frame {
+        let mut terminal = Terminal::new(TestBackend::new(self.width, self.height)).unwrap();
+        self.app.draw(&mut terminal).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut rows = Vec::with_capacity(self.height as usize);
+        let mut carets = Vec::new();
+        for row in 0..self.height {
+            let mut text = String::new();
+            for column in 0..self.width {
+                let cell = &buffer[(column, row)];
+                text.push_str(cell.symbol());
+                if cell.modifier.contains(Modifier::REVERSED) {
+                    carets.push((column, row, cell.symbol().to_owned()));
+                }
+            }
+            rows.push(text);
+        }
+        Frame {
+            width: self.width,
+            height: self.height,
+            rows,
+            carets,
+        }
+    }
+
+    /// A key, then the frame it produced. Drawing after every key is the whole
+    /// point: a viewport only moves while something is being drawn.
+    pub fn press(&mut self, key: KeyEvent) -> Frame {
+        self.app.handle_key(key);
+        self.frame()
+    }
+
+    pub fn key(&mut self, code: KeyCode) -> Frame {
+        self.press(KeyEvent::from(code))
+    }
+
+    pub fn shift(&mut self, code: KeyCode) -> Frame {
+        self.press(KeyEvent::new(code, KeyModifiers::SHIFT))
+    }
+
+    pub fn alt(&mut self, character: char) -> Frame {
+        self.press(KeyEvent::new(KeyCode::Char(character), KeyModifiers::ALT))
+    }
+
+    pub fn ctrl(&mut self, character: char) -> Frame {
+        self.press(KeyEvent::new(
+            KeyCode::Char(character),
+            KeyModifiers::CONTROL,
+        ))
+    }
+
+    /// Types `text` one character at a time, drawing after each, and returns
+    /// every frame so a test can assert on all of them rather than the last.
+    pub fn type_text(&mut self, text: &str) -> Vec<Frame> {
+        text.chars()
+            .map(|character| self.press(KeyEvent::from(KeyCode::Char(character))))
+            .collect()
+    }
+
+    pub fn mode(&self) -> EditorMode {
+        self.app.editor_mode
+    }
+
+    /// The draft's text, which is the canonical source.
+    pub fn source(&self) -> String {
+        self.app.draft.as_ref().map(|draft| draft.text()).unwrap()
+    }
+
+    pub fn visual_offset(&self) -> Option<usize> {
+        self.app.visual_cursor.map(|cursor| cursor.offset.get())
+    }
+
+    /// One line of trace, for the reproduction report of §7.
+    pub fn trace(&self, label: &str) -> String {
+        let cursor = self.app.draft.as_ref().map(|draft| draft.cursor());
+        format!(
+            "{label:<26} mode={:?} draft=({},{}) visual={:?} scroll={} vscroll={:?} column={} gen={:?}",
+            self.app.editor_mode,
+            cursor.map(|c| c.line).unwrap_or(0),
+            cursor.map(|c| c.column).unwrap_or(0),
+            self.visual_offset(),
+            self.app.editor_scroll(),
+            self.app.visual_scroll(),
+            self.app.editor_column(),
+            self.app.draft.as_ref().map(|draft| draft.generation()),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a real terminal back (Fase 5.0D.R6 §24/§25)
+// ---------------------------------------------------------------------------
+
+/// Replays a stream of terminal output into the screen it would produce.
+///
+/// A PTY test that greps the raw bytes is asserting about Ratatui's diffing,
+/// not about what a person sees: the renderer rewrites only the cells that
+/// changed, so a title can reach the terminal as `Cor: Vermelh`, a cursor
+/// jump, `Ma`, another jump and `ca: Amarelo`. Every one of those cells is on
+/// screen and no substring search finds them.
+///
+/// This understands exactly the sequences a full-screen TUI emits — absolute
+/// cursor positioning, the two erases, and carriage returns — and ignores
+/// every other escape, which is enough to reconstruct the frame and not enough
+/// to pretend to be a terminal emulator.
+pub fn replay_screen(output: &str, columns: usize, rows: usize) -> Vec<String> {
+    let mut grid = vec![vec![' '; columns]; rows];
+    let (mut row, mut column) = (0usize, 0usize);
+    let mut chars = output.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        match character {
+            '\u{1b}' => {
+                if chars.peek() != Some(&'[') {
+                    // A two-character escape; its second byte is not text.
+                    chars.next();
+                    continue;
+                }
+                chars.next();
+                let mut params = String::new();
+                let mut final_byte = None;
+                for candidate in chars.by_ref() {
+                    if candidate.is_ascii_alphabetic() {
+                        final_byte = Some(candidate);
+                        break;
+                    }
+                    params.push(candidate);
+                }
+                let numbers: Vec<usize> = params
+                    .trim_start_matches(['?', '<', '>'])
+                    .split(';')
+                    .map(|value| value.parse().unwrap_or(0))
+                    .collect();
+                match final_byte {
+                    Some('H') | Some('f') if !params.starts_with('?') => {
+                        row = numbers.first().copied().unwrap_or(1).saturating_sub(1);
+                        column = numbers.get(1).copied().unwrap_or(1).saturating_sub(1);
+                    }
+                    Some('J') if !params.starts_with('?') => {
+                        grid = vec![vec![' '; columns]; rows];
+                        row = 0;
+                        column = 0;
+                    }
+                    Some('K') if !params.starts_with('?') => {
+                        if let Some(line) = grid.get_mut(row) {
+                            for cell in line.iter_mut().skip(column) {
+                                *cell = ' ';
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            '\r' => column = 0,
+            '\n' => {
+                row += 1;
+                column = 0;
+            }
+            printable if !printable.is_control() => {
+                if let Some(cell) = grid.get_mut(row).and_then(|line| line.get_mut(column)) {
+                    *cell = printable;
+                }
+                column += 1;
+            }
+            _ => {}
+        }
+    }
+
+    grid.into_iter()
+        .map(|line| line.into_iter().collect())
+        .collect()
+}

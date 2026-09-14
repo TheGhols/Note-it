@@ -26,9 +26,14 @@ fn editing(root: &std::path::Path, content: &str) -> App {
 }
 
 /// The same, already in the visual editor.
+///
+/// Since R6 that is where `Enter` lands, so `Alt+V` is only pressed when the
+/// note was one the visual editor had nowhere to put a caret in.
 fn visual(root: &std::path::Path, content: &str) -> App {
     let mut app = editing(root, content);
-    app.handle_key(alt('v'));
+    if app.editor_mode != EditorMode::Visual {
+        app.handle_key(alt('v'));
+    }
     assert_eq!(app.editor_mode, EditorMode::Visual);
     app
 }
@@ -449,14 +454,23 @@ fn r5_g12_visual_to_markdown_and_back_is_not_an_edit() {
     let before = app.pending_text();
     assert_eq!(before, None, "nothing pending to begin with");
 
-    app.handle_key(alt('v'));
-    app.handle_key(alt('v'));
-    assert_eq!(app.editor_mode, EditorMode::Markdown);
-    assert_eq!(
-        app.pending_text(),
-        None,
-        "a round trip with no keystroke in between writes nothing"
-    );
+    // Both ways round, from whichever mode the note opened in. Since R6 that
+    // is Visual, so the first trip is Visual → Markdown/Fonte → Visual and the
+    // second is its mirror.
+    for _ in 0..2 {
+        let start = app.editor_mode;
+        app.handle_key(alt('v'));
+        assert_ne!(app.editor_mode, start, "Alt+V changes the mode");
+        app.handle_key(alt('v'));
+        assert_eq!(app.editor_mode, start, "and back again");
+        assert_eq!(
+            app.pending_text(),
+            None,
+            "a round trip with no keystroke in between writes nothing"
+        );
+        // Leave the next iteration starting from the other mode.
+        app.handle_key(alt('v'));
+    }
 }
 
 #[test]

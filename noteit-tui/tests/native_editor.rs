@@ -96,8 +96,23 @@ impl Fixture {
     }
 
     /// Enter on the selected note is how a note is opened to be worked on.
+    ///
+    /// Since R6 that lands in the visual editor, which is the mode a person
+    /// actually works in.
     fn open(&mut self) {
         self.key(KeyCode::Enter);
+    }
+
+    /// Alt+V from there reaches Markdown/Fonte, the source editor these
+    /// 5.0D.2 tests were written against.
+    fn open_source(&mut self) {
+        self.app
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        assert_eq!(
+            self.app.editor_mode,
+            noteit_tui::app::EditorMode::Markdown,
+            "Alt+V reaches the source editor"
+        );
     }
 
     fn screen(&mut self) -> String {
@@ -117,12 +132,19 @@ impl Fixture {
     /// "the editor no longer shows this text" has to be asked of the editor.
     fn pane(&mut self) -> String {
         let screen = self.screen();
+        // The pane starts at the border box that carries its title, found from
+        // the title rather than from a fixed prefix: since R6 the title leads
+        // with the editor's mode ("Visual · Edição: …", "Markdown/Fonte · …"),
+        // and matching "╭ Edição" quietly stopped finding the pane at all —
+        // which made every assertion about "the editor" an assertion about the
+        // whole screen, list panel included.
         let start = screen
             .lines()
             .find_map(|row| {
-                ["╭ Edição", "╭ Leitura", "╭ Visualização"]
+                ["Edição", "Leitura", "Visualização"]
                     .iter()
                     .find_map(|title| row.find(title))
+                    .and_then(|byte| row[..byte].rfind('╭'))
                     .map(|byte| row[..byte].chars().count())
             })
             .unwrap_or(0);
@@ -248,6 +270,11 @@ fn escape_steps_out_of_editing_into_reading_and_then_into_the_list() {
 fn typing_inserts_unicode_and_multiline_text() {
     let mut fixture = Fixture::new("");
     fixture.open();
+    // Markdown/Fonte, because this asserts the exact canonical bytes and
+    // `Enter` means different things in the two editors: a line break in the
+    // source editor, a new paragraph in the visual one. Unicode typing in the
+    // visual editor is covered by the R6 canaries.
+    fixture.open_source();
     fixture.type_text("café à noite\nação — ótimo\n日本語 🇧🇷");
 
     let pane = fixture.pane();
@@ -958,11 +985,14 @@ fn a_real_terminal_pastes_several_lines_at_once() {
     tui.input(b"\x13");
     tui.wait_text("Edição salva");
 
+    // The visual editor is what a note opens in, and there `Enter` is a new
+    // paragraph rather than a line break. What this test is about is that a
+    // real terminal delivering a burst of bytes loses none of them.
     let stored = NoteItCore::open_read_only_at(paths.clone())
         .read_note(&id)
         .unwrap()
         .content;
-    assert_eq!(stored, "uma\nduas\ntres");
+    assert_eq!(stored, "uma\n\nduas\n\ntres");
 
     tui.input(b"\x1b\x1b");
     tui.finish();
