@@ -1163,3 +1163,83 @@ Fase 4.3 — Recuperação semântica / embeddings
 
 Cada um exigirá sua própria análise de privacidade, tamanho, invalidação e
 honestidade de nomenclatura.
+
+## Fase 5.1A — a ponte para um cliente de IA
+
+O usuário quer conversar com uma IA sobre as próprias notas sem olhar para um
+terminal. O modelo **não** mora no Note-it: mora num cliente de linha de comando
+que a pessoa já instalou e já autenticou. `noteit-agent-bridge` inicia um desses
+clientes como subprocesso escondido, entrega a pergunta, e transforma o que
+volta em eventos tipados que uma interface gráfica desenha como conversa.
+
+### O que a ponte deliberadamente não é
+
+* **Não é um cliente de modelo.** Não há cliente HTTP, SDK de fornecedor, chave
+  de API, armazenamento de token nem cobrança. Se o cliente escolhido fala com
+  um serviço remoto, é ele fazendo isso, com a conta daquela pessoa.
+* **Não é um escritor.** O crate **não depende de `noteit-core`**, e isso é o
+  ponto: um componente que não consegue linkar o store não consegue possuí-lo.
+  Ler e escrever notas acontece pelo `noteit-mcp`, que já aplica
+  `expected_revision` e a autoridade de escrita exatamente como o desktop.
+* **Não é um terminal.** Nenhum pseudoterminal é alocado, nenhum ANSI é
+  interpretado, nenhum indicador de progresso é raspado e nenhum prompt
+  interativo é respondido.
+
+`scripts/check-agent-bridge-boundary` transforma os três em verificação
+mecânica, incluindo a ausência de qualquer nome de credencial no código.
+
+### Auditoria dos clientes instalados
+
+Feita nesta máquina, lendo o `--help` de cada um. Todos os três têm modo
+não-interativo documentado **e** saída estruturada, então nenhum precisa ser
+raspado e nenhum adapter está bloqueado:
+
+| Cliente | Versão auditada | Modo headless | Saída estruturada | MCP |
+| --- | --- | --- | --- | --- |
+| Claude Code | 2.1.270 | `--print` | `--output-format stream-json` | `--mcp-config` |
+| Gemini CLI | 0.56.0 | `--prompt` | `--output-format stream-json` | `gemini mcp` |
+| Codex CLI | 0.154.0 | `codex exec` | `--json` | `codex mcp` |
+
+### O contrato
+
+Um adapter é `(comando, parse de uma linha)`. O comando tem de ser
+não-interativo e emitir um objeto JSON por linha; uma linha que não é JSON é um
+evento de falha (`Failure::Protocol`), não um palpite. Uma linha que é JSON mas
+não interessa é ignorada, o que deixa esses clientes acrescentarem campos sem
+quebrar o Note-it.
+
+Uma sessão termina sempre com exatamente um de `Finished`, `Failed` ou
+`Cancelled`, então a interface nunca precisa adivinhar se vem mais.
+
+### Grupo de processos
+
+O cliente é iniciado no **próprio grupo de processos**, e cancelar encerra o
+grupo. Isso não é zelo: um cliente de IA que inicia um ajudante — um servidor
+MCP, um sub-agente — deixa esse ajudante segurando o pipe que a ponte está
+lendo, e a leitura nunca termina. Sem o grupo, fechar a janela de conversa
+deixava uma thread esperando para sempre. Foi um teste que encontrou isso, não
+uma leitura do código.
+
+### Foco não é sandbox
+
+"Esta nota" é um **foco**, não uma barreira de autorização. O cliente é
+informado de qual nota a pessoa está olhando e é pedido que responda sobre ela;
+nada aqui impede um cliente que recebeu as ferramentas de ler outra. Chamar isso
+de sandbox seria alegar uma imposição que não existe.
+
+### Privacidade
+
+A comunicação Note-it → cliente é local. O que o **cliente** faz com o texto
+depende dele: se usa um serviço online, o conteúdo enviado sai da máquina. O
+`noteit-mcp` é local; o modelo, em geral, não é. Os dois não podem ser descritos
+com a mesma frase.
+
+### O que ainda não existe
+
+* **5.1B — a interface de conversa na GUI.** A ponte tem a API; a janela não foi
+  construída.
+* **5.1C — escrita supervisionada.** Nenhuma ferramenta de escrita é oferecida a
+  um cliente: `Request::read_only` é `true` e cada adapter diz isso ao seu
+  cliente com o sinalizador que aquele cliente entende. O §24 da fase é
+  explícito — é melhor uma IA que lê perfeitamente e escreve depois do que uma
+  que consegue sobrescrever notas fora do controle da interface.

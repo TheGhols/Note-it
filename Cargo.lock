@@ -1374,6 +1374,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "noteit-agent-bridge"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "noteit-cli"
 version = "0.1.0"
 dependencies = [

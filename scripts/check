@@ -38,6 +38,7 @@ readonly RUST_STAGES=(
   embedding-boundary
   embed-boundary
   tui-boundary
+  agent-bridge-boundary
   core-tests
   cli-tests
   mcp-tests
@@ -45,6 +46,7 @@ readonly RUST_STAGES=(
   embed-tests
   remote-tests
   tui-tests
+  agent-bridge-tests
   workspace-tests
 )
 
@@ -80,6 +82,7 @@ Estágios Rust:
   embedding-boundary  scripts/check-embedding-boundary
   embed-boundary   scripts/check-embed-boundary
   tui-boundary     scripts/check-tui-boundary
+  agent-bridge-boundary  scripts/check-agent-bridge-boundary
   offline          scripts/check-offline (exige namespaces de rede sem privilégio)
   core-tests       cargo test -p noteit-core, sem display
   cli-tests        cargo test -p noteit-cli, sem display e sem barramento
@@ -88,6 +91,7 @@ Estágios Rust:
   embed-tests      cargo test -p noteit-embed, contra um mock local de HTTP
   remote-tests     cargo test -p noteit-embedding-remote e -p noteit-embed-protocol
   tui-tests        cargo test -p noteit-tui, sem display e sem barramento
+  agent-bridge-tests     cargo test -p noteit-agent-bridge, sem modelo e sem rede
   workspace-tests  cargo test --workspace (inclui o harness de isolamento)
 
 Estágios do frontend, todos executados em ui/:
@@ -150,6 +154,10 @@ stage_embedding_boundary() { "$REPO_ROOT/scripts/check-embedding-boundary"; }
 # checked for being unable to do anything else.
 stage_embed_boundary() { "$REPO_ROOT/scripts/check-embed-boundary"; }
 stage_tui_boundary() { "$REPO_ROOT/scripts/check-tui-boundary"; }
+stage_agent_bridge_boundary() { "$REPO_ROOT/scripts/check-agent-bridge-boundary"; }
+# No model, no network, no account: the fake client the tests drive is written
+# by the tests themselves.
+stage_agent_bridge_tests() { cargo test -p noteit-agent-bridge; }
 # Deliberately *not* in the `rust` aggregate. It needs unprivileged user
 # namespaces, which a container or a hardened kernel may not give, and a stage
 # that quietly passes where it cannot run would be worse than one that has to be

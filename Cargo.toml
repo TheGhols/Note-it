@@ -8,6 +8,7 @@ members = [
     "noteit-embed",
     "noteit-embedding-remote",
     "noteit-tui",
+    "noteit-agent-bridge",
 ]
 resolver = "2"
 

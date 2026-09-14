@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Fails if the AI bridge ever becomes a model client, a store writer or a terminal.
+#
+# This component exists to start a program somebody else installed and read
+# lines of JSON from it. Three things it must never become, each of which would
+# be invisible in a diff and obvious in a postmortem:
+#
+#   1. a model client — an HTTP client, a vendor SDK, an API key;
+#   2. a writer — anything that can reach the store without going through
+#      `noteit-mcp` and the write authority;
+#   3. a terminal — a pseudoterminal, an ANSI parser, a screen scraper.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tree="$(cargo tree -p noteit-agent-bridge --edges normal --prefix none)"
+
+# 1. No model client, no desktop, no async runtime, no network.
+FORBIDDEN='^(reqwest|hyper|ureq|curl|isahc|surf|h2|rustls|native-tls|openssl|tokio($|-)|async-std|gtk4|gdk4|webkit6|openai|anthropic|google-ai|genai|langchain)( |$)'
+if grep -Eq "$FORBIDDEN" <<<"$tree"; then
+  printf '%s\n' "Agent bridge boundary violation: noteit-agent-bridge depends on a network client, an LLM vendor SDK, a desktop toolkit or an async runtime. The model belongs to the AI CLI the user installed; this crate starts a process and reads JSON." >&2
+  grep -E "$FORBIDDEN" <<<"$tree" >&2
+  exit 1
+fi
+
+# 2. It cannot own the store, because it cannot link it.
+if grep -Eq '^noteit-core( |$)' <<<"$tree"; then
+  printf '%s\n' "Agent bridge boundary violation: noteit-agent-bridge depends on noteit-core. A component that cannot link the store cannot own it; note access must go through noteit-mcp." >&2
+  exit 1
+fi
+
+# 3. No terminal, no scraping, and no credentials.
+#
+# `openpty`/`forkpty` would be a pseudoterminal; an escape-sequence literal
+# would be a screen scraper; the key names are the shape of a vendor
+# integration this crate is not allowed to grow.
+# Code, not prose. The documentation in this crate says the words "ANSI" and
+# "pseudoterminal" precisely because it is explaining why they are absent, and
+# a check that fails on its own explanation is a check nobody keeps.
+code() {
+  find noteit-agent-bridge/src -name '*.rs' -print0 \
+    | xargs -0 grep -Hn -v -E '^[[:space:]]*//' \
+    | sed 's/^\([^:]*:[0-9]*\):/\1 /'
+}
+
+SCRAPING='(openpty|forkpty|termios|\\x1b\[|\\u\{1b\}|ansi_|vte::)'
+if code | grep -Eq "$SCRAPING"; then
+  printf '%s\n' "Agent bridge boundary violation: noteit-agent-bridge/src allocates a terminal or parses escape sequences. An AI client without a documented structured mode is refused, never scraped." >&2
+  code | grep -E "$SCRAPING" >&2
+  exit 1
+fi
+
+CREDENTIALS='(OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GEMINI_API_KEY|api[_-]?key|authorization:|bearer )'
+if code | grep -Eqi "$CREDENTIALS"; then
+  printf '%s\n' "Agent bridge boundary violation: noteit-agent-bridge/src mentions an API credential. Note-it does not hold one; the AI CLI is already authenticated by its owner." >&2
+  code | grep -Eni "$CREDENTIALS" >&2
+  exit 1
+fi
+
+printf '%s\n' "Agent bridge boundary OK: noteit-agent-bridge has no model client, no vendor SDK, no credential, no async runtime, no dependency on noteit-core, and no terminal."

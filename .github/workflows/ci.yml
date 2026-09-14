@@ -75,6 +75,9 @@ jobs:
       - name: TUI Dependency Boundary
         run: scripts/check tui-boundary
 
+      - name: Agent Bridge Dependency Boundary
+        run: scripts/check agent-bridge-boundary
+
       - name: Headless Core Tests
         run: scripts/check core-tests
 
@@ -95,6 +98,9 @@ jobs:
 
       - name: Headless TUI Tests
         run: scripts/check tui-tests
+
+      - name: Agent Bridge Tests Without A Model
+        run: scripts/check agent-bridge-tests
 
       - name: Run Rust Unit Tests
         run: scripts/check workspace-tests
