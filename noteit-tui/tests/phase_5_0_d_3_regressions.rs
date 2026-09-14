@@ -426,9 +426,15 @@ fn alt_f_in_markdown_mode_does_not_mutate_draft_history_or_selection() {
         "A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."
     );
     assert_eq!(app.draft.as_ref().unwrap().text(), unselected_text);
-    assert_eq!(app.draft.as_ref().unwrap().selection(), unselected_selection);
+    assert_eq!(
+        app.draft.as_ref().unwrap().selection(),
+        unselected_selection
+    );
     assert_eq!(app.draft.as_ref().unwrap().cursor(), unselected_cursor);
-    assert_eq!(app.draft.as_ref().unwrap().history_depth(), unselected_history);
+    assert_eq!(
+        app.draft.as_ref().unwrap().history_depth(),
+        unselected_history
+    );
     assert_eq!(app.pending_text(), None);
 }
 
