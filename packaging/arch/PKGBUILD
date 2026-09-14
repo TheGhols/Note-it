@@ -11,8 +11,8 @@
 # To move it forward: set _commit to the SHA you want, and _revision to
 # `git rev-list --count <SHA>`.
 pkgname=note-it
-_commit=7d54c5cddbf3545f6059b104ae8d00fc4660db1b
-_revision=213
+_commit=159fe2df4f29e15dd5a076f708c4179a3a95d1e8
+_revision=214
 pkgver=0.1.0.r${_revision}.g${_commit:0:8}
 pkgrel=1
 pkgdesc="Minimalist sticky notes for Linux Wayland"
