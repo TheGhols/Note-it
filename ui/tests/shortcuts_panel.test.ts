@@ -216,6 +216,42 @@ describe('the panel stylesheet', () => {
     expect(declarationIn('.note-shortcuts', 'overflow-y')).toBe('auto');
   });
 
+  // The rule above passed for the whole time the panel was unusable, because
+  // `100%` is only a promise about the containing block and this file never
+  // said which one. It was `#note-controls-left`: a 26px row of header
+  // buttons, so `calc(100% - var(--note-header-height) - 16px)` computed
+  // negative, clamped to zero, and 1700px of reference opened as a 20px
+  // sliver. Measured in WebKitGTK at 220x300, 420x360 and 760x560, the panel
+  // showed 0.9%, 1.2% and 1.1% of its content. The geometry is written
+  // against the note, so the mount has to be the note.
+  it('is mounted on the note, which is what its percentages measure', () => {
+    const source = repoFile('src/main.ts');
+    const construction = /shortcutsPanel = new ShortcutsPanel\(\{[\s\S]*?\n {6}\}\)/.exec(source);
+    expect(construction).not.toBeNull();
+    expect(construction![0]).toContain('mount: appRoot');
+    expect(construction![0]).not.toContain('mount: menuMount');
+
+    // Both sides pinned with no width of its own, so the width is the
+    // containing block's; and a max-height in percent, so the height is too.
+    // That is why a button-sized containing block broke both at once.
+    expect(declarationIn('.note-shortcuts', 'position')).toBe('absolute');
+    expect(declarationIn('.note-shortcuts', 'left')).toBeTruthy();
+    expect(declarationIn('.note-shortcuts', 'right')).toBeTruthy();
+    expect(() => declarationIn('.note-shortcuts', 'width')).toThrow();
+    expect(declarationIn('.note-shortcuts', 'max-height')).toContain('100%');
+  });
+
+  it('shares the containing block of the panels it was shaped after', () => {
+    const source = repoFile('src/main.ts');
+    // `.note-shortcuts` is a copy of `.note-trash`'s geometry, so a change
+    // that moves one and not the other is the defect coming back.
+    for (const panel of ['TrashPanel', 'SearchPalette', 'ShortcutsPanel']) {
+      const construction = new RegExp(`new ${panel}\\(\\{[\\s\\S]*?mount: (\\w+)`).exec(source);
+      expect(construction, `${panel} is constructed`).not.toBeNull();
+      expect(construction![1], `${panel} mounts on the note`).toBe('appRoot');
+    }
+  });
+
   it('hides when hidden, like every other panel', () => {
     expect(declarationIn('.note-shortcuts[hidden]', 'display')).toBe('none');
   });

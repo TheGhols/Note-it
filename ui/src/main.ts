@@ -1049,14 +1049,21 @@ function initUI(): void {
       },
     });
 
-    // The shortcut reference. Mounted in the same group the menu and the timer
-    // are, so it sits outside the drag region and a click on it can never move
-    // the window.
+    // The shortcut reference. Mounted beside the trash, the search palette and
+    // find — not in a header group — because its stylesheet is written against
+    // the note, not against a row of buttons: `left`, `right` and a
+    // `max-height` of `calc(100% - …)` only mean the note's width and height
+    // when the containing block is the note. Mounted inside
+    // `#note-controls-left`, that `100%` was the 26px button row, so the
+    // max-height computed negative, clamped to zero, and a panel with 1700px
+    // of content opened as a 20px sliver. A click on it still cannot move the
+    // window: the panel stops its own `pointerdown`, and `#app` is not the
+    // drag region.
     const btnShortcuts = document.getElementById('btn-shortcuts');
-    if (btnShortcuts && menuMount) {
+    if (btnShortcuts) {
       shortcutsPanel = new ShortcutsPanel({
         trigger: btnShortcuts,
-        mount: menuMount,
+        mount: appRoot,
         handlers: {
           // Everything that would sit over the same corner of a small note
           // closes, and the note menu with it: expanding a collapsed note and
