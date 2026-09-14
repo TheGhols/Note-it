@@ -1,0 +1,669 @@
+{
+  "lines": [
+    {
+      "source": "= 2 + 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "4"
+      }
+    },
+    {
+      "source": "= 10 / 4",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "2,5"
+      }
+    },
+    {
+      "source": "= 0.1 + 0.2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "0,3"
+      }
+    },
+    {
+      "source": "= 10 - 3 * 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "4"
+      }
+    },
+    {
+      "source": "= (10 - 3) * 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "14"
+      }
+    },
+    {
+      "source": "= -5 + 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "-3"
+      }
+    },
+    {
+      "source": "= 10%",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "0,1"
+      }
+    },
+    {
+      "source": "= 10% de 200",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "20"
+      }
+    },
+    {
+      "source": "= 200 + 10%",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "220"
+      }
+    },
+    {
+      "source": "= 200 - 10%",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "180"
+      }
+    },
+    {
+      "source": "= 1/0",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "division-by-zero",
+        "message": "divisão por zero"
+      }
+    },
+    {
+      "source": "= 2 +",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-expression",
+        "message": "expressão inválida"
+      }
+    },
+    {
+      "source": "= ",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-expression",
+        "message": "expressão inválida"
+      }
+    },
+    {
+      "source": "= constructor",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "= __proto__",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "= window",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "= 1.234.567",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-expression",
+        "message": "expressão inválida"
+      }
+    },
+    {
+      "source": "= 10,5 + 1",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "11,5"
+      }
+    },
+    {
+      "source": "preco := 100",
+      "kind": "declaration",
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "source": "= preco * 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "total := preco * 3",
+      "kind": "declaration",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "= total",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "invalido-nome := 5",
+      "kind": "declaration",
+      "result": {
+        "kind": "error",
+        "code": "invalid-name",
+        "message": "nome inválido"
+      }
+    },
+    {
+      "source": "= invalido",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-variable",
+        "message": "variável desconhecida"
+      }
+    },
+    {
+      "source": "= 10 km em m",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "10000 m"
+      }
+    },
+    {
+      "source": "= 10 m em km",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "0,01 km"
+      }
+    },
+    {
+      "source": "= 1 km em cm",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "100000 cm"
+      }
+    },
+    {
+      "source": "= 100 °C em °F",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "212 °F"
+      }
+    },
+    {
+      "source": "= 0 °C em °F",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "32 °F"
+      }
+    },
+    {
+      "source": "= -300 °C em K",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-conversion",
+        "message": "conversão inválida"
+      }
+    },
+    {
+      "source": "= 1 kg em g",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "1000 g"
+      }
+    },
+    {
+      "source": "= 10 kg em km",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "incompatible-units",
+        "message": "unidades incompatíveis"
+      }
+    },
+    {
+      "source": "= 1 m² em cm²",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "10000 cm²"
+      }
+    },
+    {
+      "source": "= 1 KiB em B",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "1024 B"
+      }
+    },
+    {
+      "source": "= 1 KB em B",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "1000 B"
+      }
+    },
+    {
+      "source": "= 100 km/h em m/s",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "27,7777777778 m/s"
+      }
+    },
+    {
+      "source": "= 1 dia em h",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "24 h"
+      }
+    },
+    {
+      "source": "= 2 semana em dia",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "14 dias"
+      }
+    },
+    {
+      "source": "= 10 xicara em mL",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-unit",
+        "message": "unidade desconhecida"
+      }
+    },
+    {
+      "source": "= 10 USD em BRL",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-unit",
+        "message": "unidade desconhecida"
+      }
+    },
+    {
+      "source": "= 10 km",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-expression",
+        "message": "expressão inválida"
+      }
+    },
+    {
+      "source": "= 10 + 5 km em m",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "15000 m"
+      }
+    },
+    {
+      "source": "texto comum",
+      "kind": "prose",
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "source": "",
+      "kind": "prose",
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "source": "  = 2 + 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "4"
+      }
+    },
+    {
+      "source": "== nao e calculo",
+      "kind": "prose",
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "source": "= sum",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "0"
+      }
+    },
+    {
+      "source": "= avg",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "division-by-zero",
+        "message": "divisão por zero"
+      }
+    },
+    {
+      "source": "= count",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "0"
+      }
+    },
+    {
+      "source": "= sum * 2",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "invalid-expression",
+        "message": "expressão inválida"
+      }
+    },
+    {
+      "source": "= 1e5",
+      "kind": "calculation",
+      "result": {
+        "kind": "error",
+        "code": "unknown-unit",
+        "message": "unidade desconhecida"
+      }
+    },
+    {
+      "source": "= 99999999999999999999 * 99999999999999999999",
+      "kind": "calculation",
+      "result": {
+        "kind": "value",
+        "text": "1e+40"
+      }
+    }
+  ],
+  "notes": [
+    {
+      "sources": [
+        "= 1",
+        "= 2",
+        "= 3",
+        "= sum"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        },
+        {
+          "kind": "value",
+          "text": "6"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= 1",
+        "= 2",
+        "texto",
+        "= 3",
+        "= sum"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "none"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= 1",
+        "= 2",
+        "= sum",
+        "= avg",
+        "= count"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        },
+        {
+          "kind": "value",
+          "text": "1,5"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= 1",
+        "= 2",
+        "= sum",
+        "= 5",
+        "= sum"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        },
+        {
+          "kind": "value",
+          "text": "5"
+        },
+        {
+          "kind": "value",
+          "text": "5"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= preco * 2",
+        "preco := 100",
+        "= preco * 2"
+      ],
+      "results": [
+        {
+          "kind": "error",
+          "code": "unknown-variable"
+        },
+        {
+          "kind": "none"
+        },
+        {
+          "kind": "value",
+          "text": "200"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "a := b + 1",
+        "b := a + 1"
+      ],
+      "results": [
+        {
+          "kind": "error",
+          "code": "unknown-variable"
+        },
+        {
+          "kind": "error",
+          "code": "unknown-variable"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= 1",
+        null,
+        "= 2",
+        "= sum"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "none"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "= 10 km em m",
+        "= 5",
+        "= sum"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "10000 m"
+        },
+        {
+          "kind": "value",
+          "text": "5"
+        },
+        {
+          "kind": "value",
+          "text": "5"
+        }
+      ]
+    },
+    {
+      "sources": [
+        "total := sum",
+        "= 1",
+        "= 2",
+        "total := sum",
+        "= total"
+      ],
+      "results": [
+        {
+          "kind": "value",
+          "text": "0"
+        },
+        {
+          "kind": "value",
+          "text": "1"
+        },
+        {
+          "kind": "value",
+          "text": "2"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        },
+        {
+          "kind": "value",
+          "text": "3"
+        }
+      ]
+    }
+  ]
+}

@@ -4344,3 +4344,74 @@ teria feito a TUI divergir do Core em silêncio.
 Os três diretórios reais — `~/.local/share/note-it` (259 arquivos),
 `~/.config/note-it` e `~/.local/state/note-it` — permanecem byte a byte idênticos ao
 fingerprint tomado antes de qualquer alteração. Todo teste roda em store temporário.
+
+## 42. Fase 5.0D.5 — paridade semântica: matemática e flashcards
+
+### 42.1 Checkpoint A — inventário e contrato
+
+A implementação canônica foi auditada antes de uma linha ser escrita:
+`ui/src/math/{lexer,parser,evaluate,format,document,errors}.ts`,
+`ui/src/units/{types,registry,convert}.ts`, `ui/src/editor/math.ts`,
+`ui/src/flashcards/extract.ts` e `ui/src/editor/flashcardMark.ts`.
+
+| Eixo | Contrato canônico | Como a TUI o cumpre |
+|---|---|---|
+| Sintaxe | `= expr` calcula, `:=` declara, `==` nunca calcula | mesmas regras, mesma exclusão de `==` |
+| Semântica | avaliação de cima para baixo; variáveis valem da linha que as declara em diante | porte direto; ciclos são impossíveis sem resolver grafo |
+| Agregadores | `sum`/`avg`/`count` leem o bloco contíguo imediatamente acima | porte direto, inclusive a regra de que um agregador **não** consome o bloco |
+| Percentual | `10% de 200`; `200 + 10%` é acréscimo, mas só com o `%` escrito ali | porte direto, incluindo a distinção entre `%` literal e variável que guarda `0.1` |
+| Conversões | tabela de unidades exata, busca exata e sensível a caixa | mesma tabela, mesmos fatores, mesma ausência de moeda e de medida de cozinha |
+| Erros | sete códigos, mensagens constantes | mesmos sete, mesmas palavras |
+| Formatação | pt-BR, vírgula decimal, sem separador de milhar | porte direto, inclusive a forma exponencial acima de 1e21 |
+| Segurança | sem `eval`, sem acesso a propriedade, sem chamada; limites de tamanho e de tokens; resultado sempre finito | idem, e a gramática Rust igualmente não consegue **soletrar** uma chamada |
+| Flashcards | extração do documento, nunca do Markdown; `::` e `:::`; espaço obrigatório dos dois lados | extração da **projeção**, que tem o mesmo conhecimento |
+| Preservação | nada é escrito na nota | idem, com teste |
+
+### 42.2 Como a paridade é provada
+
+Não por comparar as duas implementações entre si — isso provaria que concordam, não
+sobre o quê. Há **duas fixtures**, geradas a partir da implementação canônica e
+commitadas, e **cada lado** as afirma na sua própria suíte:
+
+- `tests/fixtures/math-conformance.json` — 52 linhas e 9 notas inteiras;
+- `tests/fixtures/flashcard-conformance.json` — 29 notas em Markdown.
+
+`ui/tests/math_conformance.test.ts` e `ui/tests/flashcards_conformance.test.ts` as
+afirmam do lado canônico; `noteit-tui/tests/math_conformance.rs` e
+`noteit-tui/tests/flashcard_conformance.rs`, do lado da TUI. Qualquer um que
+divergir falha na sua própria suíte, nomeando a linha ou a nota que divergiu.
+
+### 42.3 A única divergência encontrada
+
+`= 99999999999999999999 * 99999999999999999999` deu
+`10000000000000000000000000000000000000000` em Rust e `1e+40` no editor gráfico.
+
+Acima de 1e21 a implementação canônica recorre ao `toString` da plataforma, que muda
+para forma exponencial e escreve o sinal do expoente. O `{:e}` do Rust concorda sobre
+a mantissa e omite o `+`. A correção é de uma linha, e o ponto é outro: **as duas
+grafias estão "certas" e só uma delas é a que aparece na outra janela.** É exatamente
+o tipo de diferença que só uma fixture cruzada encontra, e que uma reimplementação
+"parecida" teria deixado passar.
+
+### 42.4 Flashcards leem a projeção
+
+O editor gráfico extrai do seu documento ProseMirror e **nunca** do Markdown, porque
+uma expressão regular sobre o arquivo não enxerga que `::` está dentro de um bloco de
+código, de um código inline, de um destino de link ou de `https://`.
+
+A TUI não tem ProseMirror, mas desde a 5.0D.4B tem algo com o mesmo conhecimento: a
+projeção lossless sabe o que é código, o que é texto e o que é opaco. A extração
+pergunta a ela, e há teste de que `::` dentro de fence, de código inline, de
+comentário, de região opaca e de destino de link não produz cartão algum.
+
+Os casos sutis conferem com o canônico, incluindo os que surpreendem: `A::B` não é
+cartão (falta espaço), `A :: B :: C` não é (dois delimitadores, duas leituras,
+nenhuma escolha), `::::` não é nada, e um `::` num **título** ou num item de lista
+**é** cartão.
+
+### 42.5 Contagem de cartões e de revisões
+
+`count` devolve os dois números, como o canônico: cinco cartões podem ser sete
+perguntas, e uma barra de progresso que diz "1 de 5" enquanto há sete pela frente
+mente sobre a metade mais curta. Um cartão reversível gera duas revisões, na ordem em
+que está escrito e não agrupadas no fim.

@@ -1,0 +1,465 @@
+{
+  "notes": [
+    {
+      "markdown": "Pergunta :: Resposta",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Pergunta",
+          "back": "Resposta",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Termo ::: Definição",
+      "counts": {
+        "cards": 1,
+        "reviews": 2
+      },
+      "cards": [
+        {
+          "front": "Termo",
+          "back": "Definição",
+          "mode": "reversible",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        },
+        {
+          "direction": "reverse",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "A::B",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "namespace::method faz algo",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "https://example.com/x",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "12:30 é a hora",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "Pergunta :::: Resposta",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "Um : dois",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "A :: B :: C",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "Só uma pergunta ::",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": ":: Só uma resposta",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "`código :: aqui`",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "texto `a :: b` mais texto",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "```\ncódigo :: dentro\n```",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "# Título :: Subtítulo",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Título",
+          "back": "Subtítulo",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "- item :: valor",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "item",
+          "back": "valor",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "> citação :: resposta",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "citação",
+          "back": "resposta",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Pergunta\n\n::\n\nResposta",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Pergunta",
+          "back": "Resposta",
+          "mode": "basic",
+          "form": "block"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Pergunta\n\n:::\n\nResposta",
+      "counts": {
+        "cards": 1,
+        "reviews": 2
+      },
+      "cards": [
+        {
+          "front": "Pergunta",
+          "back": "Resposta",
+          "mode": "reversible",
+          "form": "block"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        },
+        {
+          "direction": "reverse",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Antes\n\nPergunta\n\n::\n\nResposta\n\nDepois",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Pergunta",
+          "back": "Resposta",
+          "mode": "basic",
+          "form": "block"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Pergunta\n\n::\n\n:::\n\nResposta",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "**Negrito** :: resposta",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Negrito",
+          "back": "resposta",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Pergunta :: **resposta em negrito**",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Pergunta",
+          "back": "resposta em negrito",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Acentuação ç :: resposta ã",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "Acentuação ç",
+          "back": "resposta ã",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "日本語 :: japonês",
+      "counts": {
+        "cards": 1,
+        "reviews": 1
+      },
+      "cards": [
+        {
+          "front": "日本語",
+          "back": "japonês",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        }
+      ]
+    },
+    {
+      "markdown": "Primeira :: um\n\nSegunda :: dois",
+      "counts": {
+        "cards": 2,
+        "reviews": 2
+      },
+      "cards": [
+        {
+          "front": "Primeira",
+          "back": "um",
+          "mode": "basic",
+          "form": "inline"
+        },
+        {
+          "front": "Segunda",
+          "back": "dois",
+          "mode": "basic",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        },
+        {
+          "direction": "forward",
+          "source": 1
+        }
+      ]
+    },
+    {
+      "markdown": "Um :: dois\n\nTrês ::: quatro",
+      "counts": {
+        "cards": 2,
+        "reviews": 3
+      },
+      "cards": [
+        {
+          "front": "Um",
+          "back": "dois",
+          "mode": "basic",
+          "form": "inline"
+        },
+        {
+          "front": "Três",
+          "back": "quatro",
+          "mode": "reversible",
+          "form": "inline"
+        }
+      ],
+      "reviews": [
+        {
+          "direction": "forward",
+          "source": 0
+        },
+        {
+          "direction": "forward",
+          "source": 1
+        },
+        {
+          "direction": "reverse",
+          "source": 1
+        }
+      ]
+    },
+    {
+      "markdown": "",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    },
+    {
+      "markdown": "sem cartão nenhum",
+      "counts": {
+        "cards": 0,
+        "reviews": 0
+      },
+      "cards": [],
+      "reviews": []
+    }
+  ]
+}
