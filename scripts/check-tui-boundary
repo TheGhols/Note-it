@@ -22,19 +22,26 @@ fi
 
 # docs/tui.md property 23 (§27.20), made mechanical.
 #
-# The presentational renderer discards delimiters, decodes entities and stops a
-# link destination at the first `)`. Those are right for showing a note and
-# wrong for editing one, so the lossless projector may not be built on them —
-# and "may not" is worth nothing unless something fails when it happens.
+# The hazard §26.16 names is *recognition*: the reader's parser discards
+# delimiters, decodes entities and stops a link destination at the first `)`,
+# and founding the lossless projector on it would inherit every one of those.
+# So what is forbidden is the recognising code, by name — which also catches a
+# re-export or an aliased import that a module-path check would miss.
+#
+# Deliberately not forbidden: the canonical *spelling* helpers. `wrapper()` and
+# the two palettes are a `format!` and two constant tables; they parse nothing,
+# and sharing them is what guarantees the visual editor writes byte-for-byte
+# what the graphical editor and the raw editor write. Two copies of that
+# spelling would be the real risk.
 PROJECTOR_MODULES=(projection.rs source_map.rs visual.rs visual_edit.rs)
-LEGACY_RENDERER='crate::(markdown|inline|formatting)|super::(markdown|inline|formatting)'
+RECOGNISERS='(markdown|inline)::[a-z_]+|::(render_markdown|render_with_sources|inline_spans|comment_width|clear_selected|clear_enclosing)\b|use crate::(markdown|inline)\b|use crate::formatting::\*'
 
 for module in "${PROJECTOR_MODULES[@]}"; do
   path="noteit-tui/src/$module"
   [ -f "$path" ] || continue
-  if grep -En "$LEGACY_RENDERER" "$path" >/dev/null 2>&1; then
-    printf '%s\n' "TUI boundary violation: $module references the presentational renderer (markdown.rs, inline.rs or formatting.rs). The lossless projector must not be founded on the reader's parser — see docs/tui.md §26.16 and property 23." >&2
-    grep -En "$LEGACY_RENDERER" "$path" >&2
+  if grep -En "$RECOGNISERS" "$path" >/dev/null 2>&1; then
+    printf '%s\n' "TUI boundary violation: $module uses the presentational renderer's recognition code. The lossless projector must not be founded on the reader's parser — see docs/tui.md §26.16 and property 23. Canonical spelling helpers (formatting::wrapper and the palettes) are allowed; parsing and text-search helpers are not." >&2
+    grep -En "$RECOGNISERS" "$path" >&2
     exit 1
   fi
 done

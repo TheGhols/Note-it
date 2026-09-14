@@ -131,6 +131,23 @@ pub enum VisualCommand {
         anchor: SourceOffset,
         head: SourceOffset,
     },
+    /// B.6: set or clear the text colour of a selection. `None` clears.
+    SetColor {
+        anchor: SourceOffset,
+        head: SourceOffset,
+        color: Option<String>,
+    },
+    /// B.6: set or clear the highlight of a selection. `None` clears.
+    SetHighlight {
+        anchor: SourceOffset,
+        head: SourceOffset,
+        color: Option<String>,
+    },
+    /// B.6: add or remove `<u>` around a selection.
+    ToggleUnderline {
+        anchor: SourceOffset,
+        head: SourceOffset,
+    },
 }
 
 /// Plans `command` against `document`, or refuses.
@@ -169,6 +186,19 @@ pub fn plan(
         // that granting it in B.5 is a deliberate edit to this file and not an
         // accident.
         VisualCommand::ToggleStrong { .. } => Err(Refusal::MissingCapability),
+        VisualCommand::SetColor {
+            anchor,
+            head,
+            color,
+        } => format(document, anchor, head, Formatting::Color(color)),
+        VisualCommand::SetHighlight {
+            anchor,
+            head,
+            color,
+        } => format(document, anchor, head, Formatting::Highlight(color)),
+        VisualCommand::ToggleUnderline { anchor, head } => {
+            format(document, anchor, head, Formatting::Underline)
+        }
     }
 }
 
@@ -309,6 +339,242 @@ fn replace_selection(
         }],
         envelope: range,
         resulting_cursor: start.get() + text.len(),
+    })
+}
+
+// -- B.6: canonical HTML formatting ------------------------------------------
+
+/// What a formatting command is asking for.
+enum Formatting {
+    Color(Option<String>),
+    Highlight(Option<String>),
+    Underline,
+}
+
+/// Applies or clears one canonical HTML wrapper over a selection.
+///
+/// The whole of §26.7's precedence is here, in order: preserve every byte
+/// outside the approved envelope; choose the smallest node that must change;
+/// normalise only inside it; never widen it to tidy equivalent syntax
+/// elsewhere. The envelope is the selection itself when a wrapper is being
+/// added, and the wrapper's own span when one is being removed — in neither
+/// case does it reach a sibling.
+fn format(
+    document: &VisualDocument,
+    anchor: SourceOffset,
+    head: SourceOffset,
+    formatting: Formatting,
+) -> Result<SourceTransaction, Refusal> {
+    let (start, end) = if anchor <= head {
+        (anchor, head)
+    } else {
+        (head, anchor)
+    };
+    if start == end {
+        // §26.8: an empty selection is not a FormatSelection. Changing only the
+        // active typing style creates no patch, no history and no pending edit.
+        return Err(Refusal::NothingToDo);
+    }
+
+    // A colour reaches an HTML attribute, so it may only ever be one of the
+    // spellings this project writes. Anything else is refused rather than
+    // escaped: the palette is a closed list, and a value that is not in it is
+    // not a colour somebody chose.
+    let colour = match &formatting {
+        Formatting::Color(Some(value)) => Some((value.as_str(), crate::formatting::TEXT_COLORS)),
+        Formatting::Highlight(Some(value)) => {
+            Some((value.as_str(), crate::formatting::HIGHLIGHT_COLORS))
+        }
+        _ => None,
+    };
+    if let Some((value, palette)) = colour {
+        if !palette.iter().any(|(_, hex)| *hex == value) {
+            return Err(Refusal::MissingCapability);
+        }
+    }
+
+    // The same checks every mutating selection passes: one block, nothing
+    // protected, whole marks only.
+    let start_block = block_of(document, start);
+    if start_block != block_of(document, end) {
+        return Err(Refusal::BlockBoundary);
+    }
+    let Some(block) = start_block else {
+        return Err(Refusal::InvalidPosition);
+    };
+    if !range_is_editable(document, start.get(), end.get()) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    if !caret_is_legal(document, start) || !caret_is_legal(document, end) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    if document.range_touches_protected_lexeme(block, start.get(), end.get()) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    let kind = match &formatting {
+        Formatting::Color(_) => WrapperKind::Color,
+        Formatting::Highlight(_) => WrapperKind::Highlight,
+        Formatting::Underline => WrapperKind::Underline,
+    };
+
+    // Is the selection already exactly the content of a wrapper of this kind?
+    // If so the command removes it; otherwise it adds one.
+    let existing = enclosing_wrapper(document, kind, start.get(), end.get());
+
+    // The whole-leaf rule of §27.18 refuses a selection covering all of a
+    // mark's content *unless the requested capability has an explicit cleanup
+    // contract for that mark's own delimiters*. Clearing a wrapper is that
+    // contract: it is the operation the rule was reserving the case for. So the
+    // check runs for everything except the exact wrapper being removed, which
+    // would otherwise be the one command that can never be issued.
+    if existing.is_none() {
+        check_mark_boundaries(document, start.get(), end.get())?;
+    }
+
+    match (&formatting, existing) {
+        // Clearing, or toggling off: the envelope is the wrapper's own span and
+        // the patches are its two tags. Its content is not rewritten at all.
+        (Formatting::Color(None) | Formatting::Highlight(None), Some(node))
+        | (Formatting::Underline, Some(node)) => unwrap_node(document, node),
+
+        // Nothing of this kind here, and nothing asked for: a no-op.
+        (Formatting::Color(None) | Formatting::Highlight(None), None) => Err(Refusal::NothingToDo),
+
+        // Setting a value where one already exists: replace the wrapper rather
+        // than nesting a second one, so the source stays something the
+        // graphical editor would have written.
+        (Formatting::Color(Some(value)) | Formatting::Highlight(Some(value)), Some(node)) => {
+            let (open, close) = wrapper_text(kind, Some(value));
+            let coverage = document.projection().node(node).coverage;
+            let (content_start, content_end) = document
+                .mark_content_range(node)
+                .ok_or(Refusal::InvalidPosition)?;
+            Ok(SourceTransaction {
+                generation: document.generation(),
+                patches: vec![
+                    SourcePatch {
+                        range: SourceRange::trusted(coverage.start(), content_start),
+                        replacement: open,
+                    },
+                    SourcePatch {
+                        range: SourceRange::trusted(content_end, coverage.end()),
+                        replacement: close,
+                    },
+                ],
+                envelope: coverage,
+                resulting_cursor: content_start,
+            })
+        }
+
+        // Adding one around the selection.
+        (Formatting::Color(Some(value)) | Formatting::Highlight(Some(value)), None) => {
+            wrap_selection(document, start, end, kind, Some(value.as_str()))
+        }
+        (Formatting::Underline, None) => wrap_selection(document, start, end, kind, None),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WrapperKind {
+    Color,
+    Highlight,
+    Underline,
+}
+
+/// The canonical spelling of a wrapper, byte for byte what the graphical
+/// editor writes. Sharing the spelling is what keeps a note editable in both.
+fn wrapper_text(kind: WrapperKind, value: Option<&str>) -> (String, String) {
+    match (kind, value) {
+        (WrapperKind::Color, Some(value)) => {
+            let (open, close) =
+                crate::formatting::wrapper(crate::formatting::Kind::TextColor, value);
+            (open, close.to_owned())
+        }
+        (WrapperKind::Highlight, Some(value)) => {
+            let (open, close) =
+                crate::formatting::wrapper(crate::formatting::Kind::Highlight, value);
+            (open, close.to_owned())
+        }
+        _ => ("<u>".to_owned(), "</u>".to_owned()),
+    }
+}
+
+/// The innermost wrapper of `kind` whose content is exactly `start..end`.
+fn enclosing_wrapper(
+    document: &VisualDocument,
+    kind: WrapperKind,
+    start: usize,
+    end: usize,
+) -> Option<crate::projection::NodeId> {
+    use crate::projection::NodeKind;
+    document.mark_path(start).into_iter().rev().find(|node| {
+        let matches_kind = matches!(
+            (&document.projection().node(*node).kind, kind),
+            (NodeKind::Color(_), WrapperKind::Color)
+                | (NodeKind::Highlight(_), WrapperKind::Highlight)
+                | (NodeKind::Underline, WrapperKind::Underline)
+        );
+        matches_kind
+            && document.mark_content_range(*node) == Some((start, end))
+            && document.mark_is_editable(*node)
+    })
+}
+
+/// Removes a wrapper's two tags and nothing else.
+fn unwrap_node(
+    document: &VisualDocument,
+    node: crate::projection::NodeId,
+) -> Result<SourceTransaction, Refusal> {
+    let coverage = document.projection().node(node).coverage;
+    let (content_start, content_end) = document
+        .mark_content_range(node)
+        .ok_or(Refusal::InvalidPosition)?;
+
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![
+            SourcePatch {
+                range: SourceRange::trusted(coverage.start(), content_start),
+                replacement: String::new(),
+            },
+            SourcePatch {
+                range: SourceRange::trusted(content_end, coverage.end()),
+                replacement: String::new(),
+            },
+        ],
+        envelope: coverage,
+        resulting_cursor: coverage.start(),
+    })
+}
+
+/// Wraps a selection, leaving its content byte-identical.
+fn wrap_selection(
+    document: &VisualDocument,
+    start: SourceOffset,
+    end: SourceOffset,
+    kind: WrapperKind,
+    value: Option<&str>,
+) -> Result<SourceTransaction, Refusal> {
+    let (open, close) = wrapper_text(kind, value);
+    let open_len = open.len();
+
+    // Two patches at the two ends, strictly ordered and never touching, which
+    // §27.11 requires: the content between them is not in any patch and so is
+    // not rewritten.
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![
+            SourcePatch {
+                range: SourceRange::trusted(start.get(), start.get()),
+                replacement: open,
+            },
+            SourcePatch {
+                range: SourceRange::trusted(end.get(), end.get()),
+                replacement: close,
+            },
+        ],
+        envelope: SourceRange::trusted(start.get(), end.get()),
+        resulting_cursor: start.get() + open_len,
     })
 }
 

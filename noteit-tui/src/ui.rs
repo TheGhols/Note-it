@@ -849,10 +849,34 @@ fn visual_style(document: &crate::visual::VisualDocument, byte: usize) -> Style 
             NodeKind::Strike => style.add_modifier(Modifier::CROSSED_OUT),
             NodeKind::Underline => style.add_modifier(Modifier::UNDERLINED),
             NodeKind::InlineCode => style.fg(Color::Rgb(0x9C, 0xDC, 0xFE)),
+            // The colour a note actually asked for, read from the canonical
+            // attribute. An unreadable value leaves the style alone rather
+            // than guessing one.
+            NodeKind::Color(ref hex) => match hex_colour(hex) {
+                Some(colour) => style.fg(colour),
+                None => style,
+            },
+            NodeKind::Highlight(ref hex) => match hex_colour(hex) {
+                Some(colour) => style.bg(colour).fg(Color::Black),
+                None => style.add_modifier(Modifier::REVERSED),
+            },
             _ => style,
         };
     }
     style
+}
+
+/// `#RRGGBB` as a terminal colour, or `None` when it is not one.
+///
+/// Strict on purpose: a value that is not six hexadecimal digits is not a
+/// colour somebody chose, and drawing a guess would be inventing one.
+fn hex_colour(value: &str) -> Option<Color> {
+    let digits = value.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&digits[range], 16).ok();
+    Some(Color::Rgb(channel(0..2)?, channel(2..4)?, channel(4..6)?))
 }
 
 /// Base, selected and cursor styles of the editing pane.

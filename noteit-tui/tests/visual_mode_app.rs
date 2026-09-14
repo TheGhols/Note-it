@@ -149,8 +149,24 @@ fn the_visual_editor_hides_the_markup_it_can_edit() {
 
 #[test]
 fn the_visual_editor_still_shows_what_it_cannot_edit() {
-    // A colour span is B.6 work. Until then it is source-visible, because
-    // hiding it would tell the reader they can edit it.
+    // A link's destination is B.7 work. Until that gate passes the whole link
+    // is source-visible, because hiding it would tell the reader they can edit
+    // it — and the destination is the part that must never be edited by
+    // accident.
+    let root = tempfile::tempdir().unwrap();
+    let mut app = editing(root.path(), "veja [o site](https://example.com/a_(b))");
+    app.handle_key(alt('v'));
+
+    let visual = rendered(&app, 120, 20);
+    assert!(
+        visual.contains("https://example.com"),
+        "unsupported markup stays visible: {visual}"
+    );
+}
+
+#[test]
+fn a_colour_is_drawn_as_a_colour_and_its_tag_is_not_drawn() {
+    // B.6: the canonical wrapper the graphical editor writes becomes meaning.
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(
         root.path(),
@@ -159,10 +175,22 @@ fn the_visual_editor_still_shows_what_it_cannot_edit() {
     app.handle_key(alt('v'));
 
     let visual = rendered(&app, 120, 20);
+    assert!(visual.contains("vermelho"), "the word is there");
     assert!(
-        visual.contains("data-note-it-color"),
-        "unsupported markup stays visible: {visual}"
+        !visual.contains("data-note-it-color"),
+        "and its tag is not: {visual}"
     );
+
+    // Drawn in the colour the note asked for, not merely undrawn.
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(120, 20)).unwrap();
+    app.draw(&mut terminal).unwrap();
+    let painted = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .any(|cell| cell.fg == ratatui::style::Color::Rgb(0xDC, 0x26, 0x26));
+    assert!(painted, "the red the note asked for reached a cell");
 }
 
 #[test]

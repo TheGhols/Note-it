@@ -741,12 +741,13 @@ impl App {
 
     /// Which inline constructions the visual editor may edit today.
     ///
-    /// Exactly what the gates up to B.5 have proved. Colour, highlight,
-    /// underline, links, lists, tasks, quotes and callouts are not here: they
-    /// belong to B.6 and B.7, and until those gates pass they stay visible as
-    /// source and refuse every edit, which is the honest thing to show.
+    /// Exactly what the gates up to B.6 have proved: the inline marks and the
+    /// three constructions the graphical editor persists as HTML. Links,
+    /// lists, tasks, quotes and callouts are not here — they belong to B.7,
+    /// and until that gate passes they stay visible as source and refuse every
+    /// edit, which is the honest thing to show.
     fn visual_capabilities() -> Capabilities {
-        Capabilities::INLINE
+        Capabilities::HTML
     }
 
     /// The projection of the current draft, or `None` when there is no draft.

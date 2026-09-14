@@ -58,6 +58,10 @@ pub struct Capabilities {
     pub emphasis: bool,
     pub strike: bool,
     pub inline_code: bool,
+    // Canonical HTML, granted by B.6 behind the pre-HTML gate (§27.19).
+    pub underline: bool,
+    pub color: bool,
+    pub highlight: bool,
 }
 
 impl Capabilities {
@@ -67,6 +71,9 @@ impl Capabilities {
         emphasis: false,
         strike: false,
         inline_code: false,
+        underline: false,
+        color: false,
+        highlight: false,
     };
 
     /// Everything B.5 ends up granting, once each has been proved on its own.
@@ -75,6 +82,21 @@ impl Capabilities {
         emphasis: true,
         strike: true,
         inline_code: true,
+        underline: false,
+        color: false,
+        highlight: false,
+    };
+
+    /// Everything B.6 ends up granting: the inline marks plus the three
+    /// constructions the graphical editor persists as HTML.
+    pub const HTML: Self = Self {
+        strong: true,
+        emphasis: true,
+        strike: true,
+        inline_code: true,
+        underline: true,
+        color: true,
+        highlight: true,
     };
 
     /// Whether this node's delimiters may be hidden and its text edited.
@@ -87,6 +109,9 @@ impl Capabilities {
             NodeKind::StrongEmphasis => self.strong && self.emphasis,
             NodeKind::Strike => self.strike,
             NodeKind::InlineCode => self.inline_code,
+            NodeKind::Underline => self.underline,
+            NodeKind::Color(_) => self.color,
+            NodeKind::Highlight(_) => self.highlight,
             _ => false,
         }
     }
@@ -414,7 +439,11 @@ impl VisualDocument {
     fn lexeme_is_hidden_syntax(&self, kind: LexemeKind, owner: Option<NodeId>) -> bool {
         if !matches!(
             kind,
-            LexemeKind::MarkOpen | LexemeKind::MarkClose | LexemeKind::CodeDelimiter
+            LexemeKind::MarkOpen
+                | LexemeKind::MarkClose
+                | LexemeKind::CodeDelimiter
+                | LexemeKind::HtmlOpenTag
+                | LexemeKind::HtmlCloseTag
         ) {
             return false;
         }
@@ -660,6 +689,9 @@ impl VisualDocument {
                     | NodeKind::StrongEmphasis
                     | NodeKind::Strike
                     | NodeKind::InlineCode
+                    | NodeKind::Underline
+                    | NodeKind::Color(_)
+                    | NodeKind::Highlight(_)
             ) {
                 return true;
             }

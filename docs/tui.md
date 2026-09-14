@@ -4056,3 +4056,73 @@ incondicional por tecla em notas grandes. A correção é invalidação localiza
 bloco, que é trabalho de B.P e está registrada aqui com a medida, não escondida.
 Notas de tamanho comum — as de 1 KB a 20 KB que o store real contém — projetam em
 menos de um milissegundo e não são afetadas.
+
+## 38. Fase 5.0D.4B.6 — HTML canônico de formatação
+
+### 38.1 Escopo entregue
+
+Cor, marca-texto e sublinhado — as três construções que o editor gráfico persiste
+como HTML. `Underline` está aqui e não em B.5 porque o §27.19 o moveu: `<u>` é HTML,
+e editá-lo precisa do matching de close, da dominância de ancestral e da proteção até
+EOF que o gate P3 existe para liberar.
+
+Cada uma tem sua própria capability, como as inline. Com apenas `underline`,
+`<u>sub</u> e <mark …>marca</mark>` projeta `sub e <mark …>marca</mark>` — o `<u>`
+some e o `<mark>` fica.
+
+No editor, cor vira cor de verdade e marca-texto vira fundo: o valor é lido do
+atributo canônico e convertido, e um valor que não seja `#RRGGBB` deixa o estilo
+intacto em vez de inventar um.
+
+### 38.2 O rewrite envelope, na prática
+
+Três comandos novos: `SetColor`, `SetHighlight` (com `None` para limpar) e
+`ToggleUnderline`. O que cada um escreve é exatamente a grafia de
+`formatting::wrapper`, a mesma função que o editor raw e a GUI usam — duas cópias
+dessa grafia seriam o risco de verdade.
+
+O envelope é a seleção quando um wrapper é acrescentado e o span do próprio wrapper
+quando um é removido; em nenhum caso alcança um irmão. A prova direta é o exemplo do
+§26.7: em `<span red>a</span><span red>b</span>`, editar o primeiro deixa o segundo
+byte a byte como estava, e os dois continuam dois. "Wrapper máximo" significa máximo
+**dentro do envelope**.
+
+Acrescentar um wrapper emite dois patches vazios nas duas pontas, estritamente
+ordenados e sem se tocar (§27.11): o conteúdo entre eles não está em patch algum e
+portanto não é reescrito. É por isso que `ç日👍🏽` sobrevive a ganhar cor.
+
+### 38.3 A paleta é uma lista fechada
+
+Um valor de cor chega a um atributo HTML. `SetColor` só aceita as grafias que este
+projeto escreve — as oito de texto e as cinco de marca-texto de `formatting.rs` — e
+recusa qualquer outra em vez de escapá-la. Há teste com `javascript:alert(1)` e com
+`"><script>`: ambos são `MissingCapability`, não conteúdo escapado. Um valor que não
+está na paleta não é uma cor que alguém escolheu.
+
+### 38.4 O contrato de cleanup, finalmente exercido
+
+A regra whole-leaf do §27.18 recusa uma seleção que cubra todo o conteúdo de uma mark
+**a menos que a capability pedida tenha contrato explícito de cleanup** dos
+delimitadores daquela mark. Limpar um wrapper **é** esse contrato — é o caso que a
+regra estava reservando. Sem essa leitura, limpar uma cor seria o único comando que
+nunca poderia ser emitido, porque limpar sempre seleciona todo o conteúdo.
+
+Então a verificação de fronteira de mark roda para tudo, exceto para o wrapper exato
+que está sendo removido. Encontrado por teste: os dois testes de "limpar" falharam
+com `MissingCapability` antes de a ordem ser corrigida.
+
+### 38.5 O gate de fronteira, refinado em vez de afrouxado
+
+`visual_edit.rs` passou a usar `formatting::wrapper` e as duas paletas, e o gate da
+propriedade 23 — que eu mesmo havia escrito — falhou.
+
+A pergunta é se isso é violação. O que o §26.16 nomeia como perigo é
+**reconhecimento**: o parser do leitor descarta delimitadores, decodifica entidades e
+para o destino de um link no primeiro `)`. `wrapper()` é um `format!` e as paletas são
+duas tabelas de constantes; não analisam nada.
+
+O gate passou a proibir o código que **reconhece**, por nome — `markdown::*`,
+`inline::*`, `clear_selected`, `clear_enclosing`, `use crate::formatting::*` — o que
+também pega um re-export ou um import com alias que a checagem por caminho de módulo
+deixaria passar. Verificado nos dois sentidos: com `use crate::inline` falha, com
+`clear_selected` falha, e limpo passa. É um gate mais preciso, não mais frouxo.
