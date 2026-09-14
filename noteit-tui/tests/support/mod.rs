@@ -326,6 +326,13 @@ pub struct Frame {
     pub width: u16,
     pub height: u16,
     pub rows: Vec<String>,
+    /// The same buffer, one entry per terminal cell.
+    ///
+    /// `rows` is unusable as an index: a wide grapheme occupies two cells and
+    /// a cluster like `👨‍👩‍👧‍👦` is many `char`s in one, so the nth `char` of a row
+    /// is not the nth column of the screen. Anything asking "what is *at* this
+    /// column" has to ask here.
+    pub cells: Vec<Vec<String>>,
     /// Every reversed cell as `(column, row, symbol)`. Nothing but the caret is
     /// reversed when there is no selection, so this *is* the caret.
     pub carets: Vec<(u16, u16, String)>,
@@ -426,22 +433,27 @@ impl Screen {
         self.app.draw(&mut terminal).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let mut rows = Vec::with_capacity(self.height as usize);
+        let mut cells = Vec::with_capacity(self.height as usize);
         let mut carets = Vec::new();
         for row in 0..self.height {
             let mut text = String::new();
+            let mut line = Vec::with_capacity(self.width as usize);
             for column in 0..self.width {
                 let cell = &buffer[(column, row)];
                 text.push_str(cell.symbol());
+                line.push(cell.symbol().to_owned());
                 if cell.modifier.contains(Modifier::REVERSED) {
                     carets.push((column, row, cell.symbol().to_owned()));
                 }
             }
             rows.push(text);
+            cells.push(line);
         }
         Frame {
             width: self.width,
             height: self.height,
             rows,
+            cells,
             carets,
         }
     }
@@ -664,10 +676,8 @@ impl Screen {
         let (column, row) = after.caret();
 
         assert_eq!(
-            after.rows[before_row as usize]
-                .chars()
-                .nth(before_column as usize),
-            Some(character),
+            after.cells[before_row as usize][before_column as usize],
+            character.to_string(),
             "{label}: `{character}` is not where the caret was:\n{}",
             after.text()
         );

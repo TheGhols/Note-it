@@ -46,6 +46,27 @@ fn screen(tui: &mut Tui) -> String {
     .join("\n")
 }
 
+/// Waits until the *screen* satisfies `ready`, rather than until a clock says
+/// it probably has.
+///
+/// A fixed sleep is a guess about how loaded the machine is, and a suite
+/// running twenty test binaries at once is exactly when the guess is wrong.
+/// Waiting on the condition makes this deterministic instead of usually right.
+fn wait_screen(tui: &mut Tui, what: &str, mut ready: impl FnMut(&str) -> bool) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let rendered = screen(tui);
+        if ready(&rendered) {
+            return rendered;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timeout waiting for {what}:\n{rendered}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// Markup that may never be visible while the visual editor has the keyboard.
 const HIDDEN: &[&str] = &["<span", "</span", "<mark", "</mark", "data-note-it-"];
 
@@ -81,7 +102,6 @@ fn r6_pty_the_manual_sequence_on_a_real_terminal() {
         &b"\x1b[D"[..],
     ] {
         tui.input(sequence);
-        std::thread::sleep(std::time::Duration::from_millis(30));
         tui.drain();
     }
 
@@ -101,8 +121,10 @@ fn r6_pty_the_manual_sequence_on_a_real_terminal() {
     tui.input(b"continua");
     tui.input(b"\r");
     tui.input(b"segunda linha");
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    tui.drain();
+    let visual = wait_screen(&mut tui, "the typed text", |rendered| {
+        rendered.contains("gustavo testes de verdade continua")
+            && rendered.contains("segunda linha")
+    });
 
     // Nothing the visual editor drew, from the moment the colour was chosen,
     // may contain canonical markup.
@@ -113,17 +135,12 @@ fn r6_pty_the_manual_sequence_on_a_real_terminal() {
             "`{needle}` reached a real terminal while Visual had the keyboard"
         );
     }
-    let visual = screen(&mut tui);
     for needle in HIDDEN {
         assert!(
             !visual.contains(needle),
             "`{needle}` is on screen in Visual:\n{visual}"
         );
     }
-    assert!(
-        visual.contains("gustavo testes de verdade continua"),
-        "the text itself is there:\n{visual}"
-    );
 
     // Alt+V: the source editor, where the markup is allowed and named.
     tui.input(b"\x1bv");
@@ -143,22 +160,16 @@ fn r6_pty_the_manual_sequence_on_a_real_terminal() {
     );
 
     // Alt+V back: the markup disappears from the screen again.
-    let before_return = tui.output.len();
     tui.input(b"\x1bv");
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    tui.drain();
-    let returned = screen(&mut tui);
-    assert!(
-        returned.contains("Visual") && !returned.contains("Markdown/Fonte"),
-        "back in the visual editor:\n{returned}"
-    );
+    let returned = wait_screen(&mut tui, "the return to Visual", |rendered| {
+        rendered.contains("Visual") && !rendered.contains("Markdown/Fonte")
+    });
     for needle in HIDDEN {
         assert!(
             !returned.contains(needle),
             "`{needle}` survived the return to Visual:\n{returned}"
         );
     }
-    let _ = before_return;
 
     // Save, leave, and let the harness prove the terminal was restored.
     tui.input(b"\x13");
@@ -189,10 +200,10 @@ fn r6_pty_the_manual_sequence_on_a_real_terminal() {
     );
 
     tui.input(b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(80));
-    tui.drain();
+    wait_screen(&mut tui, "the reader", |rendered| {
+        rendered.contains("Leitura:")
+    });
     tui.input(b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(80));
     tui.finish();
     cleanup_coordination(&paths);
 }
@@ -225,14 +236,21 @@ fn r6_pty_arrows_move_one_row_at_a_time_in_a_wrapped_paragraph() {
     // several rows.
     for _ in 0..6 {
         tui.input(b"\x1b[B");
-        std::thread::sleep(std::time::Duration::from_millis(30));
         tui.drain();
     }
-    let rendered = replay_screen(&String::from_utf8_lossy(&tui.output), 60, 20).join("\n");
-    assert!(
-        rendered.contains("ultimo"),
-        "the whole note is on screen:\n{rendered}"
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let rendered = loop {
+        tui.drain();
+        let rendered = replay_screen(&String::from_utf8_lossy(&tui.output), 60, 20).join("\n");
+        if rendered.contains("ultimo") && rendered.contains("estreito") {
+            break rendered;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timeout waiting for the note:\n{rendered}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     // The paragraph is drawn across more than one row, which is what makes
     // "one row at a time" a different thing from "one block at a time": no
     // single row holds the whole sentence, and its two ends are both drawn.
@@ -250,10 +268,8 @@ fn r6_pty_arrows_move_one_row_at_a_time_in_a_wrapped_paragraph() {
     }
 
     tui.input(b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(80));
-    tui.drain();
+    tui.wait_text("Leitura:");
     tui.input(b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(80));
     tui.finish();
     cleanup_coordination(&paths);
 }
