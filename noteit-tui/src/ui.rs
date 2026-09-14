@@ -683,6 +683,20 @@ fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     let height = inner.height as usize;
     let width = inner.width as usize;
     app.editor_viewport.set(height);
+    // Navigation needs the width, and only drawing knows it: a visual row is a
+    // row at *this* width, so `Up` cannot be answered without it.
+    app.editor_width.set(width);
+
+    // The mode decides which viewport moves, before anything reads a cursor.
+    //
+    // Reading `draft.cursor()` here unconditionally is what R6-001 was: the
+    // Markdown pass wrote a *line* index into `editor_scroll`, the visual pass
+    // read the same cell back as a *block* index, and one keystroke in Visual
+    // scrolled the pane to a place the visual caret had never been.
+    if app.editor_mode == crate::app::EditorMode::Visual {
+        render_visual_body(frame, app, inner, height, width);
+        return;
+    }
 
     // Only drawing knows the pane's size, so this is where the viewport is
     // moved to contain the cursor — vertically by line and horizontally by
@@ -704,11 +718,6 @@ fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     }
     app.editor_column.set(left);
 
-    if app.editor_mode == crate::app::EditorMode::Visual {
-        render_visual_body(frame, app, inner, height, width);
-        return;
-    }
-
     let selection = draft.selection();
     let lines: Vec<Line<'static>> = draft
         .lines()
@@ -724,12 +733,16 @@ fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
 
 /// The visual editor's body: what the reader sees, not what is stored.
 ///
-/// Every line here is a projected block. A mark whose capability has been
-/// granted shows its meaning — bold looks bold — and contributes no characters
-/// of its own; a construction that is still source-visible shows its literal
-/// spelling in a dimmer colour, which is the honest way to say "this is here,
-/// and you cannot edit it yet".
+/// Every row here comes from [`crate::visual_layout`], which is also what
+/// navigation walks — so "the row below" on screen and "the row below" under
+/// `↓` are the same row by construction rather than by two pieces of code
+/// agreeing. A mark whose capability has been granted shows its meaning — bold
+/// looks bold — and contributes no characters of its own; a construction that
+/// is still source-visible shows its literal spelling in a dimmer colour,
+/// which is the honest way to say "this is here, and you cannot edit it yet".
 fn render_visual_body(frame: &mut Frame, app: &App, inner: Rect, height: usize, width: usize) {
+    use crate::visual_layout::{layout_block, open_tail_coord, place, RowCoord};
+
     let Some(document) = app.visual_document() else {
         return;
     };
@@ -745,206 +758,228 @@ fn render_visual_body(frame: &mut Frame, app: &App, inner: Rect, height: usize, 
         (start != end).then_some((start, end))
     });
 
-    // A note with nothing in it projects no blocks at all. It still has one
-    // place typing would land, and drawing that is the difference between an
-    // empty editor and one that looks broken.
-    if document.blocks().is_empty() {
-        let caret = Line::from(Span::styled(
-            " ",
-            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
-        ));
-        frame.render_widget(Paragraph::new(vec![caret]), inner);
-        return;
-    }
-
-    // Which block owns the caret, by bisection rather than by scanning every
-    // block on every frame. It is also the *only* block the caret is offered
-    // to below: a block that is not this one is drawn with `None` and so
-    // cannot produce a cursor of its own.
-    let caret_block = cursor_offset
-        .and_then(|offset| document.block_containing(offset))
-        .map_or(0, |block| block.0 as usize);
-
-    let last = document.blocks().len() - 1;
-    let mut top = app.editor_scroll.get().min(caret_block).min(last);
-    // Every block takes at least one row, so a block more than a screenful
-    // above the caret cannot share the screen with it. Starting there bounds
-    // the measuring below by the viewport instead of by the document.
-    top = top.max(caret_block.saturating_sub(height));
-
-    // How many rows the blocks above the caret's take, measured once, so that
-    // a paragraph wrapping onto several rows still leaves the caret visible.
-    let above: Vec<usize> = (top..caret_block)
-        .map(|index| {
-            visual_rows(
-                &document,
-                document.blocks()[index].id,
-                None,
-                selection,
-                width,
-            )
-            .0
-            .len()
+    // Where the caret is, as a row and a column on this screen. The open tail
+    // — the empty paragraph Enter leaves at the end of a note — belongs to no
+    // block, and attributing it to block 0 is what scrolled the whole pane
+    // back to the top the moment somebody pressed Enter at the end (R6-001).
+    let caret = cursor_offset.and_then(|offset| {
+        place(&document, width, offset).or_else(|| {
+            document
+                .is_open_tail(offset)
+                .then(|| crate::visual_layout::CaretPlace {
+                    coord: open_tail_coord(&document),
+                    column: 0,
+                })
         })
-        .collect();
-    let caret_row = visual_rows(
-        &document,
-        document.blocks()[caret_block].id,
-        cursor_offset,
-        selection,
-        width,
-    )
-    .1
-    .unwrap_or(0);
+    });
 
-    let mut total: usize = above.iter().sum::<usize>() + caret_row;
-    let mut skipped = 0;
-    while total >= height && skipped < above.len() {
-        total -= above[skipped];
-        skipped += 1;
+    let tail = document.is_open_tail(document.source_len());
+    let last_row = last_coord(&document, width, tail);
+
+    // The visual viewport, owned by the visual caret and nothing else.
+    let mut top = app.visual_scroll.get().min(last_row);
+    if let Some(caret) = caret {
+        let visible = caret.coord >= top
+            && rows_between(&document, width, top, caret.coord, height).is_some_and(|d| d < height);
+        if !visible {
+            top = anchor_above(&document, width, caret.coord, height);
+        }
     }
-    top += skipped;
-    app.editor_scroll.set(top);
+    app.visual_scroll.set(top);
 
+    let blocks = document.blocks().len();
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (index, block) in document.blocks().iter().enumerate().skip(top) {
-        if lines.len() >= height {
+    let mut coord = top;
+    while lines.len() < height && coord.block <= blocks {
+        if coord.block == blocks {
+            // The open tail is one row of nothing, which still has to be drawn:
+            // it is where typing would land.
+            if tail || blocks == 0 {
+                let caret_here = caret.filter(|caret| caret.coord.block == blocks).is_some();
+                lines.push(tail_row(caret_here));
+            }
             break;
         }
-        let caret = (index == caret_block).then_some(cursor_offset).flatten();
-        lines.extend(visual_rows(&document, block.id, caret, selection, width).0);
+        let block = document.blocks()[coord.block].id;
+        let layout = layout_block(&document, block, width);
+        for (index, row) in layout.rows.iter().enumerate().skip(coord.row) {
+            if lines.len() >= height {
+                break;
+            }
+            let caret_column = caret
+                .filter(|caret| {
+                    caret.coord
+                        == RowCoord {
+                            block: coord.block,
+                            row: index,
+                        }
+                })
+                .map(|caret| caret.column);
+            lines.push(visual_row(
+                &document,
+                layout.glyph.as_deref().filter(|_| index == 0),
+                row,
+                caret_column,
+                selection,
+            ));
+        }
+        coord = RowCoord {
+            block: coord.block + 1,
+            row: 0,
+        };
     }
-    lines.truncate(height);
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// One projected block as the rows it occupies on screen.
-///
-/// A block is not a line. A paragraph holding a soft break, and one longer
-/// than the pane, both take several rows — and the line endings a block owns
-/// are breaks rather than characters, which is why they end a row here and are
-/// never drawn. Emitting one as a glyph is what put a stray `·` at the end of
-/// almost every line and squashed two source lines onto one row.
-///
-/// `cursor` is passed only for the block that owns the caret, so exactly one
-/// cell in the whole pane can come back reversed. The returned index is the
-/// row the caret landed on, which is what the scrolling above needs.
-fn visual_rows(
+/// The last row the document has, so a viewport can never be anchored past it.
+fn last_coord(
     document: &crate::visual::VisualDocument,
-    block: crate::visual::BlockId,
-    cursor: Option<usize>,
-    selection: Option<(usize, usize)>,
     width: usize,
-) -> (Vec<Line<'static>>, Option<usize>) {
-    let width = width.max(1);
-    let mut rows: Vec<Line<'static>> = Vec::new();
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut cells = 0usize;
-    let mut caret_row: Option<usize> = None;
-    // Taken by the first cell that starts at or after it: a caret offset need
-    // not be a grapheme boundary on screen — before a hidden `<span>` tag it
-    // is several bytes earlier than the character it precedes — and comparing
-    // for equality left that caret undrawn entirely.
-    let mut pending = cursor;
+    tail: bool,
+) -> crate::visual_layout::RowCoord {
+    use crate::visual_layout::{layout_block, RowCoord};
 
-    // A structured block's marker is not drawn as source once the editor can
-    // edit the block — but the reader still has to see that it *is* a list, a
-    // task or a quote. The glyph is presentation derived from the node kind,
-    // which is the honest way round: the source keeps its `- `, and the screen
-    // shows a bullet.
-    if let Some(glyph) = block_glyph(document, block) {
-        cells += glyph.chars().count();
+    let blocks = document.blocks().len();
+    if tail || blocks == 0 {
+        return RowCoord {
+            block: blocks,
+            row: 0,
+        };
+    }
+    let last = document.blocks()[blocks - 1].id;
+    RowCoord {
+        block: blocks - 1,
+        row: layout_block(document, last, width)
+            .rows
+            .len()
+            .saturating_sub(1),
+    }
+}
+
+/// How many rows lie between `from` and `to`, giving up past `cap`.
+///
+/// Giving up is the point: an anchor far above the caret would otherwise make
+/// this walk the whole note on every frame, and the caller only needs to know
+/// whether the caret is on screen.
+fn rows_between(
+    document: &crate::visual::VisualDocument,
+    width: usize,
+    from: crate::visual_layout::RowCoord,
+    to: crate::visual_layout::RowCoord,
+    cap: usize,
+) -> Option<usize> {
+    use crate::visual_layout::row_count;
+
+    if to < from {
+        return None;
+    }
+    if to.block == from.block {
+        return Some(to.row - from.row);
+    }
+    let mut rows = row_count(document, from.block, width).saturating_sub(from.row);
+    for block in (from.block + 1)..to.block {
+        if rows > cap {
+            return None;
+        }
+        rows += row_count(document, block, width);
+    }
+    (rows + to.row <= cap).then_some(rows + to.row)
+}
+
+/// The row to start drawing at so that `caret` is the last row on screen.
+///
+/// Walks backwards from the caret, which touches at most `height` blocks
+/// however long the note is.
+fn anchor_above(
+    document: &crate::visual::VisualDocument,
+    width: usize,
+    caret: crate::visual_layout::RowCoord,
+    height: usize,
+) -> crate::visual_layout::RowCoord {
+    use crate::visual_layout::{row_count, RowCoord};
+
+    let height = height.max(1);
+    let mut wanted = height - 1;
+    let mut coord = caret;
+    loop {
+        if coord.row >= wanted {
+            return RowCoord {
+                block: coord.block,
+                row: coord.row - wanted,
+            };
+        }
+        wanted -= coord.row;
+        let Some(previous) = coord.block.checked_sub(1) else {
+            return RowCoord { block: 0, row: 0 };
+        };
+        let rows = row_count(document, previous, width);
+        coord = RowCoord {
+            block: previous,
+            row: rows.saturating_sub(1),
+        };
+        if wanted == 0 {
+            return coord;
+        }
+        wanted -= 1;
+    }
+}
+
+/// The empty paragraph at the end of a note: a row with nothing on it, and the
+/// caret when that is where it is.
+fn tail_row(caret: bool) -> Line<'static> {
+    if caret {
+        Line::from(Span::styled(
+            " ",
+            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
+        ))
+    } else {
+        Line::from(Span::styled(" ", EDITOR_TEXT))
+    }
+}
+
+/// One laid-out row, drawn.
+fn visual_row(
+    document: &crate::visual::VisualDocument,
+    glyph: Option<&str>,
+    row: &crate::visual_layout::BlockRow,
+    caret_column: Option<usize>,
+    selection: Option<(usize, usize)>,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if let Some(glyph) = glyph {
         spans.push(Span::styled(
-            glyph,
+            glyph.to_owned(),
             EDITOR_TEXT.fg(Color::Rgb(0x88, 0xAA, 0xCC)),
         ));
     }
 
-    let reversed = || EDITOR_TEXT.add_modifier(Modifier::REVERSED);
-
-    for cell in document.graphemes_of(block) {
-        let takes_caret = pending.is_some_and(|at| at <= cell.source.start());
-
-        // A line ending is where the row stops, not something to print. A
-        // caret owed to it belongs at the end of the row it closes.
-        if matches!(cell.text, "\n" | "\r\n" | "\r") {
-            if takes_caret {
-                caret_row = Some(rows.len());
-                pending = None;
-                spans.push(Span::styled(" ", reversed()));
-            }
-            rows.push(Line::from(std::mem::take(&mut spans)));
-            cells = 0;
-            continue;
-        }
-
-        let span_width = cell.width.max(1);
-        if cells + span_width > width && cells > 0 {
-            rows.push(Line::from(std::mem::take(&mut spans)));
-            cells = 0;
-        }
-
+    for cell in &row.cells {
         let mut style = visual_style(document, cell.source.start());
         if selection
             .is_some_and(|(start, end)| cell.source.start() >= start && cell.source.end() <= end)
         {
             style = style.bg(EDITOR_SELECTION);
         }
-        if takes_caret {
+        if caret_column == Some(cell.column) {
             style = style.add_modifier(Modifier::REVERSED);
-            caret_row = Some(rows.len());
-            pending = None;
         }
         let text: String = cell.text.chars().map(editor_cell).collect();
-        cells += span_width;
         spans.push(Span::styled(text, style));
     }
 
-    // The caret past the last grapheme, and the caret in an empty block.
-    if pending.is_some() {
-        if cells >= width {
-            rows.push(Line::from(std::mem::take(&mut spans)));
-        }
-        caret_row = Some(rows.len());
-        spans.push(Span::styled(" ", reversed()));
-    }
-
-    if spans.is_empty() && rows.is_empty() {
+    // The caret past the last grapheme of the row, and the caret on a row with
+    // nothing on it at all.
+    if caret_column.is_some_and(|column| column >= row.width) {
+        spans.push(Span::styled(
+            " ",
+            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
+        ));
+    } else if spans.is_empty() {
         spans.push(Span::styled(" ", EDITOR_TEXT));
     }
-    if !spans.is_empty() {
-        rows.push(Line::from(spans));
-    }
-    (rows, caret_row)
-}
 
-/// The marker a structured block is drawn with, when its own is hidden.
-fn block_glyph(
-    document: &crate::visual::VisualDocument,
-    block: crate::visual::BlockId,
-) -> Option<String> {
-    use crate::projection::NodeKind;
-
-    let node = document.block(block).node;
-    // Only when the marker is actually hidden: a block still shown as source
-    // has its own marker on screen and must not get a second one.
-    if !document.block_marker_is_hidden(block) {
-        return None;
-    }
-    match document.projection().node(node).kind {
-        NodeKind::ListItem => Some("• ".to_owned()),
-        NodeKind::Task => Some(
-            if document.task_is_done(block) {
-                "☑ "
-            } else {
-                "☐ "
-            }
-            .to_owned(),
-        ),
-        NodeKind::Blockquote | NodeKind::Callout => Some("│ ".to_owned()),
-        _ => None,
-    }
+    Line::from(spans)
 }
 
 /// The style a projected grapheme is drawn with.

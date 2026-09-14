@@ -214,6 +214,19 @@ pub struct App {
     pub(crate) editor_scroll: Cell<usize>,
     pub(crate) editor_column: Cell<usize>,
     pub(crate) editor_viewport: Cell<usize>,
+    /// The visual editor's own viewport, measured in the rows it draws.
+    ///
+    /// Separate from `editor_scroll` on purpose. They are not the same number
+    /// in different units — one is a Markdown line index driven by the draft
+    /// cursor, the other a visual row index driven by the visual caret — and
+    /// sharing one cell between them is what made the visual pane scroll to a
+    /// position the visual caret had never asked for (R6-001).
+    pub(crate) visual_scroll: Cell<crate::visual_layout::RowCoord>,
+    /// How wide the editor pane turned out to be, last time it was drawn.
+    ///
+    /// Only drawing knows this, and navigation needs it: a visual row is a row
+    /// at *this* width, so Up and Down cannot be answered without it.
+    pub(crate) editor_width: Cell<usize>,
 
     // Lifecycle
     pub should_quit: bool,
@@ -266,6 +279,8 @@ impl App {
             editor_scroll: Cell::new(0),
             editor_column: Cell::new(0),
             editor_viewport: Cell::new(1),
+            visual_scroll: Cell::new(crate::visual_layout::RowCoord::default()),
+            editor_width: Cell::new(80),
             should_quit: false,
             term_flag,
         };
@@ -1853,6 +1868,28 @@ impl App {
             eprintln!("{}", self.notice);
         }
         Ok(())
+    }
+
+    /// The first Markdown line the editor pane is showing.
+    ///
+    /// Read-only, and read-only on purpose: only drawing knows the pane's
+    /// size, so drawing is the only thing that may move a viewport. Exposed so
+    /// a test can assert *which* viewport moved, which is the whole of R6-001.
+    pub fn editor_scroll(&self) -> usize {
+        self.editor_scroll.get()
+    }
+
+    /// The first Markdown column the editor pane is showing.
+    pub fn editor_column(&self) -> usize {
+        self.editor_column.get()
+    }
+
+    /// The first visual row the visual editor is showing, as `(block, row)`.
+    ///
+    /// A row, not a block and not a Markdown line: the visual editor's
+    /// viewport is measured in the rows it actually draws.
+    pub fn visual_scroll(&self) -> crate::visual_layout::RowCoord {
+        self.visual_scroll.get()
     }
 
     /// Draws the current application frame to any backend (useful for tests and headless validation).
