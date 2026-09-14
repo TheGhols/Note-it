@@ -1536,6 +1536,41 @@ impl App {
             draft.restore_cursor(cursor);
         }
         self.draft = Some(draft);
+        self.resync_visual_cursor();
+    }
+
+    /// Puts the visual caret back onto a draft that has just been replaced.
+    ///
+    /// Rereading a note after a conflict builds a new `Draft` over different
+    /// bytes. The visual caret is an offset into the *old* ones, so leaving it
+    /// alone left it pointing past the end of the text: `End` moved nothing
+    /// and every character was refused as an invalid position, which looked
+    /// exactly like the editor having frozen.
+    ///
+    /// The raw cursor is the bridge. `restore_cursor` has already clamped it
+    /// into the new text, so translating it to an offset and resnapping is the
+    /// same mapping `Alt+V` uses, and lands on a slot that exists.
+    fn resync_visual_cursor(&mut self) {
+        self.visual_bookmark = None;
+        if self.editor_mode != EditorMode::Visual {
+            self.visual_cursor = None;
+            return;
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            self.visual_cursor = None;
+            return;
+        };
+        let text = draft.text();
+        let cursor = draft.cursor();
+        let offset = crate::source_map::offset_of_scalar(
+            &text,
+            crate::source_map::ScalarPosition {
+                line: cursor.line,
+                column: cursor.column,
+            },
+        )
+        .map_or(0, |offset| offset.get());
+        self.resnap_visual_cursor(offset);
     }
 
     fn reread_into_editor(&mut self) {
