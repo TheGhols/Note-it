@@ -1,30 +1,115 @@
 # Maintainer: Note-it contributors
+#
+# Daily-driver package, pinned to a commit rather than to a tag.
+#
+# There is no `v0.1.0` tag in this repository and inventing one would be
+# publishing a release nobody decided to make, so this builds from an exact
+# commit instead. `pkgver` follows the Arch convention for a VCS package —
+# `<version>.r<commits>.g<short sha>` — which sorts correctly against a future
+# tagged release and says out loud that this is a build of a commit.
+#
+# To move it forward: set _commit to the SHA you want, and _revision to
+# `git rev-list --count <SHA>`.
 pkgname=note-it
-pkgver=0.1.0
+_commit=7d54c5cddbf3545f6059b104ae8d00fc4660db1b
+_revision=213
+pkgver=0.1.0.r${_revision}.g${_commit:0:8}
 pkgrel=1
 pkgdesc="Minimalist sticky notes for Linux Wayland"
 arch=('x86_64' 'aarch64')
 url="https://github.com/TheGhols/Note-it"
 license=('MIT')
 depends=('gtk4' 'gtk4-layer-shell' 'webkitgtk-6.0' 'glib2')
-makedepends=('rust' 'cargo' 'nodejs' 'pnpm')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+makedepends=('git' 'rust' 'cargo' 'nodejs' 'pnpm' 'imagemagick')
+# The companion binaries are installed too, so uninstalling this package must
+# take them with it rather than leaving three orphans behind.
+provides=("$pkgname=$pkgver")
+# `ring` builds its own assembly through `cc`, and makepkg's link-time
+# optimisation leaves those symbols where `lld` cannot resolve them:
+# `undefined symbol: ring_core_0_17_14__avx2_available`. The same tree builds
+# cleanly outside makepkg, so this is the flags and not the code.
+options=('!lto')
+source=("git+$url.git#commit=$_commit")
 sha256sums=('SKIP')
 
+pkgver() {
+  # Derived from the checkout rather than restated, so the two can never drift.
+  cd "$srcdir/Note-it"
+  printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=8 HEAD)"
+}
+
 build() {
-  cd "$srcdir/$pkgname-$pkgver"
+  cd "$srcdir/Note-it"
+
+  # The frontend first: `ui/dist` is resolved at run time from the installed
+  # tree, so what is packaged has to be what this commit produces and not a
+  # `dist` left over from somebody's last development build.
   cd ui
   pnpm install --frozen-lockfile
-  pnpm build
+  pnpm run build
   cd ..
-  cargo build --release --locked
+
+  # Named explicitly. The workspace's default member is only `note-it`, so a
+  # bare `cargo build --release` would quietly not build the companions.
+  cargo build --release --locked -p note-it -p noteit-cli -p noteit-mcp -p noteit-tui
+
+  # The icon the launcher needs, derived from the one logo this project has.
+  # Only sizes, never a redraw: `-resize` on the same image, and nothing else.
+  for size in 16 24 32 48 64 128 256 512; do
+    magick assets/note-it-logo.png -resize "${size}x${size}" "icon-${size}.png"
+  done
+}
+
+check() {
+  cd "$srcdir/Note-it"
+  # The gates this repository already has, run against the exact commit being
+  # packaged. `scripts/check` is the authority; restating its stages here would
+  # be a second list that drifts.
+  cargo test --release --locked -p noteit-core -p noteit-cli -p noteit-tui
 }
 
 package() {
-  cd "$srcdir/$pkgname-$pkgver"
+  cd "$srcdir/Note-it"
+
+  # The graphical application, which is the one the launcher starts.
   install -Dm755 "target/release/note-it" "$pkgdir/usr/bin/note-it"
-  install -d "$pkgdir/usr/share/note-it/ui/dist"
-  cp -r ui/dist/* "$pkgdir/usr/share/note-it/ui/dist/"
-  install -Dm644 "resources/io.github.theghols.NoteIt.desktop" "$pkgdir/usr/share/applications/io.github.theghols.NoteIt.desktop"
+
+  # Companions. They are deliberately not in the launcher: they exist for a
+  # terminal, for scripts, and for an AI host to reach the store through the
+  # same authority the desktop uses.
+  install -Dm755 "target/release/noteit" "$pkgdir/usr/bin/noteit"
+  install -Dm755 "target/release/noteit-mcp" "$pkgdir/usr/bin/noteit-mcp"
+  install -Dm755 "target/release/noteit-tui" "$pkgdir/usr/bin/noteit-tui"
+
+  # The frontend, at the path `note-it` looks for after `./ui/dist` and before
+  # `/usr/share/note-it/ui/dist` (see `src/app.rs`).
+  find ui/dist -type f -exec install -Dm644 '{}' "$pkgdir/usr/share/note-it/{}" \;
+
+  install -Dm644 "resources/io.github.theghols.NoteIt.desktop" \
+    "$pkgdir/usr/share/applications/io.github.theghols.NoteIt.desktop"
+
+  # Cold activation. The global binding is
+  # `gapplication action io.github.theghols.NoteIt toggle-layer`, which asks
+  # the session bus for the name — and without this file the bus has no way to
+  # start Note-it, so the binding only ever worked while it was already
+  # running. `DBusActivatable=true` is deliberately *not* in the desktop entry:
+  # its two actions are `Exec=` lines rather than registered GActions, and that
+  # flag would make a compliant launcher send them over the bus instead, where
+  # nothing answers. See docs/tui.md and the phase report.
+  install -Dm644 "resources/io.github.theghols.NoteIt.service" \
+    "$pkgdir/usr/share/dbus-1/services/io.github.theghols.NoteIt.service"
+
+  # `Icon=io.github.theghols.NoteIt` in the desktop entry has to resolve to
+  # something. Installed under the icon name the entry actually asks for, in
+  # the hicolor theme, which is where every launcher looks.
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "icon-${size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/io.github.theghols.NoteIt.png"
+  done
+
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # Nothing under $HOME is ever touched: this function writes only inside
+  # $pkgdir, so installing, upgrading and removing the package cannot reach
+  # ~/.local/share/note-it, ~/.config/note-it or ~/.local/state/note-it.
 }

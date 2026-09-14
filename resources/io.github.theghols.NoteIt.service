@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=io.github.theghols.NoteIt
+Exec=/usr/bin/note-it --gapplication-service
