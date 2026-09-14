@@ -729,7 +729,15 @@ impl App {
             // A note body is Markdown, where indentation is spaces. Storing a
             // tab whose width nothing agrees on would be storing a surprise.
             KeyCode::Tab => self.edit(|draft| draft.insert_str("    ")),
-            KeyCode::Enter => self.insert_with_active_style("\n"),
+            // Enter is structural, never a styled character (R6 §16). Sending
+            // it through the styled path put the line break *inside* the open
+            // wrapper — `<mark …>teste\n</mark>` — which is the exact text the
+            // manual test photographed. The style stays armed; the next
+            // character opens a fresh wrapper on the new line.
+            KeyCode::Enter => self.edit(|draft| {
+                draft.finish_edit_group();
+                draft.insert_str("\n");
+            }),
             KeyCode::Backspace => {
                 let color = self.active_text_color;
                 let highlight = self.active_highlight;
@@ -1406,7 +1414,19 @@ impl App {
         }
     }
 
+    /// Applies a choice from the formatting menu.
+    ///
+    /// Which selection it acts on is decided by the mode and by nothing else.
+    /// Up to R5 this always read `Draft::selected_text`, so in the visual
+    /// editor a selection made with Shift+arrows was invisible to Alt+F — the
+    /// menu quietly armed a typing style instead of colouring what was
+    /// highlighted — and a stale raw selection could be rewritten with literal
+    /// HTML behind the reader's back.
     fn apply_format(&mut self, kind: Kind, color: Option<&'static str>) {
+        if self.editor_mode == EditorMode::Visual {
+            self.apply_visual_format(kind, color);
+            return;
+        }
         let Some(selected) = self.draft.as_ref().and_then(Draft::selected_text) else {
             self.edit(Draft::finish_edit_group);
             match kind {
@@ -1414,7 +1434,17 @@ impl App {
                 Kind::Highlight => self.active_highlight = color,
             }
             self.format_menu = None;
-            self.notice.clear();
+            // Never silently (R6 §5). This is the source editor, so the
+            // wrapper it is about to write is going to be on screen — which is
+            // correct here and is a surprise only to somebody who did not know
+            // which editor they were in.
+            self.notice = if color.is_some() {
+                "Estilo armado no modo Markdown/Fonte: a marcação canônica ficará visível. \
+                 Alt+V edita no Visual."
+                    .into()
+            } else {
+                String::new()
+            };
             return;
         };
         if color.is_none()
@@ -1438,6 +1468,42 @@ impl App {
         });
         self.format_menu = None;
         self.notice.clear();
+    }
+
+    /// The visual editor's half of the formatting menu.
+    ///
+    /// A selection is coloured through [`VisualCommand`], so the patch is
+    /// planned against the projection, checked for protected regions and
+    /// partial marks, and applied as one undoable step — the same road every
+    /// other visual edit takes. With no selection the choice arms the style
+    /// for whatever is typed next, which is the other half of what the menu
+    /// means and the only half that worked before.
+    fn apply_visual_format(&mut self, kind: Kind, color: Option<&'static str>) {
+        self.format_menu = None;
+        let selection = self
+            .visual_cursor
+            .and_then(|cursor| self.visual_selection(cursor));
+        let Some((anchor, head)) = selection else {
+            match kind {
+                Kind::TextColor => self.active_text_color = color,
+                Kind::Highlight => self.active_highlight = color,
+            }
+            self.notice.clear();
+            return;
+        };
+        let color = color.map(str::to_owned);
+        self.run_visual(match kind {
+            Kind::TextColor => VisualCommand::SetColor {
+                anchor,
+                head,
+                color,
+            },
+            Kind::Highlight => VisualCommand::SetHighlight {
+                anchor,
+                head,
+                color,
+            },
+        });
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent, area: ratatui::layout::Rect) {
