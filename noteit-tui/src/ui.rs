@@ -745,45 +745,108 @@ fn render_visual_body(frame: &mut Frame, app: &App, inner: Rect, height: usize, 
         (start != end).then_some((start, end))
     });
 
-    // Which block the caret is in decides what stays on screen.
-    let caret_block = cursor_offset
-        .and_then(|offset| {
-            document
-                .blocks()
-                .iter()
-                .position(|block| block.coverage.start() <= offset && offset <= block.content_end)
-        })
-        .unwrap_or(0);
-
-    let mut top = app.editor_scroll.get();
-    top = top.min(caret_block);
-    if caret_block >= top + height {
-        top = caret_block + 1 - height;
+    // A note with nothing in it projects no blocks at all. It still has one
+    // place typing would land, and drawing that is the difference between an
+    // empty editor and one that looks broken.
+    if document.blocks().is_empty() {
+        let caret = Line::from(Span::styled(
+            " ",
+            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
+        ));
+        frame.render_widget(Paragraph::new(vec![caret]), inner);
+        return;
     }
-    top = top.min(document.blocks().len().saturating_sub(1));
+
+    // Which block owns the caret, by bisection rather than by scanning every
+    // block on every frame. It is also the *only* block the caret is offered
+    // to below: a block that is not this one is drawn with `None` and so
+    // cannot produce a cursor of its own.
+    let caret_block = cursor_offset
+        .and_then(|offset| document.block_containing(offset))
+        .map_or(0, |block| block.0 as usize);
+
+    let last = document.blocks().len() - 1;
+    let mut top = app.editor_scroll.get().min(caret_block).min(last);
+    // Every block takes at least one row, so a block more than a screenful
+    // above the caret cannot share the screen with it. Starting there bounds
+    // the measuring below by the viewport instead of by the document.
+    top = top.max(caret_block.saturating_sub(height));
+
+    // How many rows the blocks above the caret's take, measured once, so that
+    // a paragraph wrapping onto several rows still leaves the caret visible.
+    let above: Vec<usize> = (top..caret_block)
+        .map(|index| {
+            visual_rows(
+                &document,
+                document.blocks()[index].id,
+                None,
+                selection,
+                width,
+            )
+            .0
+            .len()
+        })
+        .collect();
+    let caret_row = visual_rows(
+        &document,
+        document.blocks()[caret_block].id,
+        cursor_offset,
+        selection,
+        width,
+    )
+    .1
+    .unwrap_or(0);
+
+    let mut total: usize = above.iter().sum::<usize>() + caret_row;
+    let mut skipped = 0;
+    while total >= height && skipped < above.len() {
+        total -= above[skipped];
+        skipped += 1;
+    }
+    top += skipped;
     app.editor_scroll.set(top);
 
-    let lines: Vec<Line<'static>> = document
-        .blocks()
-        .iter()
-        .skip(top)
-        .take(height)
-        .map(|block| visual_line(&document, block.id, cursor_offset, selection, width))
-        .collect();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, block) in document.blocks().iter().enumerate().skip(top) {
+        if lines.len() >= height {
+            break;
+        }
+        let caret = (index == caret_block).then_some(cursor_offset).flatten();
+        lines.extend(visual_rows(&document, block.id, caret, selection, width).0);
+    }
+    lines.truncate(height);
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// One projected block as a styled line.
-fn visual_line(
+/// One projected block as the rows it occupies on screen.
+///
+/// A block is not a line. A paragraph holding a soft break, and one longer
+/// than the pane, both take several rows — and the line endings a block owns
+/// are breaks rather than characters, which is why they end a row here and are
+/// never drawn. Emitting one as a glyph is what put a stray `·` at the end of
+/// almost every line and squashed two source lines onto one row.
+///
+/// `cursor` is passed only for the block that owns the caret, so exactly one
+/// cell in the whole pane can come back reversed. The returned index is the
+/// row the caret landed on, which is what the scrolling above needs.
+fn visual_rows(
     document: &crate::visual::VisualDocument,
     block: crate::visual::BlockId,
     cursor: Option<usize>,
     selection: Option<(usize, usize)>,
     width: usize,
-) -> Line<'static> {
+) -> (Vec<Line<'static>>, Option<usize>) {
+    let width = width.max(1);
+    let mut rows: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cells = 0usize;
+    let mut caret_row: Option<usize> = None;
+    // Taken by the first cell that starts at or after it: a caret offset need
+    // not be a grapheme boundary on screen — before a hidden `<span>` tag it
+    // is several bytes earlier than the character it precedes — and comparing
+    // for equality left that caret undrawn entirely.
+    let mut pending = cursor;
 
     // A structured block's marker is not drawn as source once the editor can
     // edit the block — but the reader still has to see that it *is* a list, a
@@ -798,44 +861,62 @@ fn visual_line(
         ));
     }
 
-    // A caret sitting before the block's first grapheme has to be drawn even
-    // when the block is empty, so the reader can see where typing would land.
-    let mut caret_drawn = false;
-    let block_start = document.block(block).coverage.start();
+    let reversed = || EDITOR_TEXT.add_modifier(Modifier::REVERSED);
 
     for cell in document.graphemes_of(block) {
-        if cells >= width {
-            break;
+        let takes_caret = pending.is_some_and(|at| at <= cell.source.start());
+
+        // A line ending is where the row stops, not something to print. A
+        // caret owed to it belongs at the end of the row it closes.
+        if matches!(cell.text, "\n" | "\r\n" | "\r") {
+            if takes_caret {
+                caret_row = Some(rows.len());
+                pending = None;
+                spans.push(Span::styled(" ", reversed()));
+            }
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            cells = 0;
+            continue;
         }
+
+        let span_width = cell.width.max(1);
+        if cells + span_width > width && cells > 0 {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            cells = 0;
+        }
+
         let mut style = visual_style(document, cell.source.start());
         if selection
             .is_some_and(|(start, end)| cell.source.start() >= start && cell.source.end() <= end)
         {
             style = style.bg(EDITOR_SELECTION);
         }
-        if cursor == Some(cell.source.start()) {
+        if takes_caret {
             style = style.add_modifier(Modifier::REVERSED);
-            caret_drawn = true;
+            caret_row = Some(rows.len());
+            pending = None;
         }
         let text: String = cell.text.chars().map(editor_cell).collect();
-        cells += cell.width.max(1);
+        cells += span_width;
         spans.push(Span::styled(text, style));
     }
 
     // The caret past the last grapheme, and the caret in an empty block.
-    let at_end = cursor
-        .is_some_and(|offset| offset >= document.block(block).content_end && offset >= block_start);
-    if !caret_drawn && at_end {
-        spans.push(Span::styled(
-            " ",
-            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
-        ));
+    if pending.is_some() {
+        if cells >= width {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+        }
+        caret_row = Some(rows.len());
+        spans.push(Span::styled(" ", reversed()));
     }
 
-    if spans.is_empty() {
+    if spans.is_empty() && rows.is_empty() {
         spans.push(Span::styled(" ", EDITOR_TEXT));
     }
-    Line::from(spans)
+    if !spans.is_empty() {
+        rows.push(Line::from(spans));
+    }
+    (rows, caret_row)
 }
 
 /// The marker a structured block is drawn with, when its own is hidden.
