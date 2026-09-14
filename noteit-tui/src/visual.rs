@@ -390,8 +390,21 @@ impl VisualDocument {
         if claimed {
             return false;
         }
-        let tail = self.blocks.last().map_or(0, |block| block.coverage.end());
-        byte >= tail && byte <= self.source.len() && self.source[tail..].trim().is_empty()
+        let Some(last) = self.blocks.last() else {
+            // Nothing was projected at all: the whole source is the tail.
+            return byte <= self.source.len() && self.source.trim().is_empty();
+        };
+        let tail = last.coverage.end();
+        // A last block that offers no caret anywhere — a fenced code block, an
+        // unterminated comment — ends exactly where its own last byte does, and
+        // reading that byte as the empty paragraph after it let a keystroke land
+        // *inside* the construct: a fence with no closing line would take the
+        // character onto the code line. After a block like that, the tail starts
+        // strictly past it; after an editable one, its own end is already the
+        // place where typing continues the document.
+        let editable = !self.slots_for(last.id).is_empty();
+        let starts_here = if editable { byte >= tail } else { byte > tail };
+        starts_here && byte <= self.source.len() && self.source[tail..].trim().is_empty()
     }
 
     pub fn block(&self, id: BlockId) -> VisualBlock {
@@ -684,6 +697,17 @@ impl VisualDocument {
                 }
                 LexemeKind::MarkClose | LexemeKind::HtmlCloseTag => {
                     close = Some(lexeme.source.slice(&self.source));
+                }
+                // A code span spells both of its delimiters the same way, so
+                // the first is the opening one and the last is the closing one.
+                // Without this a split inside `code` was refused rather than
+                // producing the two code spans it should.
+                LexemeKind::CodeDelimiter => {
+                    if open.is_none() {
+                        open = Some(lexeme.source.slice(&self.source));
+                    } else {
+                        close = Some(lexeme.source.slice(&self.source));
+                    }
                 }
                 _ => {}
             }

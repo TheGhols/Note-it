@@ -997,6 +997,9 @@ impl App {
                 "a seleção cobre parte de uma marcação; selecione-a inteira ou apenas o seu interior"
             }
             Refusal::MissingCapability => "esta operação ainda não existe no editor Visual",
+            Refusal::EntityInStyledRun => {
+                "os caracteres < > e & ainda não podem ser digitados dentro de texto colorido                  ou realçado aqui; use o modo Markdown para eles"
+            }
             Refusal::BlockBoundary => "esta fronteira entre blocos não pode ser unida",
             Refusal::StaleGeneration | Refusal::InvalidPosition => "a posição não é mais válida",
             Refusal::NothingToDo => return String::new(),

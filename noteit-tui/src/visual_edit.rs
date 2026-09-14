@@ -53,6 +53,11 @@ pub enum Refusal {
     BlockBoundary,
     /// The offsets do not name a position in this document.
     InvalidPosition,
+    /// The character would have to be written as an HTML entity, and the
+    /// projection cannot yet put a caret after one that sits immediately before
+    /// a closing tag — so typing it into a styled run would scramble the text
+    /// that follows. Refusing says so instead; the Markdown editor takes it.
+    EntityInStyledRun,
     /// There was nothing to do — Backspace at the start of the document, or
     /// Delete at its end.
     ///
@@ -282,10 +287,28 @@ fn insert_styled(
     let (have_color, have_highlight) = document.inline_colours_at(at.get());
     let needed_color = color.filter(|wanted| have_color.as_deref() != Some(*wanted));
     let needed_highlight = highlight.filter(|wanted| have_highlight.as_deref() != Some(*wanted));
+
+    // `<`, `>` and `&` are text when a reader types them, and the canonical
+    // source spells them as entities — which is what the Markdown editor does
+    // while a style is active. The visual editor cannot follow it there yet:
+    // the projection gives an entity that sits immediately before a closing tag
+    // no caret after it, so the next character lands at the start of the run and
+    // the text comes out scrambled. Both alternatives were worse than saying so
+    // — a raw `<` inside a `<span>` makes the projection read the rest of the
+    // run as a tag and silently drop every further keystroke.
+    //
+    // The refusal is only for a styled run. Unstyled typing is not escaped here
+    // and never was: it is the Markdown editor's plain path, character for
+    // character.
+    let styled = color.is_some() || highlight.is_some();
+    if styled && crate::formatting::escaped_typed(text) != text {
+        return Err(Refusal::EntityInStyledRun);
+    }
+
     if needed_color.is_none() && needed_highlight.is_none() {
-        // Already inside everything the reader asked for: the plain text
-        // inherits it, and adding a second identical wrapper would only make
-        // the source larger and the undo history longer.
+        // Already inside everything the reader asked for: the text inherits it,
+        // and adding a second identical wrapper would only make the source
+        // larger and the undo history longer.
         return insert(document, at, text);
     }
 
@@ -300,17 +323,14 @@ fn insert_styled(
     }
 
     let (prefix, suffix) = crate::formatting::combined_wrapper(needed_color, needed_highlight);
-    // `<`, `>` and `&` typed by a reader are text, and the canonical source
-    // spells them as entities — the same escaping the Markdown editor applies.
-    let escaped = crate::formatting::escaped_typed(text);
-    let replacement = format!("{prefix}{escaped}{suffix}");
+    let replacement = format!("{prefix}{text}{suffix}");
 
     let range = SourceRange::trusted(at.get(), at.get());
     Ok(SourceTransaction {
         generation: document.generation(),
         patches: vec![SourcePatch { range, replacement }],
         envelope: range,
-        resulting_cursor: at.get() + prefix.len() + escaped.len(),
+        resulting_cursor: at.get() + prefix.len() + text.len(),
     })
 }
 
@@ -863,6 +883,13 @@ fn split_through_marks(
         } else {
             coverage.end()
         };
+    }
+
+    // The point moved, so what it is now has to be asked again: stepping out of
+    // a mark lands beside whatever follows it, and nothing may be inserted into
+    // a protected region by arriving there sideways.
+    if document.offset_is_protected(SourceOffset::trusted(point)) {
+        return Err(Refusal::ProtectedRegion);
     }
 
     // Outermost first, which is the order the reopened marks must nest in.

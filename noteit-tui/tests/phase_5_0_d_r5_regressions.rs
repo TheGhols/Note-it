@@ -573,3 +573,107 @@ fn r5_g16_a_flag_is_one_grapheme_to_backspace() {
         "the flag goes whole, leaving no lone regional indicator"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial review — what using the fixes above turned up
+// ---------------------------------------------------------------------------
+
+#[test]
+fn r5_review1_a_styled_run_never_scrambles_what_was_typed() {
+    // `<`, `>` and `&` have to be written as entities inside a canonical
+    // wrapper, and the projection gives an entity that sits immediately before
+    // a closing tag no caret after it — so the next character would land at the
+    // start of the run. Both ways of writing it were worse than refusing: the
+    // entity scrambled the text, and a raw `<` made the projection read the
+    // rest of the run as a tag and silently drop every further keystroke.
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    choose_text_colour(&mut app);
+    type_text(&mut app, "a");
+    type_text(&mut app, "<");
+    // Checked here, because the next accepted character clears the notice —
+    // which is what a notice is for.
+    let refused = rendered(&app, 100, 24);
+    assert!(
+        refused.contains("Recusado"),
+        "the refusal says so rather than happening silently: {refused}"
+    );
+    type_text(&mut app, "b>c&d");
+
+    let source = draft_source(&app);
+    assert!(
+        source.ends_with("abcd</span>"),
+        "everything typable was typed, in order: {source:?}"
+    );
+    assert!(
+        !source.contains("&lt;") && !source.contains("&amp;") && !source.contains("a<b"),
+        "and nothing was written that the caret could not come back from: {source:?}"
+    );
+}
+
+#[test]
+fn r5_review1_plain_typing_still_takes_an_angle_bracket_verbatim() {
+    // The counterpart: with no style armed, `<` is text and reaches the source
+    // exactly as typed. The refusal above must not have widened to this.
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    type_text(&mut app, "a<b>c");
+    assert_eq!(draft_source(&app), "a<b>c");
+}
+
+#[test]
+fn r5_review2_an_unterminated_fence_cannot_be_typed_into_from_its_end() {
+    // The empty paragraph at the end of a note is a legal caret. A block that
+    // offers no caret at all ends exactly where its own last byte does, and
+    // reading *that* byte as the empty paragraph after it let a keystroke land
+    // on the code line of a fence with no closing row.
+    for source in ["```\ncodigo", "<!-- comentario", "```\ncodigo\n```\n"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = editing(root.path(), source);
+        app.handle_key(alt('v'));
+        // Whatever the caret did on the way in, typing must not reach the
+        // protected bytes.
+        app.handle_key(key(KeyCode::End));
+        type_text(&mut app, "X");
+        assert_eq!(
+            pending_source(&app),
+            None,
+            "nothing was written into {source:?}"
+        );
+    }
+}
+
+#[test]
+fn r5_review2_enter_inside_a_code_span_splits_it_instead_of_breaking_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "`codigo`\n");
+
+    app.handle_key(key(KeyCode::Home));
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Right));
+    }
+    app.handle_key(key(KeyCode::Enter));
+
+    let source = draft_source(&app);
+    assert_eq!(
+        source.matches('`').count() % 2,
+        0,
+        "the backticks are still balanced: {source:?}"
+    );
+    let (before, after) = source.split_once("\n\n").expect("the block was split");
+    for half in [before, after] {
+        assert!(
+            half.starts_with('`') && half.ends_with('`') && half.len() > 2,
+            "each half is a code span of its own: {half:?} in {source:?}"
+        );
+    }
+    assert_eq!(
+        format!(
+            "{}{}",
+            &before[1..before.len() - 1],
+            &after[1..after.len() - 1]
+        ),
+        "codigo",
+        "and between them they still spell what was there: {source:?}"
+    );
+}
