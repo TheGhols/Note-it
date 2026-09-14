@@ -4441,3 +4441,203 @@ scripts/tui-sandbox --root DIR # usa DIR em vez de um mktemp
 
 Um diretório que o script criou, ele pode remover; um que recebeu pertence a quem
 chamou e nunca é apagado.
+
+## 44. Fase 5.0D.R6 — fechamento comportamental do editor Visual
+
+A 5.0D.R5 passou nos testes automatizados e falhou no reteste manual. Esta fase
+existe por causa dessa diferença, e a primeira coisa que ela mudou não foi o
+código: foi o que conta como prova. Um teste que afirma que uma
+`SourceTransaction` está certa não diz nada sobre onde o caret aparece, e foi
+exatamente por ali que os defeitos da R5 passaram.
+
+### 44.1 Contrato de produto — qual editor é o editor
+
+**Visual é o editor.** Abrir uma nota editável entra no modo Visual.
+**Markdown/Fonte é o modo avançado**, para editar a representação canônica.
+
+Quem formata uma nota não precisa conhecer `<span>`, `<mark>`,
+`data-note-it-color` nem `data-note-it-highlight`. Antes da R6, o caminho normal
+pela interface levava exatamente a esses símbolos: a nota abria no editor de
+fonte, e escolher "Amarelo" fazia aparecer
+`<mark data-note-it-highlight="…" style="background-color:…">` na área de
+trabalho. As capturas do reteste manual não traziam "Visual" no título por essa
+razão — eram do editor de fonte, e o editor de fonte estava certo em mostrar a
+fonte. O que estava errado era o fluxo normal terminar ali.
+
+Uma nota em que o editor visual não tem onde pôr um caret — inteiramente código
+cercado, um comentário não fechado — continua abrindo em Markdown/Fonte. Abrir
+num modo que recusa toda tecla seria pior do que mostrar a fonte, que é o que
+aquela nota é.
+
+Os dois modos se identificam no título, e o modo vem primeiro:
+
+```
+ Visual · Edição: <rótulo>
+ Markdown/Fonte · Edição: <rótulo>
+```
+
+O modo vem primeiro porque um rótulo comprido empurrava a palavra que diz em que
+editor a pessoa está para fora de um painel de 48 colunas — e era justamente ela
+que a truncagem comia. Quando o título inteiro não cabe, as partes caem na ordem
+do que se pode menos perder: o rótulo da nota já está na lista ao lado, e a cor
+armada não está escrita em nenhum outro lugar.
+
+`Alt+V` continua alternando de forma lossless. A fonte Markdown continua sendo a
+única fonte de verdade, e o `VisualDocument` continua derivado: tornar o Visual
+padrão não criou uma segunda fonte mutável.
+
+### 44.2 Arquitetura de cursor — quem manda em quê
+
+Este é o quadro que a R6 §27 pede, e a ausência dele era metade do problema.
+
+| Pergunta | Resposta |
+| --- | --- |
+| Cursor autoritativo em Markdown/Fonte | `Draft::cursor()` — linha e coluna da fonte |
+| Cursor autoritativo em Visual | `App::visual_cursor` — um `SourceOffset` |
+| Viewport Markdown | `editor_scroll` (linha) e `editor_column` (coluna), derivados de `Draft::cursor()` |
+| Viewport Visual | `visual_scroll`, um `RowCoord { block, row }`, derivado de `visual_cursor` |
+| `Alt+V` fonte → Visual | offset do cursor fonte → `open_tail_caret` ou `slot_for_offset(Absolute)`; um `RawBookmark` guarda os bytes exatos |
+| `Alt+V` Visual → fonte | bookmark intacto, se houver; senão o offset do caret visual → `scalar_of_offset` |
+| Depois de um `VisualCommand` | `transaction.resulting_cursor` → `resnap_visual_cursor` → slot legal mais próximo |
+| Depois de undo/redo | `Draft` restaura o cursor fonte; `resync_visual_cursor` o traduz e reencaixa |
+| Depois de uma releitura | idem: o cursor fonte já foi encaixado no texto novo por `restore_cursor` |
+
+A regra que faltava está nessa tabela e no código: **o cursor de um modo não
+dirige o viewport do outro.** `render_editor_pane` decide o modo antes de ler
+qualquer cursor. Até a R5, ele lia `draft.cursor()` incondicionalmente e
+escrevia um índice de *linha* em `editor_scroll`; a passagem visual lia a mesma
+célula de volta como índice de *bloco*. Duas autoridades sobre um número só.
+
+O efeito era exatamente o que o reteste manual descreveu. Com o caret na linha
+17 da tela, uma única tecla digitada levava o cursor fonte para a linha 52, o
+scroll pulava de 13 para 26 e o caret reaparecia na linha 4 — "ao digitar, o
+cursor pode saltar para uma posição acima". E `block_containing` devolve `None`
+para a cauda aberta, o parágrafo vazio que `Enter` deixa no fim da nota, o que
+colapsava o bloco do caret para 0 e rolava o painel inteiro de volta ao topo —
+"a tela volta para cima".
+
+### 44.3 O que é uma linha — `visual_layout`
+
+O editor Visual tinha duas ideias da própria forma: o renderizador quebrava um
+bloco em quantas linhas a largura exigisse, e a navegação andava entre blocos.
+`crate::visual_layout` passa a ser a única resposta, e os dois a usam — a tela
+desenha essas linhas e a navegação anda nelas, então não podem discordar.
+
+É por bloco e não por documento. Montar o documento inteiro a cada quadro
+reconstruiria o mapa de carets de todo o texto, que é o custo que a projeção é
+preguiçosa para evitar (`slots()` é documentado como "a maneira cara de
+perguntar"). Uma linha é nomeada por `(índice do bloco, linha dentro do bloco)`,
+coordenada estável que só precisa do próprio bloco. Desenhar toca os blocos da
+tela; mover o caret toca um bloco, ou dois quando o movimento cruza fronteira.
+Nenhum dos dois cresce com a nota.
+
+Duas regras carregam a correspondência com a tela:
+
+* um fim de linha é onde a linha **para**, não algo desenhado — um caret devido
+  a ele fica no fim da linha que ele fecha;
+* um offset de caret é tomado pela **primeira célula que começa nele ou depois
+  dele**, porque um caret antes de uma tag `<span>` escondida está vários bytes
+  antes do caractere que precede.
+
+Com uma exceção que custou um defeito: um caret no fim de uma linha
+*exatamente cheia* não fica na coluna `width` — ali ele é desenhado uma célula
+além do painel, onde o terminal o corta. O caret some e a digitação parece ter
+parado de funcionar. Ele fica no começo da linha seguinte, que é onde o próximo
+caractere vai aparecer.
+
+### 44.4 Semântica de movimento
+
+| Tecla | No Visual |
+| --- | --- |
+| `←` `→` | um slot de caret, cruzando para o bloco vizinho nas pontas |
+| `↑` `↓` | uma **linha visual**, mantendo uma coluna visual preferida |
+| `Home` `End` | as pontas da **linha visual**, não do bloco |
+| `PageUp` `PageDown` | um viewport de linhas visuais |
+| Roda do mouse | linhas visuais |
+| `Ctrl+A` | do primeiro ao último slot do documento |
+
+A coluna preferida é grudenta ao longo de uma sequência de movimentos verticais
+e é limpa por qualquer outra coisa: descer por uma linha curta e continuar
+descendo devolve a coluna original, em vez de ficar presa no fim da linha curta.
+
+Blocos que não aceitam caret nenhum — código cercado, comentário não fechado —
+são pulados inteiros e não linha a linha, então passar por uma listagem de mil
+linhas custa um layout e não mil.
+
+### 44.5 Formatação
+
+`Alt+F` é uma ação de formatação **visual**. No modo Visual:
+
+* com seleção, a seleção visual vira `VisualCommand::SetColor` ou `SetHighlight`
+  — o patch é planejado contra a projeção, verificado contra região protegida e
+  marcação parcial, e aplicado como um passo de desfazer;
+* sem seleção, a escolha arma o estilo para o que vier a ser digitado.
+
+Até a R5, `apply_format` lia sempre `Draft::selected_text`. No Visual isso
+significa que uma seleção feita com `Shift`+setas era invisível para `Alt+F`, e
+que uma seleção fonte obsoleta podia ser reescrita com HTML literal.
+
+`Enter` é uma operação **estrutural**, nunca um caractere estilizado. Mandá-lo
+pelo caminho estilizado colocava a quebra de linha *dentro* do wrapper aberto —
+`<mark …>teste\n</mark>`, que é o texto fotografado no reteste manual. O estilo
+continua armado como estado da interface; o próximo caractere é que materializa
+o wrapper na linha nova.
+
+No modo Markdown/Fonte, armar um estilo deixa de ser silencioso: ali a marcação
+canônica vai mesmo aparecer, o que só é surpresa para quem não sabia em que
+editor estava. **A troca automática para o Visual ao pressionar `Alt+F` na fonte
+não foi implementada**, e a razão está registrada na §44.8.
+
+### 44.6 Composição de cor e realce
+
+Os dois editores compõem os wrappers de formas diferentes, ambas canônicas e
+ambas bem formadas. O editor de fonte envolve a corrida inteira de novo; o
+Visual aninha o que foi armado depois **dentro** da corrida que já carrega o
+primeiro:
+
+```
+<span data-note-it-color="#DC2626" style="color:#DC2626">abc<mark
+ data-note-it-highlight="#FDE68A" style="background-color:#FDE68A">def</mark></span>
+```
+
+Nenhum dos dois inverte o aninhamento, e os dois fecham na ordem em que abriram.
+
+### 44.7 Como isto é testado
+
+Três pernas, e a primeira delas é nova:
+
+1. **Tela (`TestBackend`).** `tests/support/mod.rs` ganhou um harness `Screen`
+   que abre uma nota real, manda teclas reais e lê o buffer renderizado de
+   volta. `assert_caret_is_sane` afirma, depois de **cada** tecla: existe
+   exatamente um caret, ele é um slot legal ou a cauda aberta, ele foi
+   desenhado, o viewport do outro modo não se mexeu, e a geração da projeção é a
+   do texto. Os canários de cor e realce conferem **todos** os quadros, não o
+   último.
+2. **PTY real.** `tests/phase_5_0_d_r6_pty.rs` roda a sequência do reteste
+   manual contra o binário, em modo cru, com sequências de escape de verdade. As
+   asserções são feitas contra a tela **reconstruída** a partir dos bytes
+   escritos (`support::replay_screen`), porque o renderizador diferencial
+   reescreve só as células que mudaram: um título chega ao fio como
+   `Cor: Vermelh`, um salto de cursor, `Ma`, outro salto e `ca: Amarelo`, e
+   nenhuma busca por substring acha isso.
+3. **Modelo.** As suítes anteriores continuam, inalteradas no que provam.
+
+### 44.8 Limitações que permanecem
+
+* `<`, `>` e `&` dentro de uma corrida estilizada continuam recusados no editor
+  Visual (`Refusal::EntityInStyledRun`). A recusa não altera byte nenhum e não
+  move o caret; o editor Markdown/Fonte aceita esses caracteres.
+* `Alt+F` no modo Markdown/Fonte **não** troca automaticamente para o Visual. A
+  troca de modo carrega um cursor, não uma seleção: `toggle_editor_mode` captura
+  um `RawBookmark` de um ponto. Trocar automaticamente com uma seleção fonte
+  ativa a descartaria em silêncio, que é pior do que o comportamento atual. A
+  R6 §5 manda parar e documentar em vez de inventar, e é isto. Implementar a
+  opção preferida exige mapear uma seleção fonte para uma seleção visual, e uma
+  seleção que cobre delimitadores não é representável por construção.
+* `Enter` no Visual cria um **parágrafo** (o contrato B.4 de `SplitBlock`); não
+  existe quebra de linha suave por teclado no editor Visual. `Shift+Enter` não
+  foi adicionado: inserir `\n` no fim de um bloco produziria `\n\n` e dividiria
+  o bloco de qualquer forma, e resolver isso é uma capacidade nova, não um
+  atalho.
+* Blocos não são separados por uma linha em branco na tela do Visual. É uma
+  escolha de apresentação herdada da R5, não um defeito da R6.
