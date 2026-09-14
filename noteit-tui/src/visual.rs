@@ -343,6 +343,19 @@ impl VisualDocument {
         &self.blocks
     }
 
+    /// Whether this document projects nothing at all.
+    ///
+    /// A note that is empty, or that holds only whitespace, has no top-level
+    /// node and therefore no block, no grapheme and no caret slot. That is not
+    /// the same as a note made entirely of protected source — there is nothing
+    /// here to protect — and treating the two alike is what made a brand new
+    /// note impossible to type into in the visual editor. Both halves are
+    /// checked: a source with any non-whitespace byte that still projects no
+    /// block would be a defect, and this must not quietly unprotect it.
+    pub fn is_blank(&self) -> bool {
+        self.blocks.is_empty() && self.source.trim().is_empty()
+    }
+
     pub fn block(&self, id: BlockId) -> VisualBlock {
         self.blocks[id.0 as usize]
     }

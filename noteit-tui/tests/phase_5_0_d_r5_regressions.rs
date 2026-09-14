@@ -140,3 +140,118 @@ fn r5_g05_switching_back_to_markdown_leaves_one_caret_too() {
         "and one in Markdown: no ghost left by the mode switch"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R5-G01 / R5-G02 — a blank note is a note you can type into
+// ---------------------------------------------------------------------------
+
+/// The draft's text, which `pending_text` reports only when it differs from
+/// what the store holds — so `None` here means "nothing was written", which is
+/// exactly the assertion a refusal test wants.
+fn pending_source(app: &App) -> Option<String> {
+    app.pending_text()
+}
+
+/// The same, for a test that has just typed something and expects it to stick.
+fn draft_source(app: &App) -> String {
+    pending_source(app).expect("the draft differs from the store")
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for character in text.chars() {
+        app.handle_key(key(KeyCode::Char(character)));
+    }
+}
+
+/// Everything on screen, as one string.
+fn rendered(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    app.draw(&mut terminal).unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+#[test]
+fn r5_g01_an_empty_note_is_editable_in_the_visual_editor() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+
+    assert!(
+        app.visual_cursor.is_some(),
+        "an empty note has a caret: it is not protected source"
+    );
+    assert_eq!(
+        reversed_cells(&app, 80, 24).len(),
+        1,
+        "and the caret is drawn, so the reader can see where typing lands"
+    );
+
+    type_text(&mut app, "gustavo");
+    assert_eq!(
+        draft_source(&app),
+        "gustavo",
+        "typing reaches the draft at the right place"
+    );
+
+    let screen = rendered(&app, 80, 24);
+    assert!(
+        !screen.contains("fonte protegida"),
+        "and nothing claims the empty note was protected: {screen}"
+    );
+}
+
+#[test]
+fn r5_g02_enter_in_a_blank_note_opens_a_second_editable_line() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "depois");
+    assert_eq!(
+        draft_source(&app),
+        "\ndepois",
+        "Enter on a blank note is a break, not a refusal"
+    );
+    assert_eq!(reversed_cells(&app, 80, 24).len(), 1, "still one caret");
+}
+
+#[test]
+fn r5_g01_a_whitespace_only_note_is_editable_too() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "\n\n");
+
+    assert!(app.visual_cursor.is_some(), "whitespace is not protection");
+    type_text(&mut app, "x");
+    assert!(
+        draft_source(&app).contains('x'),
+        "and it takes the character"
+    );
+}
+
+#[test]
+fn r5_g13_protected_source_is_still_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "```\ncodigo\n```\n");
+
+    assert!(
+        app.visual_cursor.is_none(),
+        "a fence has no visual caret: this is the case `is_blank` must not widen"
+    );
+    assert_eq!(pending_source(&app), None, "nothing pending to begin with");
+    type_text(&mut app, "x");
+    assert_eq!(
+        pending_source(&app),
+        None,
+        "and typing into it writes nothing at all"
+    );
+    let screen = rendered(&app, 80, 24);
+    assert!(
+        screen.contains("fonte protegida"),
+        "the refusal still says why: {screen}"
+    );
+}

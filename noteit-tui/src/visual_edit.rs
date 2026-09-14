@@ -228,7 +228,11 @@ fn insert(
     if document.offset_is_protected(at) {
         return Err(Refusal::ProtectedRegion);
     }
-    if !caret_is_legal(document, at) {
+    // A blank document has no block, so it has no slot either — but it also
+    // has nothing to protect, and refusing here is what made a new note
+    // impossible to type into in the visual editor. Every other document still
+    // needs a real caret slot.
+    if !caret_is_legal(document, at) && !document.is_blank() {
         return Err(Refusal::ProtectedRegion);
     }
 
@@ -672,7 +676,25 @@ fn split_block(document: &VisualDocument, at: SourceOffset) -> Result<SourceTran
     if at.get() > document.source_len() {
         return Err(Refusal::InvalidPosition);
     }
-    if document.offset_is_protected(at) || !caret_is_legal(document, at) {
+    if document.offset_is_protected(at) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    // Enter in a blank note: there is no block to split, so the break is the
+    // whole edit. `\n` rather than a paragraph separator, because a blank
+    // document has no paragraph for the second one to be separate from.
+    if document.is_blank() {
+        let range = SourceRange::trusted(at.get(), at.get());
+        return Ok(SourceTransaction {
+            generation: document.generation(),
+            patches: vec![SourcePatch {
+                range,
+                replacement: "\n".to_owned(),
+            }],
+            envelope: range,
+            resulting_cursor: at.get() + 1,
+        });
+    }
+    if !caret_is_legal(document, at) {
         return Err(Refusal::ProtectedRegion);
     }
     let Some(block) = block_of(document, at) else {

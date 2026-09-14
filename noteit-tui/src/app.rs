@@ -802,7 +802,8 @@ impl App {
                 );
                 let snapped = document
                     .slot_for_offset(offset, Direction::Absolute)
-                    .map(|slot| slot.source_offset);
+                    .map(|slot| slot.source_offset)
+                    .or_else(|| Self::blank_caret(&document, offset.get()));
                 self.visual_cursor = snapped.map(|offset| VisualCursor {
                     offset,
                     anchor: None,
@@ -983,6 +984,18 @@ impl App {
         format!("Recusado: {reason}. Alt+V volta ao Markdown.")
     }
 
+    /// The only caret a blank note has, or `None` when the note is not blank.
+    ///
+    /// An empty note projects no block and so has no slot for `slot_for_offset`
+    /// to find. It is still a note somebody means to type into, and every byte
+    /// of it is whitespace, so the caret is legal anywhere in it.
+    fn blank_caret(document: &VisualDocument, wanted: usize) -> Option<SourceOffset> {
+        document
+            .is_blank()
+            .then(|| SourceOffset::in_source(document.source(), wanted.min(document.source_len())))
+            .flatten()
+    }
+
     /// Puts the visual caret at `offset`, or the nearest legal slot to it.
     fn resnap_visual_cursor(&mut self, offset: usize) {
         let Some(document) = self.visual_document() else {
@@ -992,8 +1005,10 @@ impl App {
             SourceOffset::in_source(document.source(), offset).unwrap_or(SourceOffset::trusted(0));
         self.visual_cursor = document
             .slot_for_offset(wanted, Direction::Absolute)
-            .map(|slot| VisualCursor {
-                offset: slot.source_offset,
+            .map(|slot| slot.source_offset)
+            .or_else(|| Self::blank_caret(&document, offset))
+            .map(|offset| VisualCursor {
+                offset,
                 anchor: None,
             });
     }
