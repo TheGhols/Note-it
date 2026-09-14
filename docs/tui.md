@@ -4415,3 +4415,29 @@ nenhuma escolha), `::::` não é nada, e um `::` num **título** ou num item de 
 perguntas, e uma barra de progresso que diz "1 de 5" enquanto há sete pela frente
 mente sobre a metade mais curta. Um cartão reversível gera duas revisões, na ordem em
 que está escrito e não agrupadas no fim.
+
+## 43. Teste manual — ambiente isolado
+
+`scripts/tui-sandbox` roda a TUI contra um store descartável, semeado com nove notas
+que exercitam o editor visual.
+
+O store real nunca é tocado. O Note-it resolve seus caminhos a partir das quatro
+variáveis XDG, e o script sobrescreve as quatro antes de iniciar qualquer coisa, de
+modo que o processo não consegue alcançar `~/.local/share/note-it` nem se quisesse. A
+TUI **não** é um `GApplication` e não reivindica nome de barramento — por isso, ao
+contrário do `note-it-isolated`, que precisa isolar o D-Bus também, isolar XDG é
+suficiente aqui. A razão fica escrita em vez de presumida.
+
+As notas são semeadas pela **CLI**, não escrevendo arquivos. O front matter é o
+formato do Core, não deste script: escrevê-lo à mão seria uma segunda cópia de um
+formato que já tem dono, e a primeira a divergir seria justamente a sandbox que
+ninguém testa.
+
+```
+scripts/tui-sandbox            # sandbox nova, aberta na TUI
+scripts/tui-sandbox --keep     # preserva o diretório ao sair
+scripts/tui-sandbox --root DIR # usa DIR em vez de um mktemp
+```
+
+Um diretório que o script criou, ele pode remover; um que recebeu pertence a quem
+chamou e nunca é apagado.

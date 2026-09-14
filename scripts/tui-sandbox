@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# Runs the terminal interface against a throwaway store, seeded with notes that
+# exercise the visual editor.
+#
+# The real store is never touched. Note-it resolves its paths from the four XDG
+# variables, and this overrides all four before starting anything, so the
+# process cannot reach `~/.local/share/note-it` even if it tried. The TUI is not
+# a `GApplication` and claims no bus name, so — unlike `note-it-isolated`, which
+# has to isolate D-Bus as well — overriding XDG is sufficient here and the
+# reason is worth stating rather than assumed.
+#
+# Fail-closed: if the sandbox directory cannot be created, or the binary is
+# missing, nothing is started.
+#
+# Usage:
+#   scripts/tui-sandbox            # seed a fresh sandbox and open the TUI
+#   scripts/tui-sandbox --keep     # keep the sandbox directory on exit
+#   scripts/tui-sandbox --root DIR # use DIR instead of a fresh mktemp tree
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
+
+KEEP=0
+ROOT=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --root) ROOT="${2:?--root needs a directory}"; shift 2 ;;
+    *) printf 'uso: %s [--keep] [--root DIR]\n' "$0" >&2; exit 2 ;;
+  esac
+done
+
+BINARY="$REPO_ROOT/target/release/noteit-tui"
+if [[ ! -x "$BINARY" ]]; then
+  BINARY="$REPO_ROOT/target/debug/noteit-tui"
+fi
+if [[ ! -x "$BINARY" ]]; then
+  printf 'Nenhum binário da TUI. Compile com: cargo build --release -p noteit-tui\n' >&2
+  exit 91
+fi
+
+if [[ -z "$ROOT" ]]; then
+  ROOT="$(mktemp -d -t noteit-tui-sandbox-XXXXXXXX)"
+  # A sandbox this script created is a sandbox this script may remove. One it
+  # was handed belongs to the caller and is never deleted.
+  if [[ "$KEEP" -eq 0 ]]; then
+    trap 'rm -rf -- "$ROOT"' EXIT
+  fi
+fi
+mkdir -p "$ROOT"/{data,config,state,runtime}
+chmod 700 "$ROOT/runtime"
+
+# Seeded through the command line rather than by writing files.
+#
+# A note's front matter is the Core's format, not this script's: writing it by
+# hand here would be a second copy of a format that already has an owner, and
+# the first thing to drift would be the sandbox nobody tests. `noteit criar`
+# goes through the same authority every other writer does.
+CLI="$REPO_ROOT/target/release/noteit"
+if [[ ! -x "$CLI" ]]; then
+  CLI="$REPO_ROOT/target/debug/noteit"
+fi
+if [[ ! -x "$CLI" ]]; then
+  printf 'Nenhum binário da CLI para semear as notas. Compile com: cargo build --release -p noteit-cli\n' >&2
+  exit 91
+fi
+
+seed() {
+  XDG_DATA_HOME="$ROOT/data" \
+  XDG_CONFIG_HOME="$ROOT/config" \
+  XDG_STATE_HOME="$ROOT/state" \
+  XDG_RUNTIME_DIR="$ROOT/runtime" \
+    "$CLI" criar "$1" >/dev/null
+}
+
+# One note per thing worth looking at, so the manual pass is a walk down the
+# list rather than a hunt.
+seed '# 1 - Formatação inline
+
+Um parágrafo com **negrito**, *itálico*, ~~riscado~~ e `código inline`.
+
+Aninhado: **negrito com *itálico* dentro**.
+
+Acentuação: ação, coração, ç, ã, õ.'
+
+seed '# 2 - Cor e marca-texto
+
+<span data-note-it-color="#DC2626" style="color:#DC2626">vermelho</span> e <span data-note-it-color="#2563EB" style="color:#2563EB">azul</span>.
+
+<mark data-note-it-highlight="#FDE68A" style="background-color:#FDE68A">marca-texto amarelo</mark>.
+
+<u>sublinhado</u>.'
+
+seed '# 3 - Listas, tarefas e citações
+
+- primeiro item
+- segundo item
+
+1. numerado um
+2. numerado dois
+
+- [ ] tarefa pendente
+- [x] tarefa concluída
+
+> uma citação
+
+> [!NOTE]
+> um alerta'
+
+seed '# 4 - Links
+
+Veja [o site](https://example.com/a_(b)) e [outro](https://example.com/simples).
+
+O destino tem parênteses balanceados e não pode ser editado por engano.'
+
+seed "# 5 - Unicode
+
+Família: 👨‍👩‍👧‍👦 (um grafema, vários escalares)
+Bandeira: 🇧🇷
+Tom de pele: 👍🏽
+Acento composto: cafe$(printf '\u0301') (e mais acento combinante)
+CJK de largura dupla: 日本語のテxto
+Tabulação:$(printf '\t')entre palavras"
+
+seed '# 6 - Fonte protegida
+
+Um bloco de código:
+
+```rust
+fn main() { println!("olá"); }
+```
+
+HTML desconhecido: <custom-widget foo="bar">conteúdo</custom-widget>
+
+Texto literal que não é HTML: 2 < 3 and 4 > 1
+
+<!-- um comentário -->'
+
+seed '# 7 - Matemática
+
+preco := 100
+quantidade := 3
+
+= preco * quantidade
+= 10% de 200
+= 200 + 10%
+
+= 1
+= 2
+= 3
+= sum
+
+= 10 km em m
+= 100 °C em °F
+= 1 KiB em B
+= 2 semana em dia
+
+= 1/0
+= 10 xicara em mL'
+
+seed '# 8 - Flashcards
+
+Capital do Brasil :: Brasília
+
+Fotossíntese ::: processo pelas plantas
+
+Pergunta em bloco
+
+::
+
+Resposta em bloco
+
+Não é cartão: A::B, `x :: y`, https://example.com'
+
+seed '# 9 - Para testar conflito
+
+Edite esta nota no editor e, antes de salvar, altere o mesmo arquivo por fora
+com outro programa. Ctrl+S deve recusar sem sobrescrever nada.'
+
+NOTES="$ROOT/data/note-it/notes"
+
+printf 'Sandbox: %s\n' "$ROOT"
+printf 'Notas:   %s\n' "$NOTES"
+printf 'Binário: %s\n\n' "$BINARY"
+printf 'O store real em ~/.local/share/note-it NAO é tocado.\n'
+printf 'Alt+V alterna entre o editor Markdown e o Visual.\n\n'
+
+XDG_DATA_HOME="$ROOT/data" \
+XDG_CONFIG_HOME="$ROOT/config" \
+XDG_STATE_HOME="$ROOT/state" \
+XDG_RUNTIME_DIR="$ROOT/runtime" \
+  "$BINARY" "$@"
