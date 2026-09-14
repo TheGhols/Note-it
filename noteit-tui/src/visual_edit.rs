@@ -148,6 +148,10 @@ pub enum VisualCommand {
         anchor: SourceOffset,
         head: SourceOffset,
     },
+    /// B.7: tick or untick the task whose text contains this caret.
+    ToggleTask {
+        at: SourceOffset,
+    },
 }
 
 /// Plans `command` against `document`, or refuses.
@@ -199,6 +203,7 @@ pub fn plan(
         VisualCommand::ToggleUnderline { anchor, head } => {
             format(document, anchor, head, Formatting::Underline)
         }
+        VisualCommand::ToggleTask { at } => toggle_task(document, at),
     }
 }
 
@@ -339,6 +344,64 @@ fn replace_selection(
         }],
         envelope: range,
         resulting_cursor: start.get() + text.len(),
+    })
+}
+
+// -- B.7: structured blocks --------------------------------------------------
+
+/// Ticks or unticks a task's checkbox, and touches nothing else.
+///
+/// The patch is the single character inside the brackets. The marker, the
+/// text and the Core's completion metadata are all outside it, so a toggle
+/// cannot reword the task or forge a completion date — and the transaction
+/// goes through the same `Draft` and the same revision as every other edit
+/// (§26.15.22).
+fn toggle_task(document: &VisualDocument, at: SourceOffset) -> Result<SourceTransaction, Refusal> {
+    use crate::projection::{LexemeKind, NodeKind};
+
+    let Some(block) = block_of(document, at) else {
+        return Err(Refusal::InvalidPosition);
+    };
+    let node = document.block(block).node;
+    if document.projection().node(node).kind != NodeKind::Task {
+        return Err(Refusal::MissingCapability);
+    }
+    if !document.mark_is_editable(node) && !document.block_is_joinable(block) {
+        return Err(Refusal::ProtectedRegion);
+    }
+
+    // The checkbox lives in the block's prefix lexeme: `- [ ] ` or `- [x] `.
+    let coverage = document.projection().node(node).coverage;
+    let prefix = document
+        .projection()
+        .lexemes()
+        .iter()
+        .find(|lexeme| lexeme.kind == LexemeKind::BlockPrefix && coverage.covers(lexeme.source))
+        .ok_or(Refusal::MissingCapability)?;
+
+    let text = prefix.source.slice(document.source());
+    let open = text.find('[').ok_or(Refusal::MissingCapability)?;
+    let state = prefix.source.start() + open + 1;
+    let current = document.source()[state..]
+        .chars()
+        .next()
+        .ok_or(Refusal::InvalidPosition)?;
+
+    let replacement = match current {
+        ' ' => "x",
+        'x' | 'X' => " ",
+        _ => return Err(Refusal::MissingCapability),
+    };
+
+    let range = SourceRange::trusted(state, state + current.len_utf8());
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![SourcePatch {
+            range,
+            replacement: replacement.to_owned(),
+        }],
+        envelope: range,
+        resulting_cursor: at.get(),
     })
 }
 
@@ -794,13 +857,15 @@ fn block_of(document: &VisualDocument, offset: SourceOffset) -> Option<BlockId> 
 }
 
 /// Whether every grapheme in `start..end` may be edited.
+///
+/// Asks only about the graphemes in the selection. Walking every block to find
+/// them made formatting cost 1.8 ms in a large note — work proportional to the
+/// document for a decision about a handful of characters.
 fn range_is_editable(document: &VisualDocument, start: usize, end: usize) -> bool {
-    document.blocks().iter().all(|block| {
-        document.graphemes_of(block.id).all(|cell| {
-            let inside = cell.source.start() >= start && cell.source.end() <= end;
-            !inside || !document.offset_is_protected(SourceOffset::trusted(cell.source.start()))
-        })
-    })
+    document
+        .selected_cells(start, end)
+        .into_iter()
+        .all(|cell| !document.offset_is_protected(SourceOffset::trusted(cell.start())))
 }
 
 impl Draft {

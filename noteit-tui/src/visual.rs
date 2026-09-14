@@ -62,6 +62,12 @@ pub struct Capabilities {
     pub underline: bool,
     pub color: bool,
     pub highlight: bool,
+    // Structured blocks, granted by B.7 behind the pre-blocks gate.
+    pub link: bool,
+    pub list: bool,
+    pub task: bool,
+    pub blockquote: bool,
+    pub callout: bool,
 }
 
 impl Capabilities {
@@ -74,6 +80,11 @@ impl Capabilities {
         underline: false,
         color: false,
         highlight: false,
+        link: false,
+        list: false,
+        task: false,
+        blockquote: false,
+        callout: false,
     };
 
     /// Everything B.5 ends up granting, once each has been proved on its own.
@@ -85,6 +96,11 @@ impl Capabilities {
         underline: false,
         color: false,
         highlight: false,
+        link: false,
+        list: false,
+        task: false,
+        blockquote: false,
+        callout: false,
     };
 
     /// Everything B.6 ends up granting: the inline marks plus the three
@@ -97,6 +113,28 @@ impl Capabilities {
         underline: true,
         color: true,
         highlight: true,
+        link: false,
+        list: false,
+        task: false,
+        blockquote: false,
+        callout: false,
+    };
+
+    /// Everything B.7 ends up granting: the inline marks, the canonical HTML
+    /// and the structured blocks.
+    pub const BLOCKS: Self = Self {
+        strong: true,
+        emphasis: true,
+        strike: true,
+        inline_code: true,
+        underline: true,
+        color: true,
+        highlight: true,
+        link: true,
+        list: true,
+        task: true,
+        blockquote: true,
+        callout: true,
     };
 
     /// Whether this node's delimiters may be hidden and its text edited.
@@ -112,6 +150,11 @@ impl Capabilities {
             NodeKind::Underline => self.underline,
             NodeKind::Color(_) => self.color,
             NodeKind::Highlight(_) => self.highlight,
+            NodeKind::Link => self.link,
+            NodeKind::ListItem => self.list,
+            NodeKind::Task => self.task,
+            NodeKind::Blockquote => self.blockquote,
+            NodeKind::Callout => self.callout,
             _ => false,
         }
     }
@@ -444,18 +487,38 @@ impl VisualDocument {
                 | LexemeKind::CodeDelimiter
                 | LexemeKind::HtmlOpenTag
                 | LexemeKind::HtmlCloseTag
+                | LexemeKind::LinkSyntax
+                | LexemeKind::LinkDestination
+                | LexemeKind::BlockPrefix
+                | LexemeKind::Metadata
         ) {
             return false;
         }
         let Some(owner) = owner else {
             return false;
         };
-        // An ancestor that is not editable dominates: a Strong inside an
-        // opaque region keeps its asterisks visible however enabled Strong is.
-        self.projection
-            .effective_classification(owner)
-            .admits_interior_caret()
-            || self.capabilities.allows(&self.projection.node(owner).kind)
+        // An ancestor that is not editable dominates: a Strong inside an opaque
+        // region keeps its asterisks visible however enabled Strong is.
+        if !self.ancestors_admit(owner) {
+            return false;
+        }
+        let node = &self.projection.node(owner).kind;
+        // Paragraphs and headings have been editable since B.3 and B.4, so
+        // their structural prefixes are hidden without a capability flag of
+        // their own. Everything else has to be granted.
+        matches!(node, NodeKind::Paragraph | NodeKind::Heading(_)) || self.capabilities.allows(node)
+    }
+
+    /// Whether every ancestor of `node` admits an interior caret.
+    fn ancestors_admit(&self, node: NodeId) -> bool {
+        let mut current = self.projection.node(node).parent;
+        while let Some(id) = current {
+            if matches!(self.projection.node(id).kind, NodeKind::Opaque) {
+                return false;
+            }
+            current = self.projection.node(id).parent;
+        }
+        true
     }
 
     /// The inline marks containing `byte`, outermost first.
@@ -601,6 +664,41 @@ impl VisualDocument {
             .map(|slot| slot.source_offset.get())
     }
 
+    /// Whether a block-level construction's capability has been granted.
+    ///
+    /// An opaque ancestor still dominates: a list inside an unknown element is
+    /// not made editable by granting lists.
+    fn block_is_granted(&self, node: NodeId) -> bool {
+        if self.projection.node(node).parent.is_some_and(|parent| {
+            !self
+                .projection
+                .effective_classification(parent)
+                .admits_interior_caret()
+        }) {
+            return false;
+        }
+        self.capabilities.allows(&self.projection.node(node).kind)
+    }
+
+    /// Whether this block's own structural marker is hidden from the reader.
+    pub fn block_marker_is_hidden(&self, block: BlockId) -> bool {
+        let node = self.block(block).node;
+        self.lexeme_is_hidden_syntax(LexemeKind::BlockPrefix, Some(node))
+    }
+
+    /// Whether a task's checkbox is ticked.
+    pub fn task_is_done(&self, block: BlockId) -> bool {
+        let coverage = self.projection.node(self.block(block).node).coverage;
+        self.projection
+            .lexemes()
+            .iter()
+            .find(|lexeme| lexeme.kind == LexemeKind::BlockPrefix && coverage.covers(lexeme.source))
+            .is_some_and(|lexeme| {
+                let text = lexeme.source.slice(&self.source);
+                text.contains("[x]") || text.contains("[X]")
+            })
+    }
+
     /// Whether a block may take part in a Join at all.
     ///
     /// B.4 grants Join to paragraphs and, in the forward direction only, to
@@ -692,6 +790,7 @@ impl VisualDocument {
                     | NodeKind::Underline
                     | NodeKind::Color(_)
                     | NodeKind::Highlight(_)
+                    | NodeKind::Link
             ) {
                 return true;
             }
@@ -739,7 +838,16 @@ impl VisualDocument {
                 .iter()
                 .take_while(|lexeme| lexeme.source.start() < coverage.end())
                 .filter(|lexeme| {
-                    coverage.covers(lexeme.source) && lexeme.kind != LexemeKind::LineEnding
+                    coverage.covers(lexeme.source)
+                        // A line ending is a break, not content, and the Core's
+                        // completion metadata is a suffix the reader never sees.
+                        // A caret past either would be a caret outside the text
+                        // it is editing — after the `-->` of a task's marker,
+                        // typing would land beyond the task altogether.
+                        && !matches!(
+                            lexeme.kind,
+                            LexemeKind::LineEnding | LexemeKind::Metadata
+                        )
                 })
                 .map(|lexeme| lexeme.source.end())
                 .max()
@@ -813,10 +921,14 @@ impl VisualDocument {
         let mut slots: Vec<CaretSlot> = Vec::new();
 
         for block in &self.blocks {
+            // A structured block is `SourceVisible` in the projection until its
+            // capability is granted; the capability is what turns its content
+            // into somewhere a caret may be, while its marker stays protected.
             if !self
                 .projection
                 .effective_classification(block.node)
                 .admits_interior_caret()
+                && !self.block_is_granted(block.node)
             {
                 continue;
             }
@@ -911,9 +1023,16 @@ impl VisualDocument {
         let lexemes = self.projection.lexemes();
         let index = lexemes.partition_point(|lexeme| lexeme.source.start() <= offset.get());
         match index.checked_sub(1).and_then(|index| lexemes.get(index)) {
+            // A caret may sit *after* protected structural bytes but never at
+            // their start or inside them. `# ` is the reason for the rule and a
+            // link's destination is the reason it has to be enforced: the
+            // destination is invisible, so without this a caret would land in
+            // the middle of a URL the reader cannot even see.
             Some(lexeme) => {
-                !(matches!(lexeme.kind, LexemeKind::BlockPrefix | LexemeKind::Metadata)
-                    && offset.get() < lexeme.source.end())
+                !(matches!(
+                    lexeme.kind,
+                    LexemeKind::BlockPrefix | LexemeKind::Metadata | LexemeKind::LinkDestination
+                ) && offset.get() < lexeme.source.end())
             }
             None => true,
         }
@@ -1008,8 +1127,11 @@ impl VisualDocument {
 /// they carry no grapheme and therefore no caret can be inside them.
 fn projects_graphemes(kind: LexemeKind) -> bool {
     match kind {
-        // Structural markers the reader never sees.
-        LexemeKind::BlockPrefix | LexemeKind::Metadata => false,
+        // Structural markers. Whether they are drawn depends on whether their
+        // block's capability has been granted, which `lexeme_is_hidden_syntax`
+        // decides; a construction the editor cannot yet edit shows its marker,
+        // because hiding it would claim otherwise.
+        LexemeKind::BlockPrefix | LexemeKind::Metadata => true,
         // Everything else is either visible text or source shown literally
         // because its construct is still SourceVisible at this gate.
         LexemeKind::Text

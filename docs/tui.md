@@ -4126,3 +4126,91 @@ O gate passou a proibir o código que **reconhece**, por nome — `markdown::*`,
 também pega um re-export ou um import com alias que a checagem por caminho de módulo
 deixaria passar. Verificado nos dois sentidos: com `use crate::inline` falha, com
 `clear_selected` falha, e limpo passa. É um gate mais preciso, não mais frouxo.
+
+## 39. Fase 5.0D.4B.P4 e 5.0D.4B.7 — gate pré-blocos e blocos estruturados
+
+### 39.1 P4 — medidas
+
+| Medida (release) | Resultado |
+|---|---|
+| nota densa em HTML canônico, 200 KB, só inline | 78,3 ms |
+| a mesma com as capabilities de HTML | 24,9 ms |
+| aplicar cor a uma seleção numa nota de 500 KB | 0,365 ms |
+
+Conceder as capabilities de HTML sai mais barato pelo mesmo motivo das inline:
+esconder tags produz menos células do que mostrá-las.
+
+P4 encontrou mais uma varredura desnecessária. Aplicar cor custava 1,8 ms porque
+`range_is_editable` percorria **todos** os blocos e todos os seus graphemes para
+decidir sobre um punhado de caracteres. Passou a perguntar apenas pelos graphemes da
+seleção: 1,8 ms → 0,365 ms.
+
+### 39.2 B.7 — escopo entregue
+
+Links, listas, tarefas, citações e callouts, cada um atrás de sua própria capability.
+A regra comum é que **estrutura não é texto**: o marcador de uma lista, a caixa de uma
+tarefa e o destino de um link são atributos, e digitar não alcança nenhum deles.
+
+**Link.** O rótulo é projetado e editável; o destino é escondido e protegido, e não
+recebe caret em byte algum — há teste que varre cada byte do destino. O destino é
+casado com parênteses balanceados, que é exatamente o caso que o §26.16 nomeia como
+prova de que o parser do leitor não serve: `inline.rs` pararia no primeiro `)` e leria
+`https://example.com/a_(b` em vez de `https://example.com/a_(b)`.
+
+Nada no projetor abre, resolve ou normaliza uma URL — é um intervalo de bytes com uma
+marca de proteção. A prova é que `javascript:alert(1)`, `file:///etc/passwd` e um
+caminho com `../../` recebem exatamente o mesmo tratamento de qualquer outro destino:
+só o rótulo é desenhado, e os bytes são preservados.
+
+**Listas, tarefas, citações e callouts.** O conteúdo passa a ser editável e o marcador
+continua protegido e sem caret. `ToggleTask` troca **um único caractere**, o de dentro
+dos colchetes: o marcador, o texto e o metadado de conclusão do Core estão todos fora
+do patch, de modo que alternar uma tarefa não pode reescrever seu texto nem forjar uma
+data de conclusão. É uma transação e um passo de undo, pela mesma autoridade.
+
+### 39.3 O marcador escondido e o glifo desenhado
+
+Esconder o `- ` de uma lista perderia a informação de que aquilo é uma lista. A
+solução é a separação que o documento inteiro defende: a **fonte** mantém seu `- `, e
+a **tela** desenha um glifo derivado do tipo do node — `•` para lista, `☐`/`☑` para
+tarefa, `│` para citação. E só quando o marcador está de fato escondido: um bloco
+ainda mostrado como fonte tem seu marcador na tela e não pode ganhar um segundo.
+
+### 39.4 Defeitos encontrados
+
+1. **Prefixos de bloco eram invisíveis sempre.** `- item` aparecia como `item` mesmo
+   sem capability alguma, o que é a mentira que este documento proíbe. A visibilidade
+   de um prefixo passou a depender da capability do seu bloco, como já era para os
+   delimitadores de mark. Parágrafo e heading são a exceção deliberada: são editáveis
+   desde B.3 e B.4 e não têm flag própria.
+2. **Um caret pousava dentro do destino de um link.** O destino é invisível, então
+   sem uma regra própria a costura entre `](` e a URL era uma posição legal — e um
+   caret no meio de uma URL que o leitor nem vê. `seam_is_legal` passou a recusar
+   offsets no início de, e dentro de, `LinkDestination`, como já fazia para
+   `BlockPrefix`.
+3. **Um caret pousava depois do metadado de conclusão.** O fim do bloco incluía o
+   `-->`, então digitar ali cairia fora da tarefa. `content_end` passou a excluir
+   `Metadata` além de `LineEnding`.
+4. **Uma fixture de teste inventava a grafia do metadado.** Eu escrevera
+   `note-it:concluida=`; a grafia canônica que o Core escreve e reconhece é
+   `note-it:completed_at=`. Corrigida a fixture, não o código — o teste é que estava
+   errado sobre o formato.
+
+### 39.5 Uma sensibilidade a carga, registrada e não rotulada
+
+Durante uma execução do gate completo, `isolated_desktop_discard_conflict_keeps_open_and_success_closes_canonical_state`
+falhou com "timed out: mapped desktop note". Investigado em vez de rotulado:
+
+- isolado, passa em 2,95 s — exatamente o tempo da baseline;
+- o estágio `workspace-tests` sozinho passou duas vezes seguidas;
+- o gate completo, repetido, passou.
+
+`workspace-tests` é `cargo test --workspace`, que roda os 382 testes da TUI junto com
+um teste que abre uma **janela real** e espera o compositor mapeá-la dentro de um
+prazo. A suíte da TUI leva 8 s e nada nela é patológico, mas o gate completo encadeia
+vários estágios e a máquina ainda está ocupada quando esse chega.
+
+Não é defeito do código desta fase — nenhuma linha de GUI ou de Core foi tocada — e o
+prazo **não** foi aumentado, porque isso esconderia um deadlock se um dia houvesse um.
+Fica registrado como o que é: um teste de janela real com prazo de relógio é sensível
+à carga da máquina, e a suíte da TUI cresceu bastante nesta fase.

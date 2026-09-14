@@ -785,6 +785,19 @@ fn visual_line(
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cells = 0usize;
 
+    // A structured block's marker is not drawn as source once the editor can
+    // edit the block — but the reader still has to see that it *is* a list, a
+    // task or a quote. The glyph is presentation derived from the node kind,
+    // which is the honest way round: the source keeps its `- `, and the screen
+    // shows a bullet.
+    if let Some(glyph) = block_glyph(document, block) {
+        cells += glyph.chars().count();
+        spans.push(Span::styled(
+            glyph,
+            EDITOR_TEXT.fg(Color::Rgb(0x88, 0xAA, 0xCC)),
+        ));
+    }
+
     // A caret sitting before the block's first grapheme has to be drawn even
     // when the block is empty, so the reader can see where typing would land.
     let mut caret_drawn = false;
@@ -823,6 +836,34 @@ fn visual_line(
         spans.push(Span::styled(" ", EDITOR_TEXT));
     }
     Line::from(spans)
+}
+
+/// The marker a structured block is drawn with, when its own is hidden.
+fn block_glyph(
+    document: &crate::visual::VisualDocument,
+    block: crate::visual::BlockId,
+) -> Option<String> {
+    use crate::projection::NodeKind;
+
+    let node = document.block(block).node;
+    // Only when the marker is actually hidden: a block still shown as source
+    // has its own marker on screen and must not get a second one.
+    if !document.block_marker_is_hidden(block) {
+        return None;
+    }
+    match document.projection().node(node).kind {
+        NodeKind::ListItem => Some("• ".to_owned()),
+        NodeKind::Task => Some(
+            if document.task_is_done(block) {
+                "☑ "
+            } else {
+                "☐ "
+            }
+            .to_owned(),
+        ),
+        NodeKind::Blockquote | NodeKind::Callout => Some("│ ".to_owned()),
+        _ => None,
+    }
 }
 
 /// The style a projected grapheme is drawn with.

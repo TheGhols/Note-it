@@ -544,3 +544,93 @@ fn p3_planning_inside_a_mark_is_still_constant() {
         "planning took {best:?} with marks enabled"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gate 5.0D.4B.P4 — measuring canonical HTML before structured blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn p4_canonical_html_does_not_change_the_shape_of_the_cost() {
+    use noteit_tui::source_map::Generation;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+
+    // A note dense in exactly what B.6 added: every paragraph carries a colour
+    // span, a highlight and an underline.
+    let block = "<span data-note-it-color=\"#DC2626\" style=\"color:#DC2626\">vermelho</span> \
+<mark data-note-it-highlight=\"#FDE68A\" style=\"background-color:#FDE68A\">marca</mark> \
+<u>sub</u> e texto normal.\n\n";
+    let mut source = String::new();
+    while source.len() < scale(200 * 1_024) {
+        source.push_str(block);
+    }
+
+    let measure_with = |capabilities: Capabilities| {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let document = VisualDocument::project_with(&source, Generation::first(), capabilities);
+            let elapsed = start.elapsed();
+            assert!(!document.blocks().is_empty());
+            best = best.min(elapsed);
+        }
+        best
+    };
+
+    let inline = measure_with(Capabilities::INLINE).as_secs_f64();
+    let html = measure_with(Capabilities::HTML).as_secs_f64();
+    let ratio = html / inline.max(f64::MIN_POSITIVE);
+
+    println!(
+        "P4 html-dense: inline {:.2} ms -> html {:.2} ms ({ratio:.2}x)",
+        inline * 1000.0,
+        html * 1000.0
+    );
+    assert!(
+        ratio < 4.0,
+        "granting the HTML capabilities cost {ratio:.1}x, which is a different shape"
+    );
+}
+
+#[test]
+fn p4_formatting_a_selection_is_constant_in_the_document_size() {
+    use noteit_tui::source_map::{Generation, SourceOffset};
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    // Applying a colour must not walk the note: the envelope is the selection.
+    let time_for = |bytes: usize| {
+        let source = realistic(bytes);
+        let document =
+            VisualDocument::project_with(&source, Generation::first(), Capabilities::HTML);
+        let slots = document.slots();
+        let anchor = slots[slots.len() / 2].source_offset;
+        let head = slots[slots.len() / 2 + 1].source_offset;
+
+        let mut best = Duration::MAX;
+        for _ in 0..5 {
+            let start = Instant::now();
+            let result = plan(
+                &document,
+                VisualCommand::SetColor {
+                    anchor: SourceOffset::in_source(&source, anchor.get()).expect("a boundary"),
+                    head: SourceOffset::in_source(&source, head.get()).expect("a boundary"),
+                    color: Some("#DC2626".into()),
+                },
+            );
+            let elapsed = start.elapsed();
+            assert!(result.is_ok(), "the colour should plan: {result:?}");
+            best = best.min(elapsed);
+        }
+        best
+    };
+
+    let large = time_for(scale(500 * 1_024));
+    println!(
+        "P4 format in a large note: {:.3} ms",
+        large.as_secs_f64() * 1000.0
+    );
+    assert!(
+        large < Duration::from_millis(2),
+        "formatting took {large:?} in a large note"
+    );
+}

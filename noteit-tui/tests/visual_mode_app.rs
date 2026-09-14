@@ -149,19 +149,45 @@ fn the_visual_editor_hides_the_markup_it_can_edit() {
 
 #[test]
 fn the_visual_editor_still_shows_what_it_cannot_edit() {
-    // A link's destination is B.7 work. Until that gate passes the whole link
-    // is source-visible, because hiding it would tell the reader they can edit
-    // it — and the destination is the part that must never be edited by
-    // accident.
+    // Fenced code is source by definition: everything in it is code, and an
+    // editor that hid the fence would be claiming it understood the contents.
+    // It stays visible, and it carries no caret, at every gate.
+    let root = tempfile::tempdir().unwrap();
+    let mut app = editing(root.path(), "```rust\nfn main() {}\n```\n");
+    app.handle_key(alt('v'));
+
+    let visual = rendered(&app, 120, 20);
+    assert!(visual.contains("```"), "the fence stays visible: {visual}");
+    assert!(visual.contains("fn main()"), "and so does the code");
+}
+
+#[test]
+fn a_link_shows_its_label_and_hides_its_destination() {
+    // B.7: the label is text the reader edits; the destination is a protected
+    // attribute they never type into by accident.
     let root = tempfile::tempdir().unwrap();
     let mut app = editing(root.path(), "veja [o site](https://example.com/a_(b))");
     app.handle_key(alt('v'));
 
     let visual = rendered(&app, 120, 20);
+    assert!(visual.contains("o site"), "the label is drawn: {visual}");
     assert!(
-        visual.contains("https://example.com"),
-        "unsupported markup stays visible: {visual}"
+        !visual.contains("example.com"),
+        "and the destination is not: {visual}"
     );
+}
+
+#[test]
+fn a_task_shows_a_checkbox_rather_than_its_markup() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = editing(root.path(), "- [ ] comprar pão\n- [x] já feito\n");
+    app.handle_key(alt('v'));
+
+    let visual = rendered(&app, 80, 20);
+    assert!(visual.contains('☐'), "an unticked box is drawn: {visual}");
+    assert!(visual.contains('☑'), "and a ticked one: {visual}");
+    assert!(!visual.contains("- [ ]"), "the markup is not: {visual}");
+    assert!(visual.contains("comprar pão"));
 }
 
 #[test]
