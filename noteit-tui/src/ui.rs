@@ -642,14 +642,24 @@ fn render_search_list(frame: &mut Frame, app: &App, area: Rect) {
 fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     let pending = app.pending_text().is_some();
     let active = active_style_label(app);
+    // Which editor has the keyboard is never a guess. Markdown is the mode a
+    // note opens in and the title it has always had; Visual announces itself,
+    // because it is the one that hides something.
+    let mode = match app.editor_mode {
+        crate::app::EditorMode::Markdown => String::new(),
+        crate::app::EditorMode::Visual => " · Visual".to_string(),
+    };
     let title = match (&app.current_note, active) {
-        (_, Some(active)) => format!(" Edição{} · {active} ", if pending { " ●" } else { "" }),
+        (_, Some(active)) => format!(
+            " Edição{}{mode} · {active} ",
+            if pending { " ●" } else { "" }
+        ),
         (Some(note), None) => format!(
-            " Edição: {}{} ",
+            " Edição: {}{}{mode} ",
             noteit_core::search::label_for(&note.content),
             if pending { " ●" } else { "" }
         ),
-        (None, None) => " Edição ".to_string(),
+        (None, None) => format!(" Edição{mode} "),
     };
 
     let block = Block::default()
@@ -694,6 +704,11 @@ fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
     }
     app.editor_column.set(left);
 
+    if app.editor_mode == crate::app::EditorMode::Visual {
+        render_visual_body(frame, app, inner, height, width);
+        return;
+    }
+
     let selection = draft.selection();
     let lines: Vec<Line<'static>> = draft
         .lines()
@@ -705,6 +720,139 @@ fn render_editor_pane(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The visual editor's body: what the reader sees, not what is stored.
+///
+/// Every line here is a projected block. A mark whose capability has been
+/// granted shows its meaning — bold looks bold — and contributes no characters
+/// of its own; a construction that is still source-visible shows its literal
+/// spelling in a dimmer colour, which is the honest way to say "this is here,
+/// and you cannot edit it yet".
+fn render_visual_body(frame: &mut Frame, app: &App, inner: Rect, height: usize, width: usize) {
+    let Some(document) = app.visual_document() else {
+        return;
+    };
+
+    let cursor_offset = app.visual_cursor.map(|cursor| cursor.offset.get());
+    let selection = app.visual_cursor.and_then(|cursor| {
+        let anchor = cursor.anchor?;
+        let (start, end) = if anchor <= cursor.offset {
+            (anchor.get(), cursor.offset.get())
+        } else {
+            (cursor.offset.get(), anchor.get())
+        };
+        (start != end).then_some((start, end))
+    });
+
+    // Which block the caret is in decides what stays on screen.
+    let caret_block = cursor_offset
+        .and_then(|offset| {
+            document
+                .blocks()
+                .iter()
+                .position(|block| block.coverage.start() <= offset && offset <= block.content_end)
+        })
+        .unwrap_or(0);
+
+    let mut top = app.editor_scroll.get();
+    top = top.min(caret_block);
+    if caret_block >= top + height {
+        top = caret_block + 1 - height;
+    }
+    top = top.min(document.blocks().len().saturating_sub(1));
+    app.editor_scroll.set(top);
+
+    let lines: Vec<Line<'static>> = document
+        .blocks()
+        .iter()
+        .skip(top)
+        .take(height)
+        .map(|block| visual_line(&document, block.id, cursor_offset, selection, width))
+        .collect();
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// One projected block as a styled line.
+fn visual_line(
+    document: &crate::visual::VisualDocument,
+    block: crate::visual::BlockId,
+    cursor: Option<usize>,
+    selection: Option<(usize, usize)>,
+    width: usize,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut cells = 0usize;
+
+    // A caret sitting before the block's first grapheme has to be drawn even
+    // when the block is empty, so the reader can see where typing would land.
+    let mut caret_drawn = false;
+    let block_start = document.block(block).coverage.start();
+
+    for cell in document.graphemes_of(block) {
+        if cells >= width {
+            break;
+        }
+        let mut style = visual_style(document, cell.source.start());
+        if selection
+            .is_some_and(|(start, end)| cell.source.start() >= start && cell.source.end() <= end)
+        {
+            style = style.bg(EDITOR_SELECTION);
+        }
+        if cursor == Some(cell.source.start()) {
+            style = style.add_modifier(Modifier::REVERSED);
+            caret_drawn = true;
+        }
+        let text: String = cell.text.chars().map(editor_cell).collect();
+        cells += cell.width.max(1);
+        spans.push(Span::styled(text, style));
+    }
+
+    // The caret past the last grapheme, and the caret in an empty block.
+    let at_end = cursor
+        .is_some_and(|offset| offset >= document.block(block).content_end && offset >= block_start);
+    if !caret_drawn && at_end {
+        spans.push(Span::styled(
+            " ",
+            EDITOR_TEXT.add_modifier(Modifier::REVERSED),
+        ));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(" ", EDITOR_TEXT));
+    }
+    Line::from(spans)
+}
+
+/// The style a projected grapheme is drawn with.
+///
+/// Derived from the marks containing it, so what the reader sees is the
+/// meaning rather than the markup. A byte no caret may enter is dimmed: it is
+/// still shown — hiding it would suggest it could be edited — but it is
+/// visibly not part of what the visual editor owns.
+fn visual_style(document: &crate::visual::VisualDocument, byte: usize) -> Style {
+    use crate::projection::NodeKind;
+
+    let mut style = EDITOR_TEXT;
+    if document.offset_is_protected(crate::source_map::SourceOffset::trusted(byte)) {
+        return style.fg(Color::Rgb(0x8A, 0x8A, 0x8A));
+    }
+
+    for node in document.mark_path(byte) {
+        style = match document.projection().node(node).kind {
+            NodeKind::Strong => style.add_modifier(Modifier::BOLD),
+            NodeKind::Emphasis => style.add_modifier(Modifier::ITALIC),
+            NodeKind::StrongEmphasis => style
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::ITALIC),
+            NodeKind::Strike => style.add_modifier(Modifier::CROSSED_OUT),
+            NodeKind::Underline => style.add_modifier(Modifier::UNDERLINED),
+            NodeKind::InlineCode => style.fg(Color::Rgb(0x9C, 0xDC, 0xFE)),
+            _ => style,
+        };
+    }
+    style
 }
 
 /// Base, selected and cursor styles of the editing pane.
@@ -987,14 +1135,17 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 fn footer_shortcuts(app: &App, width: u16) -> &'static str {
     match app.focus {
-        Focus::Editor if width >= 140 => " [Ctrl+S] Salvar  [Ctrl+Z] Desfazer  [Ctrl+Y] Refazer  [Ctrl+A] Tudo  [Shift+setas] Selecionar  [Alt+F] Formatar  [Esc] Sair ",
+        Focus::Editor if width >= 140 => " [Ctrl+S] Salvar  [Ctrl+Z] Desfazer  [Ctrl+Y] Refazer  [Alt+V] Visual/Markdown  [Shift+setas] Selecionar  [Alt+F] Formatar  [Esc] Sair ",
         Focus::Editor if width >= 100 => {
-            " [Ctrl+S] Salvar  [Ctrl+Z] Undo  [Ctrl+Y] Redo  ⇧Setas  [Alt+F] Formatar  [Esc] Sair "
+            " [Ctrl+S] Salvar  [Ctrl+Z] Undo  [Alt+V] Visual  ⇧Setas  [Alt+F] Formatar  [Esc] Sair "
         }
         Focus::Editor if width >= 65 => {
-            " ^S Salvar  ^Z Undo  ^Y Redo  ⇧Setas  Alt+F Formatar  Esc Sair "
+            " ^S Salvar  ^Z Undo  Alt+V Visual  ⇧Setas  Alt+F Formatar  Esc Sair "
         }
-        Focus::Editor => " ^S Salvar  Alt+F Formatar  Esc Sair ",
+        // Salvar, Formatar and Sair stay discoverable at every practical width
+        // — that is the 5.0D.3 contract, and adding a mode switch may not cost
+        // the reader one of the three. At 50 columns the undo hints go first.
+        Focus::Editor => " ^S Salvar  Alt+V Visual  Alt+F Formatar  Esc Sair ",
         Focus::Search if width >= 65 => " Enter Abrir nota  ↑↓ Selecionar  Esc Cancelar busca ",
         Focus::Search => " Enter Abrir  ↑↓ Selecionar  Esc Sair ",
         Focus::Reader if width >= 80 => " Enter/i Editar  ↑↓/jk Cursor  [Space] Tarefa  e $EDITOR  d Lixeira  r Restaurar  Esc Voltar  q Sair ",

@@ -3,6 +3,9 @@
 //! Provides interactive navigation across recent notes, pending tasks, and trash,
 //! with quick search (/) using noteit-core in-process.
 
+use crate::source_map::SourceOffset;
+use crate::visual::{Capabilities, Direction, RawBookmark, VisualDocument};
+use crate::visual_edit::{plan, Refusal, VisualCommand};
 use crate::{
     document::LoadedDocument,
     draft::{Draft, Motion},
@@ -91,6 +94,46 @@ pub enum EditorPrompt {
     Conflict,
 }
 
+/// Which editor the right pane is showing.
+///
+/// Two editors over one source. `Markdown` is the 5.0D.2 editor, unchanged: it
+/// shows the canonical bytes and edits them directly. `Visual` hides the syntax
+/// it has been proved able to edit and refuses everything else, which is why
+/// switching back is always available and always lossless — the same `Draft`
+/// holds the text in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditorMode {
+    #[default]
+    Markdown,
+    Visual,
+}
+
+impl EditorMode {
+    fn other(self) -> Self {
+        match self {
+            Self::Markdown => Self::Visual,
+            Self::Visual => Self::Markdown,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Markdown => "Markdown",
+            Self::Visual => "Visual",
+        }
+    }
+}
+
+/// Where the caret is while the visual editor has it.
+///
+/// A source offset rather than a screen position: the offset survives a
+/// reprojection, and a screen position does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualCursor {
+    pub offset: SourceOffset,
+    pub anchor: Option<SourceOffset>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatMenu {
     Root,
@@ -146,6 +189,14 @@ pub struct App {
     pub format_selected: usize,
     pub active_text_color: Option<&'static str>,
     pub active_highlight: Option<&'static str>,
+
+    // Visual editor state. Present only while the mode is `Visual`; leaving it
+    // drops the cursor rather than keeping a position measured in a projection
+    // that no longer exists.
+    pub editor_mode: EditorMode,
+    pub visual_cursor: Option<VisualCursor>,
+    /// The raw position to come back to, while it is still intact.
+    visual_bookmark: Option<RawBookmark>,
     pending_mouse_action: Option<PendingMouseAction>,
     /// Set when the open question was raised by somebody asking to leave, so
     /// answering it finishes the exit instead of returning to the reader.
@@ -198,6 +249,9 @@ impl App {
             format_selected: 0,
             active_text_color: None,
             active_highlight: None,
+            editor_mode: EditorMode::default(),
+            visual_cursor: None,
+            visual_bookmark: None,
             pending_mouse_action: None,
             exit_requested: false,
             editor_scroll: Cell::new(0),
@@ -602,6 +656,12 @@ impl App {
             self.open_format_menu();
             return;
         }
+        // One key, both ways. The source is the same `Draft` in either mode, so
+        // switching is a reprojection and never an edit.
+        if alt && matches!(key.code, KeyCode::Char('v' | 'V')) {
+            self.toggle_editor_mode();
+            return;
+        }
         if control || alt {
             match key.code {
                 KeyCode::Char('s') => self.save_draft(),
@@ -617,6 +677,13 @@ impl App {
                 KeyCode::Char('a') => self.edit(Draft::select_all),
                 _ => {}
             }
+            return;
+        }
+
+        // After the shortcuts, never before: Ctrl+S and Ctrl+Z must reach the
+        // save and the undo, not arrive here as the characters `s` and `z`.
+        if self.editor_mode == EditorMode::Visual {
+            self.handle_key_visual(key);
             return;
         }
 
@@ -659,6 +726,327 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    // -- the visual editor --------------------------------------------------
+
+    /// Which inline constructions the visual editor may edit today.
+    ///
+    /// Exactly what the gates up to B.5 have proved. Colour, highlight,
+    /// underline, links, lists, tasks, quotes and callouts are not here: they
+    /// belong to B.6 and B.7, and until those gates pass they stay visible as
+    /// source and refuse every edit, which is the honest thing to show.
+    fn visual_capabilities() -> Capabilities {
+        Capabilities::INLINE
+    }
+
+    /// The projection of the current draft, or `None` when there is no draft.
+    pub fn visual_document(&self) -> Option<VisualDocument> {
+        let draft = self.draft.as_ref()?;
+        Some(VisualDocument::project_with(
+            &draft.text(),
+            draft.generation(),
+            Self::visual_capabilities(),
+        ))
+    }
+
+    fn toggle_editor_mode(&mut self) {
+        let Some(draft) = self.draft.as_ref() else {
+            return;
+        };
+        let target = self.editor_mode.other();
+
+        match target {
+            EditorMode::Visual => {
+                // Remember the exact raw bytes, including positions the visual
+                // editor has no slot for — inside a delimiter, inside a tag.
+                // Coming straight back out must not be a move.
+                let text = draft.text();
+                let cursor = draft.cursor();
+                let offset = crate::source_map::offset_of_scalar(
+                    &text,
+                    crate::source_map::ScalarPosition {
+                        line: cursor.line,
+                        column: cursor.column,
+                    },
+                )
+                .unwrap_or(SourceOffset::trusted(0));
+                self.visual_bookmark =
+                    Some(RawBookmark::capture(draft.generation(), offset, offset));
+
+                let document = VisualDocument::project_with(
+                    &text,
+                    draft.generation(),
+                    Self::visual_capabilities(),
+                );
+                let snapped = document
+                    .slot_for_offset(offset, Direction::Absolute)
+                    .map(|slot| slot.source_offset);
+                self.visual_cursor = snapped.map(|offset| VisualCursor {
+                    offset,
+                    anchor: None,
+                });
+                if self.visual_cursor.is_none() {
+                    self.notice = "Nada editável no modo Visual: esta nota é fonte protegida. \
+                                   Alt+V volta ao Markdown."
+                        .into();
+                }
+            }
+            EditorMode::Markdown => self.restore_raw_cursor(),
+        }
+
+        self.editor_mode = target;
+    }
+
+    /// Puts the raw cursor back where the bookmark says, or where the visual
+    /// caret now is.
+    fn restore_raw_cursor(&mut self) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        let text = draft.text();
+        let generation = draft.generation();
+
+        let offset = match self
+            .visual_bookmark
+            .and_then(|bookmark| bookmark.restore(generation))
+        {
+            // Intact: the exact byte the reader left from.
+            Some((anchor, _)) => anchor,
+            // Consumed by movement or mutation: follow the visual caret
+            // instead, so the cursor never jumps back over the reader's own
+            // navigation.
+            None => self
+                .visual_cursor
+                .map_or(SourceOffset::trusted(0), |cursor| cursor.offset),
+        };
+
+        if let Some(position) = crate::source_map::scalar_of_offset(&text, offset) {
+            draft.restore_cursor(crate::draft::Position {
+                line: position.line,
+                column: position.column,
+            });
+        }
+        self.visual_cursor = None;
+        self.visual_bookmark = None;
+    }
+
+    fn handle_key_visual(&mut self, key: KeyEvent) {
+        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+        let Some(document) = self.visual_document() else {
+            return;
+        };
+        let Some(cursor) = self.visual_cursor else {
+            // Nowhere to type. Esc still leaves, so this is never a trap, and
+            // every other key repeats why — a notice cleared by the previous
+            // keystroke would otherwise leave the reader pressing keys at a
+            // screen that does nothing and says nothing.
+            if key.code == KeyCode::Esc {
+                self.leave_editor();
+            } else {
+                self.notice = "Nada editável no modo Visual: esta nota é fonte protegida. \
+                     Alt+V volta ao Markdown."
+                    .into();
+            }
+            return;
+        };
+
+        match key.code {
+            KeyCode::Esc => self.leave_editor(),
+            KeyCode::Char(character) => {
+                let mut buffer = [0; 4];
+                self.run_visual(VisualCommand::Insert {
+                    at: cursor.offset,
+                    text: character.encode_utf8(&mut buffer).to_owned(),
+                });
+            }
+            KeyCode::Tab => self.run_visual(VisualCommand::Insert {
+                at: cursor.offset,
+                text: "    ".into(),
+            }),
+            KeyCode::Enter => self.run_visual(VisualCommand::SplitBlock { at: cursor.offset }),
+            KeyCode::Backspace => self.visual_delete(&document, cursor, true),
+            KeyCode::Delete => self.visual_delete(&document, cursor, false),
+            KeyCode::Left => self.move_visual_cursor(&document, -1, extend),
+            KeyCode::Right => self.move_visual_cursor(&document, 1, extend),
+            KeyCode::Up => self.move_visual_block(&document, -1, extend),
+            KeyCode::Down => self.move_visual_block(&document, 1, extend),
+            KeyCode::Home => self.move_visual_edge(&document, true, extend),
+            KeyCode::End => self.move_visual_edge(&document, false, extend),
+            _ => {}
+        }
+    }
+
+    /// Backspace and Delete: a grapheme when there is one, a block boundary
+    /// when there is not.
+    fn visual_delete(&mut self, document: &VisualDocument, cursor: VisualCursor, backward: bool) {
+        if let Some((anchor, head)) = self.visual_selection(cursor) {
+            self.run_visual(VisualCommand::ReplaceSelection {
+                anchor,
+                head,
+                text: String::new(),
+            });
+            return;
+        }
+
+        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+            return;
+        };
+        let block = document.block(slot.block);
+        let at_start = Some(cursor.offset.get()) == document.first_caret_offset(slot.block);
+        let at_end = cursor.offset.get() == block.content_end;
+
+        let command = if backward && at_start {
+            VisualCommand::JoinBackward { at: cursor.offset }
+        } else if !backward && at_end {
+            VisualCommand::JoinForward { at: cursor.offset }
+        } else if backward {
+            VisualCommand::DeleteBackward {
+                block: slot.block,
+                grapheme: slot.grapheme,
+            }
+        } else {
+            VisualCommand::DeleteForward {
+                block: slot.block,
+                grapheme: slot.grapheme,
+            }
+        };
+        self.run_visual(command);
+    }
+
+    fn visual_selection(&self, cursor: VisualCursor) -> Option<(SourceOffset, SourceOffset)> {
+        let anchor = cursor.anchor?;
+        (anchor != cursor.offset).then_some((anchor, cursor.offset))
+    }
+
+    /// Plans a command, applies it, and says so when it is refused.
+    ///
+    /// A refusal is never silent except for `NothingToDo`, which is the one
+    /// case §28.2 says carries no notice: Backspace at the start of the
+    /// document did nothing, and announcing that would be noise.
+    fn run_visual(&mut self, command: VisualCommand) {
+        let Some(document) = self.visual_document() else {
+            return;
+        };
+        match plan(&document, command) {
+            Ok(transaction) => {
+                let cursor = transaction.resulting_cursor;
+                if let Some(draft) = self.draft.as_mut() {
+                    if draft.apply_transaction(&transaction).is_ok() {
+                        self.notice.clear();
+                    }
+                }
+                // The projection is rebuilt from the new text, and the caret is
+                // resolved against it — never carried over as a screen position.
+                self.visual_bookmark = None;
+                self.resnap_visual_cursor(cursor);
+            }
+            Err(Refusal::NothingToDo) => {}
+            Err(refusal) => self.notice = Self::refusal_notice(refusal),
+        }
+    }
+
+    fn refusal_notice(refusal: Refusal) -> String {
+        let reason = match refusal {
+            Refusal::ProtectedRegion => {
+                "esta região é fonte protegida e só pode ser alterada no modo Markdown"
+            }
+            Refusal::PartialMarkBoundary => {
+                "a seleção cobre parte de uma marcação; selecione-a inteira ou apenas o seu interior"
+            }
+            Refusal::MissingCapability => "esta operação ainda não existe no editor Visual",
+            Refusal::BlockBoundary => "esta fronteira entre blocos não pode ser unida",
+            Refusal::StaleGeneration | Refusal::InvalidPosition => "a posição não é mais válida",
+            Refusal::NothingToDo => return String::new(),
+        };
+        format!("Recusado: {reason}. Alt+V volta ao Markdown.")
+    }
+
+    /// Puts the visual caret at `offset`, or the nearest legal slot to it.
+    fn resnap_visual_cursor(&mut self, offset: usize) {
+        let Some(document) = self.visual_document() else {
+            return;
+        };
+        let wanted =
+            SourceOffset::in_source(document.source(), offset).unwrap_or(SourceOffset::trusted(0));
+        self.visual_cursor = document
+            .slot_for_offset(wanted, Direction::Absolute)
+            .map(|slot| VisualCursor {
+                offset: slot.source_offset,
+                anchor: None,
+            });
+    }
+
+    fn move_visual_cursor(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
+        let Some(cursor) = self.visual_cursor else {
+            return;
+        };
+        let slots = document.slots();
+        let Some(index) = slots
+            .iter()
+            .position(|slot| slot.source_offset == cursor.offset)
+        else {
+            return;
+        };
+        let target = index.saturating_add_signed(delta).min(slots.len() - 1);
+        self.set_visual_cursor(slots[target].source_offset, cursor, extend);
+    }
+
+    fn move_visual_block(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
+        let Some(cursor) = self.visual_cursor else {
+            return;
+        };
+        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+            return;
+        };
+        let blocks = document.blocks();
+        let current = slot.block.0 as usize;
+        let target = current.saturating_add_signed(delta).min(blocks.len() - 1);
+        let column = slot.grapheme.0;
+
+        // Keep the column where it can be kept, which is what makes Up and Down
+        // feel like a text editor rather than a list.
+        let destination = document
+            .slots()
+            .iter()
+            .filter(|candidate| candidate.block == blocks[target].id)
+            .min_by_key(|candidate| candidate.grapheme.0.abs_diff(column));
+        if let Some(destination) = destination {
+            self.set_visual_cursor(destination.source_offset, cursor, extend);
+        }
+    }
+
+    fn move_visual_edge(&mut self, document: &VisualDocument, start: bool, extend: bool) {
+        let Some(cursor) = self.visual_cursor else {
+            return;
+        };
+        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+            return;
+        };
+        let mut here: Vec<_> = document
+            .slots()
+            .iter()
+            .filter(|candidate| candidate.block == slot.block)
+            .collect();
+        here.sort_by_key(|candidate| candidate.grapheme.0);
+        let target = if start { here.first() } else { here.last() };
+        if let Some(target) = target {
+            self.set_visual_cursor(target.source_offset, cursor, extend);
+        }
+    }
+
+    fn set_visual_cursor(&mut self, offset: SourceOffset, previous: VisualCursor, extend: bool) {
+        // §27.9: any visual movement consumes the bookmark, so switching back
+        // follows the reader rather than undoing their navigation.
+        self.visual_bookmark = None;
+        self.visual_cursor = Some(VisualCursor {
+            offset,
+            anchor: if extend {
+                previous.anchor.or(Some(previous.offset))
+            } else {
+                None
+            },
+        });
     }
 
     fn insert_with_active_style(&mut self, text: &str) {
@@ -961,6 +1349,12 @@ impl App {
         self.draft = None;
         self.editor_prompt = None;
         self.focus = Focus::Reader;
+        // The visual caret is a position in a projection that is about to stop
+        // existing, so it is dropped rather than carried into the next note.
+        // Markdown is the mode a note opens in, always.
+        self.editor_mode = EditorMode::Markdown;
+        self.visual_cursor = None;
+        self.visual_bookmark = None;
         self.active_text_color = None;
         self.active_highlight = None;
         self.notice.clear();

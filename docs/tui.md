@@ -3945,3 +3945,65 @@ Depois disso a suíte de performance voltou a 2,5 s, 1 MB projeta em 13,22 ms e
 planejar uma tecla continua constante. Vale registrar o padrão: as três quadráticas
 encontradas até aqui (§34.2 e esta) foram todas achadas por um gate de performance
 que roda de verdade, e nenhuma por leitura do código.
+
+## 36. Integração do editor Visual na aplicação
+
+### 36.1 O que ficou acessível
+
+Até aqui os gates provaram o motor e nada disso era alcançável pela TUI real. Esta
+entrega liga B.1–B.5 à aplicação:
+
+- **`Alt+V`** alterna entre o editor Markdown e o Visual, nos dois sentidos. A nota
+  sempre **abre** em Markdown, e sair do editor devolve o modo a Markdown — o caret
+  visual é uma posição numa projeção que deixa de existir, e não é carregado para a
+  próxima nota.
+- O título diz qual editor tem o teclado. Markdown mantém exatamente o título que
+  sempre teve; Visual acrescenta ` · Visual`, porque ele é o que esconde algo.
+- O rodapé ganhou `Alt+V` **sem perder nada**: Salvar, Formatar e Sair continuam
+  descobríveis de 50 a 140 colunas, que é o contrato da 5.0D.3.
+- No Visual, negrito parece negrito, itálico parece itálico, riscado parece riscado e
+  código inline muda de cor — e seus delimitadores não são desenhados. O que o gate
+  ainda não sabe editar continua visível como fonte, em cinza: cor, marca-texto,
+  links, listas, tarefas, citações e HTML desconhecido.
+- Teclas: caracteres inserem, `Enter` divide o bloco, `Backspace`/`Delete` removem um
+  grapheme inteiro ou unem blocos na fronteira, setas andam por slots, `Home`/`End`
+  vão aos extremos do bloco, `Shift+setas` selecionam.
+- `Ctrl+S`, `Ctrl+Z`, `Ctrl+Y` e `Esc` continuam sendo exatamente o que eram. Salvar
+  do Visual passa pela mesma `authority::perform_at` com a mesma revision.
+
+### 36.2 Recusa nunca é silêncio
+
+Toda recusa vira aviso nomeando a causa e oferecendo o caminho: "Recusado: esta
+região é fonte protegida e só pode ser alterada no modo Markdown. Alt+V volta ao
+Markdown." A única exceção é `NothingToDo` — Backspace no início do documento —, que
+o §28.2 define como sem aviso, porque anunciar que nada aconteceu é ruído.
+
+Uma nota que é inteiramente fonte protegida diz isso ao entrar **e a cada tecla**:
+o aviso anterior é limpo pela ação seguinte (contrato da 5.0D.3), e sem repetir a
+mensagem o leitor ficaria diante de uma tela que não faz nada e não explica por quê.
+
+### 36.3 Dois defeitos encontrados na integração
+
+1. **`Ctrl+S` e `Ctrl+Z` eram digitados na nota.** O despacho para o Visual estava
+   **antes** do bloco de atalhos, então `Ctrl+Z` chegava ao handler visual como o
+   caractere `z` e era inserido: desfazer escrevia "z" no texto e salvar escrevia
+   "s". Corrigido movendo o despacho para depois dos atalhos. Encontrado por teste,
+   não por leitura.
+2. **O rodapé de 50 colunas perdeu "Formatar".** Acrescentar `Alt+V` à variante mais
+   estreita empurrou `Alt+F` para fora, quebrando a regressão da 5.0D.3 que exige
+   Salvar, Formatar e Sair descobríveis em todas as larguras práticas. Corrigido
+   sacrificando as dicas de undo, que têm alternativa óbvia, em vez de um comando que
+   não tem.
+
+### 36.4 O que ainda não está no Visual
+
+Registrado honestamente, porque a tela mostra essas construções como fonte cinza e o
+leitor vai perguntar por quê:
+
+- cor, marca-texto e sublinhado — B.6, atrás do gate P3;
+- links, listas, tarefas, citações e callouts — B.7, atrás do gate P4;
+- matemática e flashcards — 5.0D.5;
+- seleção por mouse no Visual, e blocos vazios como nodes próprios (§33.4).
+
+Nada disso está quebrado: está recusado, visível e editável pelo modo Markdown, que
+continua sendo o fallback integral e permanente.

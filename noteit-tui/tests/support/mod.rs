@@ -1,3 +1,12 @@
+//! Shared helpers for the integration tests.
+//!
+//! Rust compiles this module separately into every test binary that includes
+//! it, so anything one binary does not use looks dead to that binary even
+//! though another exercises it thoroughly. The allow below is about that, and
+//! nothing else: every item here is used by at least one test.
+
+#![allow(dead_code)]
+
 use noteit_core::{
     authority::perform_at,
     coordination::WriteCoordinationPaths,
