@@ -2138,7 +2138,11 @@ body[data-collapsed="true"] .resize-handle {
 }
 
 .note-shortcuts-runs {
+  /* Its own line under the sentence it belongs to: a compositor binding runs a
+     command, and reading the two as one run-on sentence is how the two halves
+     get confused in the first place. */
   display: block;
+  margin-top: calc(2px * var(--ui-scale));
   font-family: var(--note-mono-family, ui-monospace, monospace);
   font-size: var(--ui-font-small);
   /* The command a compositor binding spawns is long and must not stretch the
