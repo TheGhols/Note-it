@@ -8,6 +8,15 @@ pub struct LoadedDocument {
     pub document: NoteDocument,
     pub revision: NoteRevision,
     pub in_trash: bool,
+    /// The note's human label, derived once when it is read.
+    ///
+    /// `search::label_for` walks the body to find it, and the titles of three
+    /// panes asked for it on every single frame — 2.2 ms of a 3.0 ms frame on
+    /// a 100 KB note, growing with the note while the viewport did not. The
+    /// label is a function of the content of *this snapshot*, and a snapshot
+    /// is immutable, so asking more than once could only ever get the same
+    /// answer more slowly.
+    pub label: String,
 }
 
 impl LoadedDocument {
@@ -15,8 +24,9 @@ impl LoadedDocument {
         Ok(Self {
             id: document.metadata.id,
             revision: write::revision_of(&document)?,
-            document,
+            label: noteit_core::search::label_for(&document.content),
             in_trash,
+            document,
         })
     }
 }

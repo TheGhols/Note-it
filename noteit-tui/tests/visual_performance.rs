@@ -913,3 +913,191 @@ fn bp_the_budgets_of_p0_through_p4_all_still_hold() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Gate 5.0D.R6.P — the layout the visual editor draws and navigates
+// ---------------------------------------------------------------------------
+//
+// R6 put a layout between the projection and the screen, and both drawing and
+// navigation go through it. That is a new per-frame and per-keystroke code
+// path, so it gets the same question every other one got: does it grow with
+// the note?
+//
+// It must not. Drawing touches the blocks on screen; moving the caret touches
+// one block, or two when the move crosses a boundary. Neither is a function of
+// how much text is above or below.
+
+/// A note of roughly `blocks` paragraphs, each long enough to wrap.
+fn many_blocks(blocks: usize) -> String {
+    (1..=blocks)
+        .map(|index| {
+            format!("Parágrafo número {index}, com texto suficiente para quebrar em larguras normais de terminal.\n\n")
+        })
+        .collect()
+}
+
+#[test]
+fn r6p_laying_out_one_block_does_not_grow_with_the_document() {
+    use noteit_tui::source_map::Generation;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+    use noteit_tui::visual_layout::layout_block;
+
+    let cost = |blocks: usize| -> Duration {
+        let source = many_blocks(scale(blocks));
+        let document =
+            VisualDocument::project_with(&source, Generation::first(), Capabilities::BLOCKS);
+        // The last block, which is the worst case for anything that scans from
+        // the start of the document to reach it.
+        let block = document.blocks().last().expect("a block").id;
+        let mut best = Duration::MAX;
+        for _ in 0..5 {
+            let start = Instant::now();
+            let layout = layout_block(&document, block, 80);
+            let elapsed = start.elapsed();
+            assert!(!layout.rows.is_empty());
+            best = best.min(elapsed);
+        }
+        best
+    };
+
+    // Warm nothing: each call projects afresh, so the caches are cold and the
+    // measurement is of one block's layout and not of a hit.
+    let small = cost(100).as_secs_f64();
+    let large = cost(1_000).as_secs_f64();
+    println!(
+        "R6P layout of one block: 100 blocks {:.4} ms -> 1000 blocks {:.4} ms",
+        small * 1000.0,
+        large * 1000.0
+    );
+    if small > NOISE_FLOOR / 1000.0 {
+        assert!(
+            large < small * 4.0,
+            "laying out one block grew {:.1}x for ten times the document",
+            large / small.max(f64::MIN_POSITIVE)
+        );
+    }
+    // And it is fast in absolute terms, because it happens once per drawn row.
+    assert!(
+        large < Duration::from_millis(5).as_secs_f64(),
+        "one block's layout took {large:.3} ms"
+    );
+}
+
+#[test]
+fn r6p_placing_a_caret_does_not_grow_with_the_document() {
+    use noteit_tui::source_map::{Generation, SourceOffset};
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+    use noteit_tui::visual_layout::place;
+
+    let cost = |blocks: usize| -> Duration {
+        let source = many_blocks(scale(blocks));
+        let document =
+            VisualDocument::project_with(&source, Generation::first(), Capabilities::BLOCKS);
+        let last = document.blocks().last().expect("a block").id;
+        let offset = document
+            .slots_of_block(last)
+            .last()
+            .expect("a slot")
+            .source_offset;
+        let mut best = Duration::MAX;
+        for _ in 0..5 {
+            let start = Instant::now();
+            let found = place(&document, 80, offset.get());
+            let elapsed = start.elapsed();
+            assert!(found.is_some(), "the caret is somewhere");
+            best = best.min(elapsed);
+        }
+        let _ = SourceOffset::in_source(&source, 0);
+        best
+    };
+
+    let small = cost(100).as_secs_f64();
+    let large = cost(1_000).as_secs_f64();
+    println!(
+        "R6P placing a caret: 100 blocks {:.4} ms -> 1000 blocks {:.4} ms",
+        small * 1000.0,
+        large * 1000.0
+    );
+    if small > NOISE_FLOOR / 1000.0 {
+        assert!(
+            large < small * 4.0,
+            "placing a caret grew {:.1}x for ten times the document",
+            large / small.max(f64::MIN_POSITIVE)
+        );
+    }
+}
+
+#[test]
+fn r6p_drawing_a_frame_is_bounded_by_the_viewport_and_not_the_note() {
+    use noteit_tui::app::App;
+    use ratatui::{backend::TestBackend, Terminal};
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    // The whole application drawing a real frame, with the caret at the end of
+    // the note so the viewport is as far from the start as it can be.
+    let cost = |blocks: usize| -> Duration {
+        let root = tempfile::tempdir().unwrap();
+        let paths = noteit_core::StorePaths::from_custom_paths(
+            root.path().join("data/note-it/notes"),
+            root.path().join("config/note-it"),
+            root.path().join("state/note-it"),
+            root.path().join("runtime/note-it"),
+        );
+        noteit_core::authority::perform_at(
+            &paths,
+            &noteit_core::write::WriteOperation::CreateNote {
+                draft: noteit_core::write::NoteDraft {
+                    content: many_blocks(scale(blocks)),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
+        app.handle_key(crossterm::event::KeyEvent::from(
+            crossterm::event::KeyCode::Enter,
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        // To the bottom, which is where a viewport anchored at the top would
+        // have to walk the whole note to catch up.
+        for _ in 0..5_000 {
+            app.handle_key(crossterm::event::KeyEvent::from(
+                crossterm::event::KeyCode::Down,
+            ));
+        }
+        let mut best = Duration::MAX;
+        for _ in 0..5 {
+            let start = Instant::now();
+            app.draw(&mut terminal).unwrap();
+            best = best.min(start.elapsed());
+        }
+        best
+    };
+
+    let small = cost(100).as_secs_f64();
+    let large = cost(1_000).as_secs_f64();
+    println!(
+        "R6P drawing a frame: 100 blocks {:.3} ms -> 1000 blocks {:.3} ms",
+        small * 1000.0,
+        large * 1000.0
+    );
+    // Flat, not merely bounded. Two of the three things that made drawing grow
+    // with the note were found by this gate rather than by reading the code:
+    // handing out a clone of the whole `VisualDocument` on every consultation,
+    // and re-deriving the note's label from its body for the pane titles on
+    // every frame. Both are gone, so the bar is what the measurement supports.
+    if small > NOISE_FLOOR / 1000.0 {
+        assert!(
+            large < small * 2.0,
+            "drawing grew {:.1}x for ten times the note, which is a viewport \
+             that follows the document instead of the caret",
+            large / small.max(f64::MIN_POSITIVE)
+        );
+    }
+    assert!(
+        large < budget().as_secs_f64(),
+        "drawing one frame took {large:.3} ms, over the budget {:?}",
+        budget()
+    );
+}

@@ -658,10 +658,7 @@ fn editor_title(app: &App, pending: bool, active: Option<String>, width: u16) ->
     let marker = if pending { " ●" } else { "" };
     let tail = match (&app.current_note, &active) {
         (_, Some(active)) => format!("Edição{marker} · {active}"),
-        (Some(note), None) => format!(
-            "Edição: {}{marker}",
-            noteit_core::search::label_for(&note.content)
-        ),
+        (Some(note), None) => format!("Edição: {}{marker}", note.label,),
         (None, None) => format!("Edição{marker}"),
     };
     // Whatever a rounded border leaves for a title.
@@ -1227,7 +1224,7 @@ fn render_reader_pane(frame: &mut Frame, app: &App, area: Rect) {
         let total = doc.content.lines().count().max(1);
         format!(
             " Leitura: {} · {}/{} ",
-            noteit_core::search::label_for(&doc.content),
+            doc.label,
             app.reader_cursor.min(total - 1) + 1,
             total
         )

@@ -32,6 +32,7 @@ use noteit_core::{
 use ratatui::{backend::Backend, backend::CrosstermBackend, Terminal};
 use std::cell::{Cell, RefCell};
 use std::io::{self, Stdout};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -212,7 +213,7 @@ pub struct App {
     /// result — and projecting afresh each time did the same linear work four
     /// times over. The generation is exactly the right key: it changes on every
     /// mutation, so a stale entry cannot be served.
-    visual_cache: RefCell<Option<(Generation, VisualDocument)>>,
+    visual_cache: RefCell<Option<(Generation, Rc<VisualDocument>)>>,
     pending_mouse_action: Option<PendingMouseAction>,
     /// Set when the open question was raised by somebody asking to leave, so
     /// answering it finishes the exit instead of returning to the reader.
@@ -787,19 +788,28 @@ impl App {
     /// Cached against the draft's generation, so the several consultations one
     /// keystroke makes share one projection and a mutation invalidates it by
     /// construction rather than by anybody remembering to.
-    pub fn visual_document(&self) -> Option<VisualDocument> {
+    ///
+    /// Shared rather than copied. A `VisualDocument` owns the source text, a
+    /// block table, a content range per node and an index of every mark, so
+    /// handing out a clone was linear work on every consultation — several per
+    /// keystroke and one per frame. The measurement in the R6.P gate is what
+    /// said so: drawing grew with the note even though the viewport did not.
+    pub fn visual_document(&self) -> Option<Rc<VisualDocument>> {
         let draft = self.draft.as_ref()?;
         let generation = draft.generation();
 
         if let Some((cached, document)) = self.visual_cache.borrow().as_ref() {
             if *cached == generation {
-                return Some(document.clone());
+                return Some(Rc::clone(document));
             }
         }
 
-        let document =
-            VisualDocument::project_with(&draft.text(), generation, Self::visual_capabilities());
-        *self.visual_cache.borrow_mut() = Some((generation, document.clone()));
+        let document = Rc::new(VisualDocument::project_with(
+            &draft.text(),
+            generation,
+            Self::visual_capabilities(),
+        ));
+        *self.visual_cache.borrow_mut() = Some((generation, Rc::clone(&document)));
         Some(document)
     }
 
@@ -2064,11 +2074,7 @@ impl App {
         let Some(note) = self.current_note.as_ref().filter(|note| !note.in_trash) else {
             return;
         };
-        let tasks = noteit_core::task::parse_tasks(
-            note.id,
-            &noteit_core::search::label_for(&note.content),
-            &note.content,
-        );
+        let tasks = noteit_core::task::parse_tasks(note.id, &note.label, &note.content);
         let Some(task) = tasks
             .into_iter()
             .find(|task| task.line_number == self.reader_cursor + 1)
