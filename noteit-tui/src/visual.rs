@@ -289,6 +289,14 @@ pub struct VisualDocument {
     /// `O(cells x nodes x lexemes)`, which stopped being a theoretical concern
     /// the first time the performance suite ran and hung.
     content_ranges: Vec<Option<(usize, usize)>>,
+    /// Every inline mark, ordered by where it starts.
+    ///
+    /// Marks nest properly, so the marks containing a byte are exactly the
+    /// ancestors of the last one that starts at or before it — which turns
+    /// `mark_path` into a bisection plus a walk up the nesting, instead of a
+    /// scan of every node in the document. It is asked once per keystroke that
+    /// carries a colour, and the scan made that keystroke grow with the note.
+    marks: Vec<NodeId>,
 }
 
 impl VisualDocument {
@@ -313,6 +321,7 @@ impl VisualDocument {
             slots: RefCell::new(Vec::new()),
             capabilities,
             content_ranges: Vec::new(),
+            marks: Vec::new(),
         };
         document.build();
         document
@@ -621,26 +630,26 @@ impl VisualDocument {
     /// business, and mixing the two is what let a selection across a heading
     /// look like plain text to every rule.
     pub fn mark_path(&self, byte: usize) -> Vec<NodeId> {
-        let mut path: Vec<NodeId> = self
-            .projection
-            .nodes()
-            .iter()
-            .filter(|node| {
-                matches!(
-                    node.kind,
-                    NodeKind::Strong
-                        | NodeKind::Emphasis
-                        | NodeKind::StrongEmphasis
-                        | NodeKind::Strike
-                        | NodeKind::InlineCode
-                        | NodeKind::Underline
-                        | NodeKind::Color(_)
-                        | NodeKind::Highlight(_)
-                ) && node.coverage.start() <= byte
-                    && byte < node.coverage.end()
-            })
-            .map(|node| node.id)
-            .collect();
+        // The last mark that starts at or before `byte`. Any mark containing
+        // `byte` starts no later than that one, and marks do not partially
+        // overlap — so it either contains `byte` itself or the mark that does
+        // contains *it*, and either way the answer is on its way up the tree.
+        let index = self
+            .marks
+            .partition_point(|node| self.projection.node(*node).coverage.start() <= byte);
+        let mut current = index.checked_sub(1).map(|index| self.marks[index]);
+
+        let mut path: Vec<NodeId> = Vec::new();
+        while let Some(id) = current {
+            let node = self.projection.node(id);
+            if kind_is_mark(&node.kind)
+                && node.coverage.start() <= byte
+                && byte < node.coverage.end()
+            {
+                path.push(id);
+            }
+            current = node.parent;
+        }
         path.sort_by_key(|id| std::cmp::Reverse(self.projection.node(*id).coverage.len()));
         path
     }
@@ -1024,6 +1033,15 @@ impl VisualDocument {
         }
 
         self.compute_content_ranges();
+        self.marks = self
+            .projection
+            .nodes()
+            .iter()
+            .filter(|node| kind_is_mark(&node.kind))
+            .map(|node| node.id)
+            .collect();
+        self.marks
+            .sort_by_key(|id| self.projection.node(*id).coverage.start());
     }
 
     /// The graphemes a block projects.
@@ -1284,18 +1302,24 @@ impl VisualDocument {
     }
 
     fn is_mark(&self, node: NodeId) -> bool {
-        matches!(
-            self.projection.node(node).kind,
-            NodeKind::Strong
-                | NodeKind::Emphasis
-                | NodeKind::StrongEmphasis
-                | NodeKind::Strike
-                | NodeKind::InlineCode
-                | NodeKind::Underline
-                | NodeKind::Color(_)
-                | NodeKind::Highlight(_)
-        )
+        kind_is_mark(&self.projection.node(node).kind)
     }
+}
+
+/// Whether a node kind is an inline mark: something that styles a run of text
+/// without being text itself.
+fn kind_is_mark(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Strong
+            | NodeKind::Emphasis
+            | NodeKind::StrongEmphasis
+            | NodeKind::Strike
+            | NodeKind::InlineCode
+            | NodeKind::Underline
+            | NodeKind::Color(_)
+            | NodeKind::Highlight(_)
+    )
 }
 
 /// One block's graphemes: the bytes each occupies and how wide it draws.
