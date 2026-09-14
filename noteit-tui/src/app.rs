@@ -1368,6 +1368,12 @@ impl App {
     }
 
     fn open_format_menu(&mut self) {
+        if self.editor_mode != EditorMode::Visual {
+            self.notice =
+                "A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."
+                    .into();
+            return;
+        }
         self.format_menu = Some(FormatMenu::Root);
         self.format_selected = 0;
     }
@@ -1426,58 +1432,19 @@ impl App {
 
     /// Applies a choice from the formatting menu.
     ///
-    /// Which selection it acts on is decided by the mode and by nothing else.
-    /// Up to R5 this always read `Draft::selected_text`, so in the visual
-    /// editor a selection made with Shift+arrows was invisible to Alt+F — the
-    /// menu quietly armed a typing style instead of colouring what was
-    /// highlighted — and a stale raw selection could be rewritten with literal
-    /// HTML behind the reader's back.
+    /// Per the R6 architectural decision, visual formatting belongs exclusively
+    /// to the Visual editor. The source/markdown mode does not apply raw formatting,
+    /// does not switch modes automatically (to protect against losing raw selections),
+    /// and leaves draft bytes, cursor, selection, and history unchanged.
     fn apply_format(&mut self, kind: Kind, color: Option<&'static str>) {
-        if self.editor_mode == EditorMode::Visual {
-            self.apply_visual_format(kind, color);
+        if self.editor_mode != EditorMode::Visual {
+            self.format_menu = None;
+            self.notice =
+                "A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."
+                    .into();
             return;
         }
-        let Some(selected) = self.draft.as_ref().and_then(Draft::selected_text) else {
-            self.edit(Draft::finish_edit_group);
-            match kind {
-                Kind::TextColor => self.active_text_color = color,
-                Kind::Highlight => self.active_highlight = color,
-            }
-            self.format_menu = None;
-            // Never silently (R6 §5). This is the source editor, so the
-            // wrapper it is about to write is going to be on screen — which is
-            // correct here and is a surprise only to somebody who did not know
-            // which editor they were in.
-            self.notice = if color.is_some() {
-                "Estilo armado no modo Markdown/Fonte: a marcação canônica ficará visível. \
-                 Alt+V edita no Visual."
-                    .into()
-            } else {
-                String::new()
-            };
-            return;
-        };
-        if color.is_none()
-            && self
-                .draft
-                .as_mut()
-                .is_some_and(|draft| draft.clear_enclosing_format(kind))
-        {
-            self.format_menu = None;
-            self.notice.clear();
-            return;
-        }
-        let replacement = if let Some(color) = color {
-            let (open, close) = formatting::wrapper(kind, color);
-            format!("{open}{selected}{close}")
-        } else {
-            formatting::clear_selected(&selected, kind)
-        };
-        self.edit(|draft| {
-            draft.replace_selection_with(&replacement);
-        });
-        self.format_menu = None;
-        self.notice.clear();
+        self.apply_visual_format(kind, color);
     }
 
     /// The visual editor's half of the formatting menu.

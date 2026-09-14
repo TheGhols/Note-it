@@ -4583,10 +4583,11 @@ pelo caminho estilizado colocava a quebra de linha *dentro* do wrapper aberto �
 continua armado como estado da interface; o próximo caractere é que materializa
 o wrapper na linha nova.
 
-No modo Markdown/Fonte, armar um estilo deixa de ser silencioso: ali a marcação
-canônica vai mesmo aparecer, o que só é surpresa para quem não sabia em que
-editor estava. **A troca automática para o Visual ao pressionar `Alt+F` na fonte
-não foi implementada**, e a razão está registrada na §44.8.
+No modo Markdown/Fonte, `Alt+F` **não** aplica formatação raw, **não** altera o rascunho, a seleção, o cursor nem cria histórico ou pendência, e **não** troca automaticamente de modo. A interface exibe um aviso claro:
+
+> *"A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."*
+
+Trata-se de uma decisão arquitetural deliberada (e não limitação acidental): a transição atual transporta cursores pontuais, mas não consegue projetar seleções raw arbitrárias de forma lossless sem risco de corrupção ou perda silenciosa de seleção. A formatação visual pertence estritamente ao editor Visual.
 
 ### 44.6 Composição de cor e realce
 
@@ -4627,13 +4628,13 @@ Três pernas, e a primeira delas é nova:
 * `<`, `>` e `&` dentro de uma corrida estilizada continuam recusados no editor
   Visual (`Refusal::EntityInStyledRun`). A recusa não altera byte nenhum e não
   move o caret; o editor Markdown/Fonte aceita esses caracteres.
-* `Alt+F` no modo Markdown/Fonte **não** troca automaticamente para o Visual. A
-  troca de modo carrega um cursor, não uma seleção: `toggle_editor_mode` captura
-  um `RawBookmark` de um ponto. Trocar automaticamente com uma seleção fonte
-  ativa a descartaria em silêncio, que é pior do que o comportamento atual. A
-  R6 §5 manda parar e documentar em vez de inventar, e é isto. Implementar a
-  opção preferida exige mapear uma seleção fonte para uma seleção visual, e uma
-  seleção que cobre delimitadores não é representável por construção.
+* `Alt+F` no modo Markdown/Fonte **não** aplica formatação raw nem troca automaticamente para o Visual.
+  A razão é arquitetural e definitiva: a transição atual transporta cursor, mas não uma seleção raw
+  arbitrária de forma lossless. Trocar automaticamente poderia destruir ou deslocar silenciosamente a seleção
+  do usuário. O contrato definitivo é estrito: no modo Visual `Alt+F` formata a seleção visual ou arma estilo;
+  no modo Markdown/Fonte `Alt+F` não altera seleção, texto nem histórico, mantendo zero pendências e emitindo
+  orientação explícita para alternar via `Alt+V`. Trata-se de um comportamento deliberado de segurança,
+  não de uma limitação acidental.
 * `Enter` no Visual cria um **parágrafo** (o contrato B.4 de `SplitBlock`); não
   existe quebra de linha suave por teclado no editor Visual. `Shift+Enter` não
   foi adicionado: inserir `\n` no fim de um bloco produziria `\n\n` e dividiria

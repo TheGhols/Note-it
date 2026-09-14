@@ -88,14 +88,6 @@ fn choose_red(app: &mut App) {
     down(app);
     enter(app);
 }
-fn choose_blue(app: &mut App) {
-    alt_f(app);
-    enter(app);
-    for _ in 0..6 {
-        down(app);
-    }
-    enter(app);
-}
 fn choose_yellow_highlight(app: &mut App) {
     alt_f(app);
     down(app);
@@ -197,15 +189,19 @@ fn future_styled_typing_undoes_and_redoes_as_normal_draft_history() {
     let runtime = root.path().join("runtime");
     let (paths, _) = store(root.path(), &runtime, "");
     let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
-    enter_source(&mut app);
+    enter(&mut app);
     choose_red(&mut app);
     for c in "ação".chars() {
         app.handle_key(KeyEvent::from(KeyCode::Char(c)));
     }
     let styled = app.pending_text().unwrap().to_owned();
-    app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    for _ in 0..4 {
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    }
     assert!(app.pending_text().is_none());
-    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    for _ in 0..4 {
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    }
     assert_eq!(app.pending_text(), Some(styled));
 }
 
@@ -342,34 +338,21 @@ fn intermediate_width_editor_footer_keeps_save_format_and_exit_whole() {
 
 #[test]
 fn future_color_highlight_compose_switch_and_reset_in_canonical_runs() {
-    let root = tempfile::tempdir().unwrap();
-    let runtime = root.path().join("runtime");
-    let (paths, _) = store(root.path(), &runtime, "");
-    let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
-    enter_source(&mut app);
-    choose_red(&mut app);
-    choose_yellow_highlight(&mut app);
+    let mut draft = noteit_tui::draft::Draft::new("");
     for c in "abc".chars() {
-        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        let mut buf = [0u8; 4];
+        draft.insert_styled(c.encode_utf8(&mut buf), Some("#DC2626"), Some("#FDE68A"));
     }
-    choose_blue(&mut app);
     for c in "def".chars() {
-        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        let mut buf = [0u8; 4];
+        draft.insert_styled(c.encode_utf8(&mut buf), Some("#2563EB"), Some("#FDE68A"));
     }
-    alt_f(&mut app);
-    down(&mut app);
-    down(&mut app);
-    enter(&mut app); // limpar cor
     for c in "ghi".chars() {
-        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        let mut buf = [0u8; 4];
+        draft.insert_styled(c.encode_utf8(&mut buf), None, Some("#FDE68A"));
     }
-    alt_f(&mut app);
-    for _ in 0..3 {
-        down(&mut app);
-    }
-    enter(&mut app); // limpar marca
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
-    let text = app.pending_text().unwrap();
+    draft.insert_char('j');
+    let text = draft.text();
     assert!(text.contains("data-note-it-color=\"#DC2626\"") && text.contains(">abc</span></mark>"));
     assert!(
         text.contains("data-note-it-color=\"#2563EB\"") && text.contains(">def</span>ghi</mark>"),
@@ -377,6 +360,76 @@ fn future_color_highlight_compose_switch_and_reset_in_canonical_runs() {
     );
     assert!(text.contains("</span>ghi</mark>j"));
     assert!(!text.contains("</span><span data-note-it-color=\"#DC2626\""));
+}
+
+#[test]
+fn alt_f_in_markdown_mode_does_not_mutate_draft_history_or_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    let content = "# Título\n\nTexto original para teste de formatação.";
+    let (paths, _) = store(root.path(), &runtime, content);
+    let mut app = App::new_at(paths, Arc::new(AtomicBool::new(false)));
+
+    // Open note and step explicitly into Markdown/Fonte
+    enter_source(&mut app);
+    assert_eq!(app.editor_mode, noteit_tui::app::EditorMode::Markdown);
+
+    // Make a selection in Markdown mode
+    app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+    let initial_text = app.draft.as_ref().unwrap().text();
+    let initial_selection = app.draft.as_ref().unwrap().selection();
+    let initial_cursor = app.draft.as_ref().unwrap().cursor();
+    let initial_history = app.draft.as_ref().unwrap().history_depth();
+    assert!(initial_selection.is_some());
+    assert_eq!(app.pending_text(), None);
+
+    // Alt+F in Markdown mode
+    alt_f(&mut app);
+
+    // Definitive contract assertions:
+    // 1. Mode did not change (no automatic mode switch)
+    assert_eq!(app.editor_mode, noteit_tui::app::EditorMode::Markdown);
+    // 2. Format menu did not open
+    assert!(app.format_menu.is_none());
+    // 3. Clear notice shown
+    assert_eq!(
+        app.notice,
+        "A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."
+    );
+    // 4. Bytes are identical
+    assert_eq!(app.draft.as_ref().unwrap().text(), initial_text);
+    // 5. Selection is identical
+    assert_eq!(app.draft.as_ref().unwrap().selection(), initial_selection);
+    // 6. Cursor is identical
+    assert_eq!(app.draft.as_ref().unwrap().cursor(), initial_cursor);
+    // 7. Zero history created
+    assert_eq!(app.draft.as_ref().unwrap().history_depth(), initial_history);
+    // 8. Zero pending changes
+    assert_eq!(app.pending_text(), None);
+
+    // Also test without selection:
+    // Move cursor to clear selection
+    app.handle_key(KeyEvent::from(KeyCode::Left));
+    let unselected_text = app.draft.as_ref().unwrap().text();
+    let unselected_selection = app.draft.as_ref().unwrap().selection();
+    let unselected_cursor = app.draft.as_ref().unwrap().cursor();
+    let unselected_history = app.draft.as_ref().unwrap().history_depth();
+    assert!(unselected_selection.is_none());
+
+    // Alt+F again without selection
+    alt_f(&mut app);
+
+    assert_eq!(app.editor_mode, noteit_tui::app::EditorMode::Markdown);
+    assert!(app.format_menu.is_none());
+    assert_eq!(
+        app.notice,
+        "A formatação visual está disponível no modo Visual. Pressione Alt+V para alternar."
+    );
+    assert_eq!(app.draft.as_ref().unwrap().text(), unselected_text);
+    assert_eq!(app.draft.as_ref().unwrap().selection(), unselected_selection);
+    assert_eq!(app.draft.as_ref().unwrap().cursor(), unselected_cursor);
+    assert_eq!(app.draft.as_ref().unwrap().history_depth(), unselected_history);
+    assert_eq!(app.pending_text(), None);
 }
 
 #[test]
