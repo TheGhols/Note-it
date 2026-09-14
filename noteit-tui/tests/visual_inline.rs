@@ -138,8 +138,9 @@ fn a_caret_inside_an_enabled_mark_exists_and_maps_to_the_right_byte() {
     assert_eq!(offsets, vec![0, 2, 3, 4, 5, 7]);
 
     // And the outer/inner pair really differs in depth.
-    let outer = document.slots().iter().find(|s| s.source_offset.get() == 0);
-    let inner = document.slots().iter().find(|s| s.source_offset.get() == 2);
+    let slots = document.slots();
+    let outer = slots.iter().find(|s| s.source_offset.get() == 0);
+    let inner = slots.iter().find(|s| s.source_offset.get() == 2);
     assert!(
         outer.unwrap().context_path.len() < inner.unwrap().context_path.len(),
         "the slot before the delimiters is outside the mark; the one after is inside"

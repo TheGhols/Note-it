@@ -134,10 +134,14 @@ fn p0_projection_cost_grows_linearly_in_document_size() {
 
     // Measured at 8.9x for 10x on the P0 baseline. Twice that leaves room for a
     // slower machine and still fails long before quadratic, which would be 100x.
-    assert!(
-        growth < ratio_of_sizes * 2.0,
-        "projection grew {growth:.1}x for {ratio_of_sizes:.1}x the bytes, which is superlinear"
-    );
+    // The ratio is only asserted when the baseline is big enough to mean
+    // something; below the noise floor it is the clock being measured.
+    if small_time > NOISE_FLOOR {
+        assert!(
+            growth < ratio_of_sizes * 2.0,
+            "projection grew {growth:.1}x for {ratio_of_sizes:.1}x the bytes, which is superlinear"
+        );
+    }
 }
 
 #[test]
@@ -152,10 +156,19 @@ fn p0_one_enormous_line_is_not_quadratic() {
     let growth = long_time / short_time.max(f64::MIN_POSITIVE);
 
     println!("P0 long line: 10.0x bytes -> {growth:.1}x time");
-    // Measured at 9.6x for 10x.
+    // Measured at 9.6x for 10x. Asserted only above the noise floor, and
+    // backed by an absolute ceiling that holds either way: quadratic on half a
+    // megabyte of one line would be seconds, not milliseconds.
+    if short_time > NOISE_FLOOR {
+        assert!(
+            growth < 25.0,
+            "one long line grew {growth:.1}x for 10x the bytes, which is quadratic"
+        );
+    }
     assert!(
-        growth < 25.0,
-        "one long line grew {growth:.1}x for 10x the bytes, which is quadratic"
+        long_time < 1.0,
+        "one long line took {:.1} ms, which is not linear work",
+        long_time * 1000.0
     );
 }
 
@@ -633,4 +646,212 @@ fn p4_formatting_a_selection_is_constant_in_the_document_size() {
         large < Duration::from_millis(2),
         "formatting took {large:?} in a large note"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 5.0D.4B.P — performance closure
+// ---------------------------------------------------------------------------
+//
+// B.P consolidates P0-P4 into budgets rather than observations, and answers the
+// one question those gates left open: whether the editor needs incremental
+// invalidation, or whether projecting the whole note per keystroke is within
+// budget for the notes that exist.
+//
+// §26.13 asks for incremental invalidation "apenas se necessária e provada".
+// The measurement below is that proof, in whichever direction it falls.
+
+/// The interactive budget: one frame at 60 Hz.
+///
+/// A keystroke that plans, applies and reprojects inside this is a keystroke
+/// nobody perceives.
+const FRAME: Duration = Duration::from_millis(16);
+
+/// The budget this build may be held to.
+///
+/// A debug build runs this code roughly an order of magnitude slower, so
+/// holding it to a frame would be asserting something about `rustc -O0` rather
+/// than about the editor. The documented numbers come from `--release`, and
+/// that is where the frame budget is enforced; debug keeps a generous ceiling,
+/// which still fails on a hang or a new quadratic but not on being a debug
+/// build.
+/// Below this, a measurement is mostly the clock and a ratio of two of them
+/// says nothing. A growth assertion is only made when the baseline is above it.
+const NOISE_FLOOR: f64 = 0.001;
+
+fn budget() -> Duration {
+    if cfg!(debug_assertions) {
+        FRAME * 40
+    } else {
+        FRAME
+    }
+}
+
+/// The whole cost of one keystroke: reproject, plan, apply.
+fn keystroke_cost(source: &str) -> Duration {
+    use noteit_tui::draft::Draft;
+    use noteit_tui::source_map::SourceOffset;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    let mut best = Duration::MAX;
+    for _ in 0..3 {
+        let mut draft = Draft::new(source);
+        let start = Instant::now();
+
+        let document =
+            VisualDocument::project_with(&draft.text(), draft.generation(), Capabilities::BLOCKS);
+
+        // Exactly what the application does: resolve the caret against the one
+        // block it is in. Asking for `slots()` here would force every block to
+        // be built and would be measuring the benchmark rather than the editor.
+        // Walking back from the end also models the application, which resolves
+        // a caret against nearby blocks rather than the whole note. The last
+        // block of this fixture is a fenced code block and correctly has no
+        // caret at all, so the search skips it.
+        let at = document
+            .blocks()
+            .iter()
+            .rev()
+            .find_map(|block| {
+                document
+                    .slots_of_block(block.id)
+                    .last()
+                    .map(|slot| slot.source_offset)
+            })
+            .expect("a slot somewhere in the note");
+
+        let transaction = plan(
+            &document,
+            VisualCommand::Insert {
+                at: SourceOffset::in_source(&draft.text(), at.get()).expect("a boundary"),
+                text: "x".into(),
+            },
+        )
+        .expect("an insertion");
+        draft.apply_transaction(&transaction).expect("applies");
+
+        best = best.min(start.elapsed());
+    }
+    best
+}
+
+#[test]
+fn bp_a_keystroke_is_within_budget_for_every_real_note_size() {
+    // The store this project is being built against holds 238 notes: median
+    // 354 bytes, 90th percentile 1 005 bytes, largest 1 595 bytes. The sizes
+    // below bracket that by two orders of magnitude in both directions.
+    println!();
+    for bytes in [1_024usize, 4 * 1_024, 16 * 1_024, 64 * 1_024] {
+        let source = realistic(bytes);
+        let cost = keystroke_cost(&source);
+        println!(
+            "BP keystroke at {:>7} bytes: {:>7.3} ms",
+            source.len(),
+            cost.as_secs_f64() * 1000.0
+        );
+        assert!(
+            cost < budget(),
+            "a keystroke in a {} byte note took {cost:?}, over the budget {:?}",
+            source.len(),
+            budget()
+        );
+    }
+    println!();
+}
+
+#[test]
+fn bp_the_point_where_a_full_reprojection_stops_being_free_is_recorded() {
+    // Not an assertion about a threshold — a measurement of one, so the number
+    // in `docs/tui.md` is reproducible rather than remembered.
+    for bytes in [128 * 1_024usize, 512 * 1_024] {
+        let source = realistic(scale(bytes));
+        let cost = keystroke_cost(&source);
+        println!(
+            "BP keystroke at {:>8} bytes: {:>7.3} ms {}",
+            source.len(),
+            cost.as_secs_f64() * 1000.0,
+            if cost < FRAME {
+                "(within a frame)"
+            } else {
+                "(over a frame)"
+            }
+        );
+    }
+}
+
+#[test]
+fn bp_history_memory_is_bounded_under_a_long_editing_session() {
+    use noteit_tui::draft::{Draft, HISTORY_BYTE_BUDGET};
+
+    // Five hundred discrete edits on a note far larger than any real one.
+    let mut draft = Draft::new(&realistic(scale(64 * 1_024)));
+    for index in 0..500 {
+        draft.insert_char(char::from(b'a' + (index % 26) as u8));
+        draft.finish_edit_group();
+    }
+
+    assert!(
+        draft.history_bytes() <= HISTORY_BYTE_BUDGET,
+        "history reached {} bytes",
+        draft.history_bytes()
+    );
+    println!(
+        "BP history after 500 edits: {} entries, {} bytes (budget {HISTORY_BYTE_BUDGET})",
+        draft.history_depth(),
+        draft.history_bytes()
+    );
+}
+
+#[test]
+fn bp_the_budgets_of_p0_through_p4_all_still_hold() {
+    use noteit_tui::source_map::Generation;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+
+    // One consolidated re-run, so a regression in any earlier gate fails here
+    // too rather than waiting for somebody to run that gate again.
+    let cases: [(&str, String, Duration); 5] = [
+        ("1 KB", realistic(1_024), Duration::from_millis(5)),
+        (
+            "100 KB",
+            realistic(scale(100 * 1_024)),
+            Duration::from_millis(200),
+        ),
+        (
+            "20.000 linhas",
+            "linha de texto comum\n".repeat(scale(20_000)),
+            Duration::from_millis(500),
+        ),
+        (
+            "linha de 100.000",
+            "a".repeat(scale(100_000)),
+            Duration::from_millis(200),
+        ),
+        (
+            "unicode denso",
+            "👨\u{200D}👩\u{200D}👧\u{200D}👦ç日".repeat(scale(20_000)),
+            Duration::from_millis(500),
+        ),
+    ];
+
+    for (name, source, budget) in cases {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let document =
+                VisualDocument::project_with(&source, Generation::first(), Capabilities::BLOCKS);
+            let elapsed = start.elapsed();
+            assert!(document.source_len() == source.len());
+            best = best.min(elapsed);
+        }
+        println!(
+            "BP {name:<20} {:>9} bytes  {:>8.2} ms (budget {:?})",
+            source.len(),
+            best.as_secs_f64() * 1000.0,
+            budget
+        );
+        assert!(
+            best < budget,
+            "{name} took {best:?}, over its budget {budget:?}"
+        );
+    }
 }

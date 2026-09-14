@@ -36,6 +36,8 @@
 
 use crate::projection::{project, LexemeKind, NodeId, NodeKind, Projection};
 use crate::source_map::{Generation, GraphemeIndex, SourceOffset, SourceRange};
+use std::cell::RefCell;
+use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -205,8 +207,6 @@ pub struct VisualBlock {
     /// in the gap between blocks, and a Join that started before it would
     /// leave one of the two line endings behind.
     pub content_end: usize,
-    /// How many graphemes it projects.
-    pub graphemes: usize,
 }
 
 /// A place the caret may legally be.
@@ -273,9 +273,15 @@ pub struct VisualDocument {
     source: String,
     projection: Projection,
     blocks: Vec<VisualBlock>,
-    /// Grapheme ranges per block, as `(source range, width)`.
-    cells: Vec<Vec<(SourceRange, usize)>>,
-    slots: Vec<CaretSlot>,
+    /// Grapheme ranges per block, as `(source range, width)`, built on demand.
+    ///
+    /// Lazy because the work is per grapheme and the callers are not: a
+    /// keystroke consults one block and the renderer draws a screenful, while
+    /// building every block eagerly cost 31 ms on a 64 KB note — over a frame,
+    /// which is what B.P measured and refused to accept.
+    cells: RefCell<Vec<Option<Cells>>>,
+    /// Caret slots per block, built on demand for the same reason.
+    slots: RefCell<Vec<Option<Rc<Vec<CaretSlot>>>>>,
     capabilities: Capabilities,
     /// One entry per node: the span of its content, delimiters excluded.
     ///
@@ -303,8 +309,8 @@ impl VisualDocument {
             source: source.to_owned(),
             projection,
             blocks: Vec::new(),
-            cells: Vec::new(),
-            slots: Vec::new(),
+            cells: RefCell::new(Vec::new()),
+            slots: RefCell::new(Vec::new()),
             capabilities,
             content_ranges: Vec::new(),
         };
@@ -341,8 +347,33 @@ impl VisualDocument {
         self.blocks[id.0 as usize]
     }
 
-    pub fn slots(&self) -> &[CaretSlot] {
-        &self.slots
+    /// Every caret slot in the document, in order.
+    ///
+    /// Builds every block, so it is the expensive way to ask. The editor uses
+    /// [`Self::slot_at_offset`] and [`Self::slots_of_block`] instead, which
+    /// touch one block; this exists for tests and for the whole-document
+    /// answers a few commands genuinely need.
+    pub fn slots(&self) -> Vec<CaretSlot> {
+        self.blocks
+            .iter()
+            .flat_map(|block| self.slots_for(block.id).as_ref().clone())
+            .collect()
+    }
+
+    /// The caret slots of one block.
+    pub fn slots_of_block(&self, block: BlockId) -> Rc<Vec<CaretSlot>> {
+        self.slots_for(block)
+    }
+
+    /// The block whose text contains `offset`, found by bisection.
+    pub fn block_containing(&self, offset: usize) -> Option<BlockId> {
+        let index = self
+            .blocks
+            .partition_point(|block| block.coverage.start() <= offset);
+        index
+            .checked_sub(1)
+            .filter(|index| offset <= self.blocks[*index].content_end)
+            .map(|index| self.blocks[index].id)
     }
 
     /// Whether an object measured in `generation` may still be used.
@@ -352,27 +383,35 @@ impl VisualDocument {
 
     /// The graphemes of one block, in order.
     pub fn graphemes_of(&self, block: BlockId) -> impl Iterator<Item = GraphemeCell<'_>> + '_ {
-        self.cells[block.0 as usize]
-            .iter()
-            .map(move |(range, width)| GraphemeCell {
-                source: *range,
+        let cells = self.cells_for(block);
+        (0..cells.len()).map(move |index| {
+            let (range, width) = cells[index];
+            GraphemeCell {
+                source: range,
                 text: range.slice(&self.source),
-                width: *width,
-            })
+                width,
+            }
+        })
+    }
+
+    /// How many graphemes a block projects.
+    pub fn grapheme_count(&self, block: BlockId) -> usize {
+        self.cells_for(block).len()
     }
 
     /// The slots at one boundary, ordered outermost-first.
-    pub fn slots_at(&self, block: BlockId, grapheme: GraphemeIndex) -> Vec<&CaretSlot> {
-        self.slots
+    pub fn slots_at(&self, block: BlockId, grapheme: GraphemeIndex) -> Vec<CaretSlot> {
+        self.slots_for(block)
             .iter()
-            .filter(|slot| slot.block == block && slot.grapheme == grapheme)
+            .filter(|slot| slot.grapheme == grapheme)
+            .cloned()
             .collect()
     }
 
     /// Every boundary's slots, for checking the ordering invariant.
-    pub fn grouped_slots(&self) -> Vec<Vec<&CaretSlot>> {
-        let mut groups: Vec<Vec<&CaretSlot>> = Vec::new();
-        for slot in &self.slots {
+    pub fn grouped_slots(&self) -> Vec<Vec<CaretSlot>> {
+        let mut groups: Vec<Vec<CaretSlot>> = Vec::new();
+        for slot in self.slots() {
             match groups.last_mut() {
                 Some(group)
                     if group[0].block == slot.block && group[0].grapheme == slot.grapheme =>
@@ -395,15 +434,15 @@ impl VisualDocument {
         block: BlockId,
         grapheme: GraphemeIndex,
         direction: Direction,
-    ) -> Option<&CaretSlot> {
+    ) -> Option<CaretSlot> {
         let candidates = self.slots_at(block, grapheme);
         if candidates.is_empty() {
             return None;
         }
 
-        let cells = &self.cells[block.0 as usize];
+        let count = self.grapheme_count(block);
         let has_left = grapheme.0 > 0;
-        let has_right = grapheme.0 < cells.len();
+        let has_right = grapheme.0 < count;
 
         // Rule 1: a directional arrival with a run on the side moved towards
         // takes the innermost slot containing that run. Rules 2 and 3 fall back
@@ -427,26 +466,38 @@ impl VisualDocument {
     }
 
     /// The slot for a source offset, for coming back from raw mode.
-    pub fn slot_for_offset(
-        &self,
-        offset: SourceOffset,
-        direction: Direction,
-    ) -> Option<&CaretSlot> {
+    pub fn slot_for_offset(&self, offset: SourceOffset, direction: Direction) -> Option<CaretSlot> {
         if let Some(exact) = self.slot_at_offset(offset) {
             return Some(exact);
         }
 
         // §27.21/m10: nearest is measured in bytes, ties going to the side of
         // the direction and then to the earlier slot.
+        //
+        // Only the block the offset falls in and its two neighbours are asked.
+        // A nearest-slot search over the whole document would undo the point of
+        // building slots one block at a time.
         let target = offset.get();
-        self.slots.iter().min_by_key(|slot| {
-            let distance = slot.source_offset.get().abs_diff(target);
-            let tie = match direction {
-                Direction::FromRight => usize::from(slot.source_offset.get() > target),
-                _ => usize::from(slot.source_offset.get() < target),
-            };
-            (distance, tie, slot.source_offset.get())
-        })
+        let index = self
+            .blocks
+            .partition_point(|block| block.coverage.start() <= target);
+        let here = index.saturating_sub(1);
+        if self.blocks.is_empty() {
+            return None;
+        }
+        let first = here.saturating_sub(1);
+        let last = (here + 1).min(self.blocks.len() - 1);
+
+        (first..=last)
+            .flat_map(|index| self.slots_for(BlockId(index as u32)).as_ref().clone())
+            .min_by_key(|slot| {
+                let distance = slot.source_offset.get().abs_diff(target);
+                let tie = match direction {
+                    Direction::FromRight => usize::from(slot.source_offset.get() > target),
+                    _ => usize::from(slot.source_offset.get() < target),
+                };
+                (distance, tie, slot.source_offset.get())
+            })
     }
 
     /// Whether a caret may sit exactly at `offset`.
@@ -456,12 +507,12 @@ impl VisualDocument {
     /// bisection. It is consulted once per keystroke, and a linear scan here
     /// made planning cost 16.5x for 10x the bytes — growth that outpaces the
     /// document is the shape P1 and P2 exist to keep out.
-    pub fn slot_at_offset(&self, offset: SourceOffset) -> Option<&CaretSlot> {
-        let index = self
-            .slots
-            .binary_search_by(|slot| slot.source_offset.cmp(&offset))
-            .ok()?;
-        self.slots.get(index)
+    pub fn slot_at_offset(&self, offset: SourceOffset) -> Option<CaretSlot> {
+        let block = self.block_containing(offset.get())?;
+        self.slots_for(block)
+            .iter()
+            .find(|slot| slot.source_offset == offset)
+            .cloned()
     }
 
     /// Whether a slot may be used for editing. Every slot B.2 publishes may.
@@ -469,8 +520,8 @@ impl VisualDocument {
     /// The method exists so that the gate can assert it rather than assume it:
     /// a slot inside a protected region is a defect, not a state to handle.
     pub fn slot_is_editable(&self, id: CaretSlotId) -> bool {
-        self.slots
-            .iter()
+        self.slots()
+            .into_iter()
             .find(|slot| slot.id == id)
             .is_some_and(|slot| !self.offset_is_protected(slot.source_offset))
     }
@@ -658,9 +709,8 @@ impl VisualDocument {
     /// The offset of the block's first caret, which is where its content
     /// begins — after any invisible prefix.
     pub fn first_caret_offset(&self, block: BlockId) -> Option<usize> {
-        self.slots
-            .iter()
-            .find(|slot| slot.block == block)
+        self.slots_for(block)
+            .first()
             .map(|slot| slot.source_offset.get())
     }
 
@@ -724,7 +774,7 @@ impl VisualDocument {
         // by node kind and uneditable in fact: it publishes no caret. Joining
         // into it would move text next to bytes the editor refuses to touch,
         // so having somewhere for a caret to be is the real test.
-        self.slots.iter().any(|slot| slot.block == block)
+        !self.slots_for(block).is_empty()
     }
 
     /// Whether `start..end` touches a lexeme that may never be partly rewritten.
@@ -828,7 +878,6 @@ impl VisualDocument {
         for node in roots {
             let coverage = self.projection.node(node).coverage;
             let id = BlockId(self.blocks.len() as u32);
-            let cells = self.cells_of(node);
             // The end of the block's text, including any trailing syntax that
             // is hidden but still owned — the outer caret after `**abc**` is
             // at byte 7, past the closing asterisks, not at 5 (§26.11).
@@ -858,13 +907,10 @@ impl VisualDocument {
                 node,
                 coverage,
                 content_end,
-                graphemes: cells.len(),
             });
-            self.cells.push(cells);
         }
 
         self.compute_content_ranges();
-        self.build_slots();
     }
 
     /// The graphemes a block projects.
@@ -917,73 +963,92 @@ impl VisualDocument {
         cells
     }
 
-    fn build_slots(&mut self) {
+    /// The graphemes of one block, building them if this is the first ask.
+    fn cells_for(&self, block: BlockId) -> Cells {
+        let index = block.0 as usize;
+        if let Some(cached) = self.cells.borrow().get(index).and_then(Clone::clone) {
+            return cached;
+        }
+        let built = Rc::new(self.cells_of(self.blocks[index].node));
+        let mut cells = self.cells.borrow_mut();
+        cells.resize(self.blocks.len(), None);
+        cells[index] = Some(Rc::clone(&built));
+        built
+    }
+
+    /// The caret slots of one block, building them if this is the first ask.
+    fn slots_for(&self, block: BlockId) -> Rc<Vec<CaretSlot>> {
+        let index = block.0 as usize;
+        if let Some(cached) = self.slots.borrow().get(index).and_then(Clone::clone) {
+            return cached;
+        }
+        let built = Rc::new(self.build_slots_of(block));
+        let mut slots = self.slots.borrow_mut();
+        slots.resize(self.blocks.len(), None);
+        slots[index] = Some(Rc::clone(&built));
+        built
+    }
+
+    fn build_slots_of(&self, block: BlockId) -> Vec<CaretSlot> {
+        let visual = self.blocks[block.0 as usize];
+        if !self
+            .projection
+            .effective_classification(visual.node)
+            .admits_interior_caret()
+            && !self.block_is_granted(visual.node)
+        {
+            return Vec::new();
+        }
+
+        let all = self.cells_for(block);
+        let cells: Vec<(SourceRange, usize)> = all
+            .iter()
+            .copied()
+            .filter(|(range, _)| !self.is_line_ending(*range))
+            .collect();
+
+        // Slot ids are unique within a block and are only ever compared to
+        // slots of the same block, so the counter starts here rather than
+        // needing the whole document to have been built first.
+        let base = (block.0 as usize) << 20;
         let mut slots: Vec<CaretSlot> = Vec::new();
 
-        for block in &self.blocks {
-            // A structured block is `SourceVisible` in the projection until its
-            // capability is granted; the capability is what turns its content
-            // into somewhere a caret may be, while its marker stays protected.
-            if !self
-                .projection
-                .effective_classification(block.node)
-                .admits_interior_caret()
-                && !self.block_is_granted(block.node)
-            {
-                continue;
-            }
+        for boundary in 0..=cells.len() {
+            let lo = match boundary.checked_sub(1).and_then(|index| cells.get(index)) {
+                Some((range, _)) => range.end(),
+                None => visual.coverage.start(),
+            };
+            let hi = match cells.get(boundary) {
+                Some((range, _)) => range.start(),
+                None => visual.content_end,
+            };
 
-            let cells: Vec<(SourceRange, usize)> = self.cells[block.id.0 as usize]
-                .iter()
-                .copied()
-                .filter(|(range, _)| !self.is_line_ending(*range))
-                .collect();
-
-            for boundary in 0..=cells.len() {
-                // The seam region: everything between the visible grapheme
-                // before this boundary and the visible grapheme after it. It
-                // holds the hidden syntax, and every lexeme edge inside it is a
-                // caret position of its own — the outer one before a `**` and
-                // the inner one after it (§26.11, §26.4).
-                let lo = match boundary.checked_sub(1).and_then(|index| cells.get(index)) {
-                    Some((range, _)) => range.end(),
-                    None => block.coverage.start(),
-                };
-                let hi = match cells.get(boundary) {
-                    Some((range, _)) => range.start(),
-                    None => block.content_end,
-                };
-
-                for offset in self.seam_offsets(lo, hi) {
-                    let offset = SourceOffset::trusted(offset);
-                    if self.offset_is_protected(offset) {
-                        continue;
-                    }
-                    if !self.seam_is_legal(offset) {
-                        continue;
-                    }
-                    if !self.boundary_has_editable_neighbour(&cells, boundary) {
-                        continue;
-                    }
-                    if slots
-                        .last()
-                        .is_some_and(|last| last.source_offset == offset)
-                    {
-                        continue;
-                    }
-                    slots.push(CaretSlot {
-                        id: CaretSlotId(slots.len() as u32),
-                        generation: self.generation,
-                        block: block.id,
-                        grapheme: GraphemeIndex(boundary),
-                        source_offset: offset,
-                        context_path: self.path_of_seam(offset.get()),
-                    });
+            for offset in self.seam_offsets(lo, hi) {
+                let offset = SourceOffset::trusted(offset);
+                if self.offset_is_protected(offset) || !self.seam_is_legal(offset) {
+                    continue;
                 }
+                if !self.boundary_has_editable_neighbour(&cells, boundary) {
+                    continue;
+                }
+                if slots
+                    .last()
+                    .is_some_and(|last| last.source_offset == offset)
+                {
+                    continue;
+                }
+                slots.push(CaretSlot {
+                    id: CaretSlotId((base + slots.len()) as u32),
+                    generation: self.generation,
+                    block,
+                    grapheme: GraphemeIndex(boundary),
+                    source_offset: offset,
+                    context_path: self.path_of_seam(offset.get()),
+                });
             }
         }
 
-        self.slots = slots;
+        slots
     }
 
     /// Every lexeme edge in `lo..=hi`, in order.
@@ -1119,6 +1184,9 @@ impl VisualDocument {
         )
     }
 }
+
+/// One block's graphemes: the bytes each occupies and how wide it draws.
+type Cells = Rc<Vec<(SourceRange, usize)>>;
 
 /// Whether a lexeme's bytes reach the screen as graphemes.
 ///

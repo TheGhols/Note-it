@@ -398,7 +398,7 @@ fn a_split_never_cuts_a_grapheme() {
     let block = document.blocks()[0].id;
 
     // Splitting at each grapheme boundary keeps the clusters whole.
-    for index in 0..=document.block(block).graphemes {
+    for index in 0..=document.grapheme_count(block) {
         let cells: Vec<_> = document.graphemes_of(block).collect();
         let byte = cells
             .get(index)

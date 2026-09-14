@@ -998,19 +998,50 @@ impl App {
             });
     }
 
+    /// Left and Right: one caret slot, crossing into the next block at the end.
+    ///
+    /// Asks one block for its slots, and its neighbour only when the move
+    /// leaves it. Asking the whole document would rebuild every block's caret
+    /// map to move one character.
     fn move_visual_cursor(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
         let Some(cursor) = self.visual_cursor else {
             return;
         };
-        let slots = document.slots();
-        let Some(index) = slots
+        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+            return;
+        };
+        let here = document.slots_of_block(slot.block);
+        let Some(index) = here
             .iter()
-            .position(|slot| slot.source_offset == cursor.offset)
+            .position(|candidate| candidate.source_offset == cursor.offset)
         else {
             return;
         };
-        let target = index.saturating_add_signed(delta).min(slots.len() - 1);
-        self.set_visual_cursor(slots[target].source_offset, cursor, extend);
+
+        let target = index as isize + delta;
+        let destination = if target >= 0 && (target as usize) < here.len() {
+            Some(here[target as usize].source_offset)
+        } else {
+            // Off the end of this block: the first or last slot of the next
+            // one, so Left and Right walk the document rather than stopping.
+            let neighbour = (slot.block.0 as isize) + delta;
+            let blocks = document.blocks();
+            usize::try_from(neighbour)
+                .ok()
+                .filter(|index| *index < blocks.len())
+                .and_then(|index| {
+                    let slots = document.slots_of_block(blocks[index].id);
+                    if delta > 0 {
+                        slots.first().map(|slot| slot.source_offset)
+                    } else {
+                        slots.last().map(|slot| slot.source_offset)
+                    }
+                })
+        };
+
+        if let Some(destination) = destination {
+            self.set_visual_cursor(destination, cursor, extend);
+        }
     }
 
     fn move_visual_block(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
@@ -1028,12 +1059,12 @@ impl App {
         // Keep the column where it can be kept, which is what makes Up and Down
         // feel like a text editor rather than a list.
         let destination = document
-            .slots()
+            .slots_of_block(blocks[target].id)
             .iter()
-            .filter(|candidate| candidate.block == blocks[target].id)
-            .min_by_key(|candidate| candidate.grapheme.0.abs_diff(column));
+            .min_by_key(|candidate| candidate.grapheme.0.abs_diff(column))
+            .map(|candidate| candidate.source_offset);
         if let Some(destination) = destination {
-            self.set_visual_cursor(destination.source_offset, cursor, extend);
+            self.set_visual_cursor(destination, cursor, extend);
         }
     }
 
@@ -1044,15 +1075,10 @@ impl App {
         let Some(slot) = document.slot_at_offset(cursor.offset) else {
             return;
         };
-        let mut here: Vec<_> = document
-            .slots()
-            .iter()
-            .filter(|candidate| candidate.block == slot.block)
-            .collect();
-        here.sort_by_key(|candidate| candidate.grapheme.0);
+        let here = document.slots_of_block(slot.block);
         let target = if start { here.first() } else { here.last() };
-        if let Some(target) = target {
-            self.set_visual_cursor(target.source_offset, cursor, extend);
+        if let Some(target) = target.map(|slot| slot.source_offset) {
+            self.set_visual_cursor(target, cursor, extend);
         }
     }
 

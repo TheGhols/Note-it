@@ -4214,3 +4214,76 @@ Não é defeito do código desta fase — nenhuma linha de GUI ou de Core foi to
 prazo **não** foi aumentado, porque isso esconderia um deadlock se um dia houvesse um.
 Fica registrado como o que é: um teste de janela real com prazo de relógio é sensível
 à carga da máquina, e a suíte da TUI cresceu bastante nesta fase.
+
+## 40. Fase 5.0D.4B.P — fechamento de performance
+
+### 40.1 A pergunta que B.P existe para responder
+
+O §26.13 pede invalidação incremental "apenas se necessária e provada". B.P mediu o
+custo **inteiro** de uma tecla — reprojetar, planejar, aplicar — e a resposta foi que
+sim, era necessária:
+
+| Nota | tecla, antes | tecla, depois |
+|---|---|---|
+| 1 KB | 0,203 ms | 0,051 ms |
+| 4 KB | 1,553 ms | 0,076 ms |
+| 16 KB | 6,347 ms | 0,584 ms |
+| 64 KB | **31,662 ms** | 2,511 ms |
+| 128 KB | **84,451 ms** | 5,421 ms |
+| 512 KB | — | 17,783 ms |
+
+O orçamento é um quadro a 60 Hz, 16 ms. Antes, uma tecla estourava o quadro a partir
+de ~32 KB; agora só a partir de ~256 KB.
+
+### 40.2 O que foi feito: construção preguiçosa por bloco
+
+Não foi reparse incremental do lexer. A medição mostrou que o custo não estava em
+analisar a fonte — 100 KB projetam em 3 ms — e sim em construir **células e slots de
+todos os blocos** quando quem pergunta precisa de um.
+
+Células e caret slots passaram a ser construídos sob demanda, por bloco, com cache.
+`slot_at_offset` localiza o bloco por bisseção e pergunta só a ele; `slot_for_offset`
+consulta o bloco e seus dois vizinhos; mover o cursor pergunta ao bloco atual e ao
+seguinte apenas quando sai dele. `slots()`, que constrói tudo, continua existindo para
+os testes e não é usado em nenhum caminho de tecla.
+
+Efeito colateral medido: construir um `VisualDocument` de 100 KB caiu de **48,57 ms
+para 2,50 ms**.
+
+### 40.3 Budgets consolidados
+
+| Cenário | Medida (release) | Budget |
+|---|---|---|
+| 1 KB | 0,03 ms | 5 ms |
+| 100 KB | 2,50 ms | 200 ms |
+| 20.000 linhas | 9,79 ms | 500 ms |
+| linha de 100.000 | 0,85 ms | 200 ms |
+| Unicode denso, 600 KB | 3,63 ms | 500 ms |
+| histórico após 500 edições | 200 entradas, 13,25 MB | 16 MiB |
+
+Os cinco modos de falha proibidos continuam excluídos, agora com um teste consolidado
+que falha aqui se qualquer gate anterior regredir.
+
+### 40.4 Dois erros de medição, corrigidos
+
+1. **O benchmark media a si mesmo.** A primeira versão pegava o caret com
+   `document.slots()`, que constrói todos os blocos — exatamente o que a preguiça
+   evita. Com isso o número da tecla não melhorava, embora o editor tivesse melhorado
+   12 vezes. Corrigido para resolver o caret contra um bloco, que é o que a aplicação
+   faz.
+2. **O orçamento de quadro era exigido em debug.** O gate roda em debug, que é cerca
+   de uma ordem de grandeza mais lento, e ali o orçamento afirma algo sobre o `rustc
+   -O0` e não sobre o editor. Os números documentados vêm de `--release`, e é lá que o
+   quadro é exigido; debug mantém um teto generoso que ainda falha num travamento.
+
+Pelo mesmo motivo, as asserções de **razão** de crescimento passaram a valer somente
+acima de um piso de ruído: a razão entre duas medidas de microssegundos mede o
+relógio. Abaixo do piso vale um teto absoluto, que continua pegando uma quadrática —
+meio megabyte de uma linha só, se fosse quadrático, levaria segundos e não
+milissegundos.
+
+### 40.5 O que fica fora
+
+Reparse incremental do **lexer** não foi implementado e não foi provado necessário: a
+projeção crua de 1 MB leva 13 ms e a de 100 KB, 3 ms. Se um dia notas dessa ordem
+forem comuns, a medida já está aqui e a decisão terá números.
