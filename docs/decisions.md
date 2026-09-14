@@ -3283,3 +3283,150 @@ deixou um chamador para trás.
 * **Não fez tuning de BM25.** `k1` e `b` continuam 1.2 e 0.75.
 * **Não normaliza vetores.** Eles são usados com a norma que vieram, que é o
   correto tanto para um fornecedor que normaliza quanto para um que não.
+
+## ADR-061: A GUI é a experiência principal, o Core continua sendo a autoridade
+
+**Contexto.** O Note-it entra no Ciclo 6 com quatro superfícies — GUI GTK4 +
+WebKitGTK, CLI, TUI e MCP — e um escopo de 22 features novas cujo peso está em
+navegação, descoberta, organização e acabamento visual. Até aqui o roadmap
+tratava as superfícies como pares: o que valia numa valia na outra, e a 5.0D.5
+chegou a portar o motor matemático inteiro para a TUI para provar paridade.
+
+`docs/vision.md` dizia, em duas passagens, que "a interface não muda" e que o
+Note-it "não pretende substituir Obsidian ou Notion". A primeira frase foi
+escrita quando a Fase 4.2 introduziu o Segundo Cérebro headless, e o que ela
+queria dizer era que **aquela** fase não mexeria na interface. Lida no Ciclo 6,
+ela proíbe qualquer evolução da GUI, que é o oposto do que o produto precisa.
+
+**Problema.** Sem uma decisão explícita, duas leituras opostas são defensáveis,
+e as duas são ruins:
+
+* *Paridade literal* — toda feature nasce nas quatro superfícies. Hover preview
+  e popover não têm tradução honesta num terminal, e exigir uma produz ou uma
+  imitação pior ou o adiamento indefinido da feature na GUI.
+* *A GUI decide* — a regra nasce no `main.ts` porque é lá que ela aparece. É
+  exatamente a duplicação que os gates de fronteira existem para impedir, e o
+  caminho pelo qual GUI, TUI e CLI passariam a discordar sobre o que uma nota é.
+
+**Decisão.** Três frases, e a fronteira entre elas é o que decide cada caso:
+
+1. **A GUI é a experiência principal do produto.** Para UX, navegação,
+   descoberta, organização e acabamento, ela tem prioridade: uma feature pode
+   ser desenhada para a GUI primeiro e pode existir só nela quando for
+   interação visual.
+2. **O Core continua sendo a fonte canônica do domínio.** Toda semântica
+   compartilhável — o que resolve um link, o que é um alias, o que conta como
+   backlink, o que uma query seleciona — mora em `noteit-core` e em nenhum
+   outro lugar. Os gates `scripts/check-*-boundary` continuam valendo como
+   estão.
+3. **CLI, TUI e MCP continuam superfícies de primeira classe, complementares.**
+   Nenhuma é congelada, nenhuma é abandonada e nenhuma é obrigada a imitar um
+   desenho gráfico.
+
+O teste é a distinção entre **paridade semântica**, que é obrigatória, e
+**paridade visual**, que não é:
+
+```text
+resolver [[nota]]        semântica  ->  Core, idêntico nas quatro superfícies
+listar backlinks         semântica  ->  Core, idêntico nas quatro superfícies
+preview ao passar o mouse  visual   ->  GUI; a TUI não precisa de equivalente
+popover de atalhos         visual   ->  GUI
+```
+
+A pergunta a fazer diante de cada feature é: *se duas superfícies responderem
+diferente a isto, uma delas está errada?* Se sim, é semântica e vai para o Core.
+Se não, é apresentação e pertence à superfície.
+
+**Consequência para `docs/vision.md`.** A frase "a interface não muda" é
+substituída pela regra de evolução incremental. O que **permanece** intacto:
+local-first, sem nuvem, sem contas, Markdown como fonte da verdade, privacidade,
+captura rápida, e a recusa explícita de virar clone integral do Obsidian ou do
+Notion ou suíte genérica de produtividade. A mudança é de uma frase sobre
+imutabilidade de interface, não da visão do produto.
+
+**O que esta decisão não autoriza.** Não autoriza regra de domínio na GUI. Não
+autoriza remover, congelar ou degradar CLI, TUI, MCP ou o agent-bridge. Não
+autoriza redesign sem justificativa — o §11 do complemento de escopo continua
+exigindo problema, evidência, limitação, impacto, alternativas, proposta, riscos
+e migração antes de qualquer mudança estrutural de interface. E não autoriza
+tratar "a GUI é principal" como resposta a uma pergunta de arquitetura.
+
+## ADR-062: Uma unidade funcional concluída vira uma versão instalada
+
+**Contexto.** Em 14/09/2026 o repositório estava em `1186224` e a aplicação
+instalada era `note-it 0.1.0.r214.g159fe2df-1`, construída de `159fe2df` — três
+commits atrás. O `PKGBUILD` fixa um commit em vez de uma tag porque **não existe
+tag `v0.1.0` neste repositório**, e inventar uma seria publicar uma release que
+ninguém decidiu fazer. O efeito colateral é que a versão do aplicativo nunca se
+moveu: `0.1.0` no `Cargo.toml`, `0.1.0` no `package.json`, `0.1.0` na base do
+`pkgver` — desde o primeiro dia, através de cinco fases funcionais.
+
+**Problema.** Sem política, duas coisas acontecem ao mesmo tempo. O usuário fica
+preso a uma instalação antiga enquanto o Git acumula trabalho aprovado; e não há
+como olhar para um binário e saber o que ele contém, porque `0.1.0` significou
+tudo e portanto nada.
+
+**Decisão.** A versão canônica do aplicativo tem o formato `0.MINOR.PATCH` e
+avança de forma determinística:
+
+```text
+enquanto PATCH < 100:   0.X.N  ->  0.X.(N+1)
+quando PATCH == 100:    0.X.100 -> 0.(X+1).0
+```
+
+Então `0.1.0 → 0.1.1 → … → 0.1.99 → 0.1.100 → 0.2.0 → … → 0.2.100 → 0.3.0`.
+
+Isto é **deliberadamente não** SemVer, e nenhuma ferramenta pode reinterpretá-lo
+como tal. O `0` inicial fica onde está durante todo o amadurecimento do produto:
+a passagem para `1.0.0` é um marco do dono, nunca um efeito colateral de um
+contador, e nenhum agente decide sozinho que o Note-it chegou lá.
+
+**Quando a versão anda.** Quando uma **unidade funcional** definida pelo roadmap
+é concluída *e* aprovada: implementada, testada, integrada, sem blocker no
+escopo, gates obrigatórios verdes, CI do SHA final verde, documentação
+sincronizada, PASS formal. Só então.
+
+**Quando a versão não anda.** Não anda por commit. Não anda por subfase de uma
+unidade ainda incompleta — 6.A.1 a 6.A.5 são uma feature, não cinco versões. Não
+anda por fase estritamente documental ou arquitetural, que é o caso da 6.0
+inteira. Não anda por refatoração sem comportamento observável novo. E não anda
+por trabalho BLOCKED, falhando ou por revisar.
+
+**Um bugfix relevante na versão diária é uma unidade.** Um defeito que atinge
+quem usa o aplicativo todo dia não espera a feature em andamento: ele é
+corrigido, aprovado, versionado e promovido sozinho, e a feature em construção
+sai numa versão posterior. Deixar o usuário numa instalação defeituosa para
+preservar a pureza de um ciclo é a troca errada.
+
+**Fonte canônica única.** `version` em `[workspace.package]` do `Cargo.toml` é a
+versão do aplicativo. `ui/package.json` e o `_appver` do `PKGBUILD` repetem o
+valor por limitação das ferramentas e têm de ser mantidos em sincronia; uma
+divergência entre eles bloqueia a promoção. Nada disso se confunde com o
+identificador do pacote Arch, que é derivado e carrega mais informação:
+
+```text
+APP_VERSION   0.1.1                      a versão do aplicativo
+pkgver        0.1.1.r216.g50b40a5e       APP_VERSION + nº de commits + SHA
+pkgrel        1                          só a reconstrução do mesmo fonte
+```
+
+`pkgrel` nunca substitui um incremento de `APP_VERSION`: ele serve para
+reempacotar o mesmo código, e uma unidade funcional nova não é o mesmo código.
+
+**Definição de Done, para uma unidade destinada à GUI.** Código pronto, testes
+passando, documentação sincronizada, regressões verificadas, CI exigido verde,
+**versão incrementada, pacote produzido, instalação diária atualizada, smoke
+test na instalação real e baseline registrada.** Antes disso não está pronto:
+está mergeado, que é outra coisa.
+
+**Retenção.** Ficam no disco o pacote atual e **um** anterior, para rollback.
+`N-2` só é removido depois que `N` estiver instalada e validada — nunca antes,
+porque o momento em que se descobre que a nova versão está quebrada é
+exatamente o momento em que a anterior precisa existir. Nada fora dos artefatos
+identificados do Note-it é tocado: nem cache global do pacman, nem pacote de
+outro software, nem arquivo de origem desconhecida. Na dúvida, não se apaga —
+segurança dos dados vale mais que espaço.
+
+O histórico oficial não depende de binário guardado: ele está no Git, no SHA, no
+CHANGELOG e na documentação, e um pacote antigo se reconstrói a partir do commit
+que o produziu.

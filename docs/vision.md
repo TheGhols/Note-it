@@ -16,6 +16,7 @@ Ele não pretende substituir bases de conhecimento abrangentes como Obsidian ou 
 - **Verdadeiro WYSIWYG:** O que você vê é texto formatado. Os marcadores de sintaxe Markdown nunca atrapalham o fluxo de edição.
 - **Centrado no teclado:** Criação instantânea de notas (`Ctrl+N`), fechamento rápido (`Ctrl+W`) e controles de formatação intuitivos.
 - **Alto desempenho:** consumo mínimo de recursos, uso de CPU ocioso próximo de zero e inicialização rápida.
+- **Evolução incremental da interface:** a interface pode evoluir quando novas capacidades exigirem melhor navegação, descoberta, organização ou interação — desde que preserve a simplicidade, a captura rápida, a identidade local-first e o modelo fundamental do Note-it. Evoluir é acrescentar com intenção, não redesenhar por gosto: cada mudança estrutural precisa de problema, evidência e alternativas registradas antes de ser aprovada. A GUI é a experiência principal do produto e o `noteit-core` continua sendo a autoridade do domínio, com CLI, TUI e MCP como superfícies complementares de primeira classe — paridade semântica é obrigatória, paridade visual não. Ver ADR-061.
 
 ## Segundo Cérebro, e por que ele não muda esta visão
 
@@ -23,9 +24,9 @@ A partir da Fase 4.2 o Note-it expõe as notas como **contexto recuperável** pa
 uma IA externa, através do MCP. Isso parece estar em tensão com "minimalista e
 sem distrações", e a tensão é resolvida assim:
 
-- **A interface não muda.** A GUI continua sendo notas adesivas rápidas na área
-  de trabalho. Não há painel de IA, chat, barra de assistente nem dashboard. O
-  Note-it continua sem pretender substituir Obsidian ou Notion.
+- **A interface não ganha uma tela de IA.** A GUI continua sendo notas adesivas
+  rápidas na área de trabalho. Não há painel de IA, chat, barra de assistente
+  nem dashboard. O Note-it continua sem pretender substituir Obsidian ou Notion.
 - **A complexidade é headless.** O Segundo Cérebro é um contrato para
   *programas*, não uma tela para pessoas: ele existe no `noteit-core` e no
   servidor MCP, e uma pessoa que nunca conectar uma IA não vê diferença nenhuma.

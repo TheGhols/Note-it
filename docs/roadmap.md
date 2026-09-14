@@ -1068,7 +1068,11 @@ Evolução arquitetônica de um aplicativo para uma plataforma local programáve
           conhecido herdado da série 4.2. A 4.2 foi dada por encerrada uma vez
           antes desta R1 e não estava; o que fechou a diferença foi uma
           reprodução no fio, e é essa a régua para a próxima.
-- [ ] **Fase 4.3 — Recuperação semântica independente de fornecedor.** Liberada pela 4.2R.R1.
+- [x] **Fase 4.3 — Recuperação semântica independente de fornecedor.** Liberada pela 4.2R.R1.
+      *(Marcação corrigida em 14/09/2026: as subfases 4.3A a 4.3R estavam todas `[x]`
+      e a linha-mãe continuou `[ ]`. Era erro de marcação, não de implementação —
+      nenhuma entrega foi alterada, nada foi renumerado e nenhum texto das
+      subfases foi reescrito.)*
       Recuperação semântica *provider-neutral*, com caminho local e offline e providers remotos
       opcionais configurados explicitamente pelo usuário; índice derivado e reconstruível; ranking
       híbrido avaliado por benchmark; proveniência entre nota, revisão, chunks e vetores; e
@@ -1498,7 +1502,1790 @@ Saiu da Fase 4 em vez de ser abandonada: vem depois do trabalho de Core, CLI, MC
 - [x] **Fase 5.0D.4A — Arquitetura do Editor Visual.** Gate exclusivamente arquitetural para definir um modelo seguro e sem perdas de edição visual de Markdown/markup Note-it: mapeamento bidirecional fonte↔visual; semântica de cursor, seleção e mutações; preservação integral de sintaxe desconhecida ou malformada; e interação entre os modos Visual e Markdown fonte. A persistência canônica do Core permanece inalterada, salvo decisão arquitetural separadamente aprovada que prove outra necessidade. Concluída após **quatro rodadas e três revisões adversariais independentes**, registradas integralmente em `docs/tui.md`: o relatório original (seções 1–25), a correção normativa R1 (§26), a correção final R2, a correção R3 (§27) e o fechamento R4 (§28). A primeira revisão independente bloqueou o desenho com 3 BLOCKERs e 21 MAJORs; a segunda confirmou dois blockers fechados, manteve um aberto e apontou oito defeitos introduzidos pela própria correção; a terceira aprovou com dois ajustes de uma frase, ambos aplicados. Nenhuma rodada aprovou a si mesma. A arquitetura resultante fixa: `Lexeme`/`Node`/`ProjectionRun` separados, cobertura byte-exact da fonte, `Generation` monotônica por sessão, precedência de código/fence antes de qualquer candidato HTML, escopo de bloco na álgebra de seleção, três eixos ortogonais de classificação, envelope de reescrita declarado, e 28 propriedades verificáveis por máquina. **Nenhuma implementação de produção do editor visual foi autorizada antes desta aprovação.**
 - [x] **Fase 5.0D.4B — Implementação do Editor Visual.** Os catorze portões da sequência obrigatória do §26.14 passaram na ordem, cada um com gate verde antes do seguinte: B.1 (projeção lossless), P0 (baseline), B.2 (source map somente leitura), P1 (gate pré-interativo), B.3 (edição mínima), B.4 (headings e fronteiras de bloco), P2 (gate pré-inline), B.5 (capacidades inline), P3 (gate pré-HTML), B.6 (HTML canônico), P4 (gate pré-blocos), B.7 (blocos estruturados), B.P (fechamento de performance) e B.R (fechamento adversarial). O editor está ligado à aplicação: `Alt+V` alterna entre Markdown e Visual, a nota sempre abre em Markdown, negrito parece negrito, cor é cor, tarefas mostram caixa, e tudo o que o gate não sabe editar continua visível como fonte e recusa toda edição com aviso nomeando a causa. A suíte da TUI foi de 165 para 426 testes. Os gates de performance encontraram **cinco** custos superlineares que nenhuma revisão de código teria visto — a maior delas fazia um `VisualDocument` de 200 KB levar 598 ms — e o custo de uma tecla caiu de 31,7 ms para 2,5 ms numa nota de 64 KB. Detalhes e medidas em `docs/tui.md`, seções 29 a 41. **5.0E não iniciada.**
 - [x] **Fase 5.0D.5 — Paridade Semântica: Matemática e Flashcards.** A implementação canônica foi auditada antes de qualquer código e o motor foi **portado**, não reinterpretado: mesmo lexer, mesma gramática, mesma tabela de unidades com os mesmos fatores exatos, mesmos sete códigos de erro com as mesmas palavras, mesma formatação pt-BR. Flashcards leem a **projeção lossless** da 5.0D.4B, que é o equivalente terminal do documento ProseMirror que o editor gráfico lê — e é o que permite saber que um `::` dentro de fence, de código inline ou de destino de link não é cartão. A paridade é provada por duas fixtures geradas da implementação canônica e afirmadas pelos **dois** lados em suas próprias suítes, não por comparar as implementações entre si. A única divergência encontrada foi a forma exponencial acima de 1e21, exatamente o tipo de diferença que uma reimplementação "parecida" deixaria passar. Detalhes em `docs/tui.md`, seção 42. **5.0E não iniciada.**
+- [x] **Fase 5.0D.R5 — Correção comportamental do editor Visual.** Nove commits, de `59b2d99` a `aa082c8`, endereçando o que o editor Visual da 5.0D.4B fazia errado em uso real: caret único e quebras de linha, nota em branco editável no Visual, digitação com estilo sem partir marcações, `mark_path` por bisseção em vez de varredura de nós, ida e volta CLI → Visual → CLI, fechamento adversarial, e a sessão isolada informando que continua ativa. **A fase passou nos testes automatizados e falhou no reteste manual** — o registro dessa falha e o que ela ensinou estão em `docs/tui.md`, seção 44, escritos pela R6. Inclui também `e1143a7` e `aa082c8`, que acrescentam o botão de atalhos na barra da nota e separam comando de frase nesse painel — a mesma superfície que a 5.0E-GUI viria a corrigir.
+- [x] **Fase 5.0D.R6 — Fechamento comportamental do editor Visual.** Treze commits, de `9c08642` a `16a182e`. A R5 tinha passado nos testes e falhado no reteste manual, e a R6 foi atrás de exatamente por onde os defeitos passaram: layout do editor Visual em linhas desenhadas, o cursor visual mandando no viewport visual, o caret sobrevivendo à releitura da nota, setas/páginas/seleção total andando por linha visual, formatação e Enter estilizado no editor certo, o Visual como editor padrão com a fonte se identificando, o caret no vão de uma quebra por grafema largo, o quadro do editor Visual deixando de crescer com a nota, canários de tela, a sequência manual num terminal de verdade, revisões adversariais e o contrato definitivo de `Alt+F` no modo Markdown/Fonte. Relatório completo, medidas e limitações em `docs/tui.md`, seção 44.
+- [x] **Fase 5.0E-GUI — Ativação a frio e o pacote diário.** Recorte da 5.0E entregue antes dela, pela razão que o próprio `packaging/arch/PKGBUILD` registra: o usuário precisava de uma versão gráfica instalável para uso diário, e não havia tag `v0.1.0` para fixar. `159fe2d` corrige a ativação a frio pelo barramento de sessão — a ligação global `gapplication action io.github.theghols.NoteIt toggle-layer` só funcionava enquanto o Note-it já estivesse rodando, porque o barramento não tinha como iniciá-lo; o arquivo `resources/io.github.theghols.NoteIt.service` fecha isso, e `DBusActivatable=true` foi deliberadamente **não** posto no `.desktop`, cujas ações são linhas `Exec=` e não GActions registradas. `a59864a` e `ef035ad` fixam o pacote nesse commit e fecham ícone, checagem e lint. O pacote resultante instala quatro binários — `note-it`, `noteit`, `noteit-mcp`, `noteit-tui` —, roda `scripts/check` como `check()` e escreve exclusivamente dentro de `$pkgdir`, sem tocar `~/.local/share/note-it`, `~/.config/note-it` ou `~/.local/state/note-it`. `50b40a5` acrescenta a correção do painel de atalhos, que era um defeito visível na GUI diária. **Esta fase não fecha a 5.0E**, que continua devendo os cinco binários, o `PKGBUILD-git`, o chroot limpo, a tag e o AUR.
+- [x] **Fase 5.1A — A ponte para um cliente de IA externo.** `a7eddfc`. O crate `noteit-agent-bridge` inicia um cliente de IA de linha de comando que a pessoa já instalou e já autenticou — Claude Code, Gemini CLI, Codex — como subprocesso oculto, e converte o que ele transmite em eventos tipados que uma interface gráfica pode desenhar como conversa. Deliberadamente **não** é cliente de modelo (sem HTTP, sem SDK, sem chave, sem token), **não** é gravador (não depende de `noteit-core`, e é esse o ponto: um componente que não consegue ligar o store não pode ser dono dele — ler e gravar continua sendo pelo `noteit-mcp`, com `expected_revision` e a autoridade de escrita), e **não** é terminal (nenhum pseudoterminal, nenhum ANSI, nenhum spinner raspado). Cada adaptador dirige seu cliente num modo headless documentado que emite um JSON por linha; um cliente sem modo não interativo estruturado é recusado pelo nome, com a razão. `scripts/check-agent-bridge-boundary` é o gate mecânico dos três limites. Especificação em `docs/second-brain.md`. **Nenhum consumidor gráfico foi construído**: a ponte existe como biblioteca e a superfície que a usaria não pertence a esta fase.
 - [ ] **Fase 5.0E — Empacotamento Completo, Auditoria e Distribuição (fase final).** Só começa depois de 5.0D.1–D.5 concluídas. Atualização de `packaging/arch/PKGBUILD` contemplando os 5 binários executáveis (`note-it`, `noteit`, `noteit-mcp`, `noteit-embed`, `noteit-tui`), arquivos desktop, ícones e licença; criação de `PKGBUILD-git` para trunk; atualização de `scripts/build.sh`; e validação de integridade em chroot limpo. O fechamento absorve a antiga 5.0R: prova de zero violações em todos os gates de fronteira, zero regressões em Core, CLI, MCP, TUI e GUI, validação instalada do pacote, verificação integral do CI remoto, corte da versão `v0.1.0` e publicação no AUR. **Não há nova fase funcional depois da 5.0E; melhorias futuras entram em um novo ciclo de versão.**
+
+      **Acrescentado em 14/09/2026, sem alterar nada acima.** Dois critérios
+      novos, decididos pelo dono no fechamento do Ciclo 5:
+
+      1. **O botão INFO e o painel de atalhos têm de estar integralmente
+         utilizáveis** em uso normal, incluindo janelas próximas de
+         `MIN_NOTE_WIDTH`. Painel cortado = 5.0E BLOCKED. O defeito foi
+         reproduzido, medido no WebKitGTK real em 220x300, 420x360 e 760x560, e
+         corrigido em `50b40a5`.
+      2. **A 5.0E precede a implementação da Fase 6.** Ver 6.0.PRE, opção (a).
+         Nenhum código da Fase 6 — nem a 6.0 — começa antes do fechamento
+         formal desta fase.
+
+## Fase 6: Rede de notas, navegação e refatoração segura (novo ciclo de versão)
+
+A Fase 5.0E fecha o ciclo `v0.1.0` e diz que "melhorias futuras entram em um novo
+ciclo de versão". A Fase 6 é esse ciclo. Ela converte o escopo mestre de 22
+features (`Note-It_Escopo_Mestre_Novas_Features_e_Roadmap.md`, v1.0, 14/09/2026)
+em fases executáveis, auditadas contra o repositório real em `1186224` e não
+contra a suposição de como o Note-it é feito.
+
+**Nada nesta fase foi implementado.** O que segue é plano. Cada subfase existe
+para receber, depois de aprovada, um prompt fechado de implementação.
+
+### 6.BASELINE — O que já existe e não será reconstruído
+
+Auditado em `1186224`, com a árvore limpa.
+
+**A aplicação gráfica existe, está empacotada e está instalada para uso diário.**
+`note-it 0.1.0.r214.g159fe2df-1` foi construída do commit `159fe2df` e instalada
+em 14/09/2026. O `PKGBUILD` fixa o commit, roda `scripts/check` como `check()` e
+escreve exclusivamente dentro de `$pkgdir` — a instalação não toca
+`~/.local/share/note-it`, `~/.config/note-it` nem `~/.local/state/note-it`.
+Entre `159fe2df` e `1186224` **nenhum arquivo de `src/` ou `ui/` mudou**: os três
+commits de diferença são `noteit-agent-bridge`, `noteit-tui`, packaging, scripts
+e docs. A GUI instalada é, byte a byte de código-fonte, a GUI do HEAD.
+
+**A arquitetura gráfica é GTK4 + WebKitGTK 6.0 + `gtk4-layer-shell`, não Tauri.**
+O host nativo é `src/` (`app.rs`, `note_window.rs`, `webview_bridge.rs`,
+`write_authority.rs`, `layer_shell.rs`) e o editor é um WebView por nota,
+servindo `ui/dist` (TypeScript + Vite + ProseMirror/Tiptap 3). A ponte é um
+contrato JSON tipado em `ui/src/bridge/types.ts`
+(`HostToWebviewMessage` / `WebviewToHostMessage`), com correlação por
+`requestId` e um protocolo de escrita externa
+(`begin_external_write` → `external_write_ready` → `apply_external_document` →
+`external_write_applied` / `abort_external_write`). **Toda feature gráfica nova
+é uma extensão desse contrato — não há comandos Tauri neste projeto e planejar
+sobre eles seria planejar sobre outro produto.**
+
+**Cada nota é uma janela, não uma aba de uma biblioteca.** Não existe janela de
+biblioteca, sidebar permanente ou shell único. `MIN_NOTE_WIDTH = 220`
+(`src/layer_shell.rs:6`) e o orçamento responsivo verificado da 3.14R.1 vai de
+220 a 900 px. Tudo o que o escopo mestre chama de "painel lateral" já tem uma
+forma neste produto — **painel interno, exclusivo, dentro da própria nota** — e
+é assim que `SearchPalette`, `TrashPanel`, `TimerPanel`, `ShortcutsPanel`,
+`FlashcardPanel`, `StudyHub` e `MetadataPanel` já funcionam.
+
+**O Core é a autoridade e já é compartilhado.** `noteit-core` é headless, com
+gate de fronteira mecânico (`scripts/check-core-boundary`) que impede GTK, GDK,
+WebKitGTK, layer-shell, Wayland e Niri de entrarem. GUI, `noteit-cli`,
+`noteit-tui` e `noteit-mcp` consomem o mesmo domínio. Exatamente um gravador por
+store, garantido por lease `flock` e socket Unix privado (`coordination.rs`), com
+`WriteOperation` / `NoteMutation` / `expected_revision` tipados em `write.rs`.
+
+**Fundações reutilizáveis que o escopo mestre pede e que já estão prontas:**
+
+| Fundação | Onde | Para quê serve nesta fase |
+| --- | --- | --- |
+| Identidade normalizada | `metadata::semantic_identity` — minúscula Unicode + dobra de acento, compartilhada com a busca | Resolução de wikilink e alias sem inventar uma terceira normalização |
+| Metadados do usuário | `metadata.rs` — `NoteTags`, `NoteProperties` no front matter | Casa dos aliases e dos estados favorita/fixada/arquivada |
+| Filtro tipado | `filter.rs` — `NoteFilter`, AND de tags e propriedades | Núcleo do modelo de query das Saved Views |
+| Motor de recuperação | `context.rs` + `semantic.rs` — BM25, canal semântico, `Candidate`, `Reason`, degradação declarada | Notas relacionadas e duplicadas, sem um segundo motor |
+| Índice incremental em memória | `semantic::synchronise` — indexa o que falta, esquece o que sumiu, proveniência por revisão | Padrão exato a copiar para o índice de relações |
+| Escrita transacional | `atomic_file.rs`, `write.rs`, `authority.rs`, `revision.rs` | Extract, merge e reescrita de links |
+| Reversibilidade | `trash.rs` (lixeira recuperável), `backup.rs` (7 snapshots, manifesto v3) | Rede de proteção das operações compostas |
+| Projeção de texto visível | `visible_text.rs` + `ui/src/markdown/visibleText.ts` | Saber que um `[[` dentro de fence ou código não é link |
+
+### 6.CONFLITOS — O que a auditoria encontrou antes de qualquer plano
+
+Registrado aqui porque §23 do mandato manda registrar, não corrigir por conta
+própria. **Nada abaixo foi alterado nesta execução.**
+
+**C-1 — A visão publicada contradiz o escopo mestre. Decisão do dono, não do agente.**
+`docs/vision.md` diz, em duas passagens: *"não pretende substituir bases de
+conhecimento abrangentes como Obsidian ou Notion"* e *"A interface não muda. A
+GUI continua sendo notas adesivas rápidas na área de trabalho."* As 22 features
+do escopo — wikilinks, backlinks, aliases, referências de bloco, transclusão,
+outline, breadcrumbs, inspector, templates, saved views — são, somadas, o
+movimento em direção a essa categoria. O escopo mestre (§10) e o mandato proíbem
+"clone integral do Obsidian", e essa proibição continua valendo para cada feature
+individualmente; o conflito é sobre o **agregado** e sobre uma frase publicada
+que deixaria de ser verdadeira. **ADR obrigatório antes da 6.A.1**, decidindo se
+`docs/vision.md` é emendado conscientemente ou se o escopo é reduzido.
+
+**RESOLVIDO em 14/09/2026 pela ADR-061.** O dono decidiu: a GUI é a experiência
+principal, o Core continua sendo a autoridade do domínio, CLI/TUI/MCP continuam
+superfícies complementares de primeira classe, paridade semântica é obrigatória
+e paridade visual não é. `docs/vision.md` recebeu a emenda mínima — a frase "a
+interface não muda" virou "a interface não ganha uma tela de IA", que é o que
+ela queria dizer no contexto do Segundo Cérebro, e um princípio de evolução
+incremental foi acrescentado. **O que permanece intacto:** local-first, sem
+nuvem, sem contas, Markdown como fonte da verdade, privacidade, captura rápida,
+e a recusa explícita de virar clone integral do Obsidian ou do Notion.
+
+**C-2 — A nota não tem título. A sintaxe `[[Título da Nota]]` não tem alvo.**
+`NoteFrontMatter` (`noteit-core/src/model.rs:40`) carrega `id: Uuid`, cor, papel,
+intensidade, fonte e timestamps — e **nenhum título**. O nome legível é
+`search::label_for(&content)`: a primeira linha visível não vazia, truncada. Esse
+rótulo **não é único** (o próprio roadmap da 3.8 registra: "nunca pelo rótulo,
+que duas notas podem compartilhar") e **muda quando o usuário edita a primeira
+linha**. Um wikilink resolvido por rótulo quebra sozinho. Esta é a decisão
+arquitetural central da Fase 6 e está isolada na 6.0.A.
+
+**C-3 — ADR-027 decidiu, com medição, que não há índice. Backlinks precisam de um.**
+ADR-027 recusa índice persistente com número em mão (mil notas varridas, dobradas
+e transformadas em trechos em ~40 ms) e nomeia a condição de revisão: *"o dia em
+que ela falha é o dia em que essa decisão deve ser revista — com o número em
+mãos."* A 6.0.C tem que trazer o número antes de propor qualquer índice, e o
+precedente correto já existe no próprio repositório — `semantic::InMemoryIndex`,
+que é derivado, incremental, em memória e reconstruível, e **não** um arquivo a
+mais para versionar, migrar e incluir no backup.
+
+**C-4 — Não existe operação transacional entre duas notas.** `WriteOperation`
+opera sobre uma nota por vez. Extrair seleção (F15) e mesclar notas (F16) são,
+por definição, duas ou mais notas mudando juntas. Pelo §9 do escopo mestre, essas
+features estão **BLOCKED até existir estratégia compensatória testável** — que é
+exatamente por que 6.D.1 (histórico de versões) vem antes delas.
+
+**C-5 — `MANIFEST_VERSION = 3` é estrito, e todo artefato novo do store o afeta.**
+`backup.rs` copia `notes/`, `trash/`, `assets/`, `config.toml`, `state.json` e
+`study.json`, com cópia estrita e falha fechada. Templates (F11), histórico de
+versões (F14) e Saved Views (F21) introduzem artefatos persistentes: cada um
+exige manifesto v4 e prova de restauração, ou não é feito.
+
+**C-6 — Deriva documental: três frentes existem em git e não existem no roadmap.**
+`git log` em `1186224` mostra 28 commits depois da 5.0D.5 marcados
+`5.0D.R5` (9), `5.0D.R6` (13), `5.0E-GUI` (3) e `5.1A` (1). Nenhum desses
+identificadores aparece em `docs/roadmap.md` ou `CHANGELOG.md`. O crate
+`noteit-agent-bridge` existe, tem testes e gate de fronteira
+(`scripts/check-agent-bridge-boundary`), e nenhuma fase o declara. **Não foi
+corrigido aqui**: reescrever o passado a partir de mensagens de commit seria
+inventar histórico. A 6.0.E faz a reconciliação a partir de `docs/tui.md` e do
+git, com o dono confirmando o recorte.
+
+**RESOLVIDO em 14/09/2026.** A deriva era mais estreita do que a primeira
+auditoria disse: a documentação profunda **existia** — `docs/tui.md` seção 44
+cobre a 5.0D.R6 e cita a R5, e `docs/second-brain.md` especifica a 5.1A. O que
+faltava era o índice. As quatro entradas foram escritas acima a partir dessas
+fontes e do git, sem renumerar nada e sem mover trabalho concluído para fases
+novas. Onde uma fase não tem relatório próprio — a 5.0D.R5 — isso está dito, com
+a faixa de commits, em vez de um relatório que ninguém escreveu.
+
+**C-7 — A Fase 4.3 está `- [ ]` com 4.3A…4.3R todas `- [x]`.** Inconsistência de
+marcação, não de implementação. **RESOLVIDO em 14/09/2026**: a linha-mãe passou a
+`[x]` com a correção anotada nela mesma. Nenhuma entrega mudou.
+
+**C-8 — Dois commits locais não estão em `origin/main` e não passaram por CI.**
+`16a182e` e `1186224` estão à frente de `origin/main` (`a7eddfc`). O CI está
+verde no `a7eddfc` e nos quatro commits anteriores. Nenhuma fase da 6 deve abrir
+sobre uma baseline sem CI.
+
+**C-9 — A 5.0E continua aberta e o pacote diário saiu antes dela.** A 5.0E prevê
+5 binários (incluindo `noteit-embed`), `PKGBUILD-git`, chroot limpo, tag `v0.1.0`
+e AUR. O pacote instalado tem 4 binários e nenhuma tag foi criada — deliberado e
+documentado no próprio `PKGBUILD`. Ver a regra de precedência em 6.0.PRE.
+
+### 6.PROTEGIDO — Áreas que nenhuma fase da 6 pode tocar sem autorização nominal
+
+Esta seção é dirigida a qualquer agente futuro e vale para todas as subfases
+abaixo, sem exceção e sem precisar ser repetida em cada uma.
+
+1. **A instalação diária.** `/usr/bin/note-it`, `/usr/bin/noteit`,
+   `/usr/bin/noteit-mcp`, `/usr/bin/noteit-tui`, `/usr/share/note-it/`,
+   o `.desktop` e o serviço D-Bus. Nenhum `makepkg -i`, `pacman -U`,
+   `install`, `cp` para `/usr` ou substituição de binário. **Ausência de
+   autorização explícita de release significa NÃO INSTALAR.**
+2. **Os dados reais.** `~/.local/share/note-it/{notes,trash,assets,backups}`,
+   `~/.config/note-it/config.toml`, `~/.local/state/note-it/state.json`,
+   `study.json`. Teste usa `scripts/note-it-isolated` — barramento D-Bus privado
+   **e** XDG isolado, porque o Note-it é uma `GApplication` de instância única e
+   XDG sozinho já deixou uma nota de teste cair no store real (Fase 3.7R).
+3. **O que já está estável.** Notas existentes, atalhos, storage, busca,
+   retrieval, flashcards, matemática, conversões, properties, tags, tarefas,
+   timer, AutoPaste, imagens, lixeira e backup. Uma feature nova nunca justifica
+   regressão silenciosa em nenhum deles.
+4. **A fronteira do Core.** Os gates `scripts/check-*-boundary` não são
+   formalidade: nenhuma regra de domínio nova pode nascer na GUI, e nenhum
+   símbolo gráfico pode entrar no Core.
+5. **Versão, packaging, tag e release.** Só a 6.G.4 os toca, e só com
+   autorização nominal no prompt daquela fase.
+
+### 6.PROMOCAO — Como código vira versão diária
+
+Os três estados são distintos e o roadmap não os mistura:
+
+```text
+DESENVOLVIMENTO            VALIDAÇÃO                    PROMOÇÃO
+6.0 → 6.A → 6.B → 6.C  →   6.G.1 regressão integral  →  6.G.4 packaging
+6.D → 6.E → 6.F            6.G.2 migração                    ↓
+   (código no repo)        6.G.3 build candidato        upgrade testado
+   nenhuma instalação      em store descartável              ↓
+                                                        rollback provado
+                                                              ↓
+                                                        nova baseline
+```
+
+**Uma subfase concluída não gera instalação.** Várias macrofases podem fechar
+antes de existir uma atualização gráfica. A instalação diária só muda na 6.G.4,
+depois de 6.G.1–6.G.3 passarem, e a pergunta *"se der errado, como volto sem
+perder minhas notas?"* precisa ter resposta testada antes — não depois.
+
+`dev build` ≠ `candidate build` ≠ `release build` ≠ versão instalada.
+
+### 6.VERSAO — Unidades de promoção e a versão instalada
+
+Política completa na **ADR-062**. Uma fonte canônica, e este roadmap não a
+repete: o que segue é só o recorte que a Fase 6 precisa.
+
+A versão do aplicativo é `0.MINOR.PATCH`, avançando `0.1.1 → 0.1.2 → … →
+0.1.100 → 0.2.0`. Ela anda quando uma **unidade de promoção** fecha com PASS —
+não por commit, não por subfase, não por fase documental.
+
+**Unidades de promoção da Fase 6.** Cada linha abaixo, ao receber PASS, exige
+bump de versão, build, pacote, atualização da instalação diária e smoke test na
+instalação real. Nenhuma outra subfase exige.
+
+| Unidade | O que entrega | Promove? |
+| --- | --- | --- |
+| 6.0 inteira (A, A.2, B, C, D, E) | Contratos e ADRs, nenhum `.rs` | **Não** — documental, ADR-062 |
+| 6.A.1 … 6.A.6 | Wikilinks utilizáveis ponta a ponta, com aliases | **Sim**, ao fechar 6.A.6 |
+| 6.A.7 | Backlinks | **Sim** |
+| 6.A.8 + 6.A.9 | Links de seção e referências de bloco | **Sim**, juntas |
+| 6.A.10 + 6.A.11 | Embeds e preview | **Sim**, juntas |
+| 6.A.12 | Menções não vinculadas | **Sim** |
+| 6.A.R | Auditoria adversarial | **Não** — auditoria |
+| 6.B.1 … 6.B.4 | Outline, histórico, breadcrumbs, inspector | **Sim**, cada uma |
+| 6.C.1 + 6.C.2 | Templates utilizáveis | **Sim**, juntas |
+| 6.C.3, 6.C.4 | Slash commands; Quick Capture | **Sim**, cada uma |
+| 6.D.1 + 6.D.2 | Histórico de versões utilizável | **Sim**, juntas |
+| 6.D.3, 6.D.4 | Extract; Merge | **Sim**, cada uma |
+| 6.E.1, 6.E.2 + 6.E.3 | Estados; Saved Views | **Sim** — 6.E.2 sozinha não, é modelo |
+| 6.F.1, 6.F.2 | Relacionadas; Duplicadas | **Sim**, cada uma |
+| 6.G.* | Validação e promoção final do ciclo | **Sim**, na 6.G.4 |
+
+**6.A.1 a 6.A.5 não promovem sozinhas.** Um parser sem resolução, ou uma
+resolução sem navegação, não é uma feature que alguém possa usar — é meio
+caminho, e meio caminho não vira versão instalada.
+
+**O gate de promoção**, idêntico para toda unidade marcada **Sim**:
+
+```text
+implementação -> testes -> auditoria -> PASS funcional
+   -> bump de versão -> build -> pacote -> validação do pacote
+   -> upgrade da instalação diária -> smoke test na instalação real
+   -> rotação de pacotes (fica N e N-1; N-2 sai só depois de N validada)
+   -> baseline registrada -> PASS de promoção
+```
+
+Uma unidade não está **Done** quando o código está mergeado: está Done quando a
+GUI que o usuário abre todo dia tem a feature dentro e o smoke test provou isso.
+
+### 6.DEPENDENCIAS — Por que cada fase vem onde vem
+
+```text
+                    6.0 contratos (nenhum código de produção)
+                     │
+        ┌────────────┴──────────────┬──────────────┬───────────────┐
+        ▼                           ▼              ▼               ▼
+  6.A.1 identidade           6.C.1 templates   6.E.1 estados   6.D.1 versões
+        │                          │                │               │
+  6.A.2 parser                6.C.2 aplicar    6.E.2 query      6.D.2 UI
+        │                          │                │               │
+  6.A.3 aliases               6.C.3 comandos / 6.E.3 saved      6.D.3 extract ──┐
+        │                          │              views             │          │
+  6.A.4 índice de relações    6.C.4 quick                       6.D.4 merge ────┤
+        │                        capture                                        │
+  ┌─────┴─────┐                                                                 │
+  ▼           ▼                                                                 │
+6.A.5 GUI   6.A.6 TUI/CLI                                                       │
+  │                                                                             │
+6.A.7 backlinks ──────────┬──────────────┐                                      │
+  │                       ▼              ▼                                      │
+6.A.8 headings      6.B.2 histórico  6.B.4 inspector                            │
+  │                   navegação                                                 │
+6.A.9 blocos              │                                                     │
+  │                  6.B.3 breadcrumbs                                          │
+6.A.10 embeds                                                                   │
+  │                                                                             │
+6.A.11 preview        6.B.1 outline (depende só de 6.A.8)                       │
+  │                                                                             │
+6.A.12 menções        6.F.1 relacionadas → 6.F.2 duplicadas                     │
+  │                                                                             │
+  └──────────────────────► 6.G validação global e promoção ◄────────────────────┘
+```
+
+| Aresta | Por quê |
+| --- | --- |
+| 6.0.A → tudo em 6.A | Sem decidir o que um link aponta, o parser não tem alvo (C-2) |
+| 6.0.B → 6.A.2 | Sintaxe decidida antes de espalhar parser por Core, GUI e TUI (§9 do escopo) |
+| 6.0.C → 6.A.4 | ADR-027 precisa ser revisada com número antes de qualquer índice (C-3) |
+| 6.0.D → 6.A.5 | Onde um painel cabe numa nota de 220 px é contrato, não improviso |
+| 6.A.1 → 6.A.2 | Resolver identidade é independente de reconhecer sintaxe; separá-los deixa o resolvedor testável sozinho |
+| 6.A.3 → 6.A.4 | O índice indexa destinos resolvidos; alias muda o que "resolvido" quer dizer |
+| 6.A.4 → 6.A.7 | Backlink é a leitura inversa do mesmo índice, não uma segunda varredura |
+| 6.A.2 → 6.A.5 e 6.A.6 | GUI e TUI consomem o mesmo parser; se a GUI for primeiro e sozinha, a semântica diverge (§13 do mandato) |
+| 6.A.8 → 6.A.9 → 6.A.10 | Embed de seção precisa de heading indexado; embed de bloco precisa de ID de bloco |
+| 6.A.10 → 6.A.11 | Preview e embed renderizam conteúdo de outra nota; o segundo reusa o primeiro, não o contrário |
+| 6.A.7 → 6.A.12 | Menção não vinculada só faz sentido contra o que já está vinculado |
+| 6.A.8 → 6.B.1 | Outline é a mesma AST de headings, apresentada |
+| 6.A.5 → 6.B.2 | Só há o que empilhar depois que um link navega |
+| 6.A.7 → 6.B.4 | O inspector agrega contagens que o índice já tem |
+| 6.D.1 → 6.D.3 e 6.D.4 | C-4: operação composta sem recuperação está BLOCKED |
+| 6.E.2 → 6.E.3 | Uma view é uma query salva; sem modelo de query não há o que salvar |
+| 6.E.1 → 6.E.2 | Estado é mais um campo filtrável; defini-lo depois obrigaria a mudar o modelo duas vezes |
+| 6.F.1 → 6.F.2 | Duplicada é o caso extremo de relacionada, com limiar e comparação |
+| tudo → 6.G | Promoção só acontece sobre um conjunto aprovado |
+
+Não há ciclo. A única aresta que a intuição sugere e que foi **deliberadamente
+cortada** é 6.A.11 preview → 6.A.5 GUI: o preview não pode ser pré-requisito do
+link, senão o link não navega até existir popover.
+
+### 6.0.PRE — Precedência entre a 5.0E e a Fase 6 (decisão pendente do dono)
+
+O roadmap diz que não há fase funcional depois da 5.0E. A 5.0E está aberta, e
+mesmo assim já existe um pacote diário instalado (`5.0E-GUI`, C-9). São dois
+caminhos legítimos e a escolha **não é do agente**:
+
+- **(a) Fechar a 5.0E primeiro** — tag `v0.1.0`, 5 binários, chroot, AUR — e só
+  então abrir a 6.A. Vantagem: o ciclo fecha como foi prometido e a baseline
+  passa a ter um nome estável para rollback.
+- **(b) Abrir a 6.0 em paralelo** e manter a 5.0E como o marco que precede a
+  primeira promoção da 6.G.4. Vantagem: a 6.0 não escreve `.rs` nenhum, então não
+  compete com a 5.0E por código.
+
+**DECIDIDO em 14/09/2026: opção (a).** O dono determinou que a 5.0E é fechada
+formalmente antes de qualquer implementação da Fase 6. A política do projeto
+passa a ser:
+
+```text
+Ciclo 5 -> concluir -> validar -> fechar 5.0E -> baseline -> então a Fase 6
+```
+
+Nem `6.0.A`, nem `6.A.1`, nem qualquer outro código da Fase 6 começa antes disso.
+A Fase 6 **pode permanecer planejada** — este documento é o plano — e **não pode
+entrar em implementação**. A 6.0 é documental e mesmo ela espera: o gate não é
+sobre escrever `.rs`, é sobre encerrar um ciclo antes de abrir o próximo.
+
+---
+
+## Fase 6.0 — Contratos e reconciliação (gate arquitetural)
+
+**Nenhum `.rs`, `.ts` ou `.css` de produção é escrito nesta macrofase.**
+`Cargo.lock` e `pnpm-lock.yaml` permanecem byte-idênticos. É o padrão que a 4.3A
+e a 5.0D.4A estabeleceram neste repositório: medir e decidir antes de implementar.
+
+### 6.0.A — Identidade nomeável da nota
+
+**Objetivo.** Decidir, com evidência, o que `[[algo]]` resolve — e registrar em
+ADR (ADR-063 sugerido) antes de qualquer parser existir.
+
+**Motivação.** C-2: a nota tem `id: Uuid` e nenhum título; o rótulo é derivado,
+mutável e não único. Sem essa decisão, toda a macrofase 6.A é chute.
+
+**Escopo.** Levantar a evidência real (quantas notas do store de teste têm
+rótulos colidentes; quantas teriam rótulo alterado por uma edição de primeira
+linha); avaliar as quatro opções abaixo contra Markdown portável, estabilidade do
+link, migração de notas antigas e paridade GUI/TUI/CLI; escolher uma; registrar
+ADR com o contraexemplo que mata cada alternativa recusada.
+
+| Opção | Custo | Risco principal |
+| --- | --- | --- |
+| (a) Resolver por rótulo derivado | Zero migração | Link quebra ao editar a primeira linha; colisão silenciosa |
+| (b) Campo `title` novo no front matter | Migração de todas as notas; `NoteFrontMatter` versionado | Duas ideias de nome (título vs. rótulo) convivendo |
+| (c) Nome declarado em `properties` (usa `metadata.rs` como está) | Nenhum campo canônico novo | Propriedade é `String` única — aliases precisam de lista (ver 6.0.A.2) |
+| (d) `[[uuid]]` com texto de exibição | Estabilidade máxima | Markdown ilegível fora do Note-it — fere §9 do mandato |
+
+**Fora de escopo.** Escrever o resolvedor; tocar `model.rs`; escolher sintaxe de
+link (é 6.0.B); decidir alias (depende desta, e é 6.0.A.2).
+
+**Dependências.** Nenhuma. É a primeira.
+
+**Componentes.** `docs/decisions.md`, `docs/roadmap.md`. Leitura de
+`noteit-core/src/model.rs`, `search.rs`, `metadata.rs`.
+
+**Contratos a fixar.** Identidade canônica; identidade nomeável; normalização
+(reusar `semantic_identity`, não criar a terceira); política de colisão —
+**desambiguação explícita ou não resolvido, nunca escolha por ordem de
+filesystem**; o que acontece quando o nome muda.
+
+**Riscos.** Escolher (b) sem plano de migração transforma notas antigas em notas
+sem nome. Escolher (a) entrega links que quebram sozinhos e culpa o usuário.
+
+**Testes.** Nenhum código. A evidência é medição sobre um store sintético
+versionado, no padrão de `docs/retrieval-corpus.json`.
+
+**Aceite.** ADR escrita, com: a opção escolhida, o contraexemplo concreto que
+elimina cada uma das outras três, a regra de colisão, a regra de renomeação, e a
+migração descrita passo a passo se houver campo novo. Revisão adversarial
+independente aprovando, no padrão da 5.0D.4A.
+
+**Parada.** Se a opção escolhida exigir alterar `NoteFrontMatter` sem migração
+testável para notas sem o campo, PARAR: isso é mudança de contrato canônico
+estabilizado e §9 do escopo manda apresentar evidência antes de codar.
+
+### 6.0.A.2 — Semântica de alias
+
+**Objetivo.** Decidir como uma nota carrega vários nomes, dado que
+`NoteProperties` é um mapa chave→**String única** (`metadata.rs:189`).
+
+**Escopo.** Escolher entre: propriedade com valor delimitado (barato, feio,
+ambíguo com vírgula no nome); tipo de propriedade com lista (muda o serializador
+de properties e o contrato 4.0B); ou chave de front matter própria fora de
+`properties`. Definir limite de aliases por nota, normalização, e o que acontece
+quando um alias de A é o nome de B.
+
+**Fora de escopo.** Implementar; UI de chips no inspector.
+
+**Dependências.** 6.0.A.
+
+**Contratos.** Alias é nome, nunca cópia; alias nunca é inferido nem persistido
+sem ação do usuário; conflito alias×título×alias tem resposta declarada.
+
+**Aceite.** ADR com o formato YAML exato que uma nota com três aliases terá em
+disco, e a garantia de que uma nota antiga sem o campo continua abrindo.
+
+**Parada.** Se a opção escolhida criar um segundo formato de metadados
+concorrendo com tags/properties, PARAR — §9 do escopo proíbe a terceira fonte.
+
+### 6.0.B — Contrato de sintaxe de links
+
+**Objetivo.** Fixar a gramática de `[[nota]]`, `[[nota#seção]]`, `[[nota^bloco]]`
+e `![[nota]]` antes de qualquer parser, em ADR (ADR-065 sugerido).
+
+**Motivação.** §9 do escopo: "Se houver ambiguidade de sintaxe Markdown,
+registrar decisão arquitetural antes de espalhar o parser por várias camadas." E
+aqui são três camadas reais: `noteit-core`, o Tiptap da GUI e o
+`markdown.rs`/`inline.rs` da TUI.
+
+**Escopo.** Precedência contra o que já existe: fenced code, code span, escape,
+comentário HTML, o subconjunto HTML canônico (`span[data-note-it-color]`,
+`mark[data-note-it-highlight]`, `<u>`), autolink, imagem gerenciada
+`note-it-asset:`, delimitador de flashcard `::` / `:::`, e a sintaxe de
+matemática (`=` inicial, `nome :=`). Escaping. Nome contendo `]]`, `#`, `^`, `|`,
+quebra de linha, ou vazio. Limite de comprimento. Comportamento de `[[` sem
+fechamento até o fim do documento.
+
+**Fora de escopo.** Implementar o parser; decidir aparência.
+
+**Dependências.** 6.0.A, 6.0.A.2.
+
+**Componentes.** `docs/decisions.md`; leitura de `ui/src/markdown/sanitizer.ts`,
+`ui/src/editor/flashcardMark.ts`, `noteit-tui/src/inline.rs`,
+`noteit-core/src/visible_text.rs`.
+
+**Riscos.** `::` de flashcard e `[[` convivem no mesmo parágrafo; um wikilink
+dentro de um bloco de código tem que continuar sendo texto; a projeção
+lossless da 5.0D.4B tem um envelope de reescrita declarado que um nó novo pode
+violar.
+
+**Testes.** Nenhum código. A entrega é uma tabela de casos — pelo menos 40
+entradas, cada uma com a fonte e o resultado esperado — que vira fixture
+compartilhada pelas três implementações na 6.A.2.
+
+**Aceite.** ADR aprovada por revisão adversarial independente; tabela de casos
+completa, incluindo todos os adversariais acima; declaração explícita de que a
+gramática não altera nenhum documento existente (todo `.md` atual do store de
+teste produz exatamente os mesmos bytes ao ser lido e reescrito).
+
+**Parada.** Se a sintaxe escolhida colidir com flashcards, matemática ou o
+envelope de reescrita da 5.0D.4B e a colisão não puder ser resolvida por
+precedência declarada, PARAR e apresentar evidência.
+
+### 6.0.C — Contrato do índice de relações
+
+**Objetivo.** Decidir se existe índice, de que tipo, e com que orçamento —
+revisando ADR-027 **com número em mãos**, como a própria ADR-027 exige.
+
+**Motivação.** C-3. Backlinks (F02), menções (F04), inspector (F22) e duplicadas
+(F20) leem relação inversa. Varrer o store inteiro a cada abertura de painel pode
+ser aceitável; a cada tecla, nunca é.
+
+**Escopo.** Medir a varredura real em stores sintéticos de 100, 1.000, 5.000 e
+20.000 notas: tempo de extrair links de todas, memória do mapa
+destino→origens, e custo de atualizar após uma edição. Comparar com o precedente
+`semantic::InMemoryIndex` (em memória, incremental, com proveniência por
+revisão, reconstruível, **sem arquivo**). Definir orçamentos: abertura de nota,
+abertura de painel de backlinks, custo por tecla (alvo: zero — nada de
+reindexação síncrona no caminho de digitação).
+
+**Fora de escopo.** Implementar o índice; persistir qualquer coisa em disco.
+
+**Dependências.** 6.0.B (só se sabe o que indexar depois de saber o que é link).
+
+**Contratos.** Índice é derivado e descartável; apagá-lo e reconstruí-lo não
+perde informação; falha de índice degrada a UI, nunca torna a nota inacessível;
+atualização é incremental; invalidação é por `NoteRevision`.
+
+**Riscos.** Um índice persistente traria invalidação, versão de formato,
+migração, entrada no manifesto de backup (C-5) e uma segunda implementação para
+a CLI concordar — precisamente os custos que ADR-027 recusou.
+
+**Aceite.** ADR com os quatro números medidos, o orçamento declarado por
+superfície, e a decisão. Se a decisão for "em memória, como o semântico",
+dizer explicitamente que nenhum arquivo novo entra em `StorePaths` — e então
+C-5 não se aplica a esta macrofase.
+
+**Parada.** Se a medição mostrar que a varredura sob demanda excede o orçamento
+de abertura de painel já em 1.000 notas, o índice em memória vira obrigatório e
+a subfase 6.A.4 ganha escopo; se exceder mesmo em memória, PARAR e reprojetar
+antes de 6.A.7.
+
+### 6.0.D — Contrato de superfície gráfica
+
+**Objetivo.** Decidir onde backlinks, outline, inspector, relacionadas,
+breadcrumbs e preview aparecem numa janela de nota de 220 a 900 px, sem
+transformar a nota adesiva num IDE.
+
+**Motivação.** O escopo mestre descreve "painel lateral" seis vezes. Este produto
+não tem sidebar: tem painéis internos exclusivos. Seis painéis novos coordenados
+à mão em `ui/src/main.ts` — que hoje fecha cada painel citando-o pelo nome — é
+dívida no primeiro dia.
+
+**Escopo.** Auditar o padrão atual (`SearchPalette`, `TrashPanel`, `TimerPanel`,
+`ShortcutsPanel`, `FlashcardPanel`, `StudyHub`, `MetadataPanel`) e a coordenação
+em `main.ts`; decidir se nasce um host de painéis com exclusividade declarativa;
+definir o orçamento do cabeçalho (a 3.12R.1 já registra que o clipe some abaixo
+de 300 px e que as ações rápidas somem numa nota recolhida); decidir qual
+informação é painel, qual é linha fina, qual é popover e qual é só um atalho;
+fixar tokens de movimento, foco, `Escape` e `prefers-reduced-motion` reusando os
+da 3.14R.1.
+
+**Fora de escopo.** Redesenho da nota; qualquer alteração visual em produção;
+segunda janela GTK; glassmorphism, gradiente decorativo, sombra pesada, gauge ou
+gráfico — todos proibidos pelo §14 do mandato.
+
+**Dependências.** Nenhuma técnica; conceitualmente informa 6.A.5 em diante.
+
+**Componentes.** `docs/decisions.md`; leitura de `ui/src/main.ts`,
+`ui/src/ui/*.ts`, `ui/src/styles/theme.css`, `src/layer_shell.rs`.
+
+**Riscos.** Painel permanente numa nota de 220 px come a nota. Seis painéis
+exclusivos coordenados manualmente produzem estados impossíveis.
+
+**Aceite.** ADR nomeando, para cada uma das features gráficas da Fase 6, a forma
+que ela assume e a largura mínima em que ela aparece; matriz de larguras
+(220/300/400/600/900) dizendo o que está visível em cada uma; declaração de que
+nenhuma informação essencial existe só em hover (§14 do mandato e F08 do escopo).
+
+**Parada.** Se a conclusão for que a arquitetura de janela por nota não comporta
+a feature, **não implementar mesmo assim**: registrar problema, evidência,
+limitação, impacto, alternativas e proposta, como manda o §11 do complemento, e
+abrir uma subfase própria para a mudança estrutural.
+
+### 6.0.E — Reconciliação documental
+
+**Objetivo.** Fechar a deriva C-6, C-7 e C-9 para que a Fase 6 comece sobre um
+roadmap verdadeiro.
+
+**Escopo.** Reconstruir, a partir de `docs/tui.md` e do git (não de memória), as
+entradas de 5.0D.R1–R6, 5.0E-GUI e 5.1A; declarar `noteit-agent-bridge` no
+roadmap com a fase que o produziu; corrigir a marcação da 4.3; registrar a
+decisão 6.0.PRE; registrar a decisão C-1 sobre `docs/vision.md`.
+
+**Fora de escopo.** Renumerar, reescrever ou invalidar qualquer fase concluída.
+Editar `docs/vision.md` sem ADR aprovada.
+
+**Dependências.** Nenhuma.
+
+**Aceite.** Todo identificador de fase que aparece em `git log` aparece no
+roadmap; nenhum número antigo mudou; `CHANGELOG.md` e `docs/roadmap.md` concordam;
+o dono confirmou o recorte das frentes que não documentou.
+
+**Parada.** Se o histórico não permitir reconstruir uma fase com honestidade,
+registrá-la como "executada, não documentada na época" com a lista de commits —
+e não inventar um relatório que ninguém escreveu.
+
+---
+
+## Fase 6.A — Linking Core
+
+**Features cobertas:** F01 wikilinks, F03 aliases, F02 backlinks, F05 links para
+headings, F06 referências de bloco, F07 embeds, F08 preview, F04 menções não
+vinculadas.
+
+**Princípio da macrofase.** Um único modelo de resolução e relacionamento, no
+Core, antes de qualquer açúcar de UI. A GUI apresenta; o domínio decide. Nenhuma
+das doze subfases abaixo pode acrescentar uma segunda opinião sobre o que um link
+significa.
+
+**Gate comum a todas as subfases da 6.A** (além do gate de cada uma):
+`scripts/check rust` e `scripts/check frontend` completos, incluindo os gates de
+fronteira; CI verde no SHA de fechamento; store real verificado por fingerprint
+idêntico antes e depois de qualquer execução manual; `Cargo.lock` e
+`pnpm-lock.yaml` byte-idênticos salvo dependência aprovada nominalmente.
+
+### 6.A.1 — Resolvedor de identidade no Core
+
+**Objetivo.** Uma função no Core que, dado um nome, devolve exatamente uma de
+três respostas: resolvido para um `Uuid`, ambíguo com a lista de candidatos, ou
+não resolvido. Sem parser, sem sintaxe, sem UI.
+
+**Motivação.** Separar "quem é essa nota" de "como o texto pede por ela" deixa o
+resolvedor testável sozinho e impede que a regra nasça na GUI (§13 do mandato).
+
+**Escopo.** Tipo de resultado tipado (nada de `Option<Uuid>`, que apaga a
+diferença entre ambíguo e inexistente); normalização por `semantic_identity`;
+construção do mapa nome→notas a partir do store; política de colisão da 6.0.A.
+
+**Fora de escopo.** Reconhecer `[[...]]`. Aliases (6.A.3). Índice incremental
+(6.A.4). Qualquer escrita.
+
+**Dependências.** 6.0.A, 6.0.A.2 e a decisão 6.0.PRE registrada.
+
+**Componentes.** `noteit-core` (módulo novo, provavelmente `link.rs`);
+possivelmente `model.rs` se a 6.0.A tiver escolhido campo novo.
+
+**Contratos.** Ambiguidade é um valor, nunca um `unwrap`. Resolver não escreve
+nada e não move `updated_at`.
+
+**Riscos.** Reintroduzir uma normalização paralela à de tags/busca.
+
+**Testes.** Unitários de normalização (maiúscula, acento, espaço, Unicode
+composto vs. decomposto); colisão de duas notas com o mesmo nome; nome vazio;
+nome só de espaços; store vazio; nota ilegível no meio do store (tem que virar
+`ReadWarning`, não erro fatal). Property test: resolver duas vezes dá o mesmo
+resultado.
+
+**Aceite.** Resolver nunca escolhe entre duas notas. Nenhum caminho de leitura
+escreve — provado por fingerprint do store antes/depois, como a 3.8 já faz.
+Cobertura dos casos da tabela da 6.0.A.
+
+**Parada.** Se a 6.0.A tiver escolhido campo novo no front matter e a migração
+não estiver escrita e testada, PARAR.
+
+### 6.A.2 — Parser de wikilinks no Core
+
+**Objetivo.** Reconhecer a gramática da 6.0.B sobre Markdown, produzindo
+referências tipadas com posição na fonte, sem alterar um byte do documento.
+
+**Escopo.** Implementar a tabela de casos da 6.0.B como fixture compartilhada;
+reconhecer nota, `#seção`, `^bloco` e a forma de embed; respeitar precedência de
+fence, code span, escape e HTML admitido; devolver offsets reais na fonte.
+
+**Fora de escopo.** Resolver (é 6.A.1, que esta consome). Renderizar. Escrever.
+Reescrever links.
+
+**Dependências.** 6.0.B, 6.A.1.
+
+**Componentes.** `noteit-core`; fixture em `tests/fixtures/`.
+
+**Contratos.** Parsing é puro e total: toda entrada produz saída, nenhuma
+entrada produz pânico. Markdown continua a fonte da verdade — o parser lê.
+
+**Riscos.** Divergir do que a GUI (Tiptap) e a TUI (`inline.rs`) entendem por
+"dentro de código". A 5.0D.5 já provou que a única defesa é fixture afirmada
+pelos dois lados, nunca comparar implementações entre si.
+
+**Testes.** A fixture das 40+ entradas da 6.0.B rodando no Core. Property test:
+para todo documento, concatenar os trechos entre referências com as próprias
+referências reproduz a fonte byte a byte. Adversarial: `[[` sem fechar em nota de
+2 MB; 10.000 links numa nota; Unicode em nome; `[[a]]]]`; `[[]]`.
+
+**Aceite.** Cobertura byte-exact provada por property test. Nenhum `.md` do store
+sintético muda ao ser lido e reescrito. Custo de parsear uma nota de 64 KB
+medido e registrado, no padrão que a 5.0D.4B estabeleceu.
+
+**Parada.** Se algum caso da fixture não puder ser satisfeito sem mudar a
+gramática, voltar à 6.0.B — não ajustar a expectativa do teste para o CI ficar
+verde (§9 do escopo).
+
+### 6.A.3 — Aliases
+
+**Objetivo.** Uma nota responde por vários nomes; `[[HAS]]` e `[[Hipertensão]]`
+chegam à mesma nota quando ela os declara.
+
+**Escopo.** Persistência no formato decidido em 6.0.A.2; validação (limite,
+normalização, caractere proibido); extensão do resolvedor 6.A.1; detecção de
+conflito alias×nome×alias entre notas diferentes; leitura por CLI e TUI.
+
+**Fora de escopo.** Chips no inspector (6.B.4). Inferir alias. Renomear nota.
+
+**Dependências.** 6.0.A.2, 6.A.1.
+
+**Componentes.** `noteit-core` (`metadata.rs`, `link.rs`), `noteit-cli`,
+`noteit-tui`, ponte GUI.
+
+**Contratos.** Alias nunca é inferido nem gravado sem ação explícita. Alias não é
+cópia. Conflito é reportado, nunca resolvido por sorte.
+
+**Riscos.** Se aliases mudarem o serializador de properties, notas antigas
+precisam continuar abrindo — e `unknown_front_matter` (`model.rs:100`) já é o
+mecanismo que preserva YAML de terceiros; ele não pode ser quebrado.
+
+**Testes.** Nota com 0, 1 e N aliases; alias igual ao próprio nome; alias de A
+igual ao nome de B; alias duplicado entre duas notas; nota antiga sem o campo;
+front matter com YAML de outra ferramenta preservado. Round-trip de serialização.
+
+**Aceite.** Múltiplos aliases resolvem para uma nota. Conflito detectado em teste,
+com a resposta declarada na 6.0.A.2. Busca e wikilink usam a mesma semântica —
+provado por teste que exercita os dois caminhos com a mesma entrada.
+
+**Parada.** Se preservar `unknown_front_matter` e adicionar aliases forem
+incompatíveis no formato escolhido, PARAR e voltar à 6.0.A.2.
+
+### 6.A.4 — Índice de relações
+
+**Objetivo.** Origem→destinos e destino→origens, derivado, incremental e
+reconstruível, dentro do orçamento medido na 6.0.C.
+
+**Escopo.** Estrutura decidida na 6.0.C (esperado: em memória, no padrão
+`semantic::InMemoryIndex`); sincronização incremental — indexar o que falta,
+esquecer o que sumiu; proveniência por `NoteRevision`; trecho contextual da
+ocorrência para o backlink poder mostrar onde o link foi usado; degradação
+declarada quando uma nota não pode ser lida.
+
+**Fora de escopo.** Persistir em disco (salvo se a 6.0.C tiver decidido o
+contrário — e então esta subfase ganha manifesto de backup v4 e prova de
+restauração, C-5). Qualquer painel.
+
+**Dependências.** 6.0.C, 6.A.2, 6.A.3.
+
+**Componentes.** `noteit-core`.
+
+**Contratos.** Apagar o índice e reconstruí-lo não perde informação. Índice
+indisponível degrada a feature, nunca a nota. Nenhuma reindexação no caminho de
+digitação.
+
+**Riscos.** Índice discordar das notas — o custo exato que ADR-027 recusou.
+Crescimento de memória em biblioteca grande.
+
+**Testes.** Reconstrução total igual à incremental, sobre a mesma sequência de
+edições (property test). Nota removida some do índice. Nota restaurada da lixeira
+volta. Nota ilegível vira `ReadWarning` sem derrubar a sincronização. Benchmark
+nos quatro tamanhos da 6.0.C, com os orçamentos como asserção — não como
+comentário.
+
+**Aceite.** Os orçamentos da 6.0.C viram testes que reprovam quando estourados.
+Índice reconstruído de zero é idêntico ao incremental. Memória medida e
+registrada em 20.000 notas.
+
+**Parada.** Se o orçamento estourar, PARAR antes da 6.A.7: um painel de backlinks
+que trava a nota é pior do que nenhum painel (§12 do mandato).
+
+### 6.A.5 — Wikilink na GUI: apresentação e navegação
+
+**Objetivo.** O link parece nativo do texto, distingue resolvido de não
+resolvido, e abrir leva à nota certa.
+
+**Escopo.** Nó/decoração no Tiptap consumindo o parser do Core via ponte;
+mensagens novas na ponte (`resolve_links_requested` / `link_resolution_result` /
+`open_note_requested`, nomes a fixar na implementação); ativação por clique e por
+teclado; abertura reusando o caminho que `open_search_result` já tem em
+`src/app.rs`; criação de nota ausente **somente** por ação explícita, com
+confirmação; estado visual sutil para link quebrado.
+
+**Fora de escopo.** Preview (6.A.11). Backlinks (6.A.7). Histórico
+voltar/avançar (6.B.2). Criar nota automaticamente ao digitar `[[`.
+
+**Dependências.** 6.A.2, 6.A.3, 6.0.D.
+
+**Componentes.** `ui/src/editor/`, `ui/src/markdown/sanitizer.ts`,
+`ui/src/bridge/types.ts`, `src/webview_bridge.rs`, `src/app.rs`.
+
+**Contratos.** O link é texto Markdown portável no arquivo — nada de nó
+proprietário serializado de outro jeito. Digitar `[[` não cria nada. O
+sanitizador conhece a forma canônica ou descarta.
+
+**Riscos.** Round-trip Markdown quebrando (o risco histórico número um deste
+editor, ver Fases 1 e 3.5). Link dentro de bloco de código virando link. Criação
+acidental de nota.
+
+**Testes.** Round-trip: documento com links entra e sai idêntico. Undo depois de
+qualquer inserção restaura exatamente o anterior. Link em fence continua texto.
+Abrir link para nota fechada, nota na lixeira, nota inexistente, nota ambígua.
+Teclado equivalente ao mouse. `updated_at` não se move ao navegar.
+
+**Aceite.** Arquivo continua Markdown legível fora do Note-it — verificado abrindo
+o `.md` em outro editor no roteiro manual. Nenhuma ação implícita cria, apaga ou
+reescreve nota. Round-trip provado por teste.
+
+**Parada.** Se a serialização de ida e volta não for exata, PARAR: um editor que
+altera o arquivo ao abrir é perda de dados silenciosa.
+
+### 6.A.6 — Paridade TUI e CLI
+
+**Objetivo.** A mesma semântica de resolução nas outras duas interfaces, sem uma
+segunda implementação.
+
+**Escopo.** TUI: reconhecer e apresentar links no leitor e no editor Visual
+(5.0D.4B), navegar por teclado. CLI: comando de leitura que lista links de uma
+nota e resolve um nome; `--json` no contrato da 4.0F.
+
+**Fora de escopo.** Backlinks (6.A.7 entrega as três interfaces juntas). Edição
+de link por comando.
+
+**Dependências.** 6.A.2, 6.A.3.
+
+**Componentes.** `noteit-tui`, `noteit-cli`, `noteit-mcp` (se a 6.0.B tiver
+decidido expor links no contrato de tools).
+
+**Contratos.** Regra no Core; interfaces variam, semântica não (§13 do mandato).
+
+**Riscos.** O editor Visual tem envelope de reescrita declarado (5.0D.4A §26) —
+um nó novo pode violá-lo e a violação é silenciosa até uma fixture pegá-la.
+
+**Testes.** Fixture cruzada no padrão da 5.0D.5: um conjunto de notas com links,
+afirmado pelas três implementações em suas próprias suítes. `TestBackend` e PTY
+real para a TUI. Snapshot de saída da CLI.
+
+**Aceite.** Três interfaces, uma resposta, provado por fixture — não por
+comparação entre implementações. Zero violação nos gates de fronteira.
+
+**Parada.** Se o editor Visual não puder exibir link sem violar o envelope,
+exibir como fonte e recusar a edição com aviso nomeando a causa, exatamente como
+a 5.0D.4B já faz — nunca esconder o que não sabe editar.
+
+### 6.A.7 — Backlinks
+
+**Objetivo.** Cada nota mostra quem aponta para ela, com trecho de contexto, sem
+escrever nada na nota.
+
+**Escopo.** Leitura inversa do índice 6.A.4 no Core; painel interno na GUI no
+formato decidido em 6.0.D; equivalente na TUI; comando na CLI; contagem no
+cabeçalho apenas se couber no orçamento da 6.0.D.
+
+**Fora de escopo.** Menções não vinculadas (6.A.12) — que são outra coisa e não
+podem se misturar. Gravar seção "Backlinks" no Markdown. Grafo visual.
+
+**Dependências.** 6.A.4, 6.0.D.
+
+**Componentes.** `noteit-core`, `ui/src/ui/` (painel novo), `src/webview_bridge.rs`,
+`noteit-tui`, `noteit-cli`.
+
+**Contratos.** Backlink é derivado e nunca conteúdo. Edição não espera
+reindexação síncrona. Link explícito e menção textual nunca aparecem na mesma
+lista sem rótulo distinto.
+
+**Riscos.** Painel roubando largura numa nota estreita. Reindexação bloqueando a
+digitação.
+
+**Testes.** Criar link → backlink aparece; apagar link → some; renomear alvo →
+segue a regra da 6.0.A; nota na lixeira não aparece como origem; apagar o índice
+e reconstruir dá a mesma lista. Teste de responsividade em 220/300/400/900 px.
+Teste de que digitar não dispara reindexação.
+
+**Aceite.** Backlinks refletem o estado real depois de salvar. Índice apagado e
+reconstruído produz lista idêntica. Nenhum byte escrito na nota de destino —
+fingerprint antes/depois.
+
+**Parada.** Se manter os backlinks atualizados exigir trabalho no caminho de
+digitação, PARAR e mover para sob demanda (§12 do mandato: não aceitar como
+trade-off).
+
+### 6.A.8 — Headings e links de seção
+
+**Objetivo.** `[[Nota#Seção]]` resolve determinístico e posiciona na seção.
+
+**Escopo.** AST de headings H1–H6 derivada do Markdown no Core; slug estável e
+testado; regra declarada para headings duplicados na mesma nota; navegação com
+scroll curto e destaque transitório respeitando `prefers-reduced-motion`;
+autocomplete de headings ao criar o link, se couber no orçamento da 6.0.D;
+heading inexistente tratado explicitamente — **nunca scroll para posição
+aproximada**.
+
+**Fora de escopo.** Outline (6.B.1, que consome esta AST). Embed de seção
+(6.A.10).
+
+**Dependências.** 6.A.2, 6.A.5.
+
+**Contratos.** Posição nunca é linha: heading é identificado por slug + ordinal,
+e edição de texto vizinho não pode mover o alvo.
+
+**Riscos.** Slug divergente entre Core, GUI e TUI. Nota grande travando ao
+navegar.
+
+**Testes.** Headings duplicados; heading com acento, emoji, pontuação, só
+números, vazio; heading que muda de texto; nota de 2 MB. Fixture de slug afirmada
+pelas três implementações.
+
+**Aceite.** Duplicados tratados por regra declarada e testada. Heading inexistente
+produz diagnóstico claro e não navega. Navegação em nota grande medida.
+
+### 6.A.9 — Referências de bloco
+
+**Objetivo.** Um trecho granular tem identidade explícita, portável e legível.
+
+**Escopo.** Sintaxe de ID de bloco da 6.0.B; comando "Copiar referência do bloco"
+em menu de contexto ou gutter discreto; indexação apenas de blocos com ID
+explícito; detecção de ID duplicado; link direto a bloco.
+
+**Fora de escopo.** Gerar ID em massa em todas as linhas. Embed de bloco
+(6.A.10). Posição de caractere como identidade.
+
+**Dependências.** 6.0.B, 6.A.8.
+
+**Contratos.** O ID vive no Markdown e é legível. Editar o texto do bloco não
+invalida a referência. Editar texto adjacente não a quebra em silêncio.
+
+**Riscos.** Poluir o arquivo do usuário com identificadores. Referência quebrando
+ao mover o bloco.
+
+**Testes.** Editar conteúdo do bloco → referência continua válida; apagar o bloco
+→ referência vira não resolvida com diagnóstico; duplicar o bloco → ID duplicado
+detectado; arquivo continua utilizável como Markdown comum em outro editor.
+
+**Aceite.** Referência sobrevive à edição do conteúdo. IDs duplicados detectados.
+Nenhum ID é criado sem ação do usuário.
+
+**Parada.** Se a sintaxe escolhida gerar ruído visível que o usuário não pediu,
+voltar à 6.0.B.
+
+### 6.A.10 — Embeds e transclusão
+
+**Objetivo.** Ver o conteúdo de outra nota, seção ou bloco dentro da atual, sem
+duplicá-lo.
+
+**Escopo.** Resolução reusando 6.A.1/6.A.8/6.A.9; renderização como visão
+incorporada com origem identificável e caminho para abrir a fonte; atualização
+quando a fonte muda; **detecção de ciclo e limite de profundidade**; política
+para conteúdo pesado, mídia e embed aninhado.
+
+**Fora de escopo.** Editar a fonte pelo embed. Copiar o texto embutido para o
+arquivo atual.
+
+**Dependências.** 6.A.5, 6.A.8, 6.A.9, 6.0.D.
+
+**Contratos.** Uma única fonte de verdade: o embed lê, nunca escreve. Ciclo
+A→B→A produz mensagem segura e compacta, jamais recursão.
+
+**Riscos.** Explosão de memória em ciclo; nota de 2 MB embutida; embed dentro de
+embed dentro de embed.
+
+**Testes.** Ciclo direto A→A; ciclo A→B→A; cadeia até o limite e um além;
+embed de nota inexistente, na lixeira, ambígua; fonte muda → visão atualiza;
+fonte de 2 MB. Teste de memória com limite como asserção.
+
+**Aceite.** Ciclos tratados com mensagem, nunca com travamento. Alterar a fonte
+reflete. Nenhum dado duplicado no arquivo — fingerprint da nota que contém o
+embed inalterado.
+
+**Parada.** Se o limite de profundidade não puder ser provado por teste, a
+feature está BLOCKED: recursão infinita numa nota é perda de sessão.
+
+### 6.A.11 — Preview por mouse e por foco
+
+**Objetivo.** Consultar o destino de um link sem sair da nota, com caminho de
+teclado equivalente.
+
+**Escopo.** Atraso intencional antes de abrir; conteúdo limitado (título, trecho,
+metadados mínimos) reusando o pipeline de leitura e o renderizador seguro que o
+`FlashcardPanel` já usa; cancelamento de leitura anterior; cache leve; abrir o
+destino a partir do popover; equivalente de teclado; sanitização do conteúdo.
+
+**Fora de escopo.** Editar no preview. Carregar a nota inteira quando um trecho
+basta.
+
+**Dependências.** 6.A.5, 6.A.10, 6.0.D.
+
+**Contratos.** Nenhuma informação essencial existe só em hover. O popover
+desaparece de modo previsível e nunca cobre permanentemente o ponto de leitura.
+
+**Riscos.** Enxame de popovers ao mover o cursor; flicker; travar em nota grande.
+
+**Testes.** Cursor atravessando dez links em 200 ms abre zero popovers. Foco de
+teclado abre o mesmo conteúdo. Nota de 2 MB não congela. Leitura cancelada não
+desenha. Conteúdo com HTML desconhecido é renderizado como texto seguro.
+
+**Aceite.** Zero flicker medido. Paridade teclado/mouse provada por teste. Custo
+de abertura medido e dentro do orçamento da 6.0.D.
+
+### 6.A.12 — Menções não vinculadas
+
+**Objetivo.** Sugerir texto que provavelmente se refere a uma nota, sem tocar em
+nada até o usuário aceitar.
+
+**Escopo.** Heurística determinística sobre nomes e aliases, com limites
+declarados; apresentação com nota provável, trecho e justificativa; ação
+"Vincular" com preview da modificação; ignorar ocorrência e ignorar candidato,
+persistidos de forma simples; execução sob demanda ou em background com debounce.
+
+**Fora de escopo.** Camada semântica (fica para 6.F, opcional e derivada).
+Reescrever texto em segundo plano. Misturar com backlinks sem rótulo distinto.
+
+**Dependências.** 6.A.7.
+
+**Contratos.** Nenhum conteúdo muda sem ação explícita. Falso positivo é
+ignorável e o ignore não vira ruído repetido.
+
+**Riscos.** Processamento pesado durante a digitação; sugestão em massa
+transformando a nota num formulário.
+
+**Testes.** Nenhuma escrita sem aceite — fingerprint do store após uma sessão
+inteira de sugestões ignoradas. Ignorar impede repetição. Desempenho de edição
+medido antes e depois, com o delta como asserção.
+
+**Aceite.** Zero mutação sem aceite explícito. Degradação de digitação não
+perceptível, medida. Ignores sobrevivem a reinício.
+
+**Parada.** Se a heurística exigir varredura a cada tecla, PARAR e mover para sob
+demanda.
+
+### 6.A.R — Auditoria adversarial da macrofase
+
+**Objetivo.** Provar que a rede de links não perde, não inventa e não trava.
+
+**Escopo.** Auditoria ofensiva no padrão da 4.3R e da 5.0D.4B/B.R: notas
+adversariais, ciclos, Unicode, nomes colidentes, store danificado, índice
+corrompido, nota de 2 MB, 20.000 notas, biblioteca antiga sem nenhum link.
+Revisão independente que não aprova a si mesma.
+
+**Aceite.** Zero regressão em Core, CLI, MCP, TUI e GUI. Todos os orçamentos de
+6.0.C e 6.0.D como asserções verdes. Nenhum `.md` de uma biblioteca pré-6.A é
+alterado por abrir, navegar ou indexar — provado por fingerprint de árvore
+inteira. CI verde no SHA final.
+
+**Parada.** Qualquer perda de conteúdo, qualquer mutação silenciosa, qualquer
+orçamento estourado: BLOCKED, sem exceção e sem "trade-off aceitável".
+
+---
+
+## Fase 6.B — Navegação estrutural
+
+**Features:** F09 outline, F18 histórico de navegação, F10 breadcrumbs,
+F22 inspector. Todas reusam os mesmos IDs, headings e índices derivados da 6.A —
+nenhuma recalcula o que já existe.
+
+### 6.B.1 — Outline da nota
+
+**Objetivo.** Navegação hierárquica pelos headings da nota atual.
+
+**Escopo.** Consumir a AST de headings da 6.A.8; clicar e navegar; destaque
+discreto da seção ativa durante a rolagem quando for tecnicamente seguro;
+recolher níveis profundos com o estado guardado **como preferência de UI**;
+drawer/overlay em viewport estreita conforme 6.0.D.
+
+**Fora de escopo.** Alterar headings para construir o outline. Painel permanente
+em nota estreita. Recalcular a árvore inteira a cada tecla.
+
+**Dependências.** 6.A.8, 6.0.D.
+
+**Componentes.** `ui/src/ui/`, `ui/src/editor/`, ponte; equivalente na TUI se a
+6.0.D concluir que cabe.
+
+**Contratos.** Estado visual nunca é persistido no Markdown.
+
+**Riscos.** Jitter de layout durante a digitação; recomputação cara.
+
+**Testes.** Outline acompanha edição com debounce, sem defasagem perceptível;
+clique leva ao heading correto; zero jitter medido em digitação contínua;
+nenhuma escrita no `.md`.
+
+**Aceite.** Nenhum byte escrito. Custo por atualização medido. Painel some abaixo
+da largura declarada na 6.0.D.
+
+### 6.B.2 — Histórico de navegação (voltar/avançar)
+
+**Objetivo.** Explorar links em profundidade sem perder o caminho.
+
+**Escopo.** Pilha por contexto/janela — e "janela" aqui é **uma nota**, porque é
+assim que este produto é feito; entrada modelada como `note_id` + localização
+opcional + contexto mínimo; botões discretos no cabeçalho, desabilitados quando
+não aplicáveis; atalhos; restauração de posição quando viável; limite de tamanho
+em memória.
+
+**Fora de escopo.** Confundir com histórico de versões (6.D). Persistir rastro de
+navegação indefinidamente. Contar cada scroll como entrada.
+
+**Dependências.** 6.A.5, 6.0.D.
+
+**Componentes.** `ui/src/`, `src/app.rs` (a ativação de nota já existe pelo
+caminho de `open_search_result`), `src/note_window.rs`.
+
+**Contratos.** Abrir uma rota nova depois de voltar descarta o ramo "avançar".
+Navegar nunca move `updated_at`.
+
+**Riscos.** Semântica confusa quando a nota de destino é outra janela; vazamento
+de memória na pilha.
+
+**Testes.** Ordem de back/forward correta em sequência de 20 saltos; ramo forward
+descartado; limite respeitado; posição restaurada sem salto errático; nota
+destino fechada/na lixeira/apagada entre a ida e a volta.
+
+**Aceite.** Ordem correta provada por teste. Limite como asserção. Nenhuma
+escrita.
+
+### 6.B.3 — Breadcrumbs contextuais
+
+**Objetivo.** Contexto real de localização, sem inventar hierarquia.
+
+**Escopo.** Auditar primeiro **quais fontes determinísticas de contexto este
+produto realmente tem** — o store é plano (`notes/<uuid>.md`, sem pastas), então
+"pasta atual" não existe aqui; sobram cadeia de navegação (6.B.2) e heading
+atual (6.A.8). Definir semanticamente cada segmento antes de desenhar. Linha fina
+e discreta, truncamento elegante, navegação por segmento quando houver destino.
+
+**Fora de escopo.** Inventar hierarquia por IA. Misturar pasta, tag e backlink
+numa falsa árvore. Barra alta e pesada.
+
+**Dependências.** 6.B.2, 6.A.8, 6.0.D.
+
+**Contratos.** Cada segmento corresponde a estado real. Nenhum caminho fictício.
+
+**Riscos.** Sem hierarquia de pastas, o breadcrumb pode não ter o que mostrar —
+e então a resposta honesta é não mostrá-lo.
+
+**Testes.** Cada segmento navega para destino real; nome longo trunca; nota sem
+contexto não exibe barra vazia.
+
+**Aceite.** Zero caminho fictício. A auditoria de fontes de contexto está escrita
+e, se a conclusão for que não há o que mostrar, **a feature é entregue como
+"avaliada e deliberadamente não implementada"**, com a razão — no padrão que a
+3.8 usou para renderização compacta de links.
+
+### 6.B.4 — Note Inspector
+
+**Objetivo.** Concentrar informação da nota num painel discreto, agregando o que
+já existe.
+
+**Escopo.** Modelo de view derivada somando fontes existentes: `created_at` /
+`updated_at` (`model.rs`), contagem de palavras/caracteres via
+`visible_text.rs`, links e backlinks (6.A.4), tags e properties
+(`metadata.rs`), flashcards (`study.rs`), tarefas (`task.rs`), aliases (6.A.3).
+Distinguir claramente campo editável de métrica derivada. Debounce na atualização.
+
+**Fora de escopo.** Inventar métrica de "qualidade" ou pontuação. Dashboard
+permanente. Duplicar controle que já tem lugar melhor. Recalcular o que o índice
+já tem.
+
+**Dependências.** 6.A.7, 6.0.D.
+
+**Contratos.** Nenhuma métrica exige mutação do arquivo. Onde o dado não é
+confiável, **documentar a limitação em vez de fabricar** — `created_at` é
+`Option` e uma nota antiga pode não tê-lo (`model.rs:58`); o inspector diz
+"desconhecido", não uma data inventada.
+
+**Riscos.** Virar dashboard; recalcular tudo a cada tecla.
+
+**Testes.** Métricas batem com conteúdo real em fixtures; painel some por
+completo; nota sem `created_at` mostra desconhecido; nenhuma escrita.
+
+**Aceite.** Números conferem com o conteúdo. Painel ocultável. Zero mutação.
+
+---
+
+## Fase 6.C — Captura e criação
+
+**Features:** F11 templates, F12 comandos "/", F13 Quick Capture + Inbox.
+
+### 6.C.1 — Motor de templates no Core
+
+**Objetivo.** Templates como Markdown comum, com substituição de variáveis
+mínima e segura, no Core.
+
+**Escopo.** Decidir onde o template mora — `StorePaths` hoje tem `notes/`,
+`trash/`, `backups/`, `assets/` e nada mais; um diretório novo exige entrada no
+manifesto de backup (C-5, manifesto v4) e prova de restauração, **ou** templates
+são notas marcadas por tag/property e nada novo entra no store. Motor de
+substituição com conjunto fechado de variáveis (título, data), escaping definido,
+comportamento documentado para variável desconhecida. CRUD de templates.
+
+**Fora de escopo.** Linguagem de script. Executar shell, JavaScript ou qualquer
+código. Vínculo oculto entre nota criada e modelo. Slash commands (6.C.3).
+
+**Dependências.** 6.0.D para a superfície; nenhuma da 6.A.
+
+**Componentes.** `noteit-core`, possivelmente `backup.rs` (manifesto v4),
+`storage.rs` (`StorePaths`), `noteit-cli`.
+
+**Contratos.** Nenhum código arbitrário é executado — isso é requisito de
+segurança, não preferência. Variável desconhecida tem comportamento documentado e
+testado. Aplicar template nunca sobrescreve nota existente sem fluxo explícito.
+
+**Riscos.** Diretório novo fora do backup = dado do usuário que um restore não
+traz de volta. Motor de variáveis virando avaliador.
+
+**Testes.** Substituição correta; variável desconhecida; template vazio;
+template com `{{` sem fechar; tentativa de injeção; round-trip Markdown;
+**se houver diretório novo: backup + restore em segunda árvore XDG vazia**, no
+padrão que a 3.12R provou para `assets/`.
+
+**Aceite.** Markdown previsível. Zero execução de código. Se store novo:
+manifesto v4 com restauração provada.
+
+**Parada.** Se o motor precisar de condicional, laço ou chamada, PARAR: isso é
+linguagem de programação e o escopo a proíbe na primeira versão.
+
+### 6.C.2 — Templates nas interfaces
+
+**Objetivo.** Criar nota a partir de template em 1–2 ações.
+
+**Escopo.** Galeria/lista compacta com preview e busca na GUI; comando
+equivalente na CLI e na TUI; template padrão por ação explícita, se a auditoria
+mostrar que faz sentido.
+
+**Fora de escopo.** Modal gigante. Vínculo com o modelo depois de criada.
+
+**Dependências.** 6.C.1, 6.0.D.
+
+**Testes.** Criar de template em GUI, CLI e TUI produz o mesmo Markdown —
+fixture cruzada. Cancelar não cria nada.
+
+**Aceite.** Mesma saída nas três interfaces, provada por fixture.
+
+### 6.C.3 — Comandos "/" no editor
+
+**Objetivo.** Inserção rápida de estruturas que **já têm contrato** no Note-it.
+
+**Escopo.** Palette contextual ao digitar `/` em contexto válido; registry
+declarativo de comandos, separando descoberta da transformação textual; filtro
+por texto; teclado integral; toda inserção numa transação de editor. Conjunto
+inicial restrito ao que existe: heading, checklist, callout (3.5), código (3.5),
+tabela, comentário (3.5), flashcard (3.13), data, imagem (3.12), template (6.C.1).
+
+**Fora de escopo.** Bloco invisível ou proprietário. Interceptar `/` dentro de
+código, URL ou math sem regra clara. Virar central de recursos fora de notas.
+
+**Dependências.** 6.C.1, 6.0.B (a regra de contexto válido mora junto com a
+precedência de sintaxe).
+
+**Componentes.** `ui/src/editor/`, `ui/src/ui/`.
+
+**Contratos.** Undo restaura exatamente o anterior. Todo comando produz Markdown
+válido.
+
+**Riscos.** `/` em URL, em fence, em expressão matemática (`10/2`), em caminho.
+
+**Testes.** `/` em URL, em fence, em code span, em math, em texto normal; undo
+depois de cada comando; Markdown resultante round-trip; teclado completo.
+
+**Aceite.** Undo exato provado para todo comando do registry. Zero interferência
+em URL, código e matemática — caso por caso em teste.
+
+### 6.C.4 — Quick Capture e Inbox
+
+**Objetivo.** Capturar uma ideia em segundos sem interromper o fluxo.
+
+**Escopo.** Atalho global configurável reusando o mecanismo que já existe — o
+Note-it é `GApplication` de instância única com despachante CLI e GActions
+(`note-it new`, `toggle-layer`, o serviço D-Bus de ativação a frio da 5.0E-GUI);
+janela mínima; título opcional e conteúdo rápido; gravação pela mesma camada
+segura (`WriteOperation::CreateNote`, publicação atômica condicionada à ausência);
+local de Inbox definido — **tag/property, não diretório novo**, salvo decisão em
+contrário com manifesto v4; confirmação discreta; abrir a captura completa depois.
+
+**Fora de escopo.** Segundo daemon ou processo. Capturar clipboard, áudio ou
+contexto externo (o AutoPaste da 3.11 já é outra feature e continua sendo).
+Manter texto só em memória.
+
+**Dependências.** 6.C.1 (se a captura aplicar template), 6.0.D.
+
+**Componentes.** `src/app.rs`, `src/cli.rs`, `src/layer_shell.rs`,
+`resources/*.desktop`/`.service`, `noteit-core/src/write.rs`.
+
+**Contratos.** Captura nunca sobrescreve nota existente. Falha de gravação é
+informada e o texto não desaparece. Atalho repetido não deixa processo órfão.
+
+**Riscos.** Segundo daemon. Roubo de foco. Texto perdido em falha de escrita.
+
+**Testes.** Cem invocações seguidas sem processo órfão — no padrão do harness de
+isolamento da 3.7R, com barramento D-Bus privado. Falha de escrita simulada
+preserva o texto. Captura em store cheio. Colisão de identificador.
+
+**Aceite.** Zero processo órfão medido. Zero sobrescrita. Texto recuperável em
+falha, provado.
+
+**Parada.** Se a captura exigir um segundo processo permanente, PARAR: contraria
+"daemon ocioso não trabalha", que é propriedade medida deste produto desde a
+Fase 2.
+
+---
+
+## Fase 6.D — Segurança editorial e refatoração
+
+**Features:** F14 histórico de versões, F15 extrair seleção, F16 mesclar notas.
+
+**Por que nesta ordem.** C-4: não existe operação transacional entre duas notas.
+Pelo §9 do escopo, extract e merge estão **BLOCKED até existir estratégia
+compensatória testável**. 6.D.1 é essa estratégia.
+
+### 6.D.1 — Histórico de versões: contrato e armazenamento
+
+**Objetivo.** Poder voltar uma nota a um estado anterior, com política explícita.
+
+**Escopo.** Auditar primeiro a persistência atual — `atomic_file.rs`,
+`save_note_atomic`, o ponto de commit da 3.4R.2, e o que a lixeira (3.9) e o
+backup (3.9/3.12R) já cobrem, para não construir um terceiro mecanismo de
+recuperação. Decidir snapshot vs. delta, gatilho, retenção e limite de
+armazenamento, em ADR. Impacto em SSD medido, porque este produto trata escrita
+como custo real. Formato compatível com o backup: **artefato novo exige manifesto
+v4 e restauração provada** (C-5).
+
+**Fora de escopo.** UI (6.D.2). Cópia integral a cada tecla. Confundir com backup
+externo. Apagar histórico em silêncio por limite.
+
+**Dependências.** 6.0.C (orçamento), nenhuma da 6.A.
+
+**Componentes.** `noteit-core` (módulo novo), `backup.rs`, `storage.rs`.
+
+**Contratos.** Restaurar **cria um novo estado atual** e preserva o histórico
+anterior — nunca destrói a versão que estava valendo. Retenção é documentada e
+testada. Falha de histórico nunca bloqueia o salvamento de uma nota.
+
+**Riscos.** Degradar o salvamento normal; encher o disco; histórico divergindo do
+arquivo.
+
+**Testes.** Retenção como asserção; restaurar preserva a versão anterior;
+histórico corrompido não impede salvar; custo de salvamento medido antes/depois
+com o delta como asserção; backup + restore trazem o histórico se ele for parte
+do store.
+
+**Aceite.** Restauração nunca perde a versão corrente anterior. Política de
+retenção testada. Degradação de salvamento medida e dentro do orçamento.
+
+**Parada.** Se o histórico atrasar o salvamento de forma perceptível, PARAR: o
+editor tem prioridade sobre recurso derivado (§12 do mandato).
+
+### 6.D.2 — Histórico de versões: interface
+
+**Escopo.** Timeline compacta com data/hora; ver versão; diff; restaurar como
+ação deliberada, **visualmente separada** de "ver versão", com confirmação.
+
+**Fora de escopo.** Restauração destrutiva sem confirmação. Merge de versões.
+
+**Dependências.** 6.D.1, 6.0.D.
+
+**Testes.** Restaurar pede confirmação; cancelar não altera nada; diff
+corresponde ao conteúdo real; nota sem histórico mostra estado vazio explicativo.
+
+**Aceite.** Nenhuma restauração sem confirmação. Preview corresponde ao aplicado.
+
+### 6.D.3 — Extrair seleção para nova nota
+
+**Objetivo.** Trecho selecionado vira nota nova e o original vira link.
+
+**Escopo.** Operar só sobre seleção explícita; título proposto editável antes de
+concluir; **criar a nota e confirmar a persistência antes de tocar no original**;
+compensação se qualquer etapa falhar; preservar a formatação Markdown da seleção.
+
+**Fora de escopo.** Inferir título e concluir sem revisão. Apagar a seleção antes
+da confirmação.
+
+**Dependências.** 6.D.1, 6.A.5.
+
+**Componentes.** `noteit-core/src/write.rs` (operação composta), GUI, TUI, CLI.
+
+**Contratos.** Ordem é criar → confirmar → substituir. Falha parcial deixa o
+texto original intacto — nunca uma referência quebrada e um trecho perdido.
+
+**Riscos.** Falha entre as duas escritas; seleção multilinha com lista, heading,
+código, imagem gerenciada, flashcard.
+
+**Testes.** Falha injetada em cada etapa, verificando que nada se perde; seleção
+com lista, heading aninhado, fence, tarefa, imagem, callout, flashcard;
+undo/restore previsível; link final aponta exatamente para a nota criada.
+
+**Aceite.** Nenhuma falha intermediária perde texto — provado com injeção de
+falha em cada ponto. Formatação preservada por round-trip.
+
+**Parada.** Se a compensação não puder ser provada por teste, BLOCKED (§9 do
+escopo).
+
+### 6.D.4 — Mesclar notas
+
+**Objetivo.** Consolidar notas redundantes com revisão e sem perder fonte.
+
+**Escopo.** Selecionar fontes e destino, ou criar nota consolidada; preview do
+resultado antes de aplicar; separadores e ordem explícitos; destino das fontes
+após o merge — **manter, arquivar ou mover para a lixeira, nunca apagar**;
+conflito de metadata, títulos e IDs coberto; atualização de wikilinks apenas se
+houver mecanismo seguro e confirmação explícita.
+
+**Fora de escopo.** Concatenar e apagar num clique. Deduplicação semântica
+destrutiva. Reescrever referências globais em silêncio.
+
+**Dependências.** 6.D.1, 6.D.3, 6.E.1 (para "arquivar" existir como estado),
+6.A.4 (para saber quem aponta para as fontes).
+
+**Contratos.** Nenhuma fonte é perdida por padrão. Preview corresponde ao salvo.
+Falha parcial deixa estado recuperável.
+
+**Riscos.** O pior risco de perda de dados da Fase 6 inteira.
+
+**Testes.** Falha injetada em cada etapa; conflito de tags, properties e aliases;
+merge de nota com imagens gerenciadas; merge de nota com flashcards; preview
+comparado byte a byte com o resultado; fontes intactas quando a política é
+"manter".
+
+**Aceite.** Preview idêntico ao resultado. Nenhuma fonte apagada automaticamente.
+Toda falha parcial recuperável, provada por injeção.
+
+**Parada.** BLOCKED enquanto 6.D.1 não estiver fechada e provada.
+
+---
+
+## Fase 6.E — Organização não destrutiva
+
+**Features:** F17 favoritas/fixadas/arquivadas, F21 saved views.
+
+### 6.E.1 — Estados: favorita, fixada, arquivada
+
+**Objetivo.** Três estados com semântica separada, reusando metadata existente.
+
+**Escopo.** Definir: favorita = importante; fixada = acesso prioritário;
+arquivada = fora do fluxo normal, mas preservada. Persistir em `properties`
+(`metadata.rs`) — **reusar, não criar taxonomia nova**. Filtro por estado.
+Paridade GUI/CLI/TUI. Ícones pequenos e monocromáticos; fixadas no topo com
+separação discreta; arquivadas fora da lista padrão mas **encontráveis na busca
+global com opção clara**.
+
+**Fora de escopo.** Misturar com lixeira. Dezenas de estados derivados. Esconder
+arquivada da busca sem opção.
+
+**Dependências.** Nenhuma da 6.A.
+
+**Contratos.** Arquivar nunca equivale a deletar. Estados sobrevivem a reinício.
+
+**Riscos.** Competir com tags — que é exatamente o que o escopo proíbe.
+
+**Testes.** Estados sobrevivem a reinício; filtro consistente entre as três
+interfaces; arquivada continua encontrável; arquivar não move arquivo.
+
+**Aceite.** Zero movimentação de arquivo. Semântica idêntica nas três interfaces,
+provada por fixture.
+
+### 6.E.2 — Modelo de query unificado
+
+**Objetivo.** Um único modelo de filtro reusado por GUI, CLI e views.
+
+**Escopo.** Estender `filter.rs` — hoje `NoteFilter` é AND de tags e properties —
+com estado (6.E.1), texto e período, mantendo a semântica existente intacta.
+Serialização versionada da definição.
+
+**Fora de escopo.** DSL complexa. Duplicar o sistema de filtro existente.
+Snapshot de resultados como fonte de verdade.
+
+**Dependências.** 6.E.1.
+
+**Componentes.** `noteit-core/src/filter.rs`, `search.rs`, `noteit-cli`.
+
+**Contratos.** Compatibilidade: todo uso atual de `NoteFilter` (CLI 4.0D, MCP,
+contexto 4.2) continua funcionando sem alteração de comportamento.
+
+**Testes.** Regressão completa dos filtros existentes de CLI e MCP; serialização
+round-trip; definição de versão futura desconhecida recusada com mensagem.
+
+**Aceite.** Zero regressão nos consumidores atuais, provada pelas suítes de
+`noteit-cli` e `noteit-mcp` sem alteração de expectativa.
+
+### 6.E.3 — Saved Views
+
+**Objetivo.** Salvar consultas reutilizáveis, sem pastas artificiais.
+
+**Escopo.** Persistir **apenas a definição**; resultados dinâmicos; renomear,
+reordenar e excluir sem tocar em nota; deixar evidente que é visão, não pasta.
+Local de persistência: se for artefato novo no store, manifesto v4 e restauração
+provada (C-5).
+
+**Fora de escopo.** Mover arquivo ao adicionar/remover nota da view. Snapshot de
+resultados.
+
+**Dependências.** 6.E.2, 6.0.D.
+
+**Testes.** Mudar property de uma nota muda o resultado da view; excluir view não
+afeta nota alguma — fingerprint do store; definição serializável e versionável;
+backup/restore traz as views se forem parte do store.
+
+**Aceite.** Excluir view não altera um byte de nenhuma nota. Resultados dinâmicos
+provados. Definição versionada.
+
+---
+
+## Fase 6.F — Inteligência derivada
+
+**Features:** F19 notas relacionadas, F20 duplicadas/parecidas.
+
+**Restrição da macrofase.** Reusar `noteit-core::context` e
+`noteit-core::semantic`, que são a autoridade única desde a 4.3E. **Nenhum
+segundo motor de embedding, busca ou similaridade.** Toda sugestão é não
+destrutiva.
+
+### 6.F.1 — Notas relacionadas
+
+**Objetivo.** Sugerir notas semanticamente próximas da atual, sem tocar no
+conteúdo.
+
+**Escopo.** Usar a nota como consulta — o motor hoje responde a
+`ContextRequest { query, filter, ... }`, então a subfase precisa definir **como
+uma nota vira consulta** (trecho, resumo lexical, ou vetor do próprio documento)
+e registrar a escolha. Limite pequeno (3–5), ranking consistente, execução após
+debounce/idle ou sob demanda, cache por revisão da nota, degradação graciosa
+quando o provider semântico não estiver disponível — o motor já tem
+`SemanticStatus::Unavailable` e fallback lexical declarado.
+
+**Fora de escopo.** Segundo sistema de embeddings. Gravar links sugeridos.
+Mostrar score técnico como verdade. Bloquear a abertura da nota esperando ranking.
+
+**Dependências.** 6.A.5 (para "criar wikilink manualmente" a partir da sugestão).
+
+**Componentes.** `noteit-core/src/context.rs`, `semantic.rs`, GUI, CLI, TUI.
+
+**Contratos.** Abertura de nota não depende da busca relacionada. Provider
+indisponível degrada, nunca quebra. `Reason` já é um conjunto fechado de
+observações auditáveis, não um score — a UI apresenta motivo, não número.
+
+**Riscos.** Latência entrando no caminho de abertura; sugestão apresentada como
+certeza.
+
+**Testes.** Provider ausente, provider lento, provider com erro — editor continua
+funcional nos três. Tempo de abertura da nota medido com e sem a feature, com o
+delta como asserção. Nenhuma escrita — fingerprint.
+
+**Aceite.** Funciona com provider indisponível. Zero mutação de arquivo. Abertura
+de nota não regride, medida.
+
+### 6.F.2 — Notas duplicadas ou muito parecidas
+
+**Objetivo.** Apontar provável redundância e oferecer comparação antes de
+qualquer consolidação.
+
+**Escopo.** Usar o índice semântico/lexical existente; pares candidatos com
+preview e diferenças; ações "Comparar", "Ignorar" e — **somente depois que 6.D.4
+estiver fechada** — "Mesclar"; ignores persistidos de forma simples; thresholds
+definidos empiricamente sobre dataset de teste e **documentados**; análise
+assíncrona ou sob demanda.
+
+**Fora de escopo.** Apagar, mesclar ou renomear automaticamente. Varredura O(n²)
+ingênua. Afirmar "duplicada" sem sinal forte — a linguagem é "possivelmente
+parecidas".
+
+**Dependências.** 6.F.1; 6.D.4 para habilitar a ação de merge.
+
+**Riscos.** Varredura bloqueante em biblioteca grande; falso positivo levando a
+merge destrutivo.
+
+**Testes.** Thresholds sobre dataset versionado, no padrão de
+`docs/retrieval-corpus.json`; biblioteca de 20.000 notas sem varredura
+bloqueante; ignorar impede repetição; nenhuma operação destrutiva sem confirmação.
+
+**Aceite.** Thresholds documentados com o dataset que os produziu. Zero operação
+destrutiva automática. Biblioteca grande medida.
+
+---
+
+## Fase 6.G — Validação global e promoção da versão diária
+
+**Esta é a única macrofase autorizada a tocar versão, packaging e instalação — e
+somente quando o prompt daquela subfase autorizar nominalmente.**
+
+### 6.G.1 — Regressão integral e gate da GUI
+
+**Objetivo.** Provar que a Fase 6 não regrediu nada do que já funcionava.
+
+**Escopo.** `scripts/check` completo; suítes de Core, CLI, MCP, TUI, embed,
+agent-bridge e frontend; todos os gates de fronteira; e o **gate de regressão da
+GUI**, adaptado à arquitetura real deste produto:
+
+1. inicia pelo despachante de instância única e pela ativação a frio do
+   barramento (5.0E-GUI);
+2. resolve o store correto por `StorePaths`;
+3. lista notas e abre uma existente;
+4. cria, edita e persiste;
+5. fecha e reabre sem perda, com `updated_at` obedecendo a 3.4R;
+6. move para a lixeira e restaura byte a byte (3.9);
+7. busca global (`Ctrl+K`), localizar e substituir (`Ctrl+F`/`Ctrl+H`);
+8. atalhos: `Ctrl+N`, `Ctrl+W`, `Ctrl+Shift+M`, `Ctrl+Shift+Space`, zoom;
+9. renderiza conteúdo existente — blocos inteligentes, matemática, conversões,
+   imagens gerenciadas, flashcards, tarefas;
+10. preserva tema, escala de interface, papel, cor e geometria;
+11. timer e AutoPaste inalterados;
+12. **nenhuma nota antiga é alterada** — fingerprint de árvore inteira de uma
+    biblioteca pré-Fase 6, antes e depois de uma sessão completa.
+
+Tudo em store descartável, com `scripts/note-it-isolated` (barramento D-Bus
+privado **e** XDG isolado).
+
+**Fora de escopo.** Qualquer build de release. Qualquer instalação.
+
+**Aceite.** Doze itens verdes. Zero regressão. CI verde no SHA.
+
+**Parada.** Um único item vermelho bloqueia a 6.G.2.
+
+### 6.G.2 — Migração e compatibilidade com biblioteca antiga
+
+**Objetivo.** Provar que uma biblioteca criada antes da Fase 6 continua correta.
+
+**Escopo.** Fixture de biblioteca antiga — notas sem os campos novos, front
+matter com YAML de terceiros, notas sem `created_at`, notas com imagens, com
+flashcards, com tarefas, danificadas. Verificar: abrem; nada é reescrito ao
+abrir; campos ausentes degradam declaradamente; se houver campo novo no front
+matter, a migração é testada nos dois sentidos e o rollback é descrito.
+
+**Fora de escopo.** Migração automática irreversível sobre dados reais.
+
+**Contratos.** Nenhuma migração roda sobre a biblioteca real do usuário sem
+aprovação explícita e sem backup verificado antes.
+
+**Aceite.** Biblioteca antiga íntegra por fingerprint. Toda migração reversível
+ou explicitamente declarada como irreversível com backup obrigatório antes.
+
+### 6.G.3 — Build candidato e validação isolada
+
+**Objetivo.** Um artefato identificável, validado sem tocar na instalação diária.
+
+**Escopo.** Build release do commit exato; execução em store descartável;
+roteiro manual das classes de nota do gate 6.G.1; registro de SHA, data e
+conteúdo. **`candidate build` não é `release build` e não substitui nada.**
+
+**Fora de escopo.** `makepkg -i`, `pacman -U`, qualquer escrita em `/usr`,
+qualquer alteração de atalho do sistema.
+
+**Aceite.** Artefato roda a partir de um diretório qualquer, contra um store
+descartável, sem que a instalação em `/usr/bin` seja tocada — verificável porque
+o pacote instalado continua respondendo `pacman -Qi` com a versão antiga.
+
+### 6.G.4 — Promoção: packaging, upgrade e nova baseline
+
+**Objetivo.** Transformar um conjunto aprovado na nova versão diária.
+
+**Pré-condições, todas obrigatórias.** Todas as macrofases incluídas em PASS;
+CI verde no SHA final; nenhuma regressão conhecida aberta; documentação
+sincronizada; migrações testadas (6.G.2); 6.G.1 e 6.G.3 verdes; **e a resposta
+escrita para: "se a nova versão der problema, como volto sem perder minhas
+notas?"**. Sem essa resposta, a release não está pronta.
+
+**Escopo.** Número de versão decidido conscientemente **neste momento e não
+antes** — nada nesta auditoria inventa versão; `PKGBUILD` atualizado com o commit
+e a contagem; build reproduzível; teste de **instalação limpa** e, principalmente,
+teste de **upgrade a partir da versão instalada**, que é o cenário real;
+verificação de que notas, preferências, configuração, estado, atalhos e tema
+sobrevivem; rollback ensaiado a partir do pacote anterior; rastreabilidade
+registrada entre versão instalada, commit, build e artefato (C-9 e §18 do
+complemento).
+
+**Fora de escopo.** Qualquer coisa que não seja a promoção. Publicar sem os
+pré-requisitos.
+
+**Contratos.** A atualização não apaga nem substitui notas, preferências,
+configuração, atalhos ou estado — o `PKGBUILD` atual já garante isso por
+construção (escreve só em `$pkgdir`) e a garantia tem que continuar verdadeira.
+
+**Riscos.** Upgrade que perde dado; rollback impossível; versão publicada só
+porque compila.
+
+**Testes.** Instalação limpa em chroot; upgrade da versão anterior para a nova
+com store real **copiado**, nunca o original; rollback para a versão anterior com
+as notas intactas.
+
+**Aceite.** Upgrade testado, rollback ensaiado, dados preservados por fingerprint,
+rastreabilidade registrada. **Só então** a versão nova passa a ser a baseline
+protegida, e este roadmap é atualizado para dizê-lo.
+
+**Parada.** Qualquer pré-condição faltando: não promove. "Compila" não é critério.
+
+### 6.G.R — Fechamento do ciclo
+
+Auditoria final no padrão da 4.0R, 4.1R1 e 4.3R: revisão independente que não
+aprova a si mesma, zero violação de fronteira, zero regressão nas cinco
+superfícies, CI verde no SHA final, árvore limpa, e o roadmap dizendo a verdade
+sobre o que foi entregue e o que foi deliberadamente deixado de fora.
+
+---
+
+## 6.MAPA — As 22 features do escopo mestre, auditadas contra o código
+
+Classificação verificada em `1186224` por inspeção de implementação e testes, não
+por nome de arquivo. Buscas por `wikilink`, `backlink`, `transclu`, `outline`,
+`breadcrumb`, `favorit`, `saved view`, `inspector`, `quick capture`,
+`version history` e `template` retornaram **zero ocorrência de produção**; os 153
+hits de `alias` são aliases de unidade (conversões), de linguagem de bloco de
+código, de subcomando da CLI e de provider de embedding, e os 70 de `pinned` são
+digest fixado e geometria de janela — nenhum deles é alias de nota.
+
+**Uma etiqueta por feature.** A primeira redação desta tabela misturava o estado
+do código com a razão da dependência — `AUSENTE — depende de fundação`,
+`AUSENTE — conflitante`, `AUSENTE — BLOCKED` — e o resumo em prosa contou cinco
+parciais onde a tabela listava seis. A etiqueta agora diz **uma** coisa: o que
+existe no código hoje. Por que ela está assim e o que a destrava ficam nas
+colunas de evidência e de destino, que toda linha já tem.
+
+- **EXISTENTE** — entregue e em uso.
+- **PARCIAL** — há código em produção que entrega parte da feature.
+- **AUSENTE** — não há código de produção para ela.
+- **BLOCKED** — não pode ser construída com segurança enquanto faltar uma
+  primitiva, e o §9 do escopo mestre proíbe construí-la assim mesmo.
+- **PRECISA DE AUDITORIA MAIS PROFUNDA** — não dá para classificar nem
+  especificar antes de responder uma pergunta aberta sobre o produto.
+
+| # | Feature | Estado | Evidência | Onde entra |
+| --- | --- | --- | --- | --- |
+| F01 | Wikilinks | **AUSENTE** | Nenhum parser, nenhuma sintaxe, nenhum resolvedor | 6.0.A, 6.0.B, 6.A.1, 6.A.2, 6.A.5, 6.A.6 |
+| F02 | Backlinks | **AUSENTE** | Sem índice de relações; ADR-027 recusa índice (C-3) | 6.0.C, 6.A.4, 6.A.7 |
+| F03 | Aliases | **AUSENTE** | `NoteProperties` é chave→`String` única (`metadata.rs:189`); alias precisa de lista | 6.0.A.2, 6.A.3 |
+| F04 | Menções não vinculadas | **AUSENTE** | — | 6.A.12 |
+| F05 | Links para headings | **AUSENTE** | Nenhuma AST de headings no Core | 6.A.8 |
+| F06 | Referências de bloco | **AUSENTE** | — | 6.0.B, 6.A.9 |
+| F07 | Embeds / transclusão | **AUSENTE** | — | 6.A.10 |
+| F08 | Preview em hover/foco | **AUSENTE** | `FlashcardPanel` já renderiza fragmento seguro com `DOMSerializer` | 6.A.11 |
+| F09 | Outline | **AUSENTE** | Headings existem no Markdown, não como AST consultável | 6.B.1 |
+| F10 | Breadcrumbs | **PRECISA DE AUDITORIA MAIS PROFUNDA** | O store é plano (`notes/<uuid>.md`); não há pasta que sirva de segmento | 6.B.3 |
+| F11 | Templates | **AUSENTE** | Nenhum store de templates; `StorePaths` tem 4 diretórios e nenhum é este | 6.C.1, 6.C.2 |
+| F12 | Comandos "/" | **AUSENTE** | Todos os hits de `slash` são o operador de divisão do motor matemático | 6.C.3 |
+| F13 | Quick Capture + Inbox | **PARCIAL** | `note-it new`, instância única, GActions e ativação a frio D-Bus já existem; falta a janela de captura e o conceito de Inbox | 6.C.4 |
+| F14 | Histórico de versões | **PARCIAL** | Lixeira recuperável (3.9) e 7 snapshots de backup (3.9/3.12R) existem; histórico **por nota** não | 6.D.1, 6.D.2 |
+| F15 | Extrair para nova nota | **BLOCKED** | Sem operação transacional entre duas notas (C-4) | 6.D.3, após 6.D.1 |
+| F16 | Mesclar notas | **BLOCKED** | Mesma causa (C-4) | 6.D.4, após 6.D.1 |
+| F17 | Favorita/fixada/arquivada | **AUSENTE** | `metadata.rs` properties suporta o dado; falta semântica e UI | 6.E.1 |
+| F18 | Histórico de navegação | **AUSENTE** | `open_search_result` já ativa, abre, expande e rola até a nota | 6.B.2 |
+| F19 | Notas relacionadas | **PARCIAL** | `context::retrieve` com BM25, canal semântico, `Reason` auditável e degradação declarada (4.2/4.3); falta nota-como-consulta e superfície | 6.F.1 |
+| F20 | Duplicadas/parecidas | **PARCIAL** | Mesmo motor; faltam thresholds, pares e UI | 6.F.2 |
+| F21 | Saved Views | **PARCIAL** | `filter.rs` `NoteFilter` (AND de tags e properties) é o núcleo; falta estado, texto, período e persistência da definição | 6.E.2, 6.E.3 |
+| F22 | Note Inspector | **PARCIAL** | Todos os dados existem (`model`, `metadata`, `task`, `study`, `visible_text`); falta o agregado e o painel. `created_at` é `Option` e a limitação tem que ser dita, não fabricada | 6.B.4 |
+
+### Totais
+
+| Classificação | Quantidade | Features |
+| --- | --- | --- |
+| EXISTENTE | 0 | — |
+| PARCIAL | 6 | F13, F14, F19, F20, F21, F22 |
+| AUSENTE | 13 | F01, F02, F03, F04, F05, F06, F07, F08, F09, F11, F12, F17, F18 |
+| BLOCKED | 2 | F15, F16 |
+| PRECISA DE AUDITORIA MAIS PROFUNDA | 1 | F10 |
+| **Total** | **22** | — |
+
+**Nenhuma feature desapareceu e nenhuma aparece duas vezes.** 0 + 6 + 13 + 2 + 1
+= 22, e o conjunto das cinco linhas é exatamente F01–F22.
+
+Correção registrada: a redação anterior desta seção dizia "cinco parciais" e
+"catorze ausentes" enquanto a tabela listava seis parciais. A tabela estava
+certa quanto às evidências e o resumo estava errado quanto à contagem; as
+etiquetas foram reduzidas a uma por feature e os totais passaram a ser
+derivados da tabela, não escritos ao lado dela.
+
+## 6.ADR — Decisões arquiteturais obrigatórias antes de implementar
+
+**ADR-061 e ADR-062 foram escritas** no fechamento do Ciclo 5 e já estão em
+`docs/decisions.md`: a direção de produto (GUI principal, Core canônico,
+paridade semântica ≠ paridade visual) e a política de versionamento e promoção.
+Entre elas, ADR-061 resolve o conflito C-1 — `docs/vision.md` foi emendado na
+frase mínima, e a reserva que este roadmap tinha feito para uma ADR só sobre a
+visão deixou de ser necessária.
+
+As nove reservas da Fase 6 foram deslocadas para **ADR-063 a ADR-070** por causa
+disso. São reservas de ADRs **ainda não escritas**: nenhum número já publicado
+mudou, e escrever ADR superficial só para preencher documentação continua
+proibido pelo §17 do mandato.
+
+| ADR | Assunto | Bloqueia | Origem |
+| --- | --- | --- | --- |
+| ADR-061 | GUI principal, Core canônico, paridade semântica ≠ visual | — | **escrita** |
+| ADR-062 | Versionamento `0.MINOR.PATCH` e promoção da versão diária | — | **escrita** |
+| ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A |
+| ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 |
+| ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B |
+| ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C |
+| ADR-067 | Superfície gráfica: painéis numa janela de nota | 6.A.5 em diante | 6.0.D |
+| ADR-068 | Política de histórico de versões e retenção | 6.D.1 | 6.D.1 |
+| ADR-069 | Operação composta entre notas e compensação | 6.D.3, 6.D.4 | C-4 |
+| ADR-070 | Artefatos novos no store e manifesto de backup v4 | 6.C.1, 6.D.1, 6.E.3 | C-5 |
+
+## 6.GATES — O mínimo que cada macrofase tem que provar
+
+O `scripts/check` é a autoridade e nenhuma fase restata a lista. Toda macrofase
+da Fase 6 fecha com:
+
+- `scripts/check rust` completo — `ci-parity`, `rust-format`, `rust-check`,
+  `rust-clippy -D warnings`, os sete gates de fronteira, e as suítes de core,
+  cli, mcp, embedding, embed, remote, tui, agent-bridge e workspace;
+- `scripts/check frontend` completo — install, lint, test, build;
+- CI remoto verde **no SHA de fechamento**, com o link registrado, como todas as
+  fases 4 e 5 já fazem;
+- árvore limpa e `Cargo.lock`/`pnpm-lock.yaml` byte-idênticos, salvo dependência
+  aprovada nominalmente no prompt da fase;
+- fingerprint do store real idêntico antes e depois de qualquer execução manual;
+- para macrofases que tocam a GUI: o gate de regressão de doze itens da 6.G.1;
+- para subfases com orçamento de desempenho: o orçamento como **asserção de
+  teste**, nunca como comentário.
+
+Nenhuma fase é PASS por "funciona na máquina", e nenhum teste tem expectativa
+ajustada para deixar o CI verde.
 
 ## Integração futura com o GholsOS
 
