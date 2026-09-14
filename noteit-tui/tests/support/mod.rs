@@ -593,3 +593,93 @@ pub fn replay_screen(output: &str, columns: usize, rows: usize) -> Vec<String> {
         .map(|line| line.into_iter().collect())
         .collect()
 }
+
+impl Screen {
+    /// Everything §9 asks to be true after *every* key, checked at once.
+    ///
+    /// Stated as properties of what is observable rather than of the model,
+    /// because the model was right in R5 and the screen was not.
+    pub fn assert_caret_is_sane(&mut self, label: &str) {
+        let scroll_before = self.app.editor_scroll();
+        let frame = self.frame();
+
+        // 1 and 3: exactly one caret, and it was drawn, so it is inside the
+        // viewport by construction.
+        let (column, row) = frame.caret();
+
+        // 4: the row it landed on is a row of this frame.
+        assert!(
+            (row as usize) < frame.rows.len(),
+            "{label}: caret row {row} is off the frame"
+        );
+        assert!(
+            (column as usize) < frame.width as usize,
+            "{label}: caret column {column} is off the frame"
+        );
+
+        if self.app.editor_mode != EditorMode::Visual {
+            return;
+        }
+
+        let document = self.app.visual_document().expect("a projection");
+        let draft = self.app.draft.as_ref().expect("a draft");
+
+        // 8: the projection the caret is measured against is this text's.
+        assert_eq!(
+            document.generation(),
+            draft.generation(),
+            "{label}: the projection is a generation behind the draft"
+        );
+
+        // 2: the caret is a legal position — a real slot, or the empty
+        // paragraph at the end of the note, which no block claims.
+        let offset = self.visual_offset().expect("a visual caret");
+        let legal = noteit_tui::source_map::SourceOffset::in_source(document.source(), offset)
+            .is_some_and(|offset| document.slot_at_offset(offset).is_some())
+            || document.is_open_tail(offset);
+        assert!(
+            legal,
+            "{label}: caret at {offset} is not a legal slot:\n{}",
+            frame.text()
+        );
+
+        // 7: the Markdown viewport is not being moved by the visual editor,
+        // and the visual viewport is not being moved by the raw cursor.
+        assert_eq!(
+            self.app.editor_scroll(),
+            scroll_before,
+            "{label}: drawing the visual editor moved the Markdown viewport"
+        );
+    }
+
+    /// Types one character and proves it landed at the caret.
+    ///
+    /// "At the caret" is the whole property R6-001 was about: the character
+    /// appears in the cell the caret was in, and the caret moves on by one
+    /// place in reading order — the next column, or the start of the next row
+    /// when the one it was on had no room left.
+    pub fn assert_types_at_caret(&mut self, character: char, label: &str) {
+        let (before_column, before_row) = self.frame().caret();
+        let after = self.press(KeyEvent::from(KeyCode::Char(character)));
+        let (column, row) = after.caret();
+
+        assert_eq!(
+            after.rows[before_row as usize]
+                .chars()
+                .nth(before_column as usize),
+            Some(character),
+            "{label}: `{character}` is not where the caret was:\n{}",
+            after.text()
+        );
+
+        let advanced = (row == before_row && column == before_column + 1)
+            || (row == before_row + 1 && column <= before_column);
+        assert!(
+            advanced,
+            "{label}: the caret went from {:?} to {:?}, which is not one place on:\n{}",
+            (before_column, before_row),
+            (column, row),
+            after.text()
+        );
+    }
+}
