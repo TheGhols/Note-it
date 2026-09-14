@@ -19,7 +19,9 @@ pkgdesc="Minimalist sticky notes for Linux Wayland"
 arch=('x86_64' 'aarch64')
 url="https://github.com/TheGhols/Note-it"
 license=('MIT')
-depends=('gtk4' 'gtk4-layer-shell' 'webkitgtk-6.0' 'glib2')
+# `hicolor-icon-theme` owns the directory hierarchy the icon is installed into;
+# namcap asks for it by name rather than leaving it implicitly satisfied.
+depends=('gtk4' 'gtk4-layer-shell' 'webkitgtk-6.0' 'glib2' 'hicolor-icon-theme')
 makedepends=('git' 'rust' 'cargo' 'nodejs' 'pnpm' 'imagemagick')
 # The companion binaries are installed too, so uninstalling this package must
 # take them with it rather than leaving three orphans behind.
@@ -28,7 +30,10 @@ provides=("$pkgname=$pkgver")
 # optimisation leaves those symbols where `lld` cannot resolve them:
 # `undefined symbol: ring_core_0_17_14__avx2_available`. The same tree builds
 # cleanly outside makepkg, so this is the flags and not the code.
-options=('!lto')
+# `!debug`: the split debug package is of no use to a daily driver, and its
+# `.build-id` symlinks point into the main package, which namcap reads as four
+# broken links every time.
+options=('!lto' '!debug')
 source=("git+$url.git#commit=$_commit")
 sha256sums=('SKIP')
 
@@ -65,7 +70,12 @@ check() {
   # The gates this repository already has, run against the exact commit being
   # packaged. `scripts/check` is the authority; restating its stages here would
   # be a second list that drifts.
-  cargo test --release --locked -p noteit-core -p noteit-cli -p noteit-tui
+  #
+  # `NOTE_IT_BINARY` is the escape hatch `tests/desktop_concurrency.rs` declares
+  # for exactly this situation: it looks for `target/debug/note-it` by default,
+  # and a package build only ever produces the release one.
+  NOTE_IT_BINARY="$srcdir/Note-it/target/release/note-it" \
+    cargo test --release --locked -p noteit-core -p noteit-cli -p noteit-tui
 }
 
 package() {
