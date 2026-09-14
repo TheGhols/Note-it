@@ -505,6 +505,9 @@ impl VisualDocument {
     pub fn selected_cells(&self, start: usize, end: usize) -> Vec<SourceRange> {
         self.blocks
             .iter()
+            // Only the blocks the range actually touches: a selection is small
+            // and a document is not.
+            .filter(|block| block.coverage.start() < end && start <= block.content_end)
             .flat_map(|block| {
                 self.graphemes_of(block.id)
                     .filter(|cell| cell.source.start() >= start && cell.source.end() <= end)
@@ -698,10 +701,11 @@ impl VisualDocument {
             // The end of the block's text, including any trailing syntax that
             // is hidden but still owned — the outer caret after `**abc**` is
             // at byte 7, past the closing asterisks, not at 5 (§26.11).
-            let content_end = self
-                .projection
-                .lexemes()
+            let lexemes = self.projection.lexemes();
+            let from = lexemes.partition_point(|lexeme| lexeme.source.start() < coverage.start());
+            let content_end = lexemes[from..]
                 .iter()
+                .take_while(|lexeme| lexeme.source.start() < coverage.end())
                 .filter(|lexeme| {
                     coverage.covers(lexeme.source) && lexeme.kind != LexemeKind::LineEnding
                 })
@@ -733,7 +737,18 @@ impl VisualDocument {
         let coverage = self.projection.node(node).coverage;
         let mut cells = Vec::new();
 
-        for lexeme in self.projection.lexemes() {
+        // Bisect to the block's first lexeme and stop at its last. Scanning
+        // every lexeme for every block is `O(blocks x lexemes)`, which on a
+        // 200 KB note was most of the half-second the whole document took to
+        // build — the fourth quadratic a performance gate has caught here, and
+        // none of the four was visible by reading the code.
+        let lexemes = self.projection.lexemes();
+        let from = lexemes.partition_point(|lexeme| lexeme.source.start() < coverage.start());
+
+        for lexeme in &lexemes[from..] {
+            if lexeme.source.start() >= coverage.end() {
+                break;
+            }
             if !coverage.covers(lexeme.source) {
                 continue;
             }

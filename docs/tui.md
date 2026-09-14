@@ -4007,3 +4007,52 @@ leitor vai perguntar por quê:
 
 Nada disso está quebrado: está recusado, visível e editável pelo modo Markdown, que
 continua sendo o fallback integral e permanente.
+
+## 37. Fase 5.0D.4B.P3 — gate pré-HTML
+
+### 37.1 Medidas
+
+| Medida (release, 200 KB realista) | Resultado |
+|---|---|
+| `VisualDocument` sem capabilities | 60,9 ms |
+| `VisualDocument` com todas as capabilities de B.5 | 40,8 ms |
+| slots por bytes | 10x bytes → 10x slots (12.232 → 121.792) |
+| planejar uma tecla num documento com marks | 0,000 ms |
+
+Conceder as capabilities inline **não** muda a ordem do custo — sai mais barato,
+porque esconder delimitadores produz menos células do que mostrá-los. O mapa de
+carets cresce exatamente na proporção do texto, que é o que separa um source map por
+grapheme de um por célula de terminal.
+
+### 37.2 A quarta quadrática
+
+P3 encontrou a maior delas. Construir um `VisualDocument` de 200 KB levava **598 ms**
+contra 2,4 ms da projeção crua — `cells_of` varria **todos** os lexemes para **cada**
+bloco, isto é `O(blocos × lexemes)`, e o mesmo padrão estava em `content_end` e em
+`range_touches_protected_lexeme`.
+
+Bisseção nos três, e o mesmo limite de `selected_cells` aos blocos que a seleção
+realmente toca: 598 ms → 60,9 ms, e a suíte de performance inteira de 4,18 s para
+0,37 s.
+
+Quatro quadráticas encontradas até aqui, todas por um gate de performance que roda
+de verdade, nenhuma por leitura do código. Vale como registro de método: a forma de
+um custo não é visível numa revisão, e um gate que só mede uma vez no fim teria
+encontrado as quatro juntas, tarde.
+
+### 37.3 A projeção por tecla, e o que fica para B.P
+
+Medir a construção do `VisualDocument` expôs uma consequência da integração: a
+aplicação a reconstruía **quatro vezes por tecla** — ao decidir o que a tecla
+significa, ao planejar, ao reposicionar o caret e ao desenhar.
+
+Agora há cache por `Generation`. A chave é exatamente a certa: ela muda em toda
+mutação, então uma entrada obsoleta não pode ser servida, e a invalidação é por
+construção e não por alguém lembrar de invalidar. As quatro projeções viraram uma.
+
+**Fica aberto para B.P:** essa uma projeção ainda é integral. Numa nota de 200 KB são
+~41 ms por tecla, o que é perceptível, e o §26.13 proíbe full projection
+incondicional por tecla em notas grandes. A correção é invalidação localizada por
+bloco, que é trabalho de B.P e está registrada aqui com a medida, não escondida.
+Notas de tamanho comum — as de 1 KB a 20 KB que o store real contém — projetam em
+menos de um milissegundo e não são afetadas.

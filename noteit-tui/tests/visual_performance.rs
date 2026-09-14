@@ -433,3 +433,114 @@ fn p2_a_refusal_costs_no_more_than_a_success() {
         "refusing took {elapsed:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gate 5.0D.4B.P3 — measuring the inline vocabulary before HTML
+// ---------------------------------------------------------------------------
+//
+// P3 measures what B.5 added and must pass before B.6. Hiding delimiters and
+// giving every seam its own caret multiplies the work the source map does per
+// block, so the question is whether that growth stayed proportional.
+
+#[test]
+fn p3_enabling_inline_capabilities_does_not_change_the_shape_of_the_cost() {
+    use noteit_tui::source_map::Generation;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+
+    // The same note projected twice: once with nothing granted, once with
+    // everything B.5 grants. The second does strictly more — it walks seams and
+    // builds the extra outer/inner slots — so it is expected to cost more. What
+    // it may not do is cost a different *order*.
+    let source = realistic(scale(200 * 1_024));
+
+    let measure_with = |capabilities: Capabilities| {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let document = VisualDocument::project_with(&source, Generation::first(), capabilities);
+            let elapsed = start.elapsed();
+            assert!(!document.blocks().is_empty());
+            best = best.min(elapsed);
+        }
+        best
+    };
+
+    let plain = measure_with(Capabilities::NONE).as_secs_f64();
+    let inline = measure_with(Capabilities::INLINE).as_secs_f64();
+    let ratio = inline / plain.max(f64::MIN_POSITIVE);
+
+    println!(
+        "P3 capabilities: none {:.2} ms -> inline {:.2} ms ({ratio:.2}x)",
+        plain * 1000.0,
+        inline * 1000.0
+    );
+    assert!(
+        ratio < 6.0,
+        "granting inline capabilities cost {ratio:.1}x, which is a different shape"
+    );
+}
+
+#[test]
+fn p3_slot_count_grows_with_the_document_and_not_faster() {
+    use noteit_tui::source_map::Generation;
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+
+    // A caret map that grew faster than the text would be the "source map por
+    // célula" failure mode arriving by another road.
+    let small = realistic(scale(50 * 1_024));
+    let large = realistic(scale(500 * 1_024));
+
+    let slots = |source: &str| {
+        VisualDocument::project_with(source, Generation::first(), Capabilities::INLINE)
+            .slots()
+            .len()
+    };
+
+    let small_slots = slots(&small) as f64;
+    let large_slots = slots(&large) as f64;
+    let bytes_ratio = large.len() as f64 / small.len() as f64;
+    let slots_ratio = large_slots / small_slots.max(1.0);
+
+    println!(
+        "P3 slots: {bytes_ratio:.1}x bytes -> {slots_ratio:.1}x slots ({small_slots} -> {large_slots})"
+    );
+    assert!(
+        slots_ratio < bytes_ratio * 1.5,
+        "the caret map grew {slots_ratio:.1}x for {bytes_ratio:.1}x the bytes"
+    );
+}
+
+#[test]
+fn p3_planning_inside_a_mark_is_still_constant() {
+    use noteit_tui::source_map::{Generation, SourceOffset};
+    use noteit_tui::visual::{Capabilities, VisualDocument};
+    use noteit_tui::visual_edit::{plan, VisualCommand};
+
+    let source = realistic(scale(500 * 1_024));
+    let document = VisualDocument::project_with(&source, Generation::first(), Capabilities::INLINE);
+    let at = document.slots().last().expect("a slot").source_offset;
+
+    let mut best = Duration::MAX;
+    for _ in 0..5 {
+        let start = Instant::now();
+        let result = plan(
+            &document,
+            VisualCommand::Insert {
+                at: SourceOffset::in_source(&source, at.get()).expect("a boundary"),
+                text: "x".into(),
+            },
+        );
+        let elapsed = start.elapsed();
+        assert!(result.is_ok());
+        best = best.min(elapsed);
+    }
+
+    println!(
+        "P3 plan in a marked document: {:.3} ms",
+        best.as_secs_f64() * 1000.0
+    );
+    assert!(
+        best < Duration::from_millis(2),
+        "planning took {best:?} with marks enabled"
+    );
+}

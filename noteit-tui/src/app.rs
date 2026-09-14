@@ -3,7 +3,7 @@
 //! Provides interactive navigation across recent notes, pending tasks, and trash,
 //! with quick search (/) using noteit-core in-process.
 
-use crate::source_map::SourceOffset;
+use crate::source_map::{Generation, SourceOffset};
 use crate::visual::{Capabilities, Direction, RawBookmark, VisualDocument};
 use crate::visual_edit::{plan, Refusal, VisualCommand};
 use crate::{
@@ -30,7 +30,7 @@ use noteit_core::{
     NoteItCore, StorePaths,
 };
 use ratatui::{backend::Backend, backend::CrosstermBackend, Terminal};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -197,6 +197,14 @@ pub struct App {
     pub visual_cursor: Option<VisualCursor>,
     /// The raw position to come back to, while it is still intact.
     visual_bookmark: Option<RawBookmark>,
+    /// The projection of the current draft, kept while its generation lasts.
+    ///
+    /// Handling one key touches the projection several times — deciding what
+    /// the key means, planning it, resolving the caret afterwards, drawing the
+    /// result — and projecting afresh each time did the same linear work four
+    /// times over. The generation is exactly the right key: it changes on every
+    /// mutation, so a stale entry cannot be served.
+    visual_cache: RefCell<Option<(Generation, VisualDocument)>>,
     pending_mouse_action: Option<PendingMouseAction>,
     /// Set when the open question was raised by somebody asking to leave, so
     /// answering it finishes the exit instead of returning to the reader.
@@ -252,6 +260,7 @@ impl App {
             editor_mode: EditorMode::default(),
             visual_cursor: None,
             visual_bookmark: None,
+            visual_cache: RefCell::new(None),
             pending_mouse_action: None,
             exit_requested: false,
             editor_scroll: Cell::new(0),
@@ -741,13 +750,24 @@ impl App {
     }
 
     /// The projection of the current draft, or `None` when there is no draft.
+    ///
+    /// Cached against the draft's generation, so the several consultations one
+    /// keystroke makes share one projection and a mutation invalidates it by
+    /// construction rather than by anybody remembering to.
     pub fn visual_document(&self) -> Option<VisualDocument> {
         let draft = self.draft.as_ref()?;
-        Some(VisualDocument::project_with(
-            &draft.text(),
-            draft.generation(),
-            Self::visual_capabilities(),
-        ))
+        let generation = draft.generation();
+
+        if let Some((cached, document)) = self.visual_cache.borrow().as_ref() {
+            if *cached == generation {
+                return Some(document.clone());
+            }
+        }
+
+        let document =
+            VisualDocument::project_with(&draft.text(), generation, Self::visual_capabilities());
+        *self.visual_cache.borrow_mut() = Some((generation, document.clone()));
+        Some(document)
     }
 
     fn toggle_editor_mode(&mut self) {
