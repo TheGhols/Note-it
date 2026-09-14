@@ -345,3 +345,55 @@ fn the_footer_keeps_every_command_it_promised_and_adds_the_mode_switch() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// A real terminal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_real_terminal_edits_in_the_visual_editor_saves_and_is_restored() {
+    // Everything above runs against `TestBackend`, which knows nothing about
+    // raw mode, escape sequences or a tty. This one uses a pseudoterminal, so
+    // the visual editor is proved where it will actually live — and proved to
+    // give the terminal back exactly as it found it.
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    let (paths, id) = store(root.path(), &runtime, "um **negrito** aqui");
+
+    let mut tui = support::Tui::spawn(root.path(), |command| {
+        command.env("XDG_RUNTIME_DIR", &runtime);
+    });
+    tui.wait_text("Notas Recentes");
+    tui.input(b"\r");
+    tui.wait_text("Edição:");
+
+    // Alt+V is ESC then the character, which is how a terminal sends it.
+    tui.input(b"\x1bv");
+    tui.wait_text("Visual");
+
+    // Type at the caret, then save.
+    tui.input("Z".as_bytes());
+    tui.input(b"\x13");
+    tui.wait_text("Salv");
+
+    tui.input(b"\x1b");
+    tui.input(b"\x1b");
+    tui.input(b"q");
+    tui.wait_exit();
+
+    let stored = noteit_core::NoteItCore::open_read_only_at(paths)
+        .read_note(&id)
+        .unwrap()
+        .content;
+    assert!(
+        stored.contains('Z'),
+        "the visual edit reached the store: {stored:?}"
+    );
+    assert!(
+        stored.contains("**negrito**"),
+        "and the markup it hid is still in the file, byte for byte: {stored:?}"
+    );
+
+    tui.assert_restored();
+    assert!(tui.cooked(), "the terminal was left in raw mode");
+}
