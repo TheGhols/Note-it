@@ -462,11 +462,36 @@ if [[ -n "$REAL_DBUS_ADDRESS" && "$DBUS_SESSION_BUS_ADDRESS" == "$REAL_DBUS_ADDR
   die "DBUS_SESSION_BUS_ADDRESS is still the real session bus" 92
 fi
 
+# Whether a session started under a named root is still running.
+#
+# Only ever read. Nothing here stops, signals or quits anything: a --root
+# session is persistent *on purpose* — it is what lets a daemon started by one
+# command take the `new` sent by the next — and tearing it down because the
+# launcher happened to exit would destroy the feature.
+#
+# shellcheck disable=SC2329  # invoked by the EXIT trap below.
+session_is_live() {
+  load_private_bus || return 1
+  names_on_private_bus | grep -q "$APPLICATION_ID"
+}
+
 # shellcheck disable=SC2329  # invoked by the EXIT trap below.
 cleanup() {
   if [[ "$OWNS_BUS" -eq 1 ]]; then
     stop_private_bus
     cleanup_coordination_runtime
+  elif session_is_live; then
+    # The launcher is leaving and the session is not. That is correct, and it
+    # was also confusing: the manual test pressed Ctrl+C, saw the notes stay on
+    # screen, and had no way to know from the terminal that they were still
+    # there or how to end them. So it is said, exactly once, with the command.
+    echo >&2
+    echo "note-it-isolated: this isolated session is still running." >&2
+    echo "note-it-isolated: the notes stay open and the private bus stays up," >&2
+    echo "note-it-isolated: which is what --root is for. End it with:" >&2
+    echo >&2
+    echo "  scripts/note-it-isolated --root $ROOT --stop" >&2
+    echo >&2
   fi
   if [[ "$KEEP" -eq 1 ]]; then
     echo "note-it-isolated: kept $ROOT" >&2

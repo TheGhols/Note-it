@@ -362,6 +362,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step '7b. A launcher that leaves a live --root session says how to end it.'
+
+# The 5.0D.R5 complaint: Ctrl+C left the notes on screen and the terminal said
+# nothing, so there was no way to know the session was still there or how to
+# end it. The message is the fix, and it has two halves worth asserting — it
+# appears when a session really is live (step 10, which has a real daemon), and
+# it stays quiet when one is not, which is here. A stub binary owns no name on
+# the bus, so nothing outlives these runs.
+for log in "$WORK/run1.log" "$WORK/run2.log" "$WORK/stop.log"; do
+  if grep -q 'this isolated session is still running' "$log"; then
+    fail "$(basename "$log") announced a live session where there was none"
+  else
+    pass "$(basename "$log") said nothing about a session that had ended"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 step '8. Fail-closed: no way to make a private bus means no Note-it at all.'
 
 BLOCKED_PATH="$WORK/no-dbus"
@@ -487,6 +504,21 @@ else
       pass 'the isolated instance is on its own private bus'
     else
       fail "--verify could not find the isolated instance: $(tail -2 "$WORK/iso-verify.log")"
+    fi
+
+    # The launcher for `new` exited while the daemon it reached went on running.
+    # That is what --root is for, and it is also what the manual test could not
+    # tell from the terminal.
+    if grep -q 'this isolated session is still running' "$WORK/iso-new.log"; then
+      pass 'the launcher said the session was still running'
+    else
+      fail 'a live isolated session was left behind with nothing said about it'
+    fi
+
+    if grep -qF -- "--root $REAL_ISO --stop" "$WORK/iso-new.log"; then
+      pass 'and gave the exact command that ends it'
+    else
+      fail 'the message did not name the --stop command for this root'
     fi
 
     isolated --stop > "$WORK/iso-stop.log" 2>&1 || true
