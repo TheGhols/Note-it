@@ -195,6 +195,14 @@ pub struct App {
     // that no longer exists.
     pub editor_mode: EditorMode,
     pub visual_cursor: Option<VisualCursor>,
+    /// The visual column `Up` and `Down` are trying to keep.
+    ///
+    /// Sticky across a run of vertical moves and cleared by everything else,
+    /// which is what makes walking down through a short line and out the other
+    /// side come back to the column you started in rather than to the end of
+    /// the short line. It is a *visual* column — a screen column at the width
+    /// the pane was last drawn at — because that is what the reader sees.
+    visual_preferred_column: Option<usize>,
     /// The raw position to come back to, while it is still intact.
     visual_bookmark: Option<RawBookmark>,
     /// The projection of the current draft, kept while its generation lasts.
@@ -272,6 +280,7 @@ impl App {
             active_highlight: None,
             editor_mode: EditorMode::default(),
             visual_cursor: None,
+            visual_preferred_column: None,
             visual_bookmark: None,
             visual_cache: RefCell::new(None),
             pending_mouse_action: None,
@@ -689,16 +698,16 @@ impl App {
         if control || alt {
             match key.code {
                 KeyCode::Char('s') => self.save_draft(),
-                KeyCode::Char('z') if extend => self.edit(|draft| {
-                    draft.redo();
-                }),
-                KeyCode::Char('z' | 'Z') => self.edit(|draft| {
-                    draft.undo();
-                }),
-                KeyCode::Char('y') => self.edit(|draft| {
-                    draft.redo();
-                }),
-                KeyCode::Char('a') => self.edit(Draft::select_all),
+                KeyCode::Char('z') if extend => self.step_history(true),
+                KeyCode::Char('z' | 'Z') => self.step_history(false),
+                KeyCode::Char('y') => self.step_history(true),
+                KeyCode::Char('a') => {
+                    if self.editor_mode == EditorMode::Visual {
+                        self.select_all_visual();
+                    } else {
+                        self.edit(Draft::select_all);
+                    }
+                }
                 _ => {}
             }
             return;
@@ -926,12 +935,59 @@ impl App {
             KeyCode::Delete => self.visual_delete(&document, cursor, false),
             KeyCode::Left => self.move_visual_cursor(&document, -1, extend),
             KeyCode::Right => self.move_visual_cursor(&document, 1, extend),
-            KeyCode::Up => self.move_visual_block(&document, -1, extend),
-            KeyCode::Down => self.move_visual_block(&document, 1, extend),
+            KeyCode::Up => self.move_visual_row(&document, -1, extend),
+            KeyCode::Down => self.move_visual_row(&document, 1, extend),
             KeyCode::Home => self.move_visual_edge(&document, true, extend),
             KeyCode::End => self.move_visual_edge(&document, false, extend),
+            // A screenful of *rows*, for the same reason Up and Down are rows.
+            // Before this the page keys reached the visual editor and did
+            // nothing at all.
+            KeyCode::PageUp => self.move_visual_page(&document, -1, extend),
+            KeyCode::PageDown => self.move_visual_page(&document, 1, extend),
             _ => {}
         }
+    }
+
+    /// PageUp and PageDown: one viewport of visual rows.
+    fn move_visual_page(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
+        let page = self.editor_viewport.get().max(1);
+        for _ in 0..page {
+            let before = self.visual_cursor.map(|cursor| cursor.offset);
+            self.move_visual_row(document, delta, extend);
+            if self.visual_cursor.map(|cursor| cursor.offset) == before {
+                break;
+            }
+        }
+    }
+
+    /// Ctrl+A in the visual editor: every position the caret may reach.
+    ///
+    /// The raw `Draft::select_all` sets a selection the visual renderer does
+    /// not read, so before this the key did nothing visible and left a stale
+    /// raw selection behind. The span here is the visual one, so it is drawn,
+    /// and a mutation that crosses a block boundary is refused by name rather
+    /// than ignored.
+    fn select_all_visual(&mut self) {
+        let Some(document) = self.visual_document() else {
+            return;
+        };
+        let blocks = document.blocks();
+        let first = blocks
+            .iter()
+            .find_map(|block| document.slots_of_block(block.id).first().cloned());
+        let last = blocks
+            .iter()
+            .rev()
+            .find_map(|block| document.slots_of_block(block.id).last().cloned());
+        let (Some(first), Some(last)) = (first, last) else {
+            return;
+        };
+        self.visual_bookmark = None;
+        self.visual_preferred_column = None;
+        self.visual_cursor = Some(VisualCursor {
+            offset: last.source_offset,
+            anchor: Some(first.source_offset),
+        });
     }
 
     /// Backspace and Delete: a grapheme when there is one, a block boundary
@@ -1103,40 +1159,164 @@ impl App {
         }
     }
 
-    fn move_visual_block(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
+    /// Up and Down: the visual row above or below, at the column the reader is
+    /// keeping.
+    ///
+    /// A row, not a block. Up to R5 this moved between blocks, so `↓` inside a
+    /// paragraph that wrapped onto three rows left the paragraph entirely, and
+    /// the "column" it tried to preserve was a grapheme index inside a block
+    /// rather than a column on the screen. Both are the same mistake: treating
+    /// the source's structure as if it were the screen's.
+    ///
+    /// Blocks that admit no caret at all — a fenced code block, an unterminated
+    /// comment — are stepped over whole rather than row by row, so passing a
+    /// thousand-line listing costs one layout and not a thousand.
+    fn move_visual_row(&mut self, document: &VisualDocument, delta: isize, extend: bool) {
+        use crate::visual_layout::{layout_block, BlockLayout, RowCoord};
+
         let Some(cursor) = self.visual_cursor else {
             return;
         };
-        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+        let Some(here) = self.visual_place(document, cursor.offset.get()) else {
             return;
         };
-        let blocks = document.blocks();
-        let current = slot.block.0 as usize;
-        let target = current.saturating_add_signed(delta).min(blocks.len() - 1);
-        let column = slot.grapheme.0;
+        let width = self.editor_width.get().max(1);
+        let column = self.visual_preferred_column.unwrap_or(here.column);
+        let blocks = document.blocks().len();
+        let tail = document.is_open_tail(document.source_len());
 
-        // Keep the column where it can be kept, which is what makes Up and Down
-        // feel like a text editor rather than a list.
-        let destination = document
-            .slots_of_block(blocks[target].id)
-            .iter()
-            .min_by_key(|candidate| candidate.grapheme.0.abs_diff(column))
-            .map(|candidate| candidate.source_offset);
-        if let Some(destination) = destination {
-            self.set_visual_cursor(destination, cursor, extend);
+        let layout_of = |index: usize| -> Option<BlockLayout> {
+            document
+                .blocks()
+                .get(index)
+                .map(|block| layout_block(document, block.id, width))
+        };
+
+        let mut coord = here.coord;
+        let mut layout = layout_of(coord.block);
+        loop {
+            // One row in the asked-for direction, crossing into the next block
+            // that has a caret when this one runs out.
+            if delta > 0 {
+                let rows = layout.as_ref().map_or(1, |layout| layout.rows.len());
+                if coord.row + 1 < rows {
+                    coord.row += 1;
+                } else {
+                    let mut next = coord.block + 1;
+                    loop {
+                        if next >= blocks {
+                            // Past the last block: the empty paragraph at the
+                            // end of the note, when there is one.
+                            if tail && next == blocks {
+                                coord = RowCoord {
+                                    block: blocks,
+                                    row: 0,
+                                };
+                                layout = None;
+                                break;
+                            }
+                            return;
+                        }
+                        match layout_of(next) {
+                            Some(candidate) if candidate.has_caret() => {
+                                coord = RowCoord {
+                                    block: next,
+                                    row: 0,
+                                };
+                                layout = Some(candidate);
+                                break;
+                            }
+                            _ => next += 1,
+                        }
+                    }
+                }
+            } else if coord.row > 0 {
+                coord.row -= 1;
+            } else {
+                let mut previous = coord.block;
+                loop {
+                    let Some(candidate_index) = previous.checked_sub(1) else {
+                        return;
+                    };
+                    previous = candidate_index;
+                    match layout_of(previous) {
+                        Some(candidate) if candidate.has_caret() => {
+                            coord = RowCoord {
+                                block: previous,
+                                row: candidate.rows.len().saturating_sub(1),
+                            };
+                            layout = Some(candidate);
+                            break;
+                        }
+                        Some(_) => {}
+                        None => return,
+                    }
+                }
+            }
+
+            let destination = match &layout {
+                Some(layout) => layout
+                    .rows
+                    .get(coord.row)
+                    .and_then(|row| row.caret_near(column))
+                    .map(|caret| caret.offset),
+                // The open tail: one place, and it is the end of the source.
+                None => SourceOffset::in_source(document.source(), document.source_len()),
+            };
+            if let Some(destination) = destination {
+                self.set_visual_cursor(destination, cursor, extend);
+                self.visual_preferred_column = Some(column);
+                return;
+            }
+            // A row with nothing the caret may enter: keep going the same way.
         }
     }
 
+    /// Where a source offset is drawn, including the open tail no block claims.
+    fn visual_place(
+        &self,
+        document: &VisualDocument,
+        offset: usize,
+    ) -> Option<crate::visual_layout::CaretPlace> {
+        let width = self.editor_width.get().max(1);
+        crate::visual_layout::place(document, width, offset).or_else(|| {
+            document
+                .is_open_tail(offset)
+                .then(|| crate::visual_layout::CaretPlace {
+                    coord: crate::visual_layout::open_tail_coord(document),
+                    column: 0,
+                })
+        })
+    }
+
+    /// Home and End: the start or the end of the *visual* row.
+    ///
+    /// The same reasoning as Up and Down. In a paragraph that wraps onto three
+    /// rows, `End` belongs at the end of the row the reader is looking at; the
+    /// end of the block is three rows away and is not what the key means on a
+    /// screen that wrapped it.
     fn move_visual_edge(&mut self, document: &VisualDocument, start: bool, extend: bool) {
         let Some(cursor) = self.visual_cursor else {
             return;
         };
-        let Some(slot) = document.slot_at_offset(cursor.offset) else {
+        let Some(here) = self.visual_place(document, cursor.offset.get()) else {
             return;
         };
-        let here = document.slots_of_block(slot.block);
-        let target = if start { here.first() } else { here.last() };
-        if let Some(target) = target.map(|slot| slot.source_offset) {
+        let width = self.editor_width.get().max(1);
+        let Some(block) = document.blocks().get(here.coord.block) else {
+            // The open tail has exactly one position; Home and End are there.
+            return;
+        };
+        let layout = crate::visual_layout::layout_block(document, block.id, width);
+        let Some(row) = layout.rows.get(here.coord.row) else {
+            return;
+        };
+        let target = if start {
+            row.carets.first()
+        } else {
+            row.carets.last()
+        };
+        if let Some(target) = target.map(|caret| caret.offset) {
             self.set_visual_cursor(target, cursor, extend);
         }
     }
@@ -1145,6 +1325,9 @@ impl App {
         // §27.9: any visual movement consumes the bookmark, so switching back
         // follows the reader rather than undoing their navigation.
         self.visual_bookmark = None;
+        // Any move that is not Up or Down chooses a new column to keep; the
+        // vertical ones put theirs back immediately after calling this.
+        self.visual_preferred_column = None;
         self.visual_cursor = Some(VisualCursor {
             offset,
             anchor: if extend {
@@ -1349,6 +1532,20 @@ impl App {
                 self.move_cursor(delta);
             }
             ui::HitTarget::Editor => {
+                // Each editor is scrolled in its own units: the source editor
+                // by Markdown lines, the visual one by the rows it draws.
+                // Moving the raw cursor while Visual has the keyboard scrolled
+                // nothing at all, because the visual viewport no longer
+                // follows it.
+                if self.editor_mode == EditorMode::Visual {
+                    if let Some(document) = self.visual_document() {
+                        let step = if delta < 0 { -1 } else { 1 };
+                        for _ in 0..delta.unsigned_abs() {
+                            self.move_visual_row(&document, step, false);
+                        }
+                    }
+                    return;
+                }
                 let motion = if delta < 0 {
                     Motion::PageUp(delta.unsigned_abs())
                 } else {
@@ -1375,6 +1572,25 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Undo or redo, and put the visual caret back on the text that came back.
+    ///
+    /// §22: restoring the bytes is not enough. The visual caret is an offset
+    /// into the text it was measured against, so undoing without resnapping
+    /// left it pointing into a document that no longer existed — the caret
+    /// stopped being drawn at all, and the editor looked frozen.
+    fn step_history(&mut self, redo: bool) {
+        self.edit(|draft| {
+            if redo {
+                draft.redo();
+            } else {
+                draft.undo();
+            }
+        });
+        if self.editor_mode == EditorMode::Visual {
+            self.resync_visual_cursor();
         }
     }
 
