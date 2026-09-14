@@ -169,7 +169,26 @@ pub fn layout_block(document: &VisualDocument, block: BlockId, width: usize) -> 
         }
 
         let span = cell.width.max(1);
-        if row.width + span > width && row.width > 0 {
+        let wraps = row.width + span > width && row.width > 0;
+        // A row that ends with columns to spare does so because *this*
+        // grapheme is too wide for them — a full-width `日` needing two cells
+        // with one left. A caret owed to that grapheme belongs in the gap,
+        // because that is where a character typed here would actually be
+        // drawn. Putting it at the start of the next row instead meant typing
+        // made the character appear on the row above while the caret stayed
+        // put, which reads as the keystroke having gone somewhere else.
+        //
+        // When the row is exactly full there is no gap, the character really
+        // does start the next row, and so does the caret.
+        if wraps && row.width < width {
+            for offset in std::mem::take(&mut due) {
+                row.carets.push(LayoutCaret {
+                    offset,
+                    column: row.width,
+                });
+            }
+        }
+        if wraps {
             rows.push(std::mem::take(&mut row));
         }
         for offset in due {
