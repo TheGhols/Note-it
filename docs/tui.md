@@ -4287,3 +4287,60 @@ milissegundos.
 Reparse incremental do **lexer** não foi implementado e não foi provado necessário: a
 projeção crua de 1 MB leva 13 ms e a de 100 KB, 3 ms. Se um dia notas dessa ordem
 forem comuns, a medida já está aqui e a decisão terá números.
+
+## 41. Fase 5.0D.4B.R — fechamento adversarial e de regressão
+
+### 41.1 O que este gate pergunta
+
+Cada gate anterior provou uma camada. Este pergunta se os contratos que existiam
+**antes** do editor visual continuam de pé agora que ele existe, e aponta as entradas
+hostis para a **aplicação** e não só para o projetor. "A projeção sobrevive" e "a
+aplicação sobrevive" são afirmações diferentes, e só a segunda é o que um leitor vive.
+
+### 41.2 Superfície coberta
+
+| Superfície | Onde |
+|---|---|
+| unitários de lexer/projetor | `projection.rs`, `visual_projection.rs` |
+| unitários de source map | `source_map.rs`, `visual_source_map.rs` |
+| property tests determinísticos | `visual_projection.rs` — 4.000 fontes compostas e todo prefixo de um documento hostil |
+| tabelas de mutação | `visual_editing.rs`, `visual_boundaries.rs` |
+| round-trip Visual ↔ Markdown | `visual_source_map.rs`, `visual_closure.rs` |
+| Unicode | NFC/NFD, ZWJ, bandeiras, tom de pele, CJK, TAB, combining empilhado |
+| malformado e hostil | `visual_projection.rs`, `visual_closure.rs` |
+| `TestBackend` | `visual_mode_app.rs`, `visual_closure.rs` |
+| integração App/Core isolada | `visual_mode_app.rs`, `visual_closure.rs` |
+| PTY real | edição visual completa e `SIGTERM` com rascunho pendente |
+| conflito de revision | `visual_closure.rs` |
+| recovery | `visual_closure.rs`, via PTY |
+| sinais | `visual_closure.rs`, via PTY |
+| redimensionamento | 40×10, 200×50, 60×20 |
+| terminal estreito | 40×12, 50×20, 20×4 |
+| restauração exata de `termios` | `assert_restored()` nos testes de PTY |
+| regressões 5.0D.1–D.3 | 398 testes do crate, todos verdes |
+
+### 41.3 O sinal é provado no terminal de verdade
+
+O caminho de sinal vive no laço do terminal, e um gancho de teste no `App` provaria o
+gancho. O teste usa um pseudoterminal: abre a nota, entra no Visual com `Alt+V`,
+digita, confirma pela própria aplicação que há algo a perder, envia `SIGTERM`, e
+verifica que o rascunho foi preservado em `tui-recovery`, que a nota **não** foi
+escrita e que o terminal voltou exatamente como estava.
+
+### 41.4 Um achado que não era meu
+
+`"a\r\nb\r\n"` reaberto no editor volta como `"a\r\nb"`. Não é o editor visual: o
+Core canonicaliza o terminador final ao gravar, e o §26.3 mantém isso deliberadamente
+**fora** da projeção. Meu teste é que estava errado — comparava com o literal que eu
+passara em vez de com o que o store realmente guarda.
+
+Corrigido o teste, não o código, e a invariante que pertence a este gate ficou
+explícita: **abrir** uma nota no editor visual não muda nada em relação ao que está
+gravado. Vale registrar porque é o tipo de coisa que, "consertada" no lugar errado,
+teria feito a TUI divergir do Core em silêncio.
+
+### 41.5 Integridade dos dados reais
+
+Os três diretórios reais — `~/.local/share/note-it` (259 arquivos),
+`~/.config/note-it` e `~/.local/state/note-it` — permanecem byte a byte idênticos ao
+fingerprint tomado antes de qualquer alteração. Todo teste roda em store temporário.
