@@ -613,6 +613,7 @@ body[data-collapsed="true"][data-timer="finished"] .header-timer-action {
 
 body[data-collapsed="true"] .header-study-action,
 body[data-collapsed="true"] .header-zoom-action,
+body[data-collapsed="true"] .header-shortcuts-action,
 body[data-collapsed="true"] .header-trash-action {
   display: none;
 }
@@ -670,7 +671,8 @@ body[data-collapsed="true"] .note-controls-tools::before {
 }
 
 @media (max-width: 479px) {
-  body:not([data-collapsed="true"]) .header-zoom-action {
+  body:not([data-collapsed="true"]) .header-zoom-action,
+  body:not([data-collapsed="true"]) .header-shortcuts-action {
     display: none;
   }
 }
@@ -2054,6 +2056,108 @@ body[data-collapsed="true"] .resize-handle {
 /* The trash, and the line that says what just happened. Both are chrome rather
    than paper: they wear the interface theme, exactly as the note's menu and the
    search palette do, so they read the same over a yellow note and a black one. */
+/* The shortcut reference.
+   Shaped after `.note-trash`: the application's own furniture, so its type is
+   fixed in pixels against `--ui-scale` and a note's zoom leaves it alone. It
+   scrolls rather than growing, because the list is longer than a small note is
+   tall and a popover that runs off the bottom of the window is a popover with
+   no end. */
+.note-shortcuts {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
+  top: calc(var(--note-header-height) + (4px * var(--ui-scale)));
+  left: calc(8px * var(--ui-scale));
+  right: calc(8px * var(--ui-scale));
+  max-height: calc(100% - var(--note-header-height) - (16px * var(--ui-scale)));
+  overflow-y: auto;
+  padding: calc(8px * var(--ui-scale)) calc(10px * var(--ui-scale))
+    calc(10px * var(--ui-scale));
+  background-color: var(--ui-surface);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  box-shadow: var(--ui-shadow);
+  font-family: var(--note-font-family);
+  font-size: calc(12px * var(--ui-scale));
+}
+
+.note-shortcuts[hidden] {
+  display: none;
+}
+
+.note-shortcuts:focus-visible {
+  outline: 2px solid var(--ui-accent, currentColor);
+  outline-offset: -2px;
+}
+
+.note-shortcuts-heading {
+  font-weight: 600;
+  padding-bottom: calc(6px * var(--ui-scale));
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.note-shortcuts-group {
+  padding-top: calc(8px * var(--ui-scale));
+}
+
+.note-shortcuts-group-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.note-shortcuts-group-note {
+  margin: calc(2px * var(--ui-scale)) 0 calc(6px * var(--ui-scale));
+  color: var(--ui-text-muted);
+  font-size: var(--ui-font-small);
+  /* The reason a group behaves as it does is a sentence, not a label: it wraps
+     rather than being cut, which is the whole point of showing it. */
+  line-height: 1.35;
+}
+
+/* Two columns while there is room for the chord and its sentence side by side,
+   one when there is not — a 220px note is a size this has to stay legible at. */
+.note-shortcuts-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: calc(3px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  margin: 0;
+}
+
+.note-shortcuts-keys {
+  font-family: var(--note-mono-family, ui-monospace, monospace);
+  white-space: nowrap;
+  color: var(--ui-text);
+}
+
+.note-shortcuts-description {
+  margin: 0;
+  color: var(--ui-text-muted);
+  line-height: 1.35;
+}
+
+.note-shortcuts-runs {
+  display: block;
+  font-family: var(--note-mono-family, ui-monospace, monospace);
+  font-size: var(--ui-font-small);
+  /* The command a compositor binding spawns is long and must not stretch the
+     popover, so it wraps anywhere rather than pushing the layout sideways. */
+  overflow-wrap: anywhere;
+  opacity: 0.85;
+}
+
+@media (max-width: 260px) {
+  .note-shortcuts-list {
+    grid-template-columns: 1fr;
+    gap: 0 0;
+  }
+
+  .note-shortcuts-description {
+    padding-bottom: calc(4px * var(--ui-scale));
+  }
+}
+
 .note-trash {
   position: absolute;
   z-index: 30;
@@ -3192,6 +3296,7 @@ body[data-collapsed="true"] .resize-handle {
   .note-menu:not([hidden]),
   .note-find:not([hidden]),
   .note-trash:not([hidden]),
+  .note-shortcuts:not([hidden]),
   .note-study:not([hidden]),
   .note-study-hub:not([hidden]),
   .note-image-controls:not([hidden]) {

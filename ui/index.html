@@ -91,6 +91,18 @@
           </svg>
           <span id="note-timer-readout" class="header-timer-readout" hidden></span>
         </button>
+        <!-- The shortcut reference. A single discreet "i" beside the timer,
+             because the one thing the manual test could not discover from the
+             screen was why a chord answered in one situation and not another.
+             It opens a popover, writes nothing, and is the only place the
+             local and the compositor shortcuts are told apart. -->
+        <button id="btn-shortcuts" class="icon-btn header-shortcuts-action" title="Atalhos do Note-it" aria-label="Atalhos do Note-it">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="6" cy="6" r="4.6"></circle>
+            <path d="M6 5.4v2.8"></path>
+            <path d="M6 3.7v0.1"></path>
+          </svg>
+        </button>
         <!-- The AutoPaste indicator. Unlike every other control in this bar it
              is absent unless the note is the one capturing the clipboard: the
              bar has no room for another permanent button, and a mode that

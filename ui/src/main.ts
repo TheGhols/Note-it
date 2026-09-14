@@ -43,6 +43,7 @@ import { bindSearchEntries } from './ui/searchEntry.ts';
 import { NoteStatus, SyncIndicator } from './ui/status.ts';
 import { finishMessage } from './timer/format.ts';
 import { TimerPanel } from './ui/timerPanel.ts';
+import { ShortcutsPanel } from './ui/shortcutsPanel.ts';
 import { TrashPanel } from './ui/trashPanel.ts';
 import {
   applyPaper,
@@ -103,6 +104,7 @@ let infoTooltip: NoteInfoTooltip | null = null;
 let searchPalette: SearchPalette | null = null;
 let findBar: FindBar | null = null;
 let trashPanel: TrashPanel | null = null;
+let shortcutsPanel: ShortcutsPanel | null = null;
 let timerPanel: TimerPanel | null = null;
 let flashcardPanel: FlashcardPanel | null = null;
 let studyHub: StudyHub | null = null;
@@ -127,6 +129,7 @@ function openGlobalSearch(): void {
   findBar?.close();
   trashPanel?.close();
   timerPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   studyHub?.close();
   searchPalette?.openPalette();
@@ -143,6 +146,7 @@ function openTrash(): void {
   searchPalette?.close();
   findBar?.close();
   timerPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   studyHub?.close();
   trashPanel?.openPanel();
@@ -153,6 +157,7 @@ function openMetadata(section: 'tags' | 'properties', invoker?: HTMLElement | nu
   findBar?.close();
   trashPanel?.close();
   timerPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   studyHub?.close();
   noteMenu?.close();
@@ -164,6 +169,7 @@ function openFindBar(replace: boolean): void {
   searchPalette?.close();
   trashPanel?.close();
   timerPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   studyHub?.close();
   findBar?.openBar({ replace, seed: noteEditor?.selectedText() });
@@ -181,6 +187,7 @@ function openTimer(): void {
   searchPalette?.close();
   findBar?.close();
   trashPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   studyHub?.close();
   timerPanel?.openPanel();
@@ -201,6 +208,7 @@ function openStudyHub(filter: StudyFilter, invoker?: HTMLElement | null): void {
   findBar?.close();
   trashPanel?.close();
   timerPanel?.close();
+  shortcutsPanel?.close();
   flashcardPanel?.close();
   noteMenu?.close();
   studyHub.openHub(activeNoteId, invoker ?? document.getElementById('btn-menu'), filter);
@@ -1040,6 +1048,35 @@ function initUI(): void {
         onClose: () => noteEditor?.focus(),
       },
     });
+
+    // The shortcut reference. Mounted in the same group the menu and the timer
+    // are, so it sits outside the drag region and a click on it can never move
+    // the window.
+    const btnShortcuts = document.getElementById('btn-shortcuts');
+    if (btnShortcuts && menuMount) {
+      shortcutsPanel = new ShortcutsPanel({
+        trigger: btnShortcuts,
+        mount: menuMount,
+        handlers: {
+          // Everything that would sit over the same corner of a small note
+          // closes, and the note menu with it: expanding a collapsed note and
+          // opening this in one click is the path a pointer outside would not
+          // cover.
+          onOpen: () => {
+            searchPalette?.close();
+            findBar?.close();
+            trashPanel?.close();
+            timerPanel?.close();
+            flashcardPanel?.close();
+            studyHub?.close();
+            noteMenu?.close();
+          },
+          // Reading the shortcuts is not editing the note, so the keyboard goes
+          // back where it was.
+          onClose: () => noteEditor?.focus(),
+        },
+      });
+    }
 
     noteStatus = new NoteStatus({ mount: appRoot });
     syncIndicator = new SyncIndicator(appRoot);

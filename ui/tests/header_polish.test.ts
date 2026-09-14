@@ -35,7 +35,7 @@ describe('the reorganized header', () => {
     expect(Array.from(doc.querySelectorAll('.header-content-group button'), (node) => node.id))
       .toEqual(['btn-insert-image', 'btn-flashcards']);
     expect(Array.from(doc.querySelectorAll('.header-view-group button'), (node) => node.id))
-      .toEqual(['btn-zoom-out', 'btn-zoom-in', 'btn-timer', 'btn-autopaste']);
+      .toEqual(['btn-zoom-out', 'btn-zoom-in', 'btn-timer', 'btn-shortcuts', 'btn-autopaste']);
     expect(Array.from(doc.querySelectorAll('.note-controls-right button'), (node) => node.id))
       .toEqual(['btn-trash-note', 'btn-close']);
     expect(doc.querySelectorAll('.header-group-separator').length).toBeGreaterThanOrEqual(2);

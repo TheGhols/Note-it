@@ -97,8 +97,11 @@ describe('where an image is inserted from', () => {
     // timer and the close cross. It is a second door, so the row it is a
     // shortcut to has to still be there — a note too narrow for the paperclip
     // still has somewhere to insert a picture from.
+    //
+    // Fifteen since 5.0D.R5 added the shortcut reference; the number is here to
+    // catch a control arriving unnoticed, so it is updated deliberately.
     const page = renderedPage();
-    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(14);
+    expect(page.querySelectorAll('.note-header .icon-btn:not([hidden])')).toHaveLength(15);
 
     const note = mount();
     const panels = Array.from(

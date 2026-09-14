@@ -124,12 +124,13 @@ function switchRow(menu: NoteMenu): HTMLButtonElement {
 
 describe('where AutoPaste is switched on', () => {
   it('lives in the note menu rather than as another button in the bar', () => {
-    // The bar is already carrying the menu, six quick actions, the timer and
-    // the close cross. Switching clipboard observation on is a decision, not a
-    // quick action, and there is no room for another permanent control.
+    // The bar is already carrying the menu, six quick actions, the timer, the
+    // shortcut reference and the close cross. Switching clipboard observation
+    // on is a decision, not a quick action, and there is no room for another
+    // permanent control.
     const page = renderedPage();
     const permanent = page.querySelectorAll('.note-header .icon-btn:not([hidden])');
-    expect(permanent).toHaveLength(14);
+    expect(permanent).toHaveLength(15);
 
     const note = mount();
     click(note.trigger);
