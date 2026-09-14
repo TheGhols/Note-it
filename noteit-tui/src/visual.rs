@@ -356,6 +356,35 @@ impl VisualDocument {
         self.blocks.is_empty() && self.source.trim().is_empty()
     }
 
+    /// Whether a caret may sit at `byte` even though no block claims it.
+    ///
+    /// The end of `abc\n\n` is the empty paragraph a reader has just made with
+    /// Enter. Nothing projects it — there is nothing in it yet — so
+    /// `slot_for_offset` snaps back to the end of `abc`, and the next
+    /// character lands on the line the reader just left. This is the position
+    /// that makes Enter at the end of a note work.
+    ///
+    /// Legal only when every byte from the last block's end onwards is
+    /// whitespace, so it can never reach into a protected region: those always
+    /// have content. A blank document is the case where there is no last block
+    /// and the whole source is the tail.
+    pub fn is_open_tail(&self, byte: usize) -> bool {
+        // A position a block already offers a caret is that block's, whatever
+        // follows it. Without this, the end of a note with no trailing newline
+        // would be read as the empty paragraph after itself, and Enter there
+        // would add a line break instead of a paragraph.
+        let claimed = self.block_containing(byte).is_some_and(|block| {
+            self.slots_for(block)
+                .iter()
+                .any(|slot| slot.source_offset.get() == byte)
+        });
+        if claimed {
+            return false;
+        }
+        let tail = self.blocks.last().map_or(0, |block| block.coverage.end());
+        byte >= tail && byte <= self.source.len() && self.source[tail..].trim().is_empty()
+    }
+
     pub fn block(&self, id: BlockId) -> VisualBlock {
         self.blocks[id.0 as usize]
     }
@@ -619,6 +648,77 @@ impl VisualDocument {
     /// The visual content range of a mark: its bytes minus its delimiters.
     pub fn mark_content_range(&self, node: NodeId) -> Option<(usize, usize)> {
         self.content_ranges.get(node.0 as usize).copied().flatten()
+    }
+
+    /// The literal delimiters a mark is spelled with, as they stand in the
+    /// source: `("**", "**")` for bold, and the whole `<span data-note-it-…>`
+    /// with its attributes for a colour.
+    ///
+    /// Read rather than reconstructed, which is the only way to reopen a mark
+    /// after a break without inventing one: the note's own attributes come
+    /// back byte for byte, including any this build would not have written.
+    pub fn mark_delimiters(&self, node: NodeId) -> Option<(&str, &str)> {
+        let coverage = self.projection.node(node).coverage;
+        let lexemes = self.projection.lexemes();
+        let from = lexemes.partition_point(|lexeme| lexeme.source.start() < coverage.start());
+
+        let mut open = None;
+        let mut close = None;
+        for lexeme in lexemes[from..]
+            .iter()
+            .take_while(|lexeme| lexeme.source.start() < coverage.end())
+            .filter(|lexeme| lexeme.owner == Some(node))
+        {
+            match lexeme.kind {
+                LexemeKind::MarkOpen | LexemeKind::HtmlOpenTag => {
+                    open.get_or_insert(lexeme.source.slice(&self.source));
+                }
+                LexemeKind::MarkClose | LexemeKind::HtmlCloseTag => {
+                    close = Some(lexeme.source.slice(&self.source));
+                }
+                _ => {}
+            }
+        }
+        open.zip(close)
+    }
+
+    /// The marks whose content a caret at `byte` is inside, innermost last.
+    ///
+    /// `strictly` asks for the marks the position genuinely *divides*: a caret
+    /// exactly at a mark's first or last content byte is at its edge, not in
+    /// its middle, and a break there belongs outside the mark rather than
+    /// through it.
+    pub fn marks_containing(&self, byte: usize, strictly: bool) -> Vec<NodeId> {
+        self.mark_path(byte)
+            .into_iter()
+            .filter(|node| {
+                self.mark_content_range(*node).is_some_and(|(start, end)| {
+                    if strictly {
+                        start < byte && byte < end
+                    } else {
+                        start <= byte && byte <= end
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// The colour and the highlight already in force at `byte`.
+    ///
+    /// Read from the canonical attributes the note carries, so "the caret is
+    /// already inside the red the reader picked" is a fact about the source
+    /// and not about what the editor last remembered.
+    pub fn inline_colours_at(&self, byte: usize) -> (Option<String>, Option<String>) {
+        let mut colour = None;
+        let mut highlight = None;
+        for node in self.marks_containing(byte, false) {
+            match self.projection.node(node).kind {
+                NodeKind::Color(ref hex) => colour = Some(hex.clone()),
+                NodeKind::Highlight(ref hex) => highlight = Some(hex.clone()),
+                _ => {}
+            }
+        }
+        (colour, highlight)
     }
 
     /// Computes every node's content range in one pass over the lexemes.

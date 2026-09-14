@@ -92,6 +92,17 @@ pub enum VisualCommand {
         at: SourceOffset,
         text: String,
     },
+    /// Insert text that carries the colour and highlight the reader has armed.
+    ///
+    /// The style is part of the same transaction as the character, so one
+    /// keystroke stays one undo step and the projection is never asked to
+    /// describe a half-styled document.
+    InsertStyled {
+        at: SourceOffset,
+        text: String,
+        color: Option<String>,
+        highlight: Option<String>,
+    },
     /// Insert, stated against an explicit generation, for testing staleness.
     InsertAtGeneration {
         generation: Generation,
@@ -173,6 +184,12 @@ pub fn plan(
             insert(document, at, &text)
         }
         VisualCommand::Insert { at, text } => insert(document, at, &text),
+        VisualCommand::InsertStyled {
+            at,
+            text,
+            color,
+            highlight,
+        } => insert_styled(document, at, &text, color.as_deref(), highlight.as_deref()),
         VisualCommand::DeleteBackward { block, grapheme } => {
             delete_grapheme(document, block, grapheme, Side::Before)
         }
@@ -228,11 +245,12 @@ fn insert(
     if document.offset_is_protected(at) {
         return Err(Refusal::ProtectedRegion);
     }
-    // A blank document has no block, so it has no slot either — but it also
-    // has nothing to protect, and refusing here is what made a new note
-    // impossible to type into in the visual editor. Every other document still
-    // needs a real caret slot.
-    if !caret_is_legal(document, at) && !document.is_blank() {
+    // A blank document, and the empty paragraph at the end of any note, have
+    // no block and so no slot either — but they have nothing to protect, and
+    // refusing here is what made a new note impossible to type into and put
+    // the line after Enter back on the line before it. Every other position
+    // still needs a real caret slot.
+    if !caret_is_legal(document, at) && !document.is_open_tail(at.get()) {
         return Err(Refusal::ProtectedRegion);
     }
 
@@ -245,6 +263,54 @@ fn insert(
         }],
         envelope: range,
         resulting_cursor: at.get() + text.len(),
+    })
+}
+
+/// `insert`, with the reader's armed colour and highlight applied.
+///
+/// The wrapper is written only when the caret is not already inside one that
+/// says the same thing — which is what makes typing a word cost one `<span>`
+/// rather than one per character — and the caret is left *inside* it, so the
+/// next keystroke continues in the same run.
+fn insert_styled(
+    document: &VisualDocument,
+    at: SourceOffset,
+    text: &str,
+    color: Option<&str>,
+    highlight: Option<&str>,
+) -> Result<SourceTransaction, Refusal> {
+    let (have_color, have_highlight) = document.inline_colours_at(at.get());
+    let needed_color = color.filter(|wanted| have_color.as_deref() != Some(*wanted));
+    let needed_highlight = highlight.filter(|wanted| have_highlight.as_deref() != Some(*wanted));
+    if needed_color.is_none() && needed_highlight.is_none() {
+        // Already inside everything the reader asked for: the plain text
+        // inherits it, and adding a second identical wrapper would only make
+        // the source larger and the undo history longer.
+        return insert(document, at, text);
+    }
+
+    if at.get() > document.source_len() {
+        return Err(Refusal::InvalidPosition);
+    }
+    if document.offset_is_protected(at) {
+        return Err(Refusal::ProtectedRegion);
+    }
+    if !caret_is_legal(document, at) && !document.is_open_tail(at.get()) {
+        return Err(Refusal::ProtectedRegion);
+    }
+
+    let (prefix, suffix) = crate::formatting::combined_wrapper(needed_color, needed_highlight);
+    // `<`, `>` and `&` typed by a reader are text, and the canonical source
+    // spells them as entities — the same escaping the Markdown editor applies.
+    let escaped = crate::formatting::escaped_typed(text);
+    let replacement = format!("{prefix}{escaped}{suffix}");
+
+    let range = SourceRange::trusted(at.get(), at.get());
+    Ok(SourceTransaction {
+        generation: document.generation(),
+        patches: vec![SourcePatch { range, replacement }],
+        envelope: range,
+        resulting_cursor: at.get() + prefix.len() + escaped.len(),
     })
 }
 
@@ -679,10 +745,11 @@ fn split_block(document: &VisualDocument, at: SourceOffset) -> Result<SourceTran
     if document.offset_is_protected(at) {
         return Err(Refusal::ProtectedRegion);
     }
-    // Enter in a blank note: there is no block to split, so the break is the
-    // whole edit. `\n` rather than a paragraph separator, because a blank
-    // document has no paragraph for the second one to be separate from.
-    if document.is_blank() {
+    // Enter in a blank note, or in the empty paragraph at the end of one:
+    // there is no block to split, so the break is the whole edit. `\n` rather
+    // than a paragraph separator, because there is no paragraph here for the
+    // second one to be separate from.
+    if document.is_open_tail(at.get()) {
         let range = SourceRange::trusted(at.get(), at.get());
         return Ok(SourceTransaction {
             generation: document.generation(),
@@ -733,6 +800,15 @@ fn split_block(document: &VisualDocument, at: SourceOffset) -> Result<SourceTran
         at.get()
     };
 
+    // A break dropped in the middle of an inline mark leaves its delimiters on
+    // opposite sides of a blank line: `**negr` and `ito aqui**` are not bold,
+    // they are two paragraphs with stray asterisks, and `<span …>gustavo` and
+    // `</span>` are a wrapper straddling a block boundary. The point is first
+    // moved out of any mark it merely touches, and the marks it genuinely
+    // divides are then closed before the break and reopened after it.
+    let (insert_at, closers, openers) = split_through_marks(document, insert_at)?;
+    let replacement = format!("{closers}{replacement}{openers}");
+
     let range = SourceRange::trusted(insert_at, insert_at);
     Ok(SourceTransaction {
         generation: document.generation(),
@@ -742,13 +818,74 @@ fn split_block(document: &VisualDocument, at: SourceOffset) -> Result<SourceTran
         }],
         envelope: range,
         // §12: Enter at the start of a block leaves the caret in the new empty
-        // paragraph above; everywhere else it follows the text it just moved.
+        // paragraph above; everywhere else it follows the text it just moved —
+        // and lands inside the reopened marks, not before them, so typing on
+        // carries the colour it had.
         resulting_cursor: if at_start {
             insert_at
         } else {
-            at.get() + replacement.len()
+            insert_at + replacement.len()
         },
     })
+}
+
+/// Where a block break really goes, and the delimiters that have to travel
+/// with it.
+///
+/// Returns the adjusted offset, the text to emit before the break and the text
+/// to emit after it. Every delimiter is the one the source itself spells, so a
+/// colour is reopened with the exact attributes the note carries rather than
+/// with the ones this build would have written.
+fn split_through_marks(
+    document: &VisualDocument,
+    at: usize,
+) -> Result<(usize, String, String), Refusal> {
+    // Step out of every mark the point only touches, innermost first: leaving
+    // one can put the point on the edge of the next one out.
+    let mut point = at;
+    while let Some((node, start)) = document
+        .marks_containing(point, false)
+        .into_iter()
+        .filter_map(|node| {
+            document
+                .mark_content_range(node)
+                .map(|(start, end)| (node, start, end))
+        })
+        .filter(|(_, start, end)| point == *start || point == *end)
+        .min_by_key(|(_, start, end)| end - start)
+        .map(|(node, start, _)| (node, start))
+    {
+        let coverage = document.projection().node(node).coverage;
+        // Strictly outward each time, and a mark left behind cannot be chosen
+        // again, so this terminates.
+        point = if point == start {
+            coverage.start()
+        } else {
+            coverage.end()
+        };
+    }
+
+    // Outermost first, which is the order the reopened marks must nest in.
+    let dividing = document.marks_containing(point, true);
+    let mut closers = String::new();
+    let mut openers = String::new();
+    for node in dividing.iter().rev() {
+        // A mark whose delimiters cannot be read is one this cannot put back
+        // together. Refusing keeps the source correct; splitting anyway would
+        // not.
+        let (_, close) = document
+            .mark_delimiters(*node)
+            .ok_or(Refusal::PartialMarkBoundary)?;
+        closers.push_str(close);
+    }
+    for node in &dividing {
+        let (open, _) = document
+            .mark_delimiters(*node)
+            .ok_or(Refusal::PartialMarkBoundary)?;
+        openers.push_str(open);
+    }
+
+    Ok((point, closers, openers))
 }
 
 /// `Backspace` at a block start, or `Delete` at a block end.

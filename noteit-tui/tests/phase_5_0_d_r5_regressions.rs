@@ -255,3 +255,321 @@ fn r5_g13_protected_source_is_still_refused() {
         "the refusal still says why: {screen}"
     );
 }
+// ---------------------------------------------------------------------------
+// R5-G08 / R5-G09 / R5-G10 — styled typing across Enter
+// ---------------------------------------------------------------------------
+
+/// Picks a text colour through the format menu, the way a reader does.
+fn choose_text_colour(app: &mut App) {
+    app.handle_key(alt('f'));
+    app.handle_key(key(KeyCode::Enter)); // "Cor do texto"
+    app.handle_key(key(KeyCode::Down)); // the first colour
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.active_text_color.is_some(), "a colour is active");
+}
+
+/// The same for a highlight.
+fn choose_highlight(app: &mut App) {
+    app.handle_key(alt('f'));
+    app.handle_key(key(KeyCode::Down)); // "Realce"
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Down)); // the first colour
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.active_highlight.is_some(), "a highlight is active");
+}
+
+#[test]
+fn r5_g08_colour_then_enter_does_not_leak_a_span_into_the_projection() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+
+    choose_text_colour(&mut app);
+    type_text(&mut app, "gustavo testes de verdade");
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "segunda linha");
+
+    let screen = rendered(&app, 100, 24);
+    assert!(
+        !screen.contains("<span") && !screen.contains("</span"),
+        "no canonical tag reaches the visual editor: {screen}"
+    );
+    assert!(
+        !screen.contains("data-note-it-color"),
+        "and no canonical attribute either: {screen}"
+    );
+    assert!(
+        screen.contains("segunda linha"),
+        "the second line is typable: {screen}"
+    );
+
+    let source = draft_source(&app);
+    assert!(
+        source.contains("gustavo testes de verdade"),
+        "the first line survives: {source:?}"
+    );
+    assert!(
+        source.contains("segunda linha"),
+        "and so does the second: {source:?}"
+    );
+    assert!(
+        !source.contains("</span></span>") && !source.contains("<span></span>"),
+        "the canonical source has no broken or empty wrapper: {source:?}"
+    );
+}
+
+#[test]
+fn r5_g09_highlight_then_enter_does_not_leak_a_mark() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+
+    choose_highlight(&mut app);
+    type_text(&mut app, "marcado");
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "depois");
+
+    let screen = rendered(&app, 100, 24);
+    assert!(
+        !screen.contains("<mark") && !screen.contains("</mark"),
+        "no canonical mark tag reaches the visual editor: {screen}"
+    );
+    assert!(screen.contains("depois"), "the second line is typable");
+}
+
+#[test]
+fn r5_g08_the_reported_sequence_produces_canonical_source() {
+    // Exactly what the manual test did: colour, "gustavo", a space, a phrase,
+    // Enter, a second line.
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    choose_text_colour(&mut app);
+    let colour = app.active_text_color.expect("a colour is armed");
+
+    type_text(&mut app, "gustavo");
+    type_text(&mut app, " ");
+    type_text(&mut app, "testes de verdade");
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "segunda linha");
+
+    let source = draft_source(&app);
+    let open = format!("<span data-note-it-color=\"{colour}\" style=\"color:{colour}\">");
+    assert_eq!(
+        source,
+        format!("{open}gustavo testes de verdade</span>\n\n{open}segunda linha</span>"),
+        "one wrapper per line, closed before the break and reopened after it"
+    );
+    assert_eq!(
+        source.matches("<span").count(),
+        2,
+        "one wrapper per line, not one per character: {source}"
+    );
+    assert_eq!(
+        source.matches("<span").count(),
+        source.matches("</span>").count(),
+        "every wrapper is closed: {source}"
+    );
+
+    // And the projection of that source shows the reader two coloured lines,
+    // with no markup in sight.
+    let screen = rendered(&app, 100, 24);
+    assert!(
+        !screen.contains("span") && !screen.contains("data-note-it"),
+        "no markup reaches the visual editor: {screen}"
+    );
+    assert!(screen.contains("gustavo testes de verdade"));
+    assert!(screen.contains("segunda linha"));
+    assert_eq!(reversed_cells(&app, 100, 24).len(), 1, "and one caret");
+}
+
+#[test]
+fn r5_g10_colour_and_highlight_together_stay_canonical() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    choose_text_colour(&mut app);
+    choose_highlight(&mut app);
+
+    type_text(&mut app, "ab");
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "cd");
+
+    let source = draft_source(&app);
+    for (open, close) in [("<span", "</span>"), ("<mark", "</mark>")] {
+        assert_eq!(
+            source.matches(open).count(),
+            source.matches(close).count(),
+            "{open} is balanced: {source}"
+        );
+        assert_eq!(
+            source.matches(open).count(),
+            2,
+            "one {open} per line: {source}"
+        );
+    }
+    // The highlight is the outer wrapper on both lines, which is the nesting
+    // the graphical editor persists.
+    assert!(
+        !source.contains("<span data-note-it-color=\"#64748B\" style=\"color:#64748B\"><mark"),
+        "the mark stays outside the span: {source}"
+    );
+    let screen = rendered(&app, 100, 24);
+    assert!(
+        !screen.contains("mark") && !screen.contains("span"),
+        "and neither reaches the screen: {screen}"
+    );
+}
+
+#[test]
+fn r5_g11_undo_and_redo_across_a_styled_enter_are_lossless() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    choose_text_colour(&mut app);
+    type_text(&mut app, "ab");
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "cd");
+    let after = draft_source(&app);
+
+    let undo = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    let redo = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+    for _ in 0..20 {
+        app.handle_key(undo);
+    }
+    for _ in 0..20 {
+        app.handle_key(redo);
+    }
+    assert_eq!(
+        pending_source(&app).unwrap_or_default(),
+        after,
+        "redoing everything undone gets the same bytes back"
+    );
+}
+
+#[test]
+fn r5_g12_visual_to_markdown_and_back_is_not_an_edit() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = editing(root.path(), "um **dois** tres\n\n- item\n");
+    let before = app.pending_text();
+    assert_eq!(before, None, "nothing pending to begin with");
+
+    app.handle_key(alt('v'));
+    app.handle_key(alt('v'));
+    assert_eq!(app.editor_mode, EditorMode::Markdown);
+    assert_eq!(
+        app.pending_text(),
+        None,
+        "a round trip with no keystroke in between writes nothing"
+    );
+}
+
+#[test]
+fn r5_g03_backspace_removes_a_whole_grapheme_cluster() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "familia 👨‍👩‍👧‍👦 fim\n");
+
+    // To the end of the family cluster, then remove it in one Backspace.
+    app.handle_key(key(KeyCode::End));
+    for _ in 0..4 {
+        app.handle_key(key(KeyCode::Left));
+    }
+    app.handle_key(key(KeyCode::Backspace));
+
+    let source = draft_source(&app);
+    assert!(
+        !source.contains('\u{1F468}')
+            && !source.contains('\u{1F469}')
+            && !source.contains('\u{200D}'),
+        "the family goes as one grapheme, leaving no half of itself: {source:?}"
+    );
+    assert!(source.starts_with("familia "), "and nothing else moved");
+}
+
+// ---------------------------------------------------------------------------
+// R5-G04 / R5-G14 / R5-G15 / R5-G16 — selection, protection and Unicode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn r5_g04_a_keyboard_selection_is_replaced_in_place() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "alfa bravo charlie\n");
+
+    // Select "alfa" with Shift+Right, then type over it.
+    for _ in 0..4 {
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    }
+    type_text(&mut app, "X");
+    assert_eq!(
+        draft_source(&app),
+        "X bravo charlie",
+        "the selected region is what was replaced"
+    );
+    assert_eq!(reversed_cells(&app, 80, 24).len(), 1, "one caret after it");
+}
+
+#[test]
+fn r5_g14_unknown_html_still_refuses_and_still_shows_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(
+        root.path(),
+        "<custom-thing a=\"1\">conteudo</custom-thing>\n",
+    );
+
+    let screen = rendered(&app, 100, 24);
+    assert!(
+        screen.contains("custom-thing"),
+        "unknown HTML stays visible as source rather than being hidden: {screen}"
+    );
+
+    // Put the caret where the tag is and try to type through it.
+    app.handle_key(key(KeyCode::Home));
+    type_text(&mut app, "X");
+    let source = pending_source(&app).unwrap_or_default();
+    assert!(
+        !source.contains("X<custom-thing") && !source.contains("<Xcustom"),
+        "nothing was inserted into the tag: {source:?}"
+    );
+}
+
+#[test]
+fn r5_g15_and_g16_unicode_survives_styled_typing_and_the_renderer() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "");
+    choose_text_colour(&mut app);
+
+    // Combining acute (NFD), a CJK double-width pair, a flag and a skin tone.
+    let sample = "cafe\u{301} \u{4E2D}\u{6587} \u{1F1E7}\u{1F1F7} \u{1F44D}\u{1F3FD}";
+    type_text(&mut app, sample);
+    app.handle_key(key(KeyCode::Enter));
+    type_text(&mut app, "depois");
+
+    let source = draft_source(&app);
+    assert!(
+        source.contains(sample),
+        "every scalar reaches the source unchanged: {source:?}"
+    );
+    assert_eq!(
+        source.matches("<span").count(),
+        2,
+        "one wrapper per line even across a flag and a skin tone: {source}"
+    );
+    assert_eq!(
+        source.matches("<span").count(),
+        source.matches("</span>").count(),
+        "and they are balanced: {source}"
+    );
+
+    let screen = rendered(&app, 100, 24);
+    assert!(!screen.contains("span"), "no markup on screen: {screen}");
+    assert_eq!(reversed_cells(&app, 100, 24).len(), 1, "and one caret");
+}
+
+#[test]
+fn r5_g16_a_flag_is_one_grapheme_to_backspace() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = visual(root.path(), "ab \u{1F1E7}\u{1F1F7}\n");
+
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(key(KeyCode::Backspace));
+    assert_eq!(
+        draft_source(&app),
+        "ab ",
+        "the flag goes whole, leaving no lone regional indicator"
+    );
+}

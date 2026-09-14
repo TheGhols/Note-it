@@ -800,10 +800,11 @@ impl App {
                     draft.generation(),
                     Self::visual_capabilities(),
                 );
-                let snapped = document
-                    .slot_for_offset(offset, Direction::Absolute)
-                    .map(|slot| slot.source_offset)
-                    .or_else(|| Self::blank_caret(&document, offset.get()));
+                let snapped = Self::open_tail_caret(&document, offset.get()).or_else(|| {
+                    document
+                        .slot_for_offset(offset, Direction::Absolute)
+                        .map(|slot| slot.source_offset)
+                });
                 self.visual_cursor = snapped.map(|offset| VisualCursor {
                     offset,
                     anchor: None,
@@ -877,10 +878,29 @@ impl App {
             KeyCode::Esc => self.leave_editor(),
             KeyCode::Char(character) => {
                 let mut buffer = [0; 4];
-                self.run_visual(VisualCommand::Insert {
-                    at: cursor.offset,
-                    text: character.encode_utf8(&mut buffer).to_owned(),
-                });
+                let typed = character.encode_utf8(&mut buffer).to_owned();
+                // Typing over a selection replaces it, here as in every other
+                // editor. Only Backspace and Delete consulted the selection
+                // before, so a character quietly landed beside the highlighted
+                // text instead of over it.
+                if let Some((anchor, head)) = self.visual_selection(cursor) {
+                    self.run_visual(VisualCommand::ReplaceSelection {
+                        anchor,
+                        head,
+                        text: typed,
+                    });
+                } else {
+                    // The armed colour and highlight belong to typing in either
+                    // editor. Ignoring them here is what made "pick a colour,
+                    // type" produce plain text while the title still said
+                    // `Cor: Cinza`.
+                    self.run_visual(VisualCommand::InsertStyled {
+                        at: cursor.offset,
+                        text: typed,
+                        color: self.active_text_color.map(str::to_owned),
+                        highlight: self.active_highlight.map(str::to_owned),
+                    });
+                }
             }
             KeyCode::Tab => self.run_visual(VisualCommand::Insert {
                 at: cursor.offset,
@@ -984,15 +1004,19 @@ impl App {
         format!("Recusado: {reason}. Alt+V volta ao Markdown.")
     }
 
-    /// The only caret a blank note has, or `None` when the note is not blank.
+    /// The caret in a note's unprojected whitespace, when that is where it was
+    /// asked for.
     ///
-    /// An empty note projects no block and so has no slot for `slot_for_offset`
-    /// to find. It is still a note somebody means to type into, and every byte
-    /// of it is whitespace, so the caret is legal anywhere in it.
-    fn blank_caret(document: &VisualDocument, wanted: usize) -> Option<SourceOffset> {
+    /// An empty note, and the empty paragraph Enter leaves at the end of any
+    /// note, project no block and so have no slot for `slot_for_offset` to
+    /// find. It does not return `None` for them either — it returns the
+    /// *nearest* slot, which is the end of the previous line, which is how the
+    /// second line ended up appended to the first. So this is consulted first,
+    /// and only ever answers for a position no block claims.
+    fn open_tail_caret(document: &VisualDocument, wanted: usize) -> Option<SourceOffset> {
         document
-            .is_blank()
-            .then(|| SourceOffset::in_source(document.source(), wanted.min(document.source_len())))
+            .is_open_tail(wanted)
+            .then(|| SourceOffset::in_source(document.source(), wanted))
             .flatten()
     }
 
@@ -1003,10 +1027,12 @@ impl App {
         };
         let wanted =
             SourceOffset::in_source(document.source(), offset).unwrap_or(SourceOffset::trusted(0));
-        self.visual_cursor = document
-            .slot_for_offset(wanted, Direction::Absolute)
-            .map(|slot| slot.source_offset)
-            .or_else(|| Self::blank_caret(&document, offset))
+        self.visual_cursor = Self::open_tail_caret(&document, offset)
+            .or_else(|| {
+                document
+                    .slot_for_offset(wanted, Direction::Absolute)
+                    .map(|slot| slot.source_offset)
+            })
             .map(|offset| VisualCursor {
                 offset,
                 anchor: None,
