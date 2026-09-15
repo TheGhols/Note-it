@@ -4672,3 +4672,406 @@ estado inescapável; o vocabulário foi varrido ocorrência por ocorrência.
 O núcleo da decisão — a opção C, o espaço de nomes único sem precedência, a
 deduplicação por UUID e a recusa de escolher em silêncio — atravessou as três
 passagens sem emenda.
+
+## ADR-065: Gramática de wikilink, seção, bloco e embed
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.B.
+
+### Contexto e problema
+
+A ADR-063 tornou o UUID a identidade canônica e `title` o nome humano opcional;
+a ADR-064 acrescentou `aliases` ao mesmo namespace. O resolvedor já responde
+`UNRESOLVED`, `RESOLVED(uuid)` ou `AMBIGUOUS(uuids)` sem preferir título a
+alias. Esta ADR não reabre nada disso. Ela responde a pergunta anterior ao
+resolvedor: quais bytes do corpo Markdown formam uma referência e quais textos
+tipados são entregues à resolução.
+
+Copiar a aparência de outro editor não basta. `#`, `^`, `|`, `[`, `]`, `!` e
+barra invertida são permitidos nos nomes do Note-it, mas também são candidatos
+a pontuação estrutural. Sem uma regra de escape, `[[entrada|saída]]` teria duas
+leituras válidas. Além disso, o produto já dá significado e precedência a code
+span, fences, HTML, links e imagens Markdown, comentários, cálculos e
+flashcards; o projetor lossless da TUI não pode ganhar uma segunda opinião.
+
+O corpus normativo é `docs/link-syntax-corpus.json`, versão 1, com 110 casos.
+Ele é contrato de entrada da 6.A.2, não resultado de um parser desta fase.
+
+### Evidência comparativa
+
+Somente as diferenças que pesam na decisão:
+
+| Ecossistema | Convenção útil | Limite que o Note-it não copia |
+| --- | --- | --- |
+| [Obsidian](https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/Internal%20links.md) | `[[nota]]`, `#` para heading, `^` para bloco, `|` para texto e `!` para embed são reconhecíveis | a própria documentação recomenda evitar `# | ^ : %% [[ ]]`; isso é incompatível com nomes já válidos pelas ADR-063/064 |
+| [Foam](https://foambubble.github.io/foam-template/docs/features/wikilinks.html) | distingue referência e caminho e diagnostica ambiguidade | resolve colisão alfabeticamente e trabalha por arquivo/caminho; Note-it nunca escolhe candidato e resolve somente `title`/`aliases` |
+| [Logseq](https://github.com/logseq/docs/blob/master/pages/tutorial.md) | confirma que referência de página, referência de bloco e embed são conceitos diferentes | usa `((uuid))` e `{{embed ...}}`; não oferece uma solução compatível com a gramática alvo já reservada no roadmap |
+| [CommonMark](https://spec.commonmark.org/current/) / [GFM](https://github.github.com/gfm/) | backslash escape, code/fence literal, links sem links aninhados e precedência de code span/autolink/HTML | não define wikilinks; suas regras são a moldura de precedência, não a semântica de `[[...]]` |
+
+### Decisão central
+
+Adotam-se as formas reconhecíveis abaixo, com **barra invertida como escape
+obrigatório da pontuação estrutural dentro dos componentes**:
+
+```text
+[[nota]]
+[[nota#seção]]
+[[#seção]]
+[[nota^abc123]]
+[[^abc123]]
+[[nota|texto de exibição]]
+![[nota]]
+![[nota#seção]]
+![[nota^abc123]]
+```
+
+`[[entrada|saída]]` é sempre a nota `entrada`, exibida como `saída`.
+O nome literal `entrada|saída` escreve-se `[[entrada\|saída]]`. Do mesmo modo:
+
+```text
+nome "Seção # 3"        [[Seção \# 3]]
+nome "bloco^42"         [[bloco\^42]]
+nome "Glasgow [ECG]"    [[Glasgow \[ECG\]]]
+nome "A\B"              [[A\\B]]
+```
+
+O parser futuro é puro: conserva a fonte, os offsets e a grafia raw; entrega
+também os componentes decodificados. Nunca reescreve, corrige, normaliza ou
+persiste qualquer byte.
+
+### Gramática normativa
+
+EBNF, complementada pelas restrições logo abaixo:
+
+```ebnf
+reference       = embed | link ;
+embed           = "![[", locator, "]]" ;
+link            = "[[", locator, [ "|", display ], "]]" ;
+
+locator         = note
+                | note, "#", section
+                | "#", section
+                | note, "^", block_id
+                | "^", block_id ;
+
+note            = component ;
+section         = component ;
+display         = component ;
+component       = unit, { unit } ;
+unit            = ordinary | escape | literal_backslash ;
+escape          = "\\", ( "\\" | "[" | "]" | "#" | "^" | "|" | "!" ) ;
+literal_backslash = "\\", non_escapable ;
+ordinary        = ? qualquer escalar Unicode exceto CR, LF,
+                    "\\", "[", "]", "#", "^" e "|" ? ;
+non_escapable   = ? qualquer escalar Unicode exceto CR, LF e os sete aceitos
+                    por escape ? ;
+block_id        = alnum_lower, { alnum_lower | "-" }, alnum_lower ;
+alnum_lower     = "a"…"z" | "0"…"9" ;
+```
+
+Restrições normativas:
+
+1. `component` é uma linha Unicode. Somente CR (U+000D) e LF (U+000A) são
+   limites físicos que encerram um candidato; U+2028/U+2029 são escalares
+   internos, não quebras de linha Markdown. Primeiro decodificam-se escapes; depois
+   removem-se das pontas os escalares da propriedade Unicode `White_Space`:
+   U+0009–000D, U+0020, U+0085, U+00A0, U+1680, U+2000–200A, U+2028–2029,
+   U+202F, U+205F e U+3000 — o conjunto de `char::is_whitespace` no Rust.
+   Finalmente, qualquer `General_Category=Cc` restante invalida; portanto TAB
+   nas pontas é trim, TAB interno é inválido. `Cf` (por exemplo ZWJ) não é
+   controle e permanece texto. Whitespace interno é preservado. Vazio ou só
+   whitespace após o recorte invalida o candidato.
+2. `note`, `section` e `display` têm no máximo 512 escalares Unicode depois de
+   decodificar e recortar. O limite de `note` é exatamente o das ADR-063/064.
+   O interior raw inteiro tem no máximo 3.074 escalares: três componentes de
+   512 escalares inteiramente escapados custam 3 × 1.024, mais `#` e `|`.
+3. `block_id` tem 6 a 64 caracteres ASCII, minúsculos, começa e termina em
+   alfanumérico e pode conter hífen no meio. É **case-sensitive**. Maiúscula,
+   Unicode, underscore, hífen externo ou tamanho fora do intervalo invalidam.
+4. `#`, `^` e `|` sem escape são estruturais em qualquer componente e só podem
+   aparecer nas posições da gramática. Há no máximo um seletor (`#` ou `^`) e
+   no máximo um `|`. Um segundo separador invalida o candidato inteiro.
+5. `[` e `]` dentro do interior sempre exigem escape. Não há nesting de
+   wikilink. O fechamento é o primeiro `]]` não escapado.
+6. Barra invertida só decodifica os sete caracteres enumerados. Antes de outro
+   caractere ela permanece parte literal do componente: `A\qB` nomeia
+   `A\qB`. Isso impede que a gramática destrua barras de arquivos externos.
+7. `!` só significa embed quando está imediatamente unido a `[[`. `! [[a]]`
+   é `! ` literal seguido de link. Em `!![[a]]`, o primeiro `!` é literal e o
+   segundo inicia embed. `\[[a]]` suprime o opener e não cria referência.
+8. Embed usa o mesmo `locator` de link e aceita nota, seção ou bloco, inclusive
+   seção/bloco da nota atual. Embed não aceita `display`: apresentação
+   substituta não tem papel numa transclusão e `![[a|b]]` é inválido.
+9. A construção nunca atravessa CR, LF ou CRLF. Uma abertura sem fechamento
+   antes desse limite físico é literal até o fim da linha.
+
+Fora de code/fence/HTML/link Markdown, a varredura é esquerda→direita e o
+escape CommonMark de pontuação é consumido antes de procurar opener: uma barra
+não escapada mais `[` consome `\[` e impede que aquele `[` abra. Assim,
+`\[[a]]` não referencia; `\\[[a]]` contém barra literal seguida de link; e
+`\\\[[a]]` contém barra literal mais `[[a]]` escapado, sem link. `\![[a]]`
+consome `\!` como `!` literal e deixa `[[a]]` como **link normal**, não embed.
+Essa paridade é de bytes de fonte, não uma normalização do componente.
+
+Não existe percent-encoding nem quoting. `%23` continua os três caracteres
+`%23`; aspas são texto. O único mecanismo estrutural é backslash escape.
+
+### Nota, seção e resolução
+
+`[[abc]]` produz sintaticamente `note = "abc"`. O parser não consulta store.
+Em etapa posterior, `resolve_note_name("abc")` decide inexistente, único ou
+ambíguo segundo ADR-063/064.
+
+`[[#Tratamento]]` e `[[^abc123]]` usam a nota de origem. A ausência do nome
+nesse ponto significa **self**, não nome vazio. `[[ ]]` continua inválido.
+
+Uma seção é o texto visível de um heading ATX ou Setext, decodificado e
+recortado como componente. A resolução futura usa `semantic_identity`; heading
+inexistente é unresolved e duas ocorrências semanticamente iguais são
+ambiguous — nunca “a primeira”. Um `#` literal no heading escreve-se `\#` no
+locator. Múltiplos `#` sem escape são inválidos; esta versão não codifica uma
+cadeia hierárquica de headings.
+
+Um bloco referenciável futuro termina seu bloco Markdown não vazio com um token
+separado por whitespace, ` ^block-id`. O token é metadado estrutural invisível,
+não parte do texto projetado. O mesmo ID duplicado no escopo da nota será
+ambíguo; ID ausente será unresolved. Criar, validar, localizar e exibir IDs
+pertence à 6.A.9. Esta ADR apenas fixa a forma para que a sintaxe não precise
+mudar quando aquela fase chegar.
+
+### Texto de exibição
+
+Existe e é somente apresentação. `[[Hipertensão|HAS]]` resolve exclusivamente
+`Hipertensão`; `HAS` não entra em `resolve_note_name`, não cria alias e não
+desempata nada. É permitido com nota, seção ou bloco em links normais. Depois
+de escape/trim deve ser não vazio e ter até 512 escalares. `[[a|]]`, `[[|x]]`
+e múltiplos `|` são candidatos inválidos integrais.
+
+### Precedência de contexto
+
+O parser da 6.A.2 deve receber o corpo sem front matter e usar os mesmos
+limites estruturais que a projeção lossless. “Não interpretar” significa que
+nenhum `[[...]]` daquele intervalo entra na lista de referências.
+
+| Contexto | Wikilink? | Regra |
+| --- | --- | --- |
+| prosa, heading, lista, tarefa, citação | sim | varredura inline normal |
+| corpo de alert GFM | sim | o marcador do alert é estrutura; o corpo é Markdown normal |
+| lado de flashcard `::`/`:::` | sim | flashcard separa lados, mas cada lado conserva suas inlines |
+| code span balanceado | não | conteúdo literal; backslash também é literal |
+| fence ```/~~~ fechado ou até EOF | não | todo o intervalo pertence ao código |
+| bloco indentado de código | não | segue CommonMark; quatro espaços/tab dominam inlines |
+| front matter YAML inicial válido | não | camada de metadata separada antes do corpo |
+| comentário HTML fechado ou até EOF | não | comentário é intervalo opaco |
+| autolink `<scheme:...>` | não | autolink domina colchetes internos |
+| HTML desconhecido, balanceado ou opaco até EOF | não | região lossless protegida da TUI |
+| tags canônicas `<u>`, `<span>`, `<mark>` | nas tags não; no conteúdo sim | wrappers são estrutura, conteúdo continua inline |
+| `<img ...>` canônico | não | elemento void, sem conteúdo |
+| link Markdown `[texto](destino)` ou `[texto][ref]` | não em todo o constructo | links não contêm links; label e destino ficam intactos |
+| imagem Markdown `![alt](destino)` | não em todo o constructo | alt e destino não viram referência |
+| cálculo `= ...` e declaração `nome := ...` reconhecidos | não na linha | a expressão pertence à gramática matemática existente |
+| texto que apenas contém `=` ou `:=` sem classificar como math | sim | continua prosa normal |
+| front matter aparente fora do início | sim | é corpo Markdown, não YAML da nota |
+
+Consequências de encostar sintaxes:
+
+```text
+[veja [[A]]](https://x)     zero wikilink: o link Markdown inteiro domina
+![alt [[A]]](x.png)         zero wikilink: a imagem inteira domina
+<u>[[A]]</u>                um wikilink: somente as tags são estrutura
+`[[A]]`                     zero wikilink
+[[A]]::pergunta             um wikilink no lado do flashcard
+```
+
+Essa tabela é o contrato compartilhável. Core, GUI e TUI não podem inferir
+contexto de suas árvores particulares e divergir da fixture.
+
+#### Limite exato do Markdown tradicional
+
+“Link Markdown” nesta tabela significa uma construção válida segundo CommonMark
+0.31.2, não qualquer `[` seguido mais tarde por `)`. O reconhecedor de contexto
+da 6.A.2 deve cobrir as quatro formas: inline `[label](destination "title")`,
+reference completa `[label][ref]`, collapsed `[label][]` e shortcut `[label]`
+quando existir uma definição `[label]: destination "title"` válida no mesmo
+documento. Definições são blocos e seu label, destino e título inteiros não são
+varridos por wikilink.
+
+Labels usam colchetes balanceados e escapes CommonMark; code spans, autolinks e
+HTML dentro do label dominam seus colchetes. Destino inline usa `<...>` sem
+quebra ou parênteses balanceados/escapados; título opcional usa aspas simples,
+duplas ou parênteses. Os espaços e a única quebra de linha admitidos entre os
+componentes seguem CommonMark 0.31.2. O intervalo protegido começa em `[` (ou
+`![` para imagem) e termina no fechamento da construção; para reference link,
+a definição permanece outro intervalo protegido independente.
+
+Se a construção Markdown não fechar ou violar essas regras, ela **não** ganha
+proteção por parecer link: a varredura de prosa continua e um `[[A]]` contido
+pode ser wikilink. Isso resolve sem recuperação implícita os casos multiline,
+destino inválido e título incompleto. O `link_span` atual da TUI, que cobre
+somente inline, é evidência de uma lacuna a implementar em 6.A.2 — não uma
+redução silenciosa deste contrato.
+
+### Candidatos malformados e algoritmo total
+
+Ao encontrar opener não escapado, o scanner procura o primeiro `]]` não
+escapado **na mesma linha**, limitado a 3.074 escalares. Se houver fechamento,
+esse intervalo inteiro é um candidato. Se qualquer regra falhar, ele produz
+zero referência, permanece literal e a varredura recomeça depois do fechamento
+— nunca de dentro dele. Se não houver fechamento antes da linha/limite, o
+opener e o restante daquela linha são literais. Assim não há interpretação
+competidora escondida dentro de candidato recusado e o custo é linear.
+
+| Fonte | Resultado sintático |
+| --- | --- |
+| `[[`, `]]`, `[[]]`, `[[ ]]`, `[[a]`, `[a]]` | literal, zero referência |
+| `[[a]]]`, `[[a]]]]` | um link `a`; colchetes excedentes são texto |
+| `[[[a]]` | candidato inválido integral; não procura `[[a]]` dentro |
+| `! [[a]]` | `! ` literal e um link normal |
+| `!![[a]]` | `!` literal e um embed |
+| `[[a#]]`, `[[a^]]`, `[[a|]]`, `[[|x]]` | candidato inválido integral |
+| `[[#x]]` | seção `x` da nota atual |
+| `[[^x]]` | inválido: ID curto; `[[^abc123]]` é bloco atual válido |
+| `[[a#b^c]]`, `[[a^b#c]]` | inválido; seletores não compõem |
+| quebra de linha, controle, componente acima do limite | inválido integral |
+
+Nenhuma entrada causa pânico, reparo ou escrita. Uma nota de 2 MiB terminando
+em opener incompleto continua texto; 10.000 links são 10.000 resultados em
+ordem de fonte. A 6.A.2 deve devolver intervalos de bytes
+`[start_byte, end_byte)`, com início inclusivo e fim exclusivo, medidos sobre
+UTF-8, além de `raw` igual exatamente àquele slice. Para embed, `start_byte`
+inclui `!`. Cada componente conserva também seu slice raw interno (`note_raw`,
+`section_raw`, `block_raw`, `display_raw`) antes de decode/trim. Intercalar
+trechos e referências raw deve reproduzir a entrada byte a byte.
+
+Esses campos lossless são obrigatórios para **toda** referência de **todo** caso
+da fixture. Para evitar duplicar dados deriváveis em 110 entradas, o JSON os
+explicita em `lossless_examples`; o harness da 6.A.2 deve materializá-los nos
+demais casos e afirmar, em todos, igualdade de slice, fronteiras UTF-8 e
+reconstrução integral. Não é permitido tratar `lossless_examples` como o único
+subconjunto sujeito a essa propriedade.
+
+### Separação entre sintaxe e semântica
+
+O futuro valor sintático contém `kind`, `note?`, `section?`, `block?`,
+`display?`, intervalo raw e componentes raw. Ele **não** contém UUID, existência
+ou escolha de candidato. Depois do parse:
+
+```text
+note presente  → resolve_note_name → UNRESOLVED | RESOLVED | AMBIGUOUS
+note ausente   → UUID da nota de origem
+section/bloco  → resolvedor próprio posterior, só após a nota
+display        → apresentação, nunca resolução
+embed          → intenção de apresentação, nunca permissão para transcluir
+```
+
+Parse válido pode resolver para nada; parse inválido não chega ao resolvedor.
+Ambiguidade semântica não torna sintaxe inválida.
+
+### Compatibilidade, segurança e losslessness
+
+Wikilink é extensão de Markdown: leitores CommonMark antigos o mostram como
+colchetes literais. Arquivos antigos não são migrados. O parser futuro só lê o
+corpo e não altera o serializador; downgrade preserva bytes. Nomes com toda a
+pontuação aceita pelas ADR-063/064 continuam alcançáveis por escape, sem
+proibição silenciosa. URL, `mailto:`, links, imagens e autolinks existentes
+mantêm precedência.
+
+O contrato é determinístico: para cada opener há no máximo um candidato, para
+cada candidato há no máximo uma decomposição, e candidato inválido nunca é
+revarrido internamente. Limites por linha e por tamanho impedem opener hostil de
+capturar o documento ou induzir crescimento quadrático. Texto é dado; HTML
+continua sujeito às regras existentes e embed não executa nada nesta fase.
+
+### Alternativas rejeitadas
+
+1. **Proibir `#`, `^`, `|` ou colchetes nos nomes.** Contradiz dados válidos da
+   ADR-064 e transforma compatibilidade externa em perda de endereço.
+2. **Primeiro ou último separador vence, sem escape.** Falha para nomes que
+   carregam o mesmo caractere e faz copiar/colar depender de adivinhação.
+3. **Percent-encoding.** É familiar em URL, mas o alvo não é URL; torna Unicode
+   e nomes humanos opacos e cria decisão adicional sobre decodificação dupla.
+4. **Aspas internas.** Acrescenta uma segunda modalidade de componente,
+   escaping de aspas e whitespace sem resolver colchete de fechamento melhor.
+5. **Sem display text nesta versão.** Evitaria `|`, mas obrigaria a reabrir a
+   gramática logo na primeira necessidade de apresentação e diverge da
+   convenção reconhecível; escape já elimina a colisão.
+6. **Paths/UUID dentro de wikilink.** Reabre ADR-063: Note-it resolve nomes
+   declarados e mantém caminhos físicos/UUID fora do Markdown humano.
+7. **Nesting ou recuperação permissiva.** Pode produzir duas interpretações e
+   custo não linear. Falha integral e literal é mais previsível e lossless.
+8. **Display em embed.** Não há texto substituto a exibir numa transclusão;
+   aceitar e ignorar seria sintaxe sem efeito.
+
+### Consequências
+
+Positivas: uma gramática única atende Core, GUI e TUI; toda pontuação de nome
+continua representável; malformed é total e não destrutivo; parse e resolução
+ficam testáveis separadamente; a fixture já nomeia contextos e escala.
+
+Negativas: links copiados de ferramentas que tratam pontuação sem escape podem
+degradar a literal; nomes com pontuação estrutural ficam mais verbosos; display
+não existe em embed; múltiplos headings iguais e IDs duplicados permanecem
+ambíguos; implementar a mesma precedência estrutural nas três projeções exigirá
+fixture compartilhada, não regex isolada.
+
+### Impacto futuro e fora de escopo
+
+Esta ADR desbloqueia **6.A.2** (parser puro) e fixa entradas para **6.A.8**
+(seções), **6.A.9** (blocos) e **6.A.10** (embed/transclusão). Também alimenta
+6.0.C/6.A.4 (índice), 6.A.5 (GUI), 6.A.6 (outras superfícies) e 6.A.7
+(backlinks). Nenhuma dessas fases é iniciada aqui.
+
+Não existe parser, nó Tiptap, renderer, navegação, backlink, índice,
+autocomplete, UI, ID de bloco ou transclusão nesta entrega.
+
+### Revisão adversarial
+
+Revisão independente em contexto separado, sem editar a proposta.
+
+**R1 — 0 blocker, 6 major, 2 minor.** A proposta não foi aprovada. Os majors
+mostraram: `ordinary` ausente da EBNF e categorias Unicode indefinidas; paridade
+de barras antes do opener sem contrato; teto raw de 3.072 dois escalares menor
+que o pior caso permitido; corpus sem raw/offsets UTF-8; precedência de links
+Markdown reduzida à forma inline; e status PASS escrito antes da própria
+revisão. Os minors pediram front matter combinado com corpo e cobertura HTML
+em atributos/elementos void.
+
+As correções definiram `ordinary`, `Cc`, `Cf`, trim e barra literal; congelaram
+`\[[a]]`, `\\[[a]]`, `\\\[[a]]` e `\![[a]]`; elevaram o teto para 3.076;
+fixaram `[start_byte,end_byte)`, raw e componentes raw em casos lossless;
+adotaram as quatro formas CommonMark de link com definição e a degradação de
+Markdown inválido; ampliaram o corpus de 88 para 102 casos; e devolveram ADR e
+roadmap ao estado de proposta. Nenhuma correção alterou código.
+
+O resultado da R2 é registrado abaixo depois de verificar estas correções.
+
+**R2 — 0 blocker, 1 major, 2 minor.** Todos os achados da R1 foram fechados.
+O major novo encontrou duas definições de reference link cujo label com
+`[[A]]` era inválido em CommonMark; portanto collapsed/shortcut não estavam
+protegidos como a expectativa dizia. Os minors pediram teto raw exato e a
+obrigação lossless para todos os casos, não apenas quatro exemplos.
+
+A correção separou collapsed/shortcut válidos dos labels deliberadamente
+inválidos — nestes, cada `[[A]]` exposto é referência —, fixou o teto matemático
+em 3.074 com casos de fronteira e tornou raw/componentes/offsets uma asserção
+obrigatória para toda referência. O corpus passou a 106 casos. O resultado da
+R3 é registrado abaixo.
+
+**R3 — 0 blocker, 1 major, 1 minor.** A EBNF excluía todo controle antes de a
+regra textual recortar whitespace, tornando TAB periférico inválido pela EBNF
+e válido pela validação; U+2028/U+2029 também não tinham limite físico claro.
+O caso raw 3.075 excedia simultaneamente teto raw e tamanho do display.
+
+A correção faz somente CR/LF encerrarem candidato, admite os demais escalares
+lexicalmente, recorta `White_Space` e então recusa `Cc` remanescente. Casos de
+TAB periférico/interno, NBSP, U+2028 e CR/LF congelam a ordem. O caso 3.075
+agora acrescenta espaço periférico recortável, isolando o teto raw. O corpus
+passou a 110 casos. A R4
+verifica essa correção.
+
+**R4 — 0 blocker, 0 major, 0 minor, 1 nit.** A revisão confirmou a ordem
+lexical→trim→validação, os limites CR/LF, U+2028/U+2029, os boundaries
+3.074/3.075, CommonMark e a obrigação lossless sem encontrar interpretação
+competidora. O nit observou que `non_escapable`, lido isoladamente, ainda
+incluía CR/LF depois de barra; a restrição física já os recusava, mas a EBNF foi
+tornada autossuficiente excluindo-os também. Estado final: zero blocker e zero
+major conhecidos.
