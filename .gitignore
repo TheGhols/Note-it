@@ -26,6 +26,8 @@ tmp/
 *.pkg.tar.xz
 /packaging/arch/src/
 /packaging/arch/pkg/
+# The bare clone makepkg keeps for the `git+` source, recreated on every build.
+/packaging/arch/Note-it/
 
 # IDE / Editors
 .idea/
