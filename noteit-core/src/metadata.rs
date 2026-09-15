@@ -15,12 +15,14 @@ pub const MAX_TAG_CHARS: usize = 64;
 pub const MAX_PROPERTIES: usize = 32;
 pub const MAX_PROPERTY_KEY_CHARS: usize = 64;
 pub const MAX_PROPERTY_VALUE_CHARS: usize = 512;
+pub const MAX_NOTE_NAME_CHARS: usize = MAX_PROPERTY_VALUE_CHARS;
+pub const MAX_ALIASES: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataError(String);
 
 impl MetadataError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
@@ -41,6 +43,25 @@ pub fn semantic_identity(value: &str) -> String {
 
 fn has_forbidden_character(value: &str) -> bool {
     value.chars().any(char::is_control)
+}
+
+/// Validates and trims a title or alias supplied for writing.
+pub fn normalize_note_name(raw: &str) -> Result<String, MetadataError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(MetadataError::new("o nome da nota não pode ser vazio"));
+    }
+    if has_forbidden_character(trimmed) {
+        return Err(MetadataError::new(
+            "o nome da nota não pode conter quebras de linha ou caracteres de controle",
+        ));
+    }
+    if trimmed.chars().count() > MAX_NOTE_NAME_CHARS {
+        return Err(MetadataError::new(format!(
+            "o nome da nota excede o limite de {MAX_NOTE_NAME_CHARS} caracteres"
+        )));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn normalize_tag_display(raw: &str) -> Result<String, MetadataError> {

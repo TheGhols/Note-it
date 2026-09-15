@@ -1,4 +1,7 @@
-use crate::metadata::{NoteMetadata, NoteProperties, NoteTags};
+use crate::metadata::{
+    normalize_note_name, semantic_identity, MetadataError, NoteMetadata, NoteProperties, NoteTags,
+    MAX_ALIASES,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -83,6 +86,10 @@ fn default_font_size() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteFrontMatterWrapper {
     pub note_it: NoteFrontMatter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<serde_yaml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aliases: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "NoteTags::is_empty")]
     pub tags: NoteTags,
     #[serde(default, skip_serializing_if = "NoteProperties::is_empty")]
@@ -97,6 +104,8 @@ pub struct NoteDocument {
     pub metadata: NoteFrontMatter,
     pub user_metadata: NoteMetadata,
     pub content: String,
+    title: Option<serde_yaml::Value>,
+    aliases: Option<serde_yaml::Value>,
     unknown_front_matter: BTreeMap<String, serde_yaml::Value>,
 }
 
@@ -117,6 +126,8 @@ impl NoteDocument {
             },
             user_metadata: NoteMetadata::default(),
             content: String::new(),
+            title: None,
+            aliases: None,
             unknown_front_matter: BTreeMap::new(),
         }
     }
@@ -137,6 +148,8 @@ impl NoteDocument {
             },
             user_metadata: NoteMetadata::default(),
             content: String::new(),
+            title: None,
+            aliases: None,
             unknown_front_matter: BTreeMap::new(),
         }
     }
@@ -168,6 +181,8 @@ impl NoteDocument {
             },
             user_metadata: NoteMetadata::default(),
             content: String::new(),
+            title: None,
+            aliases: None,
             unknown_front_matter: BTreeMap::new(),
         }
     }
@@ -254,6 +269,8 @@ impl NoteDocument {
                 metadata: doc.metadata,
                 user_metadata: doc.user_metadata,
                 content: Self::canonical_content(raw).to_string(),
+                title: None,
+                aliases: None,
                 unknown_front_matter: BTreeMap::new(),
             });
         };
@@ -275,6 +292,8 @@ impl NoteDocument {
                 properties: wrapper.properties,
             },
             content: Self::canonical_content(content).to_string(),
+            title: wrapper.title,
+            aliases: wrapper.aliases,
             unknown_front_matter: wrapper.unknown,
         })
     }
@@ -294,6 +313,8 @@ impl NoteDocument {
                 metadata: doc.metadata,
                 user_metadata: doc.user_metadata,
                 content: Self::canonical_content(raw).to_string(),
+                title: None,
+                aliases: None,
                 unknown_front_matter: BTreeMap::new(),
             });
         };
@@ -308,6 +329,8 @@ impl NoteDocument {
                 properties: wrapper.properties,
             },
             content: Self::canonical_content(content).to_string(),
+            title: wrapper.title,
+            aliases: wrapper.aliases,
             unknown_front_matter: wrapper.unknown,
         })
     }
@@ -315,6 +338,8 @@ impl NoteDocument {
     pub fn serialize(&self) -> Result<String, String> {
         let wrapper = NoteFrontMatterWrapper {
             note_it: self.metadata.clone(),
+            title: self.title.clone(),
+            aliases: self.aliases.clone(),
             tags: self.user_metadata.tags.clone(),
             properties: self.user_metadata.properties.clone(),
             unknown: self.unknown_front_matter.clone(),
@@ -327,6 +352,81 @@ impl NoteDocument {
         // file; `parse` takes that terminator back off, so the pair round-trips
         // a note unchanged however many times it is written and read.
         Ok(format!("---\n{}---\n\n{}\n", yaml_str, self.content))
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        let value = self.title.as_ref()?.as_str()?;
+        normalize_note_name(value).ok()?;
+        Some(value.trim())
+    }
+
+    pub fn aliases(&self) -> Vec<String> {
+        let Some(values) = self
+            .aliases
+            .as_ref()
+            .and_then(serde_yaml::Value::as_sequence)
+        else {
+            return Vec::new();
+        };
+        let mut identities = std::collections::BTreeSet::new();
+        values
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .filter_map(|value| normalize_note_name(value).ok())
+            .filter(|value| identities.insert(semantic_identity(value)))
+            .collect()
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        let mut identities = std::collections::BTreeSet::new();
+        self.title()
+            .map(str::to_string)
+            .into_iter()
+            .chain(self.aliases())
+            .filter(|value| identities.insert(semantic_identity(value)))
+            .collect()
+    }
+
+    pub fn set_title(&mut self, title: Option<&str>) -> Result<bool, MetadataError> {
+        let replacement = title
+            .map(normalize_note_name)
+            .transpose()?
+            .map(serde_yaml::Value::String);
+        if self.title == replacement {
+            return Ok(false);
+        }
+        self.title = replacement;
+        Ok(true)
+    }
+
+    pub fn set_aliases(&mut self, aliases: &[String]) -> Result<bool, MetadataError> {
+        let old_count = self.aliases().len();
+        let mut identities = std::collections::BTreeSet::new();
+        let mut normalized = Vec::new();
+        for alias in aliases {
+            let display = normalize_note_name(alias)?;
+            if identities.insert(semantic_identity(&display)) {
+                normalized.push(display);
+            }
+        }
+        if normalized.len() > MAX_ALIASES && normalized.len() > old_count {
+            return Err(MetadataError::new(format!(
+                "a nota aceita no máximo {MAX_ALIASES} aliases"
+            )));
+        }
+        let replacement = (!normalized.is_empty()).then(|| {
+            serde_yaml::Value::Sequence(
+                normalized
+                    .into_iter()
+                    .map(serde_yaml::Value::String)
+                    .collect(),
+            )
+        });
+        if self.aliases == replacement {
+            return Ok(false);
+        }
+        self.aliases = replacement;
+        Ok(true)
     }
 }
 
