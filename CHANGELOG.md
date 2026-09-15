@@ -4,6 +4,29 @@ Todas as alterações notáveis ​​neste projeto serão documentadas neste ar
 
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). O versionamento é o do próprio Note-it, definido na ADR-062: `0.MINOR.PATCH`, avançando `0.1.100` para `0.2.0`, e **deliberadamente não** [Versionamento Semântico](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-09-15
+
+Segundo bugfix promovido sozinho, pela mesma regra da ADR-062 que moveu a
+`0.1.2`. Defeito identificado durante o hotfix do botão X e adiado ali para não
+ampliar aquele escopo.
+
+### Corrigido
+- **Uma alteração de metadata vira exatamente uma mensagem.** Adicionar uma tag
+  enviava `metadata_changed` duas vezes, com payloads byte a byte idênticos e o
+  mesmo `requestId`, para uma única ação do leitor. É a mesma leitura errada de
+  `deferDocumentEdit` que quebrou o botão X: `defer` **executa** a ação recebida
+  quando o documento está livre e responde `false`, e o handler lia esse `false`
+  como "não aconteceu" e repetia o envio logo abaixo. O caminho com escrita
+  externa segurando o documento já estava correto e continua — zero mensagens
+  durante o hold, exatamente uma na liberação, citando a geração nova. Medido no
+  WebKitGTK real com `inotifywait`: o defeito **não** gravava a nota duas vezes,
+  porque o store recusa um save idêntico (`save_user_metadata` devolve `Ok(())`
+  quando conteúdo e metadados não mudaram); o que sobrava era trabalho duplicado
+  na ponte e no host, e a dependência desse curto-circuito para continuar
+  inofensivo. A auditoria dos quatro usos de `deferDocumentEdit` fica registrada
+  em `docs/hotfix-metadata-duplicate.md`: este era o único sítio restante com o
+  padrão defeituoso.
+
 ## [0.1.2] — 2026-09-14
 
 Correção de um defeito que atingia a instalação diária: o botão de fechar da
