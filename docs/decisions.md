@@ -5155,7 +5155,7 @@ memória Python apresentada como Rust, persistência por conveniência, duplica�
 do índice semântico e reindexação por tecla. R1 encontrou 4 MAJOR: margem
 pós-hoc estreita, reprodutibilidade insuficiente, contexto por par confundido
 com ocorrência e ausência de resolução/avisos na carga. A correção elevou o
-rebuild a 25 s, registrou dados brutos/fórmula/hashes e tornou os limites e a
+rebuild a 25 s, registrou resultados estruturados/fórmula/hashes e tornou os limites e a
 nova medição Rust obrigatórios. R2: 0 BLOCKER, 0 MAJOR. Zero por tecla permanece
 regra, não estimativa.
 
