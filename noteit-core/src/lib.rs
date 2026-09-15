@@ -214,30 +214,69 @@ impl NoteItCore {
     }
 
     /// Resolves titles and aliases in the live-note namespace.
+    ///
+    /// The signature has no room to report a note that could not be read, so
+    /// the warnings are dropped here. Callers that must act on them use
+    /// [`Self::resolve_note_name_with_warnings`].
     pub fn resolve_note_name(&self, name: &str) -> Result<NoteNameResolution, String> {
+        self.resolve_note_name_with_warnings(name)
+            .map(|(resolution, _)| resolution)
+    }
+
+    /// Resolves titles and aliases in the live-note namespace, alongside any
+    /// non-fatal read warnings.
+    ///
+    /// One unreadable file must not decide the answer for every other note in
+    /// the store. It becomes a [`ReadWarning`] and the scan carries on, the
+    /// way listing and search already behave: a store with one corrupted note
+    /// still knows who the other notes are. It never becomes a partial
+    /// candidate either — a note whose names could not be read is a note whose
+    /// names are unknown, not a note that happened to match.
+    ///
+    /// A scan that could not be performed at all remains an error, because
+    /// answering `Unresolved` for a store nobody could open would be a lie.
+    ///
+    /// Nothing here writes: resolution only ever opens notes for reading, so
+    /// no `updated_at` moves and no file is rewritten.
+    pub fn resolve_note_name_with_warnings(
+        &self,
+        name: &str,
+    ) -> Result<(NoteNameResolution, Vec<ReadWarning>), String> {
         let query = name.trim();
         if query.is_empty() {
-            return Ok(NoteNameResolution::Unresolved);
+            return Ok((NoteNameResolution::Unresolved, Vec::new()));
         }
         let identity = metadata::semantic_identity(query);
+        let (ids, mut warnings) = self.storage.list_notes_by_recency_with_warnings()?;
         let mut candidates = Vec::new();
-        for id in self.storage.list_notes_by_recency()? {
-            let document = self.storage.load_note(&id)?;
-            if document
-                .names()
-                .iter()
-                .any(|candidate| metadata::semantic_identity(candidate) == identity)
-            {
-                candidates.push(id);
+        for id in ids {
+            match self.storage.load_note(&id) {
+                Ok(document) => {
+                    if document
+                        .names()
+                        .iter()
+                        .any(|candidate| metadata::semantic_identity(candidate) == identity)
+                    {
+                        candidates.push(id);
+                    }
+                }
+                Err(error) => warnings.push(ReadWarning {
+                    note_id: Some(id),
+                    kind: ReadWarningKind::UnreadableNote,
+                    message: format!("Falha ao ler a nota {id} ao resolver um nome: {error}"),
+                }),
             }
         }
         candidates.sort_unstable();
         candidates.dedup();
-        Ok(match candidates.as_slice() {
-            [] => NoteNameResolution::Unresolved,
-            [note_id] => NoteNameResolution::Resolved { note_id: *note_id },
-            _ => NoteNameResolution::Ambiguous { candidates },
-        })
+        Ok((
+            match candidates.as_slice() {
+                [] => NoteNameResolution::Unresolved,
+                [note_id] => NoteNameResolution::Resolved { note_id: *note_id },
+                _ => NoteNameResolution::Ambiguous { candidates },
+            },
+            warnings,
+        ))
     }
 
     /// Lists live note identifiers in the canonical recency order.
