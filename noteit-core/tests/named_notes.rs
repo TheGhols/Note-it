@@ -1,8 +1,9 @@
 use noteit_core::{
-    NoteDocument, NoteItCore, NoteNameResolution, StorageManager, Uuid, MAX_ALIASES,
-    MAX_NOTE_NAME_CHARS,
+    NoteDocument, NoteItCore, NoteNameResolution, ReadWarningKind, StorageManager, Uuid,
+    MAX_ALIASES, MAX_NOTE_NAME_CHARS,
 };
 use std::fs;
+use std::time::SystemTime;
 use tempfile::TempDir;
 
 fn store() -> (TempDir, NoteItCore) {
@@ -229,4 +230,231 @@ fn saved_title_does_not_move_the_uuid_or_file() {
         core.resolve_note_name("Depois").unwrap(),
         NoteNameResolution::Resolved { note_id: id }
     );
+}
+
+/// Every file under the store, with its bytes and its modification time.
+///
+/// The read-only proof of 3.8 applied to resolution: content answers "was a
+/// note rewritten?", `modified` answers "was it touched at all?", and the path
+/// list answers "did a file or directory appear?".
+fn fingerprint(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>, Option<SystemTime>)> {
+    let mut result = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                result.push((path.clone(), Vec::new(), None));
+                pending.push(path);
+            } else {
+                let modified = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+                result.push((path.clone(), fs::read(&path).expect("read"), modified));
+            }
+        }
+    }
+    result.sort();
+    result
+}
+
+/// Writes a file named like a note that no reader can parse.
+///
+/// Invalid UTF-8 rather than broken YAML: it fails at the one place every
+/// reader has to pass, so the test cannot accidentally be measuring a lenient
+/// front-matter parser instead of a degraded read.
+fn unreadable(core: &NoteItCore) -> Uuid {
+    let id = Uuid::new_v4();
+    fs::write(core.storage().note_path(&id), [0xF0, 0x28, 0x8C, 0x28]).expect("write garbage");
+    id
+}
+
+#[test]
+fn an_unreadable_note_warns_without_deciding_for_the_notes_that_could_be_read() {
+    let (_tmp, core) = store();
+    let readable = named(&core, Some("AVC"), &[]);
+    let broken = unreadable(&core);
+
+    let (resolution, warnings) = core
+        .resolve_note_name_with_warnings("AVC")
+        .expect("resolution survives one unreadable note");
+
+    assert_eq!(
+        resolution,
+        NoteNameResolution::Resolved { note_id: readable },
+        "one corrupted file must not hide the note that does answer to the name"
+    );
+    assert_eq!(warnings.len(), 1, "exactly the unreadable note is reported");
+    assert_eq!(warnings[0].note_id, Some(broken));
+    assert_eq!(warnings[0].kind, ReadWarningKind::UnreadableNote);
+    assert!(!warnings[0].message.is_empty());
+}
+
+#[test]
+fn an_unreadable_note_never_becomes_a_candidate_of_its_own() {
+    let (_tmp, core) = store();
+    let broken = unreadable(&core);
+
+    let (resolution, warnings) = core
+        .resolve_note_name_with_warnings("AVC")
+        .expect("a store of one corrupted note is still a store");
+
+    assert_eq!(
+        resolution,
+        NoteNameResolution::Unresolved,
+        "a note whose names could not be read has unknown names, not matching ones"
+    );
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].note_id, Some(broken));
+    assert_eq!(warnings[0].kind, ReadWarningKind::UnreadableNote);
+}
+
+#[test]
+fn an_unreadable_note_does_not_turn_two_candidates_into_an_answer() {
+    let (_tmp, core) = store();
+    let first = named(&core, Some("Cardiologia"), &[]);
+    let second = named(&core, None, &["cardiología"]);
+    unreadable(&core);
+
+    let (resolution, warnings) = core
+        .resolve_note_name_with_warnings("cardiologia")
+        .expect("resolve");
+
+    let mut expected = vec![first, second];
+    expected.sort_unstable();
+    assert_eq!(
+        resolution,
+        NoteNameResolution::Ambiguous {
+            candidates: expected
+        },
+        "a corrupted third file cannot break a tie it was never part of"
+    );
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn an_empty_store_resolves_to_nothing_without_warnings() {
+    let (_tmp, core) = store();
+
+    let (resolution, warnings) = core
+        .resolve_note_name_with_warnings("qualquer nome")
+        .expect("an empty store is not a failure");
+
+    assert_eq!(resolution, NoteNameResolution::Unresolved);
+    assert!(
+        warnings.is_empty(),
+        "nothing went wrong, so nothing is reported: {warnings:?}"
+    );
+    assert_eq!(
+        fs::read_dir(core.storage().notes_dir()).unwrap().count(),
+        0,
+        "asking an empty store a question must not populate it"
+    );
+}
+
+#[test]
+fn composed_and_decomposed_spellings_name_the_same_note() {
+    let (_tmp, core) = store();
+    let composed = "Pr\u{e9}-operat\u{f3}rio";
+    let decomposed = "Pre\u{301}-operato\u{301}rio";
+    assert_ne!(
+        composed, decomposed,
+        "the two spellings must really differ byte for byte"
+    );
+
+    let id = named(&core, Some(composed), &[]);
+
+    assert_eq!(
+        core.resolve_note_name(decomposed).expect("resolve"),
+        NoteNameResolution::Resolved { note_id: id },
+        "a decomposed query reaches a composed title"
+    );
+
+    let other = named(&core, Some(decomposed), &[]);
+    let mut expected = vec![id, other];
+    expected.sort_unstable();
+    assert_eq!(
+        core.resolve_note_name(composed).expect("resolve"),
+        NoteNameResolution::Ambiguous {
+            candidates: expected
+        },
+        "two notes spelling one name differently collide instead of being chosen between"
+    );
+}
+
+#[test]
+fn resolving_never_writes_to_the_store() {
+    let (tmp, core) = store();
+    named(&core, Some("AVC"), &["Derrame"]);
+    named(&core, Some("Cardiologia"), &[]);
+    named(&core, Some("cardiología"), &[]);
+    let trashed = named(&core, Some("Neurologia"), &[]);
+    core.storage().move_note_to_trash(&trashed).expect("trash");
+    unreadable(&core);
+
+    // Modification times have a filesystem-dependent resolution; let the clock
+    // move past it so a write during resolution could not hide inside one tick.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let before = fingerprint(tmp.path());
+
+    for query in [
+        "AVC",
+        "Derrame",
+        "cardiologia",
+        "Neurologia",
+        "inexistente",
+        "   ",
+        "",
+        "Pr\u{e9}-operat\u{f3}rio",
+    ] {
+        let _ = core
+            .resolve_note_name_with_warnings(query)
+            .expect("resolve without writing");
+    }
+
+    assert_eq!(
+        fingerprint(tmp.path()),
+        before,
+        "resolution touched the store: content, timestamps or files changed"
+    );
+}
+
+#[test]
+fn repeating_a_resolution_repeats_its_answer() {
+    let (_tmp, core) = store();
+    let resolved = named(&core, Some("AVC"), &[]);
+    let first = named(&core, Some("Cardiologia"), &[]);
+    let second = named(&core, None, &["cardiología"]);
+    unreadable(&core);
+
+    let mut expected = vec![first, second];
+    expected.sort_unstable();
+
+    for _ in 0..16 {
+        let (one, warnings_one) = core
+            .resolve_note_name_with_warnings("avc")
+            .expect("resolve");
+        assert_eq!(one, NoteNameResolution::Resolved { note_id: resolved });
+
+        let (two, warnings_two) = core
+            .resolve_note_name_with_warnings("cardiologia")
+            .expect("resolve");
+        assert_eq!(
+            two,
+            NoteNameResolution::Ambiguous {
+                candidates: expected.clone()
+            },
+            "the candidate order is the answer, not the order the files were read in"
+        );
+
+        let (three, warnings_three) = core
+            .resolve_note_name_with_warnings("inexistente")
+            .expect("resolve");
+        assert_eq!(three, NoteNameResolution::Unresolved);
+
+        for warnings in [warnings_one, warnings_two, warnings_three] {
+            assert_eq!(warnings.len(), 1, "the same file is reported every time");
+        }
+    }
 }
