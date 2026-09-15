@@ -766,35 +766,27 @@ function initUI(): void {
         // in the middle of an external write would carry the pre-commit text
         // back with the tag. It waits instead — nothing is lost and nothing
         // arrives late enough to undo the commit.
-        if (
-          deferDocumentEdit(() => {
-            if (!activeNoteId || !noteEditor) return;
-            bridge.sendMessage({
-              type: 'metadata_changed',
-              payload: {
-                requestId,
-                id: activeNoteId,
-                content: noteEditor.getMarkdown(),
-                generation: currentGeneration(),
-                tags: draft.tags,
-                properties: draft.properties,
-              },
-            });
-          })
-        ) {
-          return;
-        }
-        noteEditor.cancelPendingSave();
-        bridge.sendMessage({
-          type: 'metadata_changed',
-          payload: {
-            requestId,
-            id: activeNoteId,
-            content: noteEditor.getMarkdown(),
-            generation: currentGeneration(),
-            tags: draft.tags,
-            properties: draft.properties,
-          },
+        //
+        // The send is the deferred action and there is nothing after it.
+        // `defer` is not a question: with the document free it *runs* what it
+        // is given and answers `false`, so reading that `false` as "it did not
+        // happen" and sending again underneath put the same change on the
+        // bridge twice — same `requestId`, byte-identical payload — and the
+        // host wrote the note once for each.
+        deferDocumentEdit(() => {
+          if (!activeNoteId || !noteEditor) return;
+          noteEditor.cancelPendingSave();
+          bridge.sendMessage({
+            type: 'metadata_changed',
+            payload: {
+              requestId,
+              id: activeNoteId,
+              content: noteEditor.getMarkdown(),
+              generation: currentGeneration(),
+              tags: draft.tags,
+              properties: draft.properties,
+            },
+          });
         });
       },
       onOpen: () => {
