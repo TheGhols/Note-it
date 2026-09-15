@@ -4,6 +4,30 @@ Todas as alterações notáveis ​​neste projeto serão documentadas neste ar
 
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). O versionamento é o do próprio Note-it, definido na ADR-062: `0.MINOR.PATCH`, avançando `0.1.100` para `0.2.0`, e **deliberadamente não** [Versionamento Semântico](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-09-14
+
+Correção de um defeito que atingia a instalação diária: o botão de fechar da
+nota não fechava nada. Pela ADR-062, um bugfix relevante na versão diária é uma
+unidade própria e não espera a feature em andamento.
+
+### Corrigido
+- **O X fecha a nota.** Clicar no X não fechava a nota e a interface parava de
+  responder logo depois; `Ctrl+W` falhava igual, por ser a mesma função. A causa
+  era `saveAndClose` entregar a si mesma à barreira de escrita externa:
+  `ExternalWriteBarrier.defer(action)` enfileira a ação quando uma escrita
+  externa segura o documento, mas **executa** a ação ali mesmo quando o
+  documento está livre — o caso comum. Passar a própria função que chama
+  `defer` fazia `defer` reentrar em `saveAndClose` indefinidamente, e o
+  `RangeError: Maximum call stack size exceeded` era lançado antes de
+  `bridge.sendMessage`: nenhum `save_and_close` chegava ao host, nenhuma linha
+  era registrada e a janela continuava aberta. Reproduzido no WebKitGTK real, em
+  compositor aninhado e store isolado, com `is_open` permanecendo `true`. A
+  correção passa o trabalho em vez do chamador — a forma que os outros sítios de
+  `deferDocumentEdit` já usavam — e o fecho passa a ocorrer nos dois caminhos:
+  imediatamente com o documento livre, ou na liberação da barreira, citando a
+  geração vigente nesse instante. Autosave, escrita externa, geração, janelas
+  múltiplas, D-Bus e o processo residente ficam como estavam.
+
 ## [0.1.1] — 2026-09-14
 
 Primeira versão a andar desde `0.1.0`. A política que a fez andar está na

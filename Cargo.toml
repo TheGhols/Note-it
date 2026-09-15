@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 # The writer lease is `std::fs::File::try_lock`, stabilised in 1.89. Stating it
 # here turns "your toolchain is too old" into a clear message from Cargo rather
