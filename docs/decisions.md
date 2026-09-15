@@ -5075,3 +5075,185 @@ competidora. O nit observou que `non_escapable`, lido isoladamente, ainda
 incluía CR/LF depois de barra; a restrição física já os recusava, mas a EBNF foi
 tornada autossuficiente excluindo-os também. Estado final: zero blocker e zero
 major conhecidos.
+
+## ADR-066: Relações ficam num índice derivado em memória, nunca no caminho da tecla
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.C.
+
+### Contexto e medição
+
+A ADR-027 recusou índice para busca porque mil notas eram pesquisadas em cerca
+de 40 ms. Relação inversa é outra carga: precisa extrair toda referência e
+produzir destino→origens com proveniência e contexto. A condição de revisão da
+própria ADR-027 foi satisfeita com números novos em
+`docs/relation-index-measurement.md`.
+
+O protótipo descartável, fora do workspace, criou stores de 100, 1.000, 5.000 e
+20.000 notas, com ~2,2 KiB e seis referências por nota. Duas rodadas de warmup e
+nove medidas deram p95 de varredura/rebuild de 98,56/177,57 ms, 996,86/1.020,61
+ms, 4.836,38/4.541,58 ms e 17.107,58/19.080,77 ms. Abrir um backlink por scan
+sob demanda custou 134,40 ms, 951,11 ms, 5.088,72 ms e 17.421,54 ms p95.
+
+Atualizar uma origem ficou abaixo de 1,99 ms p95 em todas as escalas; remoção,
+abaixo de 0,03 ms; restauração, abaixo de 1,99 ms. A memória profunda aproximada
+das quatro estruturas Python foi 271 KiB, 2,74 MiB, 13,54 MiB e 54,33 MiB. O
+contexto limitado a 96 caracteres domina o último valor. Esses números são
+conservadores de um protótipo Python, não uma previsão de layout Rust.
+
+### Decisão
+
+A opção A, varredura sob demanda sem índice, é recusada: já em 1.000 notas o
+p95 de 951 ms viola qualquer abertura interativa de painel e cresce para 17,4 s.
+
+A opção B é escolhida. A 6.A.4 implementará, no Core, um índice de relações:
+
+- **derivado, descartável e reconstruível** a partir das notas;
+- **em memória**, sem arquivo novo em `StorePaths`;
+- **incremental**, substituindo somente a origem cuja revisão mudou;
+- invalidado exclusivamente por `NoteRevision`;
+- com origem→destinos, destino→origens, proveniência e contexto mínimo limitado;
+- sem fonte de verdade própria: excluir o índice perde performance temporária,
+  nunca informação;
+- com falha degradando backlinks/derivados, nunca leitura ou edição da nota.
+
+O precedente é `semantic::InMemoryIndex`: ordem determinística, substituição
+atômica por nota, sincronização do que falta e remoção do que sumiu. A estrutura
+de relações não reutiliza vetores nem persistência de cache semântico; reutiliza
+as propriedades arquiteturais e a autoridade do Core.
+
+### Orçamentos congelados
+
+Na máquina de referência e na carga de 20.000 notas/120.000 referências:
+
+| Superfície/operação | Orçamento p95 | Regra |
+| --- | ---: | --- |
+| abertura de nota | 0 ms síncronos de relações | nota abre sem esperar hidratação/rebuild |
+| painel de backlinks, índice pronto | 50 ms | leitura do mapa e projeção limitada |
+| painel frio | shell em 50 ms | resultado pode ser progressivo; rebuild fica fora da UI |
+| update após edição confirmada | 10 ms | uma origem, enfileirada após nova `NoteRevision` |
+| custo síncrono por tecla | **0 ms / zero trabalho** | nenhuma extração ou reindexação por tecla |
+| rebuild total | 25 s p95 | assíncrono, cancelável/substituível e sem bloquear nota |
+| memória do índice | 64 MiB | inclui os dois mapas, revisão e contexto limitado |
+
+Os números viram benchmark/asserção em 6.A.4. Digitação não agenda trabalho
+por caractere: somente uma revisão canônica confirmada torna uma origem elegível
+para update, com coalescência de revisões obsoletas.
+
+### Persistência, backup e superfícies
+
+Não há persistência. O p95 de rebuild de 19,08 s em Python cabe no orçamento
+assíncrono de 25 s com 24% de folga e a atualização incremental é barata. Persistir acrescentaria
+formato, invalidação, migração, restauração e manifesto de backup sem recuperar
+informação alguma. Portanto C-5 não é acionado, nenhum novo arquivo entra em
+backup e CLI/TUI/GUI/MCP consultam a mesma autoridade em memória no Core; uma
+superfície sem processo residente pode reconstruir ou degradar a feature.
+
+### Revisão adversarial
+
+A revisão 6.0.C atacou viés de cache, carga irreal, decisão anterior ao número,
+memória Python apresentada como Rust, persistência por conveniência, duplicação
+do índice semântico e reindexação por tecla. R1 encontrou 4 MAJOR: margem
+pós-hoc estreita, reprodutibilidade insuficiente, contexto por par confundido
+com ocorrência e ausência de resolução/avisos na carga. A correção elevou o
+rebuild a 25 s, registrou resultados estruturados/fórmula/hashes e tornou os limites e a
+nova medição Rust obrigatórios. R2: 0 BLOCKER, 0 MAJOR. Zero por tecla permanece
+regra, não estimativa.
+
+## ADR-067: Superfícies futuras são internas, transitórias e coordenadas por declaração
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.D.
+
+### Evidência da interface existente
+
+O Note-it é uma janela por nota, com mínimo real de 220 px. `SearchPalette`,
+`TrashPanel`, `ShortcutsPanel`, `FlashcardPanel` e `StudyHub` montam em `#app`;
+`TimerPanel` e `MetadataPanel` são popovers internos ancorados. Os painéis usam
+`hidden` como autoridade de fechamento, papéis/nomes ARIA, foco explícito e
+Escape. Colapsar fecha painéis sem desmontar o editor; o timer pode continuar.
+
+A exclusividade, porém, vive em sequências manuais de `foo?.close()` em
+`main.ts`. Acrescentar seis superfícies assim criaria pares não enumerados e
+estados impossíveis. A responsabilidade futura será um coordenador declarativo
+de superfícies exclusivas. Esta ADR não escolhe seu nome público e não o
+implementa; 6.A.5 deve decidir o nome no código mantendo uma única regra:
+abrir uma superfície fecha a ativa antes de mover foco.
+
+### Forma de cada feature
+
+| Feature | Forma canônica | Entrada estreita/acessível |
+| --- | --- | --- |
+| backlinks | painel interno exclusivo, lista origem+contexto | ação no menu e atalho; painel ocupa a área disponível |
+| outline | painel interno exclusivo, árvore/lista de headings | ação no menu/atalho; selecionar fecha e retorna ao heading |
+| inspector | painel interno exclusivo com seções | ação no menu; nunca sidebar permanente |
+| notas relacionadas | painel interno exclusivo, lista explicável | ação contextual/menu; motivo textual, não só cor |
+| breadcrumbs | linha fina contextual a partir de 400 px | abaixo disso, indicador discreto acionável abre popover/lista |
+| preview | popover ancorado por foco/ponteiro a partir de 400 px | ação contextual/Enter abre painel interno de preview |
+| menções não vinculadas | seção/aba do painel de backlinks | mesma entrada de backlinks; estado e contagem textuais |
+
+Preview por hover é conveniência, nunca única entrada. Foco no link mostra o
+mesmo conteúdo; `Enter`/ação contextual abre a versão navegável. Nenhum dado
+essencial existe apenas em hover, tooltip, cor ou animação.
+
+Preview projeta somente conteúdo local já lido pela autoridade do Core, como
+dado não confiável e dentro de limite explícito. Não busca título, favicon ou
+metadata na rede; não executa HTML, script ou destino; não antecipa navegação.
+Contexto de backlinks e menções obedece ao mesmo limite e tratamento textual.
+
+### Matriz de largura
+
+| Largura | Visível no fluxo | Painel/popover | O que cede e como continua acessível |
+| ---: | --- | --- | --- |
+| 220 px | editor, Menu, estado essencial e Close | um painel por vez ocupa o interior; preview vira painel | breadcrumbs e indicadores somem; todas as ações ficam no Menu/atalho; cabeçalho/Close ficam fixos e o corpo rola também na altura mínima de 160 px |
+| 300 px | editor e indicador discreto quando houver estado | painel exclusivo; preview continua painel, nunca popover | breadcrumbs viram botão compacto com nome acessível |
+| 400 px | linha fina de breadcrumbs e indicadores discretos | painel exclusivo; preview pode ser popover ancorado | labels redundantes cedem; Menu/atalho preservam tudo |
+| 600 px | breadcrumbs e ações contextuais compactas | painel exclusivo com largura limitada; preview popover | nenhuma coluna permanente; editor conserva a maior área |
+| 900 px | breadcrumbs completos e indicadores com rótulo | painel transitório de até 360 px ou popover | editor continua protagonista; fechar restaura toda a largura |
+
+“Painel exclusivo” significa mobiliário temporário dentro da nota, não segunda
+janela, dock ou sidebar persistente. Abaixo de 400 px o preview é sempre painel;
+a partir de 400 px pode ser popover se a âncora e o retângulo calculado couberem,
+senão degrada deterministicamente para painel. Em 220–400 px o painel pode
+cobrir o editor, mas o editor permanece montado e volta intacto ao fechar. Sua
+largura é `min(360 px, viewport - 16 px)`, a altura não ultrapassa o interior
+disponível, cabeçalho/Close permanecem visíveis e apenas o corpo rola.
+
+### Foco, Escape, fechamento e movimento
+
+Cada abertura registra o invocador, fecha a superfície ativa, torna `hidden`
+falso e move foco para o heading/primeiro controle significativo. Tab/Shift+Tab
+permanecem na superfície enquanto ela está aberta. Escape fecha exatamente a
+única superfície ativa e retorna ao invocador se ainda visível; caso contrário,
+ao editor. Se a superfície tiver um filho efêmero aberto — lista, menu ou
+popover — o primeiro Escape fecha somente o filho e devolve foco ao seu
+invocador; um Escape posterior fecha a superfície. Selecionar destino fecha
+antes de navegar. Clique externo fecha popover não modal, mas nunca é o único
+fechamento.
+
+Uma nota recolhida não hospeda painel. Uma ação futura nela expande a nota pelo
+caminho canônico e só então abre a superfície; recolher fecha a superfície e
+retorna ao estado de barra. O timer segue o contrato próprio e não é cancelado.
+
+Movimento reutiliza `--motion-fast`, `--motion-normal`, `--motion-panel` e
+`--motion-ease` da 3.14R.1. `[hidden]` muda imediatamente; animação não atrasa
+semântica, foco ou clique. `prefers-reduced-motion: reduce` remove animações,
+transições e scroll suave sem remover informação.
+
+### Consequências e limites
+
+O desenho preserva nota flutuante, captura rápida e conteúdo primeiro. Recusa
+sidebar permanente, dashboard, múltiplas colunas obrigatórias e coordenação
+manual par-a-par. O host declarativo é escopo de implementação de 6.A.5, não
+desta macrofase. Backlinks/outline/etc. continuam ausentes.
+
+### Revisão adversarial
+
+A rodada R1 atacou 220 px, editor encoberto, foco perdido, Escape ambíguo,
+hover-only, nota recolhida, seis coordenadores e painel permanente. Encontrou
+quatro MAJOR: altura mínima sem rolagem contratada, popover condicional em
+300 px, Escape indefinido com filho efêmero e limite de painel incompleto. A
+matriz, o fallback Menu/atalho, a exclusividade única, o fechamento em pilha e
+os limites bidimensionais corrigem os quatro. R2 reexecutou os mesmos ataques:
+0 BLOCKER, 0 MAJOR. A revisão global R3, pela lente de segurança, encontrou um
+MAJOR adicional: o rascunho não dizia se preview podia buscar ou executar
+conteúdo hostil. O contrato local, inerte e limitado acima o fecha; reataque:
+0 BLOCKER, 0 MAJOR. Nenhuma feature ou host foi implementado.

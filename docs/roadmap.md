@@ -1528,8 +1528,11 @@ features (`Note-It_Escopo_Mestre_Novas_Features_e_Roadmap.md`, v1.0, 14/09/2026)
 em fases executáveis, auditadas contra o repositório real em `1186224` e não
 contra a suposição de como o Note-it é feito.
 
-**Nada nesta fase foi implementado.** O que segue é plano. Cada subfase existe
-para receber, depois de aprovada, um prompt fechado de implementação.
+**Estado revalidado em 15/09/2026.** A fundação 6.0 é documental. A primeira
+implementação da Fase 6 já entrou em `5b9aa11`: `title`, `aliases` e o resolvedor
+de nomes no Core. Wikilinks, parser, índice de relações e superfícies novas
+continuam ausentes. As seções abaixo distinguem contrato, implementação parcial
+e trabalho ainda não iniciado.
 
 ### 6.BASELINE — O que já existe e não será reconstruído
 
@@ -1620,13 +1623,14 @@ que duas notas podem compartilhar") e **muda quando o usuário edita a primeira
 linha**. Um wikilink resolvido por rótulo quebra sozinho. Esta é a decisão
 arquitetural central da Fase 6 e está isolada na 6.0.A.
 
-**RESOLVIDO em 15/09/2026 pela ADR-063.** A auditoria estava certa no
+**RESOLVIDO arquiteturalmente em 15/09/2026 pela ADR-063.** A auditoria estava certa no
 diagnóstico e a medição o endureceu: 39% dos rótulos do corpus colidem após a
 dobra semântica, e o rótulo muda até quando a edição não toca na primeira linha
 do arquivo. A nota passa a ter um nome declarado — `title` no topo do front
 matter, opcional — e o rótulo derivado fica sendo o que sempre foi na prática:
-apresentação. Nada foi implementado: `model.rs`, `search.rs` e `metadata.rs`
-continuam byte-idênticos.
+apresentação. A implementação posterior `5b9aa11` materializou `title`,
+`aliases` e resolução no Core; a auditoria de 6.A.1 abaixo registra a lacuna de
+`ReadWarning`, sem retroagir essa implementação para dentro da fase documental.
 
 **C-3 — ADR-027 decidiu, com medição, que não há índice. Backlinks precisam de um.**
 ADR-027 recusa índice persistente com número em mão (mil notas varridas, dobradas
@@ -1836,7 +1840,11 @@ Não há ciclo. A única aresta que a intuição sugere e que foi **deliberadame
 cortada** é 6.A.11 preview → 6.A.5 GUI: o preview não pode ser pré-requisito do
 link, senão o link não navega até existir popover.
 
-### 6.0.PRE — Precedência entre a 5.0E e a Fase 6 (decisão pendente do dono)
+### 6.0.PRE — Precedência entre a 5.0E e a Fase 6 (decisão histórica registrada)
+
+**Estado: CONCLUÍDA como decisão documental.** Sua escolha histórica foi a opção
+(a); a execução posterior não a cumpriu literalmente. A reconciliação abaixo
+preserva ambos os fatos e não usa PRE para alegar que a 5.0E foi concluída.
 
 O roadmap diz que não há fase funcional depois da 5.0E. A 5.0E está aberta, e
 mesmo assim já existe um pacote diário instalado (`5.0E-GUI`, C-9). São dois
@@ -1849,7 +1857,7 @@ caminhos legítimos e a escolha **não é do agente**:
   primeira promoção da 6.G.4. Vantagem: a 6.0 não escreve `.rs` nenhum, então não
   compete com a 5.0E por código.
 
-**DECIDIDO em 14/09/2026: opção (a).** O dono determinou que a 5.0E é fechada
+**DECIDIDO em 14/09/2026: opção (a).** O dono determinou que a 5.0E seria fechada
 formalmente antes de qualquer implementação da Fase 6. A política do projeto
 passa a ser:
 
@@ -1857,10 +1865,12 @@ passa a ser:
 Ciclo 5 -> concluir -> validar -> fechar 5.0E -> baseline -> então a Fase 6
 ```
 
-Nem `6.0.A`, nem `6.A.1`, nem qualquer outro código da Fase 6 começa antes disso.
-A Fase 6 **pode permanecer planejada** — este documento é o plano — e **não pode
-entrar em implementação**. A 6.0 é documental e mesmo ela espera: o gate não é
-sobre escrever `.rs`, é sobre encerrar um ciclo antes de abrir o próximo.
+O Git registra que a sequência literal não foi mantida: a 5.0E original continua
+com critérios de distribuição não executados, enquanto versões 0.1.1–0.1.3 e a
+implementação `5b9aa11` foram autorizadas e integradas depois. Isto não transforma
+a 5.0E em concluída nem reescreve a decisão; registra uma decisão de precedência
+posteriormente superada pela execução real. O fechamento 6.0.E trata o estado
+atual como autoridade e não fabrica relatório retroativo da 5.0E.
 
 ---
 
@@ -1869,6 +1879,11 @@ sobre escrever `.rs`, é sobre encerrar um ciclo antes de abrir o próximo.
 **Nenhum `.rs`, `.ts` ou `.css` de produção é escrito nesta macrofase.**
 `Cargo.lock` e `pnpm-lock.yaml` permanecem byte-idênticos. É o padrão que a 4.3A
 e a 5.0D.4A estabeleceram neste repositório: medir e decidir antes de implementar.
+
+**ENCERRADA em 15/09/2026 — PASS arquitetural.** 6.0.PRE, A, A.2, B, C, D e E
+estão documentadas. O fechamento não declara parser, índice ou UI existentes.
+ADR-066 decide o índice; ADR-067 decide superfícies; 6.0.E reconcilia a primeira
+implementação e determina 6.A.1.R1 como a próxima fase funcional.
 
 ### 6.0.A — Identidade nomeável da nota
 
@@ -2101,6 +2116,13 @@ de abertura de painel já em 1.000 notas, o índice em memória vira obrigatóri
 a subfase 6.A.4 ganha escopo; se exceder mesmo em memória, PARAR e reprojetar
 antes de 6.A.7.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-066.** Stores temporários de
+100/1.000/5.000/20.000 notas mediram p95 de full scan em 98,56 ms / 996,86 ms /
+4.836,38 ms / 17.107,58 ms; atualização de uma origem ficou abaixo de 1,99 ms
+p95. Escolhido índice derivado em memória, incremental, reconstruível e
+invalidado por `NoteRevision`, sem arquivo em `StorePaths`. Orçamentos e memória
+estão em `docs/relation-index-measurement.md`; zero trabalho síncrono por tecla.
+
 ### 6.0.D — Contrato de superfície gráfica
 
 **Objetivo.** Decidir onde backlinks, outline, inspector, relacionadas,
@@ -2143,6 +2165,12 @@ a feature, **não implementar mesmo assim**: registrar problema, evidência,
 limitação, impacto, alternativas e proposta, como manda o §11 do complemento, e
 abrir uma subfase própria para a mudança estrutural.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-067.** Superfícies futuras são
+internas, transitórias e exclusivas, coordenadas futuramente por responsabilidade
+declarativa em vez de pares de `close()` em `main.ts`. A matriz 220/300/400/600/
+900 px preserva editor, Menu/atalho alternativo, foco, Escape e redução de
+movimento. Nenhuma sidebar permanente ou alteração visual foi implementada.
+
 ### 6.0.E — Reconciliação documental
 
 **Objetivo.** Fechar a deriva C-6, C-7 e C-9 para que a Fase 6 comece sobre um
@@ -2166,6 +2194,30 @@ o dono confirmou o recorte das frentes que não documentou.
 registrá-la como "executada, não documentada na época" com a lista de commits —
 e não inventar um relatório que ninguém escreveu.
 
+**CONCLUÍDA em 15/09/2026 — PASS documental.** Git, código, `docs/tui.md`,
+CHANGELOG, roadmap e vision foram comparados. 5.0D.R1–R4 são as revisões da
+arquitetura 5.0D.4A preservadas no commit `b1747aa` e em `docs/tui.md`; R5
+(`59b2d99..aa082c8`), R6 (`9c08642..16a182e`), 5.0E-GUI
+(`159fe2d`, `a59864a`, `ef035ad`, `50b40a5`), 5.1A (`a7eddfc`) e 4.3 continuam
+nos números históricos já reconciliados. A 5.0D.R5 foi executada sem relatório
+próprio na época; sua faixa de commits e a falha manual registrada pela R6 são o
+registro, não um relatório retroativo. A 5.0E original permanece não concluída.
+6.A.1 é **PARCIAL** por faltar degradação com `ReadWarning` e provas específicas;
+6.A.3 é **PARCIAL** porque o Core existe, mas CLI/TUI/ponte GUI e paridade com
+wikilink ainda faltam. `docs/vision.md` já concorda com ADR-061 e não foi alterado.
+
+**Revisão adversarial global.** R1 aplicou três lentes independentes. O Sabotador
+encontrou um MAJOR: a primeira redação da auditoria 6.A.1 confundia comportamento
+observável com testes específicos inexistentes. O Novo Mantenedor encontrou um
+MAJOR: PRE ainda parecia pendente no título embora sua decisão e seu desvio já
+estivessem registrados. A lente de Segurança encontrou um MAJOR na ADR-067:
+preview não proibia explicitamente rede ou execução de conteúdo hostil. As três
+correções entraram nos respectivos contratos. R2 repetiu os ataques e a matriz
+`6.0.A→identidade; 6.0.A.2→aliases; 6.0.B→6.A.2; 6.0.C→6.A.4;
+6.0.D→6.A.5+; 6.A.1→6.A.2; 6.A.2→parsing; 6.A.3→6.A.4`:
+0 BLOCKER, 0 MAJOR. ADR-061–067, vision, CHANGELOG, corpora, medição e código
+`5b9aa11` não deixam decisão 6.0 ausente antes da próxima implementação.
+
 ---
 
 ## Fase 6.A — Linking Core
@@ -2186,6 +2238,15 @@ idêntico antes e depois de qualquer execução manual; `Cargo.lock` e
 `pnpm-lock.yaml` byte-idênticos salvo dependência aprovada nominalmente.
 
 ### 6.A.1 — Resolvedor de identidade no Core
+
+**Estado auditado: PARCIAL (`5b9aa11`).** O código satisfaz resultado tipado,
+normalização por `semantic_identity`, colisão sem escolha, zero escrita, store e
+nome vazios e ordenação estável de candidatos. Os testes cobrem acento/case,
+colisão, nome vazio e ordenação. A leitura, porém, usa `load_note(&id)?`: uma nota
+ilegível aborta a resolução em vez de retornar os demais candidatos com
+`ReadWarning`, como este contrato exige. Também faltam testes próprios para
+store vazio, Unicode composto/decomposto, fingerprint antes/depois e duas
+resoluções idênticas. Próxima implementação: **6.A.1.R1**.
 
 **Objetivo.** Uma função no Core que, dado um nome, devolve exatamente uma de
 três respostas: resolvido para um `Uuid`, ambíguo com a lista de candidatos, ou
@@ -2261,6 +2322,11 @@ gramática, voltar à 6.0.B — não ajustar a expectativa do teste para o CI fi
 verde (§9 do escopo).
 
 ### 6.A.3 — Aliases
+
+**Estado auditado: PARCIAL (`5b9aa11`).** O Core já persiste e valida até 16
+aliases, preserva YAML externo, deduplica semanticamente e resolve colisões no
+mesmo namespace de `title`. Ainda faltam CLI, TUI, ponte GUI, testes nessas
+superfícies e a prova compartilhada busca↔wikilink, que depende do parser.
 
 **Objetivo.** Uma nota responde por vários nomes; `[[HAS]]` e `[[Hipertensão]]`
 chegam à mesma nota quando ela os declara.
@@ -3254,7 +3320,7 @@ sobre o que foi entregue e o que foi deliberadamente deixado de fora.
 
 ## 6.MAPA — As 22 features do escopo mestre, auditadas contra o código
 
-Classificação verificada em `1186224` por inspeção de implementação e testes, não
+Classificação revalidada em `5b9aa11` por inspeção de implementação e testes, não
 por nome de arquivo. Buscas por `wikilink`, `backlink`, `transclu`, `outline`,
 `breadcrumb`, `favorit`, `saved view`, `inspector`, `quick capture`,
 `version history` e `template` retornaram **zero ocorrência de produção**; os 153
@@ -3279,9 +3345,9 @@ colunas de evidência e de destino, que toda linha já tem.
 
 | # | Feature | Estado | Evidência | Onde entra |
 | --- | --- | --- | --- | --- |
-| F01 | Wikilinks | **AUSENTE** | Nenhum parser, nenhuma sintaxe, nenhum resolvedor | 6.0.A, 6.0.B, 6.A.1, 6.A.2, 6.A.5, 6.A.6 |
+| F01 | Wikilinks | **PARCIAL** | Nome e resolvedor existem no Core; parser, renderer e navegação não | 6.A.1.R1, 6.A.2, 6.A.5, 6.A.6 |
 | F02 | Backlinks | **AUSENTE** | Sem índice de relações; ADR-027 recusa índice (C-3) | 6.0.C, 6.A.4, 6.A.7 |
-| F03 | Aliases | **AUSENTE** | `NoteProperties` é chave→`String` única (`metadata.rs:189`); alias precisa de lista | 6.0.A.2, 6.A.3 |
+| F03 | Aliases | **PARCIAL** | `aliases` no Core persiste, valida e resolve; faltam CLI/TUI/ponte GUI e wikilink | 6.A.3 |
 | F04 | Menções não vinculadas | **AUSENTE** | — | 6.A.12 |
 | F05 | Links para headings | **AUSENTE** | Nenhuma AST de headings no Core | 6.A.8 |
 | F06 | Referências de bloco | **AUSENTE** | — | 6.0.B, 6.A.9 |
@@ -3307,13 +3373,13 @@ colunas de evidência e de destino, que toda linha já tem.
 | Classificação | Quantidade | Features |
 | --- | --- | --- |
 | EXISTENTE | 0 | — |
-| PARCIAL | 6 | F13, F14, F19, F20, F21, F22 |
-| AUSENTE | 13 | F01, F02, F03, F04, F05, F06, F07, F08, F09, F11, F12, F17, F18 |
+| PARCIAL | 8 | F01, F03, F13, F14, F19, F20, F21, F22 |
+| AUSENTE | 11 | F02, F04, F05, F06, F07, F08, F09, F11, F12, F17, F18 |
 | BLOCKED | 2 | F15, F16 |
 | PRECISA DE AUDITORIA MAIS PROFUNDA | 1 | F10 |
 | **Total** | **22** | — |
 
-**Nenhuma feature desapareceu e nenhuma aparece duas vezes.** 0 + 6 + 13 + 2 + 1
+**Nenhuma feature desapareceu e nenhuma aparece duas vezes.** 0 + 8 + 11 + 2 + 1
 = 22, e o conjunto das cinco linhas é exatamente F01–F22.
 
 Correção registrada: a redação anterior desta seção dizia "cinco parciais" e
@@ -3332,8 +3398,8 @@ frase mínima, e a reserva que este roadmap tinha feito para uma ADR só sobre a
 visão deixou de ser necessária.
 
 As nove reservas da Fase 6 foram deslocadas para **ADR-063 a ADR-070** por causa
-disso. Delas, a ADR-063 foi escrita na 6.0.A e a ADR-064 na 6.0.A.2; as demais
-continuam sendo reservas de ADRs **ainda não escritas**. Nenhum número já publicado mudou, e escrever ADR
+disso. ADR-063 a ADR-067 já estão escritas; ADR-068 a ADR-070 continuam reservas
+das fases funcionais correspondentes. Nenhum número já publicado mudou, e escrever ADR
 superficial só para preencher documentação continua proibido pelo §17 do
 mandato.
 
@@ -3344,8 +3410,8 @@ mandato.
 | ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A — **escrita** |
 | ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 — **escrita** |
 | ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B — **escrita** |
-| ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C |
-| ADR-067 | Superfície gráfica: painéis numa janela de nota | 6.A.5 em diante | 6.0.D |
+| ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C — **escrita** |
+| ADR-067 | Superfície gráfica: painéis numa janela de nota | 6.A.5 em diante | 6.0.D — **escrita** |
 | ADR-068 | Política de histórico de versões e retenção | 6.D.1 | 6.D.1 |
 | ADR-069 | Operação composta entre notas e compensação | 6.D.3, 6.D.4 | C-4 |
 | ADR-070 | Artefatos novos no store e manifesto de backup v4 | 6.C.1, 6.D.1, 6.E.3 | C-5 |

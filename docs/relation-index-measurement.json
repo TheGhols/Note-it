@@ -1,0 +1,61 @@
+{
+  "schema": "noteit.relation-index-measurement.v1",
+  "baseline": "6e36cdf8359c6e604305073ae7c2c11a6d54bd15",
+  "prototype_sha256": "708efdc4539ca8dafe8e8684bf4b7d1327f0258be863382e7499abf3ecd96d72",
+  "corpus_sha256": "96324d124d2b0557daa7c4ab69adc912327fe2fc5528f31f8a397a00e14a2f36",
+  "corpus_cases_validated": 20,
+  "warmups": 2,
+  "rounds": 9,
+  "runtime": "CPython 3.14.7, one thread, stdlib",
+  "hardware": "Intel Core i5-9300H, 4C/8T, 23 GiB RAM, Linux 7.2.4-arch1-2",
+  "results": [
+    {
+      "notes": 100,
+      "references": 600,
+      "average_note_bytes": 2210.85,
+      "full_scan_ms": {"median": 78.495531, "p95": 98.559992},
+      "backlink_on_demand_ms": {"median": 81.963539, "p95": 134.400762},
+      "rebuild_ms": {"median": 100.773615, "p95": 177.565152},
+      "edit_incremental_ms": {"median": 1.076079, "p95": 1.889529},
+      "remove_incremental_ms": {"median": 0.013097, "p95": 0.025998},
+      "restore_incremental_ms": {"median": 0.645869, "p95": 1.878748},
+      "memory_bytes": {"forward": 50967, "reverse": 25893, "provenance": 17528, "context": 183226, "total": 277614}
+    },
+    {
+      "notes": 1000,
+      "references": 6000,
+      "average_note_bytes": 2209.142,
+      "full_scan_ms": {"median": 865.730232, "p95": 996.863833},
+      "backlink_on_demand_ms": {"median": 790.569309, "p95": 951.109692},
+      "rebuild_ms": {"median": 874.699679, "p95": 1020.605696},
+      "edit_incremental_ms": {"median": 0.735548, "p95": 1.755746},
+      "remove_incremental_ms": {"median": 0.015458, "p95": 0.019738},
+      "restore_incremental_ms": {"median": 0.856057, "p95": 1.983744},
+      "memory_bytes": {"forward": 508371, "reverse": 252672, "provenance": 168032, "context": 1948081, "total": 2877156}
+    },
+    {
+      "notes": 5000,
+      "references": 30000,
+      "average_note_bytes": 2208.0558,
+      "full_scan_ms": {"median": 4677.213562, "p95": 4836.38117},
+      "backlink_on_demand_ms": {"median": 4582.750037, "p95": 5088.721923},
+      "rebuild_ms": {"median": 4417.546144, "p95": 4541.581405},
+      "edit_incremental_ms": {"median": 0.636204, "p95": 1.562305},
+      "remove_incremental_ms": {"median": 0.016511, "p95": 0.02192},
+      "restore_incremental_ms": {"median": 0.645381, "p95": 1.677981},
+      "memory_bytes": {"forward": 2542195, "reverse": 1241496, "provenance": 813856, "context": 9602889, "total": 14200436}
+    },
+    {
+      "notes": 20000,
+      "references": 120000,
+      "average_note_bytes": 2207.3687,
+      "full_scan_ms": {"median": 16751.429441, "p95": 17107.581863},
+      "backlink_on_demand_ms": {"median": 16235.706711, "p95": 17421.539158},
+      "rebuild_ms": {"median": 17525.93108, "p95": 19080.771375},
+      "edit_incremental_ms": {"median": 0.713375, "p95": 1.435795},
+      "remove_incremental_ms": {"median": 0.016411, "p95": 0.01821},
+      "restore_incremental_ms": {"median": 0.57114, "p95": 0.889424},
+      "memory_bytes": {"forward": 10248491, "reverse": 4979042, "provenance": 3255152, "context": 38491299, "total": 56973984}
+    }
+  ]
+}
