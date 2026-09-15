@@ -611,12 +611,26 @@ function saveAndClose(): void {
   if (!activeNoteId || !noteEditor) return;
   // Closing during an external write would race the commit. It is held until
   // the document is released, and then closes normally.
-  if (deferDocumentEdit(() => saveAndClose())) return;
-  const content = noteEditor.getMarkdown();
-  noteEditor.cancelPendingSave();
-  bridge.sendMessage({
-    type: 'save_and_close',
-    payload: { id: activeNoteId, content, generation: currentGeneration() },
+  //
+  // The close itself is the deferred action, and that is the whole point.
+  // `defer` *runs* what it is given when the document is free and only queues
+  // it when a write is holding it, so handing it `saveAndClose` itself — the
+  // function that calls `defer` — re-entered immediately on the ordinary idle
+  // path and recursed until the stack gave out. The `RangeError` was thrown
+  // before `sendMessage` was ever reached, so the host heard nothing at all:
+  // the X button and Ctrl+W did nothing, and the page went unresponsive while
+  // it unwound. Passing the work rather than the caller is the same shape
+  // every other `deferDocumentEdit` site uses, and it closes on both paths —
+  // now while the document is free, or once it is released, reading the text
+  // and the generation as they stand at that moment.
+  deferDocumentEdit(() => {
+    if (!activeNoteId || !noteEditor) return;
+    const content = noteEditor.getMarkdown();
+    noteEditor.cancelPendingSave();
+    bridge.sendMessage({
+      type: 'save_and_close',
+      payload: { id: activeNoteId, content, generation: currentGeneration() },
+    });
   });
 }
 
