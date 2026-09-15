@@ -48,7 +48,7 @@ pub use chrono;
 pub use filter::{NoteFilter, NoteSelectorError};
 pub use metadata::{
     MetadataCatalog, NoteMetadata, NoteProperties, NoteProperty, NoteTags, PropertyKeyCatalogEntry,
-    TagCatalogEntry,
+    TagCatalogEntry, MAX_ALIASES, MAX_NOTE_NAME_CHARS,
 };
 pub use model::{NoteDocument, NoteFrontMatter, NoteSummary};
 pub use revision::{NoteRevision, RevisionFormatError};
@@ -69,6 +69,14 @@ pub use warning::{ReadBatch, ReadWarning, ReadWarningKind};
 #[derive(Debug, Clone)]
 pub struct NoteItCore {
     storage: StorageManager,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum NoteNameResolution {
+    Unresolved,
+    Resolved { note_id: Uuid },
+    Ambiguous { candidates: Vec<Uuid> },
 }
 
 /// The hexadecimal form of a selector, or a refusal.
@@ -203,6 +211,33 @@ impl NoteItCore {
             1 => Ok(matches[0]),
             _ => Err(NoteSelectorError::Ambiguous(trimmed.to_string(), matches)),
         }
+    }
+
+    /// Resolves titles and aliases in the live-note namespace.
+    pub fn resolve_note_name(&self, name: &str) -> Result<NoteNameResolution, String> {
+        let query = name.trim();
+        if query.is_empty() {
+            return Ok(NoteNameResolution::Unresolved);
+        }
+        let identity = metadata::semantic_identity(query);
+        let mut candidates = Vec::new();
+        for id in self.storage.list_notes_by_recency()? {
+            let document = self.storage.load_note(&id)?;
+            if document
+                .names()
+                .iter()
+                .any(|candidate| metadata::semantic_identity(candidate) == identity)
+            {
+                candidates.push(id);
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        Ok(match candidates.as_slice() {
+            [] => NoteNameResolution::Unresolved,
+            [note_id] => NoteNameResolution::Resolved { note_id: *note_id },
+            _ => NoteNameResolution::Ambiguous { candidates },
+        })
     }
 
     /// Lists live note identifiers in the canonical recency order.
