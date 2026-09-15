@@ -175,6 +175,59 @@ Nenhuma das 42 notas reais foi usada como massa de teste.
 
 ---
 
-## I. CI e pacote
+## I. CI
 
-Registrados na seção J abaixo, preenchida depois que o SHA funcional ficou verde.
+| Run | SHA | Rust Checks & Tests | Frontend Checks & Tests | Resultado |
+| --- | --- | --- | --- | --- |
+| `34936608706` | `cc0781dd` — a correção e a versão 0.1.3 | success | success | **success** |
+
+Passou na primeira tentativa; nenhum pipeline reexecutado.
+
+---
+
+## J. Pacote
+
+Construído do commit `cc0781dd` — o SHA que o CI aprovou.
+
+| Item | Valor |
+| --- | --- |
+| Arquivo | `packaging/arch/note-it-0.1.3.r232.gcc0781dd-1-x86_64.pkg.tar.zst` |
+| Versão / `pkgver` | `0.1.3` / `0.1.3.r232.gcc0781dd-1` |
+| Commit de origem | `cc0781ddc9b9308170bdc245ff59b267d8156b32` |
+| Tamanho | 8 426 321 bytes (8,1 MiB) |
+| SHA256 | `58a89164579a8fce5193ba38321a000c3515d00408e4937d3bc468ebb3434491` |
+
+`pacman -Qp` responde `note-it 0.1.3.r232.gcc0781dd-1`. `pacman -Qlp` lista os
+quatro binários, o `.desktop`, o serviço D-Bus, os oito tamanhos de ícone, a
+licença e o frontend. `namcap` não aponta nenhum erro — zero `E:`, só os avisos
+habituais de binário Rust.
+
+**As duas correções verificadas dentro do pacote, não presumidas.** O
+`index-rJwMgyvm.js` extraído é byte a byte o bundle validado no WebKitGTK real
+(`sha256 29c7c8d3…`), e nele `"metadata_changed"` e `"save_and_close"` aparecem
+**uma vez cada**, os dois dentro da ação deferida. A 0.1.3 descende da 0.1.2,
+então este pacote carrega o hotfix do botão X e este — instalar a 0.1.2 antes é
+desnecessário.
+
+`makepkg` precisou de `-d`, pela mesma razão da 0.1.2: `pnpm` está no PATH mas
+não é pacote pacman neste sistema.
+
+**Retenção.** Ficam em disco `0.1.3`, `0.1.2`, `0.1.1` (a instalada) e `0.1.0`.
+Pela ADR-062 nada é removido antes que a nova esteja instalada e validada, e a
+instalada é justamente a que precisa existir para rollback.
+
+---
+
+## K. Estado final
+
+| Item | Valor |
+| --- | --- |
+| Instalação diária | `note-it 0.1.1.r223.g79332043-1` — **intocada** |
+| Dados reais | 42 notas, fingerprint `ef7371a3…` — **inalterados** |
+| Fase 6 | **NÃO INICIADA** |
+
+A instalação não foi atualizada automaticamente:
+
+```bash
+sudo pacman -U ./packaging/arch/note-it-0.1.3.r232.gcc0781dd-1-x86_64.pkg.tar.zst
+```
