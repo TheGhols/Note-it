@@ -437,3 +437,22 @@ fn an_indented_line_is_code_only_where_a_block_could_start() {
         "four spaces inside a paragraph continue it"
     );
 }
+
+/// The same hostile shapes, but in a document that *does* define a reference
+/// label — so the collapsed and shortcut paths are live rather than short-
+/// circuited, and every label scan has to be bounded on its own.
+#[test]
+fn hostile_repetition_stays_linear_even_where_a_definition_exists() {
+    let definition = "[ref]: /destino\n\n";
+    for (what, body) in [
+        ("unclosed labels", "[a][".to_string() + &"x".repeat(200_000)),
+        ("repeated unclosed labels", "[a][xxxxxxxx".repeat(40_000)),
+        ("repeated shortcuts", "[ref] ".repeat(100_000)),
+        ("repeated collapsed", "[ref][] ".repeat(100_000)),
+        ("long label", format!("[{}]", "x".repeat(400_000))),
+        ("openers after a definition", "[".repeat(200_000)),
+    ] {
+        let source = format!("{definition}{body}");
+        assert_contract(&source, what);
+    }
+}

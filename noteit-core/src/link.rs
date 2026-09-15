@@ -395,6 +395,10 @@ fn is_declaration(line: &str) -> bool {
 /// The most characters a CommonMark link label may hold.
 const MAX_LABEL_CHARS: usize = 999;
 
+/// The most bytes those characters can occupy, which is the cheap bound every
+/// label scan checks before it reads anything.
+const MAX_LABEL_BYTES: usize = MAX_LABEL_CHARS * 4;
+
 /// The labels this document defines, and the bytes those definitions occupy.
 ///
 /// A definition is a block, so it is only looked for where a block could begin:
@@ -461,8 +465,11 @@ fn definition_label(text: &str) -> Option<String> {
 /// an ordinary wikilink.
 fn label_at(source: &str, at: usize) -> Option<(String, usize)> {
     let body = source.get(at..)?.strip_prefix('[')?;
+    // A scalar is four bytes at most, so this is the widest a 999-scalar label
+    // can be. Without it a single unclosed `[` reads to the end of the file.
+    let ceiling = body.len().min(MAX_LABEL_BYTES);
     let mut index = 0;
-    while index < body.len() {
+    while index < ceiling {
         let character = body[index..].chars().next()?;
         match character {
             '\\' => {
@@ -484,7 +491,8 @@ fn label_at(source: &str, at: usize) -> Option<(String, usize)> {
 /// A label folded the way CommonMark matches them: case-insensitive, with runs
 /// of whitespace counting as one space.
 fn normalized_label(raw: &str) -> Option<String> {
-    if raw.trim().is_empty() || raw.chars().count() > MAX_LABEL_CHARS {
+    if raw.len() > MAX_LABEL_BYTES || raw.trim().is_empty() || raw.chars().count() > MAX_LABEL_CHARS
+    {
         return None;
     }
     let mut normalized = String::with_capacity(raw.len());
@@ -509,6 +517,9 @@ fn normalized_label(raw: &str) -> Option<String> {
 /// text between an opener's brackets, which a collapsed or shortcut reference
 /// reuses as its own label.
 fn label_of_text(text: &str) -> Option<String> {
+    if text.len() > MAX_LABEL_BYTES {
+        return None;
+    }
     let mut index = 0;
     while index < text.len() {
         let character = text[index..].chars().next()?;
