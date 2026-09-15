@@ -243,3 +243,75 @@ for menor que 100.
 `0.1.1` → **`0.1.2`**, na fonte canônica (`[workspace.package]` do `Cargo.toml`) e
 nos dois espelhos exigidos (`ui/package.json`, `_appver` do `PKGBUILD`). Nenhuma
 tag criada, nenhuma release publicada.
+
+---
+
+## L. CI
+
+Acompanhado no SHA exato, não no branch.
+
+| Run | SHA | Rust Checks & Tests | Frontend Checks & Tests | Resultado |
+| --- | --- | --- | --- | --- |
+| `34922859554` | `d85d19dd` — a correção e a versão 0.1.2 | success | success | **success** |
+| `34924025336` | `35f1773a` — o `PKGBUILD` fixado | success | success | **success** |
+| `34924713072` | `6c2dafd0` — `.gitignore` do clone do makepkg | success | success | **success** |
+
+Nenhum pipeline foi reexecutado: os três passaram na primeira tentativa.
+
+---
+
+## M. Pacote
+
+Construído do commit `d85d19dd` — o SHA que o CI aprovou — e de nenhum
+intermediário.
+
+| Item | Valor |
+| --- | --- |
+| Arquivo | `packaging/arch/note-it-0.1.2.r227.gd85d19dd-1-x86_64.pkg.tar.zst` |
+| Versão | `0.1.2.r227.gd85d19dd-1` |
+| Tamanho | 8 428 020 bytes (8,1 MiB) |
+| SHA256 | `27cc88c4cbca0d5f8f04ca306ab3ff84536a44fc5c8a47e7dcf5d49fcae389f1` |
+| Commit de origem | `d85d19ddf66ec20ea01fcbd0b96480cdb28c52b4` |
+
+`pacman -Qp` responde `note-it 0.1.2.r227.gd85d19dd-1`. `pacman -Qlp` lista os
+quatro binários, o `.desktop`, o serviço D-Bus, os oito tamanhos de ícone, a
+licença e o frontend em `/usr/share/note-it/ui/dist`. `namcap` não aponta nenhum
+erro — só os avisos habituais de binário Rust (`ld-linux` não usada, `glibc` e
+`libgcc` implicitamente satisfeitas).
+
+**O frontend dentro do pacote foi verificado, não presumido.** O
+`index-w8SyGvVw.js` extraído do pacote é byte a byte o mesmo bundle validado no
+WebKitGTK real — `sha256 803d2c7a…` nos dois — e o código minificado mostra a
+forma corrigida: a ação entregue a `deferDocumentEdit` é o trabalho, e não a
+função que a chama.
+
+`makepkg` precisou de `-d`: `pnpm` existe no PATH (11.24.0) mas não é pacote
+pacman neste sistema, então a checagem de dependências do makepkg não o encontra.
+A build usa o `pnpm` real.
+
+**Retenção.** Ficam em disco `0.1.2` (nova), `0.1.1` (atual, para rollback) e
+`0.1.0`. Pela ADR-062, `N-2` só sai depois que a nova estiver instalada e
+validada — que é justamente quando a anterior pode ser necessária. Nada foi
+removido.
+
+---
+
+## N. Estado final
+
+| Item | Valor |
+| --- | --- |
+| HEAD | `6c2dafd01398e414926e378b35d64b7a7ab79218`, igual a `origin/main` |
+| Árvore | limpa |
+| Instalação diária | `note-it 0.1.1.r223.g79332043-1` — **intocada** |
+| Dados reais | 42 notas, fingerprint `ef7371a3…` — **inalterados** |
+| Fase 6 | **NÃO INICIADA** |
+
+A instalação **não** foi atualizada automaticamente. O comando é do dono:
+
+```bash
+sudo pacman -U ./packaging/arch/note-it-0.1.2.r227.gd85d19dd-1-x86_64.pkg.tar.zst
+```
+
+Depois da instalação, o que fecha a unidade pela ADR-062 é o smoke test na
+instalação real: abrir uma nota, editar, fechar pelo X, reabrir e conferir o
+texto.
