@@ -3430,3 +3430,638 @@ segurança dos dados vale mais que espaço.
 O histórico oficial não depende de binário guardado: ele está no Git, no SHA, no
 CHANGELOG e na documentação, e um pacote antigo se reconstrói a partir do commit
 que o produziu.
+
+## ADR-063: A nota ganha um nome declarado, e o rótulo derivado nunca resolve nada
+
+**Contexto.** A Fase 6 quer uma rede de notas, e uma rede precisa que uma nota
+possa apontar para outra. Antes de existir qualquer parser de `[[algo]]`, há uma
+pergunta anterior: **o que `algo` nomeia?** Hoje o Note-it tem duas coisas, e
+nenhuma delas é um nome.
+
+A primeira é a identidade canônica. `NoteFrontMatter` (`noteit-core/src/model.rs:40`)
+carrega `id: Uuid`, e o arquivo se chama `<uuid>.md`. Quem manda é o nome do
+arquivo: um front matter cujo `id` discorda dele faz a leitura falhar com
+`conflito de identidade da nota`, em vez de redirecionar, e uma nota sem front
+matter nenhum continua sendo uma nota, com metadados ancorados no UUID do
+arquivo e sem carimbos inventados (`model.rs:241`). Isso já é um contrato; a
+6.0.A o declara, não o escolhe.
+
+A segunda é o rótulo. `search::label_for` (`noteit-core/src/search.rs:199`)
+projeta a nota pelo `visible_text` e devolve a primeira linha não vazia,
+recortada e truncada em 120 caracteres; uma nota sem nada visível recebe a
+constante `"Nota vazia"`. Ele é derivado do conteúdo, nunca é gravado, e o
+comentário que o acompanha diz, desde a Fase 3.8, que o Note-it "não tem campo
+de título e não vai ganhar um: um título seria conteúdo que o leitor não
+escreveu".
+
+Essa frase é o ponto de partida desta ADR, e ela merece ser respondida em vez de
+contornada. O que ela recusa é **inventar** um título — e essa recusa continua
+valendo aqui, inteira. O que ela não previu é o caso em que a pessoa *quer*
+dizer como a nota se chama, para poder apontar para ela de outra nota. Um campo
+de front matter que só existe porque alguém o escreveu não é conteúdo que
+ninguém escreveu: é metadado, no mesmo lugar onde `tags` e `properties` já
+moram, e com a mesma regra de que a ausência é um estado legítimo e nunca é
+preenchida em massa. O comentário em `search.rs:195` descreve o estado anterior
+a esta decisão e é atualizado quando a implementação chegar.
+
+**Problema.** Sem decidir isto, a macrofase 6.A inteira é chute: o resolvedor
+(6.A.1), a gramática (6.0.B), os aliases (6.0.A.2), os backlinks (6.A.7) e as
+menções não vinculadas (6.A.12) todos precisam saber o que é o nome de uma nota
+e o que acontece quando dois nomes coincidem.
+
+### Evidência
+
+Medição completa em `docs/naming-identity-measurement.md`, sobre o corpus
+sintético `docs/naming-corpus.json` (36 notas, sha256
+`5a9b0799d00fb838194379edcd4d90af542e5237e96ad8ff66c8a696883de18f`), executada
+com o binário real de `328698be` — nenhum rótulo foi reimplementado, nenhuma
+dobra foi estimada. O que ela devolveu:
+
+```text
+MEDIDO, store base
+  36 notas, 31 rótulos distintos, 28 nomes distintos após semantic_identity
+   9 notas (25%) em colisão exata de rótulo
+  14 notas (39%) em colisão após a dobra semântica do Core
+   3 notas sem nome humano nenhum, todas exibindo "Nota vazia"
+
+MEDIDO, edição da primeira linha visível (E1)
+  12 notas editadas, 11 mudaram de nome
+
+MEDIDO, edição FORA da primeira linha (E2)
+  10 notas editadas, 4 mudaram de nome
+
+MEDIDO, onde um campo de nome sobrevive
+  `title` no TOPO do YAML, em qualquer forma (texto, número, lista,
+  mapa, vazio, nulo): a nota abre e o valor é PRESERVADO por uma
+  gravação real do binário 0.1.3
+  `note_it.title`: a nota abre e o valor é DESCARTADO em silêncio pela
+  mesma gravação
+
+MEDIDO, normalização, pelo filtro real do Core
+  caixa, acento e forma Unicode (NFC/NFD) dobram juntos
+  espaço em volta é recortado antes da dobra
+  espaço interno NÃO é colapsado; nome vazio é recusado
+```
+
+Três achados fazem o trabalho pesado desta decisão, e os três são medidos.
+
+**O rótulo muda sem que o usuário tenha mexido no que ele chama de título.** Na
+nota `6a00000e` a primeira linha do arquivo é `> [!WARNING]`, que é marcador e
+não texto; em `6a00001f` é uma cerca de bloco de código. As duas edições E2
+preservaram a primeira linha da fonte byte a byte e mesmo assim mudaram o nome
+derivado. E o inverso aconteceu na mesma rodada: `6a000020` começa com um
+comentário HTML e tem `# Fibrilação atrial` na linha três; a edição reescreveu
+esse título e o nome derivado não se mexeu.
+
+**O truncamento é cego nos dois sentidos.** `6a000010` e `6a000011` têm
+primeiras linhas diferentes que compartilham os primeiros 120 caracteres: o
+corte em `MAX_LABEL_CHARS` fabrica uma colisão que o texto não tem. E a edição
+E1 de `6a000010`, que acrescentou palavras depois do caractere 120, não mudou o
+rótulo — o mesmo defeito, visto do outro lado.
+
+**O topo do YAML preserva; o bloco reservado não.** `NoteFrontMatterWrapper` tem
+`#[serde(default, flatten)] unknown` (`model.rs:92`) e `NoteFrontMatter` não tem
+equivalente (`model.rs:40`). Um campo de nome no topo atravessa intacto uma
+gravação feita por um binário que não o conhece; o mesmo campo dentro de
+`note_it` é apagado.
+
+**O que esta evidência NÃO cobre, dito aqui e não só no relatório.** Nenhum
+`title` real foi medido, porque o campo não existe: a sonda acima mede o
+tratamento de *uma chave que o binário não conhece*, que é o que `title` é para
+qualquer versão anterior a ele. E os 39% de colisão são colisão de **rótulo**,
+que esta decisão descarta como fonte de nome — eles matam a Opção A e **não**
+dizem nada sobre com que frequência dois títulos declarados colidiriam. A
+política de colisão abaixo não se apoia nesse número; ela se apoia no princípio
+de que uma escolha arbitrária entre duas notas é sempre inaceitável,
+independentemente de ser rara.
+
+### Alternativas avaliadas
+
+As quatro do roadmap, contra os mesmos critérios. Alguns critérios são
+invariantes e não votam em pé de igualdade com os outros: resolução silenciosa
+de colisão, perda de nota antiga e dependência de ordem de filesystem são
+eliminatórias, não penalidades.
+
+| Critério | (A) rótulo derivado | (B) `title` no front matter | (C) `properties.name` | (D) UUID no link |
+| --- | --- | --- | --- | --- |
+| Estabilidade do destino | **falha** — 11/12 em E1, 4/10 em E2 | estável: independe do corpo | estável: independe do corpo | máxima |
+| Legibilidade humana | boa | boa | boa | **falha** |
+| Markdown portátil | boa: o nome é o texto | boa: `title` de topo é a chave que o resto do mundo lê | boa, mas a chave é privada do Note-it | **falha** |
+| Comportamento após renomear | indefinível | definido | definido | irrelevante |
+| Política de colisão | 39% do corpus colide | declarável | colide no espaço do usuário | sem colisão |
+| Notas antigas | abrem | abrem, sem nome | abrem, sem nome | abrem |
+| Custo/migração | zero | **nenhuma migração em massa** | zero | zero |
+| YAML externo preservado | n/a | sim — medido, em todas as formas | sim | n/a |
+| GUI / TUI / CLI / MCP | igual em todas | igual em todas | igual em todas | igual em todas |
+| Aliases depois | impossível | extensão natural | **bloqueado**: valor é uma String | n/a |
+| Segunda fonte de verdade | nenhuma | nenhuma: está no Markdown | nenhuma | nenhuma |
+| Resolução determinística | sim, para o alvo errado | sim | sim | sim |
+| Responde à pergunta da fase | sim | **sim** | sim | **não** |
+
+### Decisão
+
+**A identidade nomeável da nota é um campo `title` no topo do front matter,
+irmão de `tags` e `properties`. É opcional; o Note-it nunca o escreve sem que o
+usuário peça e nunca o deriva do conteúdo. O rótulo derivado continua existindo
+e é rebaixado formalmente a apresentação: ele nunca resolve uma referência.**
+É a Opção B.
+
+A linha entre os dois é a coisa mais importante nesta ADR e não pode ser
+borrada em nenhuma fase posterior:
+
+```text
+title          identidade nomeável    resolve       declarada por quem escreve
+label_for      rótulo de apresentação NUNCA resolve derivada do conteúdo
+```
+
+#### Onde o campo mora, e por que não dentro de `note_it`
+
+A primeira versão desta ADR pôs o campo em `note_it.title`, argumentando que
+reivindicar `title` no topo transformaria um valor de terceiro num campo
+validado e faria um `.md` estrangeiro com `title: 42` deixar de abrir. **Esse
+argumento estava errado e a revisão adversarial o derrubou**, com o
+contraexemplo dentro do próprio repositório: `model.rs:9-11` documenta que
+`color` e `paper_type` são `String` simples justamente para que um valor
+desconhecido **degrade** em vez de "derrubar a nota inteira". O projeto já sabe
+receber valor que não entende sem recusar o arquivo.
+
+Com o argumento falso removido, a medição decide, e ela decide para o outro
+lado:
+
+```text
+                              abre hoje?   sobrevive a uma gravação de 0.1.3?
+title: "Hipertensão arterial"    sim              PRESERVADO
+title: 42                        sim              PRESERVADO
+title: [um, dois]                sim              PRESERVADO
+title: {pt: …, en: …}            sim              PRESERVADO
+title: ""   /   title:           sim              PRESERVADO
+note_it.title: "Hipertensão…"    sim              PERDIDO
+```
+
+Três razões, nessa ordem:
+
+1. **Compatibilidade, medida.** Um nome no topo é seguro em *downgrade* hoje,
+   sem uma linha de código novo: um binário anterior ao campo o guarda em
+   `unknown` e o reescreve intacto. Dentro de `note_it` ele seria apagado, e
+   evitá-lo exigiria acrescentar preservação de chave desconhecida ao bloco
+   reservado **antes** de qualquer versão gravar um nome.
+2. **A partição que o produto já usa.** `note_it` é bookkeeping de máquina —
+   identidade, versão, aparência, carimbos. O metadado semântico de autoria do
+   usuário já mora no topo: `tags` e `properties`. Um nome é dessa segunda
+   categoria, não da primeira, e `docs/markdown-format.md` já descreve o topo
+   exatamente assim.
+3. **O nome viaja.** `title` no topo é a chave que Obsidian, Hugo, Jekyll e
+   praticamente todo o ecossistema Markdown já leem. Isso serve diretamente ao
+   princípio de `docs/vision.md` de que os arquivos continuam úteis fora do
+   Note-it — e é justamente o que a versão anterior desta ADR sacrificava.
+
+O custo é real e fica declarado: **o Note-it passa a reivindicar uma chave num
+espaço que hoje ele só atravessa.** As duas regras que fecham esse custo estão
+em *Identidade nomeável* e *Nota sem nome*, abaixo, e nenhuma delas permite ao
+Note-it reescrever um valor de terceiro por conta própria.
+
+Como uma nota nomeada fica em disco — `model.rs` é somente leitura nesta fase e
+não foi tocado:
+
+```yaml
+---
+note_it:
+  version: 1
+  id: "550e8400-e29b-41d4-a716-446655440000"
+  color: "yellow"
+  paper_type: "blank"
+  paper_intensity: "normal"
+  font_size: 15
+  created_at: "2026-08-26T14:00:00Z"
+  updated_at: "2026-08-26T14:05:00Z"
+title: "Hipertensão arterial"
+tags:
+  - Medicina
+properties:
+  fonte: Harrison
+---
+```
+
+### Identidade canônica
+
+O **UUID da nota**, que é o nome do arquivo `<uuid>.md` e é conferido contra a
+cópia redundante em `note_it.id`. Nunca muda, por nada: nem ao renomear, nem ao
+editar, nem ao mover para a lixeira e voltar. Não é derivada do conteúdo, do
+caminho relativo, da ordem do diretório nem de qualquer índice. Toda ação de
+toda superfície continua endereçada por ela.
+
+### Identidade nomeável
+
+O valor de `title` no topo do front matter, quando ele é um **texto simples
+válido**. Uma nota tem **no máximo um** nome nesta fase; a pluralidade é assunto
+da 6.0.A.2. O nome serve para humanos encontrarem a identidade canônica — nunca
+a substitui, nunca vira chave física de armazenamento e nunca renomeia o
+arquivo.
+
+Um nome é válido quando, depois de recortado nas pontas, ele:
+
+```text
+não é vazio nem só espaços
+não contém quebra de linha nem caractere de controle
+não excede 512 caracteres Unicode
+```
+
+As três regras são as que `metadata.rs` já aplica a um valor de propriedade
+(`has_forbidden_character`, `MAX_PROPERTY_VALUE_CHARS`), porque um nome é um
+texto de uma linha exatamente como um, e um quarto teto inventado só para nomes
+seria arbitrário.
+
+A assimetria entre ler e gravar é deliberada e é a mesma de `model.rs:9-11`:
+
+- **na leitura**, um `title` inválido — ou que não seja texto simples — nunca
+  derruba a nota. A nota abre, simplesmente **não tem nome**, e o valor é
+  preservado como já é hoje;
+- **na gravação**, um nome inválido é recusado, com erro, antes de tocar o
+  arquivo.
+
+**Um `title` escrito em outra ferramenta é um nome.** Se a pessoa digitou um
+título no Obsidian ou no Hugo, ela declarou o nome daquela nota; o Note-it o
+adota na leitura e **não grava nada** para isso. Isso não contradiz a proibição
+de inventar nome: o Note-it não escreve nome que ninguém pediu e não deriva nome
+do conteúdo. Ler o que já está escrito não é nenhuma das duas coisas.
+
+**As três regras de validade não dependem de quem escreveu o valor.** Um `title`
+estrangeiro de 900 caracteres, ou com uma quebra de linha dentro, é texto e mesmo
+assim **não é nome**: a nota abre, o valor fica onde está, e ela simplesmente não
+tem identidade nomeável — a mesma resposta que um `title` ausente recebe. O
+Note-it não recorta, não trunca e não corrige o valor de ninguém para fazê-lo
+caber.
+
+### Normalização
+
+A mesma `semantic_identity` de `metadata.rs:38`, sem uma segunda função e sem
+uma terceira semântica, aplicada no mesmo ponto em que tags e properties já a
+aplicam: **recorta primeiro na validação, dobra depois**. O contrato medido:
+
+```text
+Hipertensão  hipertensão  HIPERTENSÃO  Hipertensao   uma identidade
+Pré-operatório em NFC e em NFD                       uma identidade
+"  Hipertensão  "                                    a mesma identidade
+"Hiper tensão"                                       identidade diferente
+""   ou   "   "                                      recusado, não é nome
+```
+
+Duas limitações ficam **registradas e não corrigidas aqui**, porque corrigi-las
+mudaria a semântica que tags e properties já usam e isso não é trabalho da
+6.0.A: espaço interno não é colapsado, então `Consulta de retorno` e
+`Consulta␣␣␣de␣␣␣retorno` são nomes diferentes; e a dobra cobre Latin-1
+Supplement e Latin Extended-A, então um precomposto fora desses blocos só dobra
+se chegar decomposto (`search.rs:120`). Se algum dia isso se mostrar errado para
+nomes, a correção é uma regra do **validador compartilhado**, não uma segunda
+função de identidade.
+
+### Colisão
+
+**O espaço de nomes é o das notas vivas.** Uma nota na lixeira não tem
+identidade nomeável e não é alvo de resolução — o repositório já separa os dois
+espaços, e `lib.rs:148` diz por quê: apontar o resolvedor de uma para a outra
+"restauraria, ou sobrescreveria, a nota errada sem que nada parecesse errado no
+ponto de chamada".
+
+Uma referência por nome tem exatamente três resultados semânticos, e a escolha
+arbitrária não é um deles:
+
+```text
+RESOLVIDO     exatamente uma nota viva tem aquela identidade nomeável
+NÃO RESOLVIDO nenhuma nota viva tem
+AMBÍGUO       duas ou mais têm: a referência NÃO resolve, e a resposta
+              carrega o conjunto completo de candidatos com a identidade
+              canônica de cada um
+```
+
+É **proibido**, em qualquer superfície e em qualquer versão: pegar a primeira,
+a mais recente, a de menor UUID, a primeira do filesystem, ou resolver em
+silêncio. Ambiguidade é um estado legítimo e relatável, nunca um erro a
+esconder. O repositório já fala essa língua nas quatro superfícies e a
+implementação reusa o vocabulário em vez de inventar outro:
+`NoteSelectorError::Ambiguous(String, Vec<Uuid>)` (`filter.rs:80`),
+`WriteError::AmbiguousSelector` (`write.rs:62`), `ErrorCode::AmbiguousSelector`
+(`noteit-mcp/src/contract.rs:119`) e `"ambiguous_selector"`
+(`noteit-cli/src/machine.rs:521`).
+
+Unicidade **não** é invariante de armazenamento. Exigi-la obrigaria a uma
+verificação global a cada gravação e faria o Note-it recusar uma escrita
+legítima por causa de outra nota; o store continua aceitando dois títulos
+iguais. O que nenhuma superfície pode fazer é resolvê-los sem dizer.
+
+**Excluir e restaurar mexem no espaço de nomes, e isso é esperado.** Excluir
+tira o nome do espaço; restaurar o devolve. Como a lixeira preserva a nota byte
+a byte — mover é `rename` e restaurar é `hard_link` mais `remove_file`, sem ler
+nem reescrever o arquivo (`trash.rs:231`) — uma restauração **pode** criar
+ambiguidade, se o nome tiver sido reutilizado nesse meio-tempo. A resposta é a
+do quadro acima: a referência passa a ser `AMBÍGUO` e as duas notas aparecem.
+Restaurar **nunca** é bloqueado, adiado ou resolvido renomeando a nota
+restaurada: a lixeira devolve exatamente o que recebeu, e essa garantia vale
+mais do que a conveniência de um nome único.
+
+### Renomeação
+
+A identidade canônica **não se move**. Só o campo `title` muda.
+
+A resolução por nome é uma função pura do nome e do estado atual do store,
+calculada no momento da leitura. Não existe vínculo persistido entre uma
+referência e uma nota. Portanto, ao trocar o título:
+
+- o nome anterior **deixa de resolver** para aquela nota — vira `NÃO RESOLVIDO`,
+  ou `AMBÍGUO` se outra nota carregar o mesmo nome. Nunca aponta em silêncio
+  para outro lugar;
+- o nome novo passa a resolver;
+- **nenhuma outra nota é gravada por causa de uma renomeação.** Reescrever
+  referências em outros arquivos não é efeito colateral de renomear. Se uma
+  reescrita assistida for oferecida algum dia, é uma operação separada,
+  iniciada pelo usuário, passando pelo caminho de escrita como qualquer outra;
+- preservar o nome anterior é o que um alias faz, e alias é 6.0.A.2. A regra
+  acima é completa sem ele: sem alias, a resposta é "o nome antigo não resolve
+  mais", que é um resultado definido e não uma lacuna.
+
+**Nomear é metadado semântico de autoria do usuário**, na mesma classe de `tags`
+e `properties` — agora literalmente a mesma, porque `title` é irmão delas no
+topo do YAML. A regra dessa classe já existe e já tem teste
+(`semantic_metadata_never_moves_created_or_updated_at`, `model.rs:636`):
+renomear **não move `updated_at` nem `created_at`**.
+
+A consequência precisa estar escrita, porque o projeto já tropeçou nela uma vez.
+Gravar um nome reescreve o arquivo e move o `mtime` dele. A ordenação lê
+`updated_at` e só cai para `mtime` quando não há carimbo legível (ADR-027.1),
+então renomear **não** promove a nota a "editada mais recentemente" — que é
+exatamente o defeito que a 3.8R corrigiu quando recolorir uma nota a empurrava
+para o topo da lista. Uma nota sem carimbo nenhum, ordenada por `mtime`, **sobe**
+ao ser nomeada; isso é o mesmo que já acontece hoje quando ela muda de cor, e
+não é uma regressão nova desta decisão.
+
+### Nota sem nome
+
+```text
+title ausente                        a nota NÃO tem identidade nomeável
+title vazio, só espaços ou inválido  não é nome; equivale a ausente
+title que não é texto simples        não é nome; o valor é preservado
+nota vazia                           sem nome
+nota sem front matter                sem nome
+nota antiga                          sem nome
+nota na lixeira                      sem nome enquanto estiver lá
+```
+
+Uma nota sem nome continua existindo inteira: abre, é buscada, é listada, é
+editada e é endereçada pela identidade canônica em todas as superfícies. O que
+ela não tem é um nome pelo qual outra nota possa apontar para ela.
+
+Nenhum nome é inventado, derivado ou persistido sem ação do usuário. Criar uma
+nota não gera título. `label_for` nunca é gravado em arquivo nenhum.
+
+**Nomear uma nota cujo `title` guarda um valor de terceiro que não é texto —
+uma lista, um mapa, um número — sobrescreveria dado que não é do Note-it.** Isso
+só pode acontecer por ação explícita e informada do usuário, nunca como efeito
+colateral de nomear, de salvar ou de abrir. Na dúvida, o Note-it preserva o
+valor e a nota fica sem nome.
+
+E a consequência que precisa estar escrita: **`"Nota vazia"` é rótulo de
+apresentação e nunca identidade nomeável.** As três notas do corpus que exibem
+esse rótulo não são alcançáveis por uma referência a esse texto. O mesmo vale
+para qualquer rótulo derivado: a interface pode mostrar
+`def dose_por_peso(mg_kg, peso):` como nome de uma nota, e nenhuma referência a
+essa frase resolve para ela.
+
+### Compatibilidade com notas antigas
+
+Total, e sem tocar em nenhuma. O campo é opcional; a ausência é o estado
+definido de "sem nome", exatamente como `created_at` e `updated_at` já são
+opcionais e relatam ausência em vez de chutar, e como `tags` e `properties` são
+opcionais e "nunca migradas em massa". Nenhuma nota existente deixa de abrir,
+perde identidade, muda de bytes ou tem carimbo movido por causa desta decisão.
+
+E, medido: uma nota que **já** carrega `title` no topo — escrita por outra
+ferramenta, ou por uma versão futura do Note-it — abre hoje, em todas as formas
+testadas, e atravessa uma gravação do binário atual sem perder o valor.
+
+### Migração
+
+**Não há migração em massa, e essa é a decisão — não uma omissão.** Reescrever o
+store para dar um título a cada nota seria inventar nome, que esta ADR proíbe, e
+mexeria em arquivos que o usuário não pediu para mexer. A escolha do topo do
+YAML, além disso, torna desnecessária qualquer mudança de formato para que um
+nome sobreviva a versões anteriores: isso já funciona, e foi medido.
+
+Fica registrado um achado que **não** bloqueia esta decisão, mas bloqueia
+qualquer outra que queira um campo novo no bloco reservado:
+
+> O bloco `note_it` **não preserva chave desconhecida**. Medido: um
+> `note_it.title` gravado à mão é apagado em silêncio por uma gravação do
+> binário 0.1.3. Qualquer campo futuro ali dentro precisa que a preservação
+> exista antes, ou será destruído por qualquer binário anterior a ele.
+
+Os casos que a implementação futura tem de provar, em teste, antes de fechar:
+
+```text
+nota atual com front matter completo, sem title      abre; sem nome
+nota antiga com front matter mínimo                  abre; sem nome
+nota sem front matter nenhum                         abre; sem nome
+nota vazia                                           abre; sem nome
+nota com YAML de terceiro no topo                    YAML intacto após gravar
+nota com title que não é texto simples               abre; sem nome; valor intacto
+nota com title de outra ferramenta                   abre; ESSE é o nome
+nota com title textual porém inválido (> 512, \n)    abre; sem nome; valor intacto
+duas notas recebendo o mesmo title                   AMBÍGUO, ambas listadas
+nota restaurada da lixeira para um nome reutilizado  AMBÍGUO; restauração intacta
+title vazio / só espaços / com controle / > 512      recusado na gravação
+gravação interrompida                                nota íntegra; sem título parcial
+regravar o mesmo title                               idempotente; nada muda
+downgrade para binário sem o campo                   title preservado
+UUID preservado em todos os casos acima
+conteúdo preservado em todos os casos acima
+created_at/updated_at imóveis quando só o nome mudou
+```
+
+### Paridade semântica
+
+Pela ADR-061, o nome de uma nota é semântica compartilhável e mora inteiro no
+`noteit-core`: o campo, a validação, a normalização e os três resultados de
+resolução. GUI, TUI, CLI e MCP consomem a mesma resposta e **não podem
+discordar** sobre o que um nome significa nem sobre o que uma ambiguidade é. O
+que pode diferir é apresentação — como a GUI desenha um destino ambíguo, se a
+TUI mostra a lista de candidatos numa coluna, como o MCP a serializa.
+
+### Consequências
+
+Positivas. O destino de uma referência para de depender do texto da nota, e as
+39% de colisão medidas deixam de ser o espaço de nomes do produto. O nome passa
+a ser uma coisa que o usuário decide e vê, em vez de um efeito colateral de onde
+ele pôs o cursor. O nome é a mesma chave que o resto do ecossistema Markdown já
+lê, então ele atravessa a fronteira do Note-it nos dois sentidos. A ambiguidade
+ganha um resultado declarado, e as quatro superfícies já têm vocabulário para
+ele. Aliases (6.0.A.2) têm onde nascer: uma chave irmã no topo, sem mexer no
+serializador de properties nem no contrato 4.0B.
+
+Negativas, e elas são reais. **Uma nota não tem nome até alguém dar um**, então
+escrever uma referência para uma nota ainda não nomeada não resolve; cabe à 6.A
+tornar nomear barato e visível, e não a esta ADR fingir que o custo não existe.
+**Duas ideias de nome passam a conviver** — título e rótulo — e a única coisa
+que impede a confusão é a linha declarada acima, que precisa ser repetida em
+cada fase que tocar no assunto. **O Note-it passa a reivindicar `title` no
+topo**, uma chave que hoje ele só atravessa: uma biblioteca importada de outra
+ferramenta chega com nomes que o usuário nunca declarou *dentro* do Note-it, e
+com as colisões que ela trouxer. A política de colisão cobre isso sem escolher
+em silêncio, mas o usuário vai ver ambiguidade que não criou aqui. E **o teto de
+512 caracteres** é herdado de properties por consistência, não por medição.
+
+### Alternativas rejeitadas
+
+#### (A) Resolver pelo rótulo derivado
+
+```text
+ENTRADA:
+  6a00000e, cujo arquivo começa com "> [!WARNING]" e tem
+  "> Dose máxima excedida" na linha seguinte;
+  outra nota contendo uma referência ao nome "Dose máxima excedida".
+
+AÇÃO:
+  o usuário acrescenta "em 20%" à linha do alerta. A primeira linha do
+  ARQUIVO não é tocada.
+
+RESULTADO (MEDIDO):
+  o nome derivado passa a ser "Dose máxima excedida em 20%".
+
+VIOLAÇÃO:
+  a referência persistida deixa de resolver por causa de uma edição que
+  não tocou em nada que o usuário reconheceria como título, e nenhum
+  arquivo registra que alguém apontava para ali. A alternativa entrega
+  links que quebram sozinhos, que é exatamente o risco que o roadmap
+  nomeou.
+```
+
+E, no mesmo corpus, sem precisar de nenhuma edição: `[[Consulta de retorno]]`
+nomeia duas notas distintas, `[[Checklist de alta]]` nomeia duas, e
+`[[Nota vazia]]` nomeia três — 9 notas em 36 (25%) em colisão exata, 14 (39%)
+depois da dobra. Uma delas, `6a000011`, só colide porque o truncamento em 120
+caracteres apagou a parte da frase em que ela diferia de `6a000010`.
+
+#### (B) — ESCOLHIDA
+
+#### (C) Nome declarado em `properties`
+
+```text
+ENTRADA:
+  6a000014 com properties { name: "Protocolo de sepse", fonte: "comissão" },
+  e outra nota referindo o nome "Protocolo de sepse".
+
+AÇÃO:
+  o usuário, que usa `name` para outra coisa na sua própria organização,
+  remove a propriedade pelo caminho que sempre existiu:
+  `noteit propriedades remover 6a000014 name`
+
+RESULTADO (MEDIDO):
+  rc=0, properties=[]. A nota perde o nome, sem aviso e sem que nada
+  indique que aquela chave era estrutural. A referência deixa de resolver.
+
+VIOLAÇÃO:
+  põe identidade estrutural dentro de um mapa que o usuário preenche à
+  vontade e cuja lista de chaves ele vê em `noteit propriedades` como se
+  fosse toda dele. Medido também: `name=` e `name=␣␣␣` são aceitos e viram
+  valor vazio, e `Name=Outro` substitui `name` sem avisar, porque as duas
+  chaves têm a mesma identidade semântica.
+```
+
+E um segundo contraexemplo, que já compromete a fase seguinte:
+
+```text
+ENTRADA:  uma nota que precisa se chamar "Primeiro" e também "Segundo".
+AÇÃO:     `noteit propriedades definir <id> "name=Primeiro, Segundo"`
+RESULTADO (MEDIDO): value == "Primeiro, Segundo" — uma String só.
+VIOLAÇÃO: `NoteProperty.value` é `String` (`metadata.rs:149`), então a
+          vírgula é parte do nome e não um separador. Dar plural a isso
+          exige mudar o serializador de properties e o contrato 4.0B, que
+          é precisamente a parada declarada na 6.0.A.2.
+```
+
+#### (D) UUID no wikilink com texto de exibição
+
+```text
+ENTRADA:
+  uma nota contendo
+      Ver [[6a000001-6a0a-4000-8000-000000000000]] antes de prescrever.
+  e uma segunda nota — a de número 33 do corpus — cuja primeira linha é,
+  literalmente, aquele mesmo UUID.
+
+AÇÃO:
+  abrir o arquivo em qualquer outro editor Markdown — o teste que
+  `docs/vision.md` impõe ao exigir que os arquivos continuem úteis fora
+  do Note-it.
+
+RESULTADO:
+  a frase é ilegível: o leitor não tem como saber para onde aponta, não
+  consegue digitar a referência de memória e não consegue conferi-la num
+  diff. E o corpus mostra que os dois espaços se sobrepõem: existe uma
+  nota cujo nome legível É um UUID.
+
+VIOLAÇÃO:
+  Markdown legível, que é princípio de produto e não preferência. E, o
+  que pesa mais para esta fase: a alternativa não responde à pergunta da
+  6.0.A. Ela dispensa a identidade nomeável em vez de defini-la, deixando
+  aliases (6.0.A.2), autocompletar e menções não vinculadas (6.A.12) sem
+  nada em que se apoiar. Um texto de exibição não salva o caso, porque a
+  sintaxe ainda será decidida na 6.0.B e não pode ser presumida aqui.
+```
+
+### Relação com aliases (6.0.A.2)
+
+Esta ADR fixa **uma** identidade nomeável por nota e não decide nada sobre
+plural. O que ela deixa amarrado para a 6.0.A.2, e que a 6.0.A.2 não pode
+contradizer: um alias é um **nome**, sujeito à mesma `semantic_identity`, à
+mesma validade e aos mesmos três resultados de resolução; um alias nunca é
+inferido nem persistido sem ação do usuário; um alias nunca vira identidade
+canônica; e um alias que colida com o título de outra nota produz `AMBÍGUO`,
+jamais uma preferência silenciosa entre nome e alias. Ficam **abertos**, porque
+pertencem àquela fase: o formato YAML exato, o limite por nota, a precedência
+entre título e alias, e o que fazer quando um alias de A é o título de B.
+
+### Relação com a sintaxe (6.0.B)
+
+Nenhuma. `[[algo]]` aparece nesta ADR como notação abstrata para "referência
+pelo nome" e nada mais. Delimitadores, escaping, `#`, `^`, `|`, embeds e o
+comportamento desses caracteres dentro de um nome são a 6.0.B, e esta decisão
+não os antecipa.
+
+### Relação com a implementação (6.A.1 em diante)
+
+Nenhum código foi escrito. `model.rs`, `search.rs`, `metadata.rs` e
+`visible_text.rs` estão byte-idênticos à baseline `328698be`. Não existe
+resolvedor, módulo `link`, tipo Rust novo, índice de nomes nem parser. A 6.A.1
+codifica a semântica acima; a ordem contrária está proibida pelo roadmap.
+Quatro coisas a implementação herda desta ADR como obrigação, não como
+sugestão: um `title` inválido ou não textual **nunca** pode derrubar a leitura
+de uma nota; o Note-it **nunca** sobrescreve um `title` de terceiro sem ação
+explícita; reusar o vocabulário de ambiguidade que já existe nas quatro
+superfícies; e atualizar o comentário de `search.rs:195`, que descreve o estado
+anterior a esta decisão.
+
+### Revisão
+
+Revisão adversarial independente, em contexto separado, no padrão da 5.0D.4A,
+em duas passagens.
+
+A primeira encontrou 1 blocker, 3 major, 3 minor e 1 nit, e **o blocker derrubou
+a escolha de onde o campo morava**: o argumento de que um `title` de topo faria uma nota
+estrangeira deixar de abrir foi refutado por `model.rs:9-11`. A sub-decisão foi
+reaberta, medida e invertida — é a seção *Onde o campo mora* acima. Os três
+major também foram acatados: o espaço de nomes ganhou a regra da lixeira, a
+renomeação ganhou a classificação correta de metadado com a consequência de
+ordenação escrita, e a seção *Evidência* passou a dizer o que a medição não
+cobre. O núcleo da decisão — identidade canônica é o UUID do arquivo,
+identidade nomeável é um campo declarado, rótulo derivado nunca resolve,
+colisão nunca resolve em silêncio — atravessou a revisão sem emenda.
+
+A segunda passagem revisou as emendas e fechou com **0 blocker e 0 major**. Ela
+refez por conta própria a medição de downgrade do topo do YAML — incluindo mapa
+aninhado em três níveis e cinco ciclos de gravação seguidos — e atacou a
+superfície de risco nova que a inversão criou: `storage.rs` não interpreta o
+topo, `write.rs` não reconstrói front matter, `backup.rs` copia arquivo e não
+campo, a lixeira não faz parse, e o teste
+`unknown_top_level_yaml_survives_a_real_reserialization` continua válido. Um
+campo novo no front matter **não** exige manifesto de backup v4, porque o C-5 do
+roadmap trata de artefatos novos no store e um campo não é um artefato. Os dois
+minor que sobraram — a validade de um `title` estrangeiro longo, vista do lado
+da regra e do lado do teste — foram fechados nesta versão.

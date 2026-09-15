@@ -1,0 +1,536 @@
+{
+ "$schema_version": 1,
+ "sobre": "Corpus sintético de identidade nomeável do Note-it, criado na Fase 6.0.A. Inteiramente inventado: nenhuma linha vem de nota real de usuário. O tema é médico/estudo porque é o perfil do aplicativo, e os textos são ficção — não são orientação clínica. Existe para que a decisão sobre o que `[[algo]]` resolve seja medida contra a mesma régua, e não decidida por impressão.",
+ "como_usar": "Criar um store sintético isolado (XDG_DATA_HOME próprio), gravar cada nota de `notas` como `notes/<id>.md` com o front matter indicado por `front_matter`, e rodar o binário real do Note-it sobre ele. `edicao_primeira_linha` (E1) e `edicao_fora_primeira_linha` (E2) são corpos alternativos: E1 reescreve apenas a primeira linha VISÍVEL e preserva o resto; E2 preserva a primeira linha visível — ou, nos casos marcados `primeira_linha_nao_e_o_nome`, preserva a primeira linha da FONTE — e mexe no resto. Aplicar cada cenário em uma cópia separada do store, nunca sobre o mesmo. Este arquivo é ENTRADA: não contém rótulo esperado. O que sai é medido e registrado em `docs/naming-identity-measurement.md`.",
+ "front_matter": {
+  "completo": "bloco `note_it` com version, id, color, paper_type, paper_intensity, font_size, created_at e updated_at",
+  "minimo": "bloco `note_it` só com `id`, como uma nota anterior aos demais campos",
+  "ausente": "arquivo sem front matter nenhum: a identidade vem do nome do arquivo",
+  "terceiro": "front matter completo mais chaves de topo de outra ferramenta (`future_tool`, `external_number`)",
+  "com_title_hipotetico": "front matter completo mais um `note_it.title` que a versão medida NÃO conhece, e chaves de terceiro — sonda de compatibilidade da Opção B"
+ },
+ "notas": [
+  {
+   "id": "6a000001-6a0a-4000-8000-000000000000",
+   "classes": [
+    "primeira_linha_unica"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "cardiologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Hipertensão arterial\n\nPressão sistólica persistentemente acima de 140 mmHg. Medir em duas consultas antes de rotular.\n",
+   "edicao_primeira_linha": "# Hipertensão arterial sistêmica\n\nPressão sistólica persistentemente acima de 140 mmHg. Medir em duas consultas antes de rotular.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Caso base: primeira linha é um título de verdade e é única no corpus."
+  },
+  {
+   "id": "6a000002-6a0a-4000-8000-000000000000",
+   "classes": [
+    "primeira_linha_unica"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "cardiologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Insuficiência cardíaca com fração de ejeção reduzida\n\nDispneia aos esforços, ortopneia e edema. Ecocardiograma confirma.\n",
+   "edicao_primeira_linha": "# Insuficiência cardíaca de fração reduzida\n\nDispneia aos esforços, ortopneia e edema. Ecocardiograma confirma.\n",
+   "edicao_fora_primeira_linha": "# Insuficiência cardíaca com fração de ejeção reduzida\n\nDispneia aos esforços, ortopneia e edema. Ecocardiograma confirma o diagnóstico e estima a fração.\n",
+   "sobre": "Recebe as duas edições, para comparar o mesmo rótulo sob os dois cenários."
+  },
+  {
+   "id": "6a000003-6a0a-4000-8000-000000000000",
+   "classes": [
+    "colisao_exata"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "ambulatorio"
+   ],
+   "propriedades": [],
+   "conteudo": "# Consulta de retorno\n\nPaciente do ambulatório de terça. Trouxe exames de agosto.\n",
+   "edicao_primeira_linha": "# Consulta de retorno de agosto\n\nPaciente do ambulatório de terça. Trouxe exames de agosto.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Primeira metade de uma colisão exata de rótulo entre notas distintas."
+  },
+  {
+   "id": "6a000004-6a0a-4000-8000-000000000000",
+   "classes": [
+    "colisao_exata"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "ambulatorio"
+   ],
+   "propriedades": [],
+   "conteudo": "# Consulta de retorno\n\nOutro paciente, outra queixa. Nada em comum com a nota anterior além do cabeçalho.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "# Consulta de retorno\n\nOutro paciente, outra queixa. Nada em comum com a nota anterior além do cabeçalho, e o corpo mudou.\n",
+   "sobre": "Segunda metade da colisão exata. Duas notas distintas, um nome só."
+  },
+  {
+   "id": "6a000005-6a0a-4000-8000-000000000000",
+   "classes": [
+    "colisao_normalizada",
+    "caixa",
+    "acento"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Hipertensão\n\nGrafia com maiúscula inicial e acento.\n",
+   "edicao_primeira_linha": "# Hipertensão pulmonar\n\nGrafia com maiúscula inicial e acento.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Uma das três grafias que dobram para a mesma identidade semântica."
+  },
+  {
+   "id": "6a000006-6a0a-4000-8000-000000000000",
+   "classes": [
+    "colisao_normalizada",
+    "caixa",
+    "acento"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# hipertensao\n\nMesma palavra, minúscula e sem acento.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Segunda grafia. Difere de n05 byte a byte, dobra igual."
+  },
+  {
+   "id": "6a000007-6a0a-4000-8000-000000000000",
+   "classes": [
+    "colisao_normalizada",
+    "caixa"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# HIPERTENSÃO\n\nMesma palavra em caixa alta.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Terceira grafia. Colisão de três sob semantic_identity, zero colisão exata."
+  },
+  {
+   "id": "6a000008-6a0a-4000-8000-000000000000",
+   "classes": [
+    "unicode_composto"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Pré-operatório\n\nJejum, suspensão de anticoagulante e avaliação de risco.\n",
+   "edicao_primeira_linha": "# Pré-operatório em cirurgia eletiva\n\nJejum, suspensão de anticoagulante e avaliação de risco.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Acentos precompostos (NFC). Visualmente idêntico a n09 e diferente em bytes."
+  },
+  {
+   "id": "6a000009-6a0a-4000-8000-000000000000",
+   "classes": [
+    "unicode_decomposto"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Pré-operatório\n\nOutra nota, mesma aparência na tela, outros bytes no arquivo.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Acentos decompostos (NFD). O usuário não consegue ver a diferença; o arquivo sim."
+  },
+  {
+   "id": "6a00000a-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nota_vazia"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "Comprar filtro de café e pilhas.\n",
+   "sobre": "Nota vazia. Não tem primeira linha nenhuma para virar nome."
+  },
+  {
+   "id": "6a00000b-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nota_whitespace"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "   \n\t\n  \n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "   \n\t\n  \nRascunho que virou texto.\n",
+   "sobre": "Só espaços e tabulações. Igual à vazia para efeito de nome."
+  },
+  {
+   "id": "6a00000c-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nota_sem_texto_visivel"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "***\n\n---\n\n___\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Três regras horizontais: o arquivo tem conteúdo, a projeção visível não tem nada."
+  },
+  {
+   "id": "6a00000d-6a0a-4000-8000-000000000000",
+   "classes": [
+    "visivel_diverge_da_fonte"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "laboratorio"
+   ],
+   "propriedades": [],
+   "conteudo": "- [ ] Revisar **exames** de sangue\n- [ ] Pedir ferritina\n",
+   "edicao_primeira_linha": "- [ ] Revisar **exames** de urina\n- [ ] Pedir ferritina\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Tarefa com negrito: a fonte diz `- [ ] Revisar **exames** de sangue`, o leitor vê outra coisa."
+  },
+  {
+   "id": "6a00000e-6a0a-4000-8000-000000000000",
+   "classes": [
+    "visivel_diverge_da_fonte",
+    "primeira_linha_nao_e_o_nome"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "> [!WARNING]\n> Dose máxima excedida\n>\n> Conferir prescrição antes de liberar.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "> [!WARNING]\n> Dose máxima excedida em 20%\n>\n> Conferir prescrição antes de liberar.\n",
+   "sobre": "O marcador de callout não é texto. A primeira linha da FONTE nunca vira nome; a segunda vira. A edição E2 preserva a primeira linha do arquivo e mesmo assim mexe no nome."
+  },
+  {
+   "id": "6a00000f-6a0a-4000-8000-000000000000",
+   "classes": [
+    "visivel_diverge_da_fonte"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "<span data-note-it-color=\"#D32F2F\" style=\"color:#D32F2F\">Urgente</span>: checar potássio\n\nResultado de 6,1 mEq/L pendente de recoleta.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Marcação de cor que o próprio Note-it escreve. O nome não pode conter o atributo."
+  },
+  {
+   "id": "6a000010-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nome_muito_longo",
+    "truncamento"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Protocolo institucional de abordagem inicial do paciente com dor torácica aguda no pronto-socorro, versão revisada pela comissão de emergência em setembro\n\nFluxo de ECG em dez minutos, troponina seriada e estratificação de risco.\n",
+   "edicao_primeira_linha": "# Protocolo institucional de abordagem inicial do paciente com dor torácica aguda no pronto-socorro, versão revisada pela comissão de emergência em setembro (revisão 2)\n\nFluxo de ECG em dez minutos, troponina seriada e estratificação de risco.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Primeira linha bem acima do teto de 120 caracteres do rótulo."
+  },
+  {
+   "id": "6a000011-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nome_muito_longo",
+    "truncamento",
+    "colisao_por_truncamento"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Protocolo institucional de abordagem inicial do paciente com dor torácica aguda no pronto-socorro, versão revisada pela diretoria clínica em dezembro\n\nMesmo assunto, outra versão do documento, outro dono.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Compartilha os primeiros 120 caracteres com n16 e diverge depois. O truncamento fabrica uma colisão que o texto não tem."
+  },
+  {
+   "id": "6a000012-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nomes_parecidos_distintos"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "endocrinologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Diabetes tipo 1\n\nDeficiência absoluta de insulina, início habitualmente jovem.\n",
+   "edicao_primeira_linha": "# Diabetes mellitus tipo 1\n\nDeficiência absoluta de insulina, início habitualmente jovem.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Par que NÃO pode colidir: a normalização não pode ser agressiva a ponto de juntar os dois."
+  },
+  {
+   "id": "6a000013-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nomes_parecidos_distintos"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "endocrinologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Diabetes tipo 2\n\nResistência periférica à insulina, associada a obesidade visceral.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "O outro lado do par. Um caractere de diferença, doenças diferentes."
+  },
+  {
+   "id": "6a000014-6a0a-4000-8000-000000000000",
+   "classes": [
+    "propriedade_nome"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "protocolo"
+   ],
+   "propriedades": [
+    {
+     "chave": "name",
+     "valor": "Protocolo de sepse"
+    },
+    {
+     "chave": "fonte",
+     "valor": "comissão"
+    }
+   ],
+   "conteudo": "# Pacote de primeira hora\n\nHemocultura antes do antibiótico, lactato e volume.\n",
+   "edicao_primeira_linha": "# Pacote da primeira hora\n\nHemocultura antes do antibiótico, lactato e volume.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Property `name` escrita pelo usuário, discordando do rótulo derivado. Qual dos dois é o nome?"
+  },
+  {
+   "id": "6a000015-6a0a-4000-8000-000000000000",
+   "classes": [
+    "propriedade_nome"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [
+    {
+     "chave": "nome",
+     "valor": "Ficha do paciente"
+    }
+   ],
+   "conteudo": "# Anamnese dirigida\n\nQueixa, história, antecedentes, medicações em uso.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "A mesma ideia em português. `name` e `nome` são chaves distintas e igualmente naturais."
+  },
+  {
+   "id": "6a000016-6a0a-4000-8000-000000000000",
+   "classes": [
+    "propriedade_nome",
+    "colisao_normalizada"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [
+    {
+     "chave": "name",
+     "valor": "protocolo de SEPSE"
+    }
+   ],
+   "conteudo": "# Reavaliação em seis horas\n\nNova medida de lactato e resposta a volume.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Outro `name` que dobra para a mesma identidade do de n20. Colisão dentro do espaço de properties."
+  },
+  {
+   "id": "6a000017-6a0a-4000-8000-000000000000",
+   "classes": [
+    "yaml_de_terceiro"
+   ],
+   "front_matter": "terceiro",
+   "tags": [
+    "neurologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Cefaleia em salvas\n\nDor periorbitária estritamente unilateral, em surtos.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "# Cefaleia em salvas\n\nDor periorbitária estritamente unilateral, em surtos, com lacrimejamento ipsilateral.\n",
+   "sobre": "Front matter com chaves de outra ferramenta no topo. Elas têm de sobreviver a qualquer gravação."
+  },
+  {
+   "id": "6a000018-6a0a-4000-8000-000000000000",
+   "classes": [
+    "sem_front_matter"
+   ],
+   "front_matter": "ausente",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Nota escrita por outro editor\n\nEste arquivo nunca passou pelo Note-it e não tem bloco `note_it`.\n",
+   "edicao_primeira_linha": "# Nota escrita fora do Note-it\n\nEste arquivo nunca passou pelo Note-it e não tem bloco `note_it`.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Identidade canônica só pode vir do nome do arquivo: não existe front matter para carregá-la."
+  },
+  {
+   "id": "6a000019-6a0a-4000-8000-000000000000",
+   "classes": [
+    "front_matter_minimo"
+   ],
+   "front_matter": "minimo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Nota antiga\n\nEscrita quando o front matter tinha só o identificador.\n",
+   "edicao_primeira_linha": "# Nota antiga do arquivo\n\nEscrita quando o front matter tinha só o identificador.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Só `note_it.id`. Sem version, cor, papel ou carimbos."
+  },
+  {
+   "id": "6a00001a-6a0a-4000-8000-000000000000",
+   "classes": [
+    "conteudo_identico"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Checklist de alta\n\nReceita, retorno marcado, sinais de alarme explicados.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Gêmeo A: conteúdo byte a byte igual ao de n27, UUID diferente."
+  },
+  {
+   "id": "6a00001b-6a0a-4000-8000-000000000000",
+   "classes": [
+    "conteudo_identico"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Checklist de alta\n\nReceita, retorno marcado, sinais de alarme explicados.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "# Checklist de alta\n\nReceita, retorno marcado, sinais de alarme explicados e contato da equipe.\n",
+   "sobre": "Gêmeo B. Prova que conteúdo não é identidade."
+  },
+  {
+   "id": "6a00001c-6a0a-4000-8000-000000000000",
+   "classes": [
+    "espacamento"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "#    Espaçamento    \n\nMarcador de título com espaços de sobra em volta.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Espaços em volta do nome. O recorte de linha já os remove."
+  },
+  {
+   "id": "6a00001d-6a0a-4000-8000-000000000000",
+   "classes": [
+    "espacamento",
+    "espaco_interno_duplo"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "Consulta   de   retorno\n\nMesmas palavras de n03 e n04, com espaços internos dobrados.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Para um humano é o mesmo nome de n03. Nem o rótulo nem semantic_identity colapsam espaço interno."
+  },
+  {
+   "id": "6a00001e-6a0a-4000-8000-000000000000",
+   "classes": [
+    "sonda_title_hipotetico",
+    "yaml_de_terceiro"
+   ],
+   "front_matter": "com_title_hipotetico",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Linha visível desta nota\n\nO front matter carrega um `note_it.title` que esta versão do Note-it não conhece.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "# Linha visível desta nota\n\nO front matter carrega um `note_it.title` que esta versão do Note-it não conhece, e esta nota foi regravada.\n",
+   "sobre": "SONDA: um campo hipotético dentro do bloco reservado `note_it`, para medir se um binário que não o conhece o preserva ao regravar a nota."
+  },
+  {
+   "id": "6a00001f-6a0a-4000-8000-000000000000",
+   "classes": [
+    "bloco_de_codigo",
+    "primeira_linha_nao_e_o_nome"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "```python\ndef dose_por_peso(mg_kg, peso):\n    return mg_kg * peso\n```\n\nCálculo usado na pediatria.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "```python\ndef dose_por_kg(mg_kg, peso):\n    return mg_kg * peso\n```\n\nCálculo usado na pediatria.\n",
+   "sobre": "A cerca não é texto: o nome derivado vira uma linha de código. E2 preserva a primeira linha da fonte e ainda assim muda o nome."
+  },
+  {
+   "id": "6a000020-6a0a-4000-8000-000000000000",
+   "classes": [
+    "comentario",
+    "primeira_linha_nao_e_o_nome"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "<!-- rascunho, revisar com a preceptora -->\n\n# Fibrilação atrial\n\nControle de frequência, anticoagulação por CHA2DS2-VASc.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": "<!-- rascunho, revisar com a preceptora -->\n\n# Fibrilação atrial de início recente\n\nControle de frequência, anticoagulação por CHA2DS2-VASc.\n",
+   "sobre": "O comentário é texto visível e vira o nome. E2 reescreve o título que o usuário enxerga como título — e o nome derivado não muda."
+  },
+  {
+   "id": "6a000021-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nome_ambiguo_com_uuid"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "6a000001-6a0a-4000-8000-000000000000\n\nPrimeira linha que é, literalmente, o UUID de outra nota.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Um nome legível que colide com o espaço dos identificadores canônicos."
+  },
+  {
+   "id": "6a000022-6a0a-4000-8000-000000000000",
+   "classes": [
+    "nome_degenerado"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "...\n\nPrimeira linha sem nenhuma letra.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Nome que existe, dobra para si mesmo e não identifica nada para um humano."
+  },
+  {
+   "id": "6a000023-6a0a-4000-8000-000000000000",
+   "classes": [
+    "espacamento",
+    "quebra_dura"
+   ],
+   "front_matter": "completo",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "Sinais de alarme  \nProcurar serviço se houver dor torácica.\n",
+   "edicao_primeira_linha": null,
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Dois espaços no fim da linha são quebra dura de Markdown, e são conteúdo — mas o recorte de linha do rótulo os remove."
+  },
+  {
+   "id": "6a000024-6a0a-4000-8000-000000000000",
+   "classes": [
+    "primeira_linha_unica"
+   ],
+   "front_matter": "completo",
+   "tags": [
+    "nefrologia"
+   ],
+   "propriedades": [],
+   "conteudo": "# Injúria renal aguda\n\nQueda do débito urinário e elevação de creatinina em 48 horas.\n",
+   "edicao_primeira_linha": "# Lesão renal aguda\n\nQueda do débito urinário e elevação de creatinina em 48 horas.\n",
+   "edicao_fora_primeira_linha": null,
+   "sobre": "Renomeação realista: o mesmo assunto passa a ser chamado por outro nome consagrado."
+  }
+ ]
+}

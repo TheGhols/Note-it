@@ -1620,6 +1620,14 @@ que duas notas podem compartilhar") e **muda quando o usuário edita a primeira
 linha**. Um wikilink resolvido por rótulo quebra sozinho. Esta é a decisão
 arquitetural central da Fase 6 e está isolada na 6.0.A.
 
+**RESOLVIDO em 15/09/2026 pela ADR-063.** A auditoria estava certa no
+diagnóstico e a medição o endureceu: 39% dos rótulos do corpus colidem após a
+dobra semântica, e o rótulo muda até quando a edição não toca na primeira linha
+do arquivo. A nota passa a ter um nome declarado — `title` no topo do front
+matter, opcional — e o rótulo derivado fica sendo o que sempre foi na prática:
+apresentação. Nada foi implementado: `model.rs`, `search.rs` e `metadata.rs`
+continuam byte-idênticos.
+
 **C-3 — ADR-027 decidiu, com medição, que não há índice. Backlinks precisam de um.**
 ADR-027 recusa índice persistente com número em mão (mil notas varridas, dobradas
 e transformadas em trechos em ~40 ms) e nomeia a condição de revisão: *"o dia em
@@ -1910,6 +1918,32 @@ independente aprovando, no padrão da 5.0D.4A.
 **Parada.** Se a opção escolhida exigir alterar `NoteFrontMatter` sem migração
 testável para notas sem o campo, PARAR: isso é mudança de contrato canônico
 estabilizado e §9 do escopo manda apresentar evidência antes de codar.
+
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-063.** Venceu a opção (b), com
+o campo no **topo** do front matter e não dentro de `note_it`: identidade
+canônica continua sendo o UUID do arquivo, identidade nomeável é um `title`
+opcional irmão de `tags` e `properties`, e o rótulo derivado é rebaixado
+formalmente a apresentação — ele nunca resolve. Colisão tem três resultados
+declarados (`RESOLVIDO`, `NÃO RESOLVIDO`, `AMBÍGUO`) e nenhuma superfície pode
+escolher entre candidatos; o espaço de nomes é o das notas vivas, e restaurar da
+lixeira pode criar ambiguidade sem que a restauração seja bloqueada. **Sem
+migração em massa**: a ausência do campo é o estado definido de "nota sem nome".
+
+Evidência em `docs/naming-identity-measurement.md`, sobre o corpus versionado
+`docs/naming-corpus.json` (36 notas), medida com o binário real de `328698be`:
+39% dos rótulos derivados colidem após `semantic_identity`, 11 de 12 mudam
+quando a primeira linha é editada, e 4 de 10 mudam por edições que **não** tocam
+nela. A medição que decidiu a posição do campo: `title` no topo sobrevive a uma
+gravação do binário atual em todas as formas testadas; `note_it.title` é apagado
+em silêncio, porque o bloco reservado não preserva chave desconhecida — achado
+registrado como bloqueio para qualquer campo futuro ali dentro.
+
+Revisão adversarial independente em duas passagens: a primeira devolveu 1
+blocker, 3 major, 3 minor e 1 nit, e o blocker reabriu a escolha de onde o campo
+morava, que foi medida e invertida; a segunda fechou com 0 blocker e 0 major.
+Nenhum `.rs`, `.ts` ou `.css` alterado; `Cargo.lock` e `ui/pnpm-lock.yaml`
+byte-idênticos; sem bump de versão, sem pacote, sem instalação — a 6.0 não é
+unidade de promoção (ADR-062).
 
 ### 6.0.A.2 — Semântica de alias
 
@@ -3249,15 +3283,16 @@ frase mínima, e a reserva que este roadmap tinha feito para uma ADR só sobre a
 visão deixou de ser necessária.
 
 As nove reservas da Fase 6 foram deslocadas para **ADR-063 a ADR-070** por causa
-disso. São reservas de ADRs **ainda não escritas**: nenhum número já publicado
-mudou, e escrever ADR superficial só para preencher documentação continua
-proibido pelo §17 do mandato.
+disso. Delas, a ADR-063 foi escrita na 6.0.A; as demais continuam sendo reservas
+de ADRs **ainda não escritas**. Nenhum número já publicado mudou, e escrever ADR
+superficial só para preencher documentação continua proibido pelo §17 do
+mandato.
 
 | ADR | Assunto | Bloqueia | Origem |
 | --- | --- | --- | --- |
 | ADR-061 | GUI principal, Core canônico, paridade semântica ≠ visual | — | **escrita** |
 | ADR-062 | Versionamento `0.MINOR.PATCH` e promoção da versão diária | — | **escrita** |
-| ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A |
+| ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A — **escrita** |
 | ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 |
 | ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B |
 | ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C |
