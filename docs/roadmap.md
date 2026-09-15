@@ -2150,6 +2150,12 @@ a feature, **não implementar mesmo assim**: registrar problema, evidência,
 limitação, impacto, alternativas e proposta, como manda o §11 do complemento, e
 abrir uma subfase própria para a mudança estrutural.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-067.** Superfícies futuras são
+internas, transitórias e exclusivas, coordenadas futuramente por responsabilidade
+declarativa em vez de pares de `close()` em `main.ts`. A matriz 220/300/400/600/
+900 px preserva editor, Menu/atalho alternativo, foco, Escape e redução de
+movimento. Nenhuma sidebar permanente ou alteração visual foi implementada.
+
 ### 6.0.E — Reconciliação documental
 
 **Objetivo.** Fechar a deriva C-6, C-7 e C-9 para que a Fase 6 comece sobre um

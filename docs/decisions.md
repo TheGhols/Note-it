@@ -5159,3 +5159,101 @@ rebuild a 25 s, registrou dados brutos/fórmula/hashes e tornou os limites e a
 nova medição Rust obrigatórios. R2: 0 BLOCKER, 0 MAJOR. Zero por tecla permanece
 regra, não estimativa.
 
+## ADR-067: Superfícies futuras são internas, transitórias e coordenadas por declaração
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.D.
+
+### Evidência da interface existente
+
+O Note-it é uma janela por nota, com mínimo real de 220 px. `SearchPalette`,
+`TrashPanel`, `ShortcutsPanel`, `FlashcardPanel` e `StudyHub` montam em `#app`;
+`TimerPanel` e `MetadataPanel` são popovers internos ancorados. Os painéis usam
+`hidden` como autoridade de fechamento, papéis/nomes ARIA, foco explícito e
+Escape. Colapsar fecha painéis sem desmontar o editor; o timer pode continuar.
+
+A exclusividade, porém, vive em sequências manuais de `foo?.close()` em
+`main.ts`. Acrescentar seis superfícies assim criaria pares não enumerados e
+estados impossíveis. A responsabilidade futura será um coordenador declarativo
+de superfícies exclusivas. Esta ADR não escolhe seu nome público e não o
+implementa; 6.A.5 deve decidir o nome no código mantendo uma única regra:
+abrir uma superfície fecha a ativa antes de mover foco.
+
+### Forma de cada feature
+
+| Feature | Forma canônica | Entrada estreita/acessível |
+| --- | --- | --- |
+| backlinks | painel interno exclusivo, lista origem+contexto | ação no menu e atalho; painel ocupa a área disponível |
+| outline | painel interno exclusivo, árvore/lista de headings | ação no menu/atalho; selecionar fecha e retorna ao heading |
+| inspector | painel interno exclusivo com seções | ação no menu; nunca sidebar permanente |
+| notas relacionadas | painel interno exclusivo, lista explicável | ação contextual/menu; motivo textual, não só cor |
+| breadcrumbs | linha fina contextual a partir de 400 px | abaixo disso, indicador discreto acionável abre popover/lista |
+| preview | popover ancorado por foco/ponteiro a partir de 400 px | ação contextual/Enter abre painel interno de preview |
+| menções não vinculadas | seção/aba do painel de backlinks | mesma entrada de backlinks; estado e contagem textuais |
+
+Preview por hover é conveniência, nunca única entrada. Foco no link mostra o
+mesmo conteúdo; `Enter`/ação contextual abre a versão navegável. Nenhum dado
+essencial existe apenas em hover, tooltip, cor ou animação.
+
+Preview projeta somente conteúdo local já lido pela autoridade do Core, como
+dado não confiável e dentro de limite explícito. Não busca título, favicon ou
+metadata na rede; não executa HTML, script ou destino; não antecipa navegação.
+Contexto de backlinks e menções obedece ao mesmo limite e tratamento textual.
+
+### Matriz de largura
+
+| Largura | Visível no fluxo | Painel/popover | O que cede e como continua acessível |
+| ---: | --- | --- | --- |
+| 220 px | editor, Menu, estado essencial e Close | um painel por vez ocupa o interior; preview vira painel | breadcrumbs e indicadores somem; todas as ações ficam no Menu/atalho; cabeçalho/Close ficam fixos e o corpo rola também na altura mínima de 160 px |
+| 300 px | editor e indicador discreto quando houver estado | painel exclusivo; preview continua painel, nunca popover | breadcrumbs viram botão compacto com nome acessível |
+| 400 px | linha fina de breadcrumbs e indicadores discretos | painel exclusivo; preview pode ser popover ancorado | labels redundantes cedem; Menu/atalho preservam tudo |
+| 600 px | breadcrumbs e ações contextuais compactas | painel exclusivo com largura limitada; preview popover | nenhuma coluna permanente; editor conserva a maior área |
+| 900 px | breadcrumbs completos e indicadores com rótulo | painel transitório de até 360 px ou popover | editor continua protagonista; fechar restaura toda a largura |
+
+“Painel exclusivo” significa mobiliário temporário dentro da nota, não segunda
+janela, dock ou sidebar persistente. Abaixo de 400 px o preview é sempre painel;
+a partir de 400 px pode ser popover se a âncora e o retângulo calculado couberem,
+senão degrada deterministicamente para painel. Em 220–400 px o painel pode
+cobrir o editor, mas o editor permanece montado e volta intacto ao fechar. Sua
+largura é `min(360 px, viewport - 16 px)`, a altura não ultrapassa o interior
+disponível, cabeçalho/Close permanecem visíveis e apenas o corpo rola.
+
+### Foco, Escape, fechamento e movimento
+
+Cada abertura registra o invocador, fecha a superfície ativa, torna `hidden`
+falso e move foco para o heading/primeiro controle significativo. Tab/Shift+Tab
+permanecem na superfície enquanto ela está aberta. Escape fecha exatamente a
+única superfície ativa e retorna ao invocador se ainda visível; caso contrário,
+ao editor. Se a superfície tiver um filho efêmero aberto — lista, menu ou
+popover — o primeiro Escape fecha somente o filho e devolve foco ao seu
+invocador; um Escape posterior fecha a superfície. Selecionar destino fecha
+antes de navegar. Clique externo fecha popover não modal, mas nunca é o único
+fechamento.
+
+Uma nota recolhida não hospeda painel. Uma ação futura nela expande a nota pelo
+caminho canônico e só então abre a superfície; recolher fecha a superfície e
+retorna ao estado de barra. O timer segue o contrato próprio e não é cancelado.
+
+Movimento reutiliza `--motion-fast`, `--motion-normal`, `--motion-panel` e
+`--motion-ease` da 3.14R.1. `[hidden]` muda imediatamente; animação não atrasa
+semântica, foco ou clique. `prefers-reduced-motion: reduce` remove animações,
+transições e scroll suave sem remover informação.
+
+### Consequências e limites
+
+O desenho preserva nota flutuante, captura rápida e conteúdo primeiro. Recusa
+sidebar permanente, dashboard, múltiplas colunas obrigatórias e coordenação
+manual par-a-par. O host declarativo é escopo de implementação de 6.A.5, não
+desta macrofase. Backlinks/outline/etc. continuam ausentes.
+
+### Revisão adversarial
+
+A rodada R1 atacou 220 px, editor encoberto, foco perdido, Escape ambíguo,
+hover-only, nota recolhida, seis coordenadores e painel permanente. Encontrou
+quatro MAJOR: altura mínima sem rolagem contratada, popover condicional em
+300 px, Escape indefinido com filho efêmero e limite de painel incompleto. A
+matriz, o fallback Menu/atalho, a exclusividade única, o fechamento em pilha e
+os limites bidimensionais corrigem os quatro. R2 reexecutou os mesmos ataques:
+0 BLOCKER, 0 MAJOR. A revisão global R3, pela lente de segurança, encontrou um
+MAJOR adicional: o rascunho não dizia se preview podia buscar ou executar
+conteúdo hostil. O contrato local, inerte e limitado acima o fecha; reataque:
+0 BLOCKER, 0 MAJOR. Nenhuma feature ou host foi implementado.
