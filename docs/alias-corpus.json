@@ -1,0 +1,754 @@
+{
+ "$schema_version": 1,
+ "sobre": "Corpus sintético da semântica de alias do Note-it, criado na Fase 6.0.A.2. Inteiramente inventado: nenhuma linha vem de nota real de usuário. O tema é médico/estudo porque é o perfil do aplicativo, e os textos são ficção — não são orientação clínica. Existe para que a decisão sobre como uma nota carrega vários nomes seja medida contra a mesma régua, e para que a futura 6.A.3 possa reusá-lo.",
+ "como_usar": "Criar um store isolado (XDG_DATA_HOME, XDG_CONFIG_HOME, XDG_STATE_HOME e XDG_RUNTIME_DIR próprios) e gravar cada nota como `notes/<id>.md`, montando o front matter conforme `front_matter`, `title` e `aliases`. O campo `aliases` vale: a string \"AUSENTE\" (não escrever a chave nenhuma), uma lista de strings, ou um dos marcadores de `marcadores_invalidos`, que o gerador expande para o YAML inválido correspondente. Notas com `na_lixeira` verdadeiro vão para `trash/` em vez de `notes/`. Este arquivo é ENTRADA e não contém resultado esperado; o que sai está registrado em `docs/alias-semantics-measurement.md`.",
+ "marcadores_invalidos": {
+  "LISTA_MISTA": "aliases com um item textual e um item numérico",
+  "MAPA": "aliases como mapa de chave para valor, em vez de lista",
+  "SCALAR": "aliases como texto simples, em vez de lista",
+  "NUMERO": "aliases como número",
+  "LONGO": "aliases com um item de 513 caracteres, acima do teto"
+ },
+ "front_matter": {
+  "completo": "bloco note_it com version, id, color, paper_type, paper_intensity, font_size, created_at e updated_at",
+  "minimo": "bloco note_it só com id, como uma nota anterior aos demais campos",
+  "ausente": "arquivo sem front matter nenhum: a identidade vem do nome do arquivo",
+  "terceiro": "completo mais chaves de topo de outra ferramenta (future_tool, external_number)"
+ },
+ "notas": [
+  {
+   "id": "a1000001-a11a-4000-8000-000000000000",
+   "classes": [
+    "sem_title_sem_aliases"
+   ],
+   "front_matter": "completo",
+   "title": null,
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Anotação solta\n\nNem nome nem apelido.\n",
+   "na_lixeira": false,
+   "sobre": "Linha de base: a nota que a maioria do store é hoje."
+  },
+  {
+   "id": "a1000002-a11a-4000-8000-000000000000",
+   "classes": [
+    "title_sem_aliases"
+   ],
+   "front_matter": "completo",
+   "title": "Cardiologia",
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Cardiologia\n\nNota com nome primário e nenhum apelido.\n",
+   "na_lixeira": false,
+   "sobre": "Só title. Aliases ausente, não vazio."
+  },
+  {
+   "id": "a1000003-a11a-4000-8000-000000000000",
+   "classes": [
+    "um_alias"
+   ],
+   "front_matter": "completo",
+   "title": "Infarto agudo do miocárdio",
+   "aliases": [
+    "IAM"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# IAM\n\nOclusão coronariana aguda.\n",
+   "na_lixeira": false,
+   "sobre": "O caso comum: uma sigla."
+  },
+  {
+   "id": "a1000004-a11a-4000-8000-000000000000",
+   "classes": [
+    "tres_aliases"
+   ],
+   "front_matter": "completo",
+   "title": "Acidente vascular cerebral",
+   "aliases": [
+    "AVC",
+    "Derrame",
+    "Acidente vascular encefálico"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# AVC\n\nDéficit neurológico focal súbito.\n",
+   "na_lixeira": false,
+   "sobre": "Três aliases — é este o exemplo que a ADR precisa mostrar em disco."
+  },
+  {
+   "id": "a1000005-a11a-4000-8000-000000000000",
+   "classes": [
+    "muitos_aliases"
+   ],
+   "front_matter": "completo",
+   "title": "Doença pulmonar obstrutiva crônica",
+   "aliases": [
+    "DPOC",
+    "Enfisema",
+    "Bronquite crônica",
+    "COPD",
+    "Pneumopatia obstrutiva",
+    "DPOC exacerbada",
+    "Limitação crônica ao fluxo aéreo"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# DPOC\n\nLimitação crônica ao fluxo aéreo.\n",
+   "na_lixeira": false,
+   "sobre": "Sete aliases: pressiona o limite escolhido sem ser absurdo."
+  },
+  {
+   "id": "a1000006-a11a-4000-8000-000000000000",
+   "classes": [
+    "aliases_vazio"
+   ],
+   "front_matter": "completo",
+   "title": "Nefrologia",
+   "aliases": [],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Nefrologia\n\nLista explicitamente vazia.\n",
+   "na_lixeira": false,
+   "sobre": "`aliases: []` escrito à mão. Precisa significar o mesmo que ausente."
+  },
+  {
+   "id": "a1000007-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_sem_title"
+   ],
+   "front_matter": "completo",
+   "title": null,
+   "aliases": [
+    "Rascunho do plantão"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "Coisas para checar antes do round.\n",
+   "na_lixeira": false,
+   "sobre": "Alias sem title. A pergunta do §27: isso resolve?"
+  },
+  {
+   "id": "a100000a-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_espacos"
+   ],
+   "front_matter": "completo",
+   "title": "Insuficiência cardíaca",
+   "aliases": [
+    "Insuficiencia cardiaca congestiva"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# IC\n",
+   "na_lixeira": false,
+   "sobre": "Espaços internos simples, caso trivial."
+  },
+  {
+   "id": "a100000b-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_virgula"
+   ],
+   "front_matter": "completo",
+   "title": "Choque",
+   "aliases": [
+    "Choque, abordagem inicial",
+    "Estado de choque"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Choque\n",
+   "na_lixeira": false,
+   "sobre": "O TESTE FUNDAMENTAL do §24: vírgula legítima dentro do alias."
+  },
+  {
+   "id": "a100000c-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_dois_pontos"
+   ],
+   "front_matter": "completo",
+   "title": "Sepse",
+   "aliases": [
+    "Sepse: pacote de 1 hora"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Sepse\n",
+   "na_lixeira": false,
+   "sobre": "Dois-pontos é sintaxe YAML; em valor de lista precisa sobreviver."
+  },
+  {
+   "id": "a100000d-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_colchetes"
+   ],
+   "front_matter": "completo",
+   "title": "Escala de coma",
+   "aliases": [
+    "Glasgow [ECG]",
+    "[Rascunho] escala"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Glasgow\n",
+   "na_lixeira": false,
+   "sobre": "Colchetes: YAML pode lê-los como fluxo se não houver aspas."
+  },
+  {
+   "id": "a100000e-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_hash"
+   ],
+   "front_matter": "completo",
+   "title": "Protocolo",
+   "aliases": [
+    "#urgente",
+    "Seção # 3"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Protocolo\n",
+   "na_lixeira": false,
+   "sobre": "`#` é comentário em YAML e futuro separador de seção na 6.0.B."
+  },
+  {
+   "id": "a100000f-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_circunflexo"
+   ],
+   "front_matter": "completo",
+   "title": "Referência",
+   "aliases": [
+    "bloco^42"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Referência\n",
+   "na_lixeira": false,
+   "sobre": "`^` é futuro marcador de bloco na 6.0.B."
+  },
+  {
+   "id": "a1000010-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_pipe"
+   ],
+   "front_matter": "completo",
+   "title": "Fluxo",
+   "aliases": [
+    "entrada|saída"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Fluxo\n",
+   "na_lixeira": false,
+   "sobre": "`|` é bloco literal em YAML e futuro separador de texto de exibição."
+  },
+  {
+   "id": "a1000011-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_com_colchetes_duplos"
+   ],
+   "front_matter": "completo",
+   "title": "Ambiguidade",
+   "aliases": [
+    "texto [[interno]] aqui"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Ambiguidade\n",
+   "na_lixeira": false,
+   "sobre": "Os próprios delimitadores de wikilink dentro de um nome."
+  },
+  {
+   "id": "a1000012-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_parecido_com_uuid"
+   ],
+   "front_matter": "completo",
+   "title": "Nota técnica",
+   "aliases": [
+    "a1000003-a11a-4000-8000-000000000000"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Técnica\n",
+   "na_lixeira": false,
+   "sobre": "Um alias que é, literalmente, o UUID de outra nota."
+  },
+  {
+   "id": "a1000013-a11a-4000-8000-000000000000",
+   "classes": [
+    "alias_unicode"
+   ],
+   "front_matter": "completo",
+   "title": "Medicação",
+   "aliases": [
+    "Anticoagulação",
+    "Präoperativ",
+    "血圧"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Medicação\n",
+   "na_lixeira": false,
+   "sobre": "Unicode fora do alcance da tabela de dobra latina."
+  },
+  {
+   "id": "a1000014-a11a-4000-8000-000000000000",
+   "classes": [
+    "norm_caixa"
+   ],
+   "front_matter": "completo",
+   "title": "Hipertensão",
+   "aliases": [
+    "HIPERTENSÃO ARTERIAL",
+    "hipertensão arterial"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# HAS\n",
+   "na_lixeira": false,
+   "sobre": "Dois aliases que dobram entre si por caixa."
+  },
+  {
+   "id": "a1000015-a11a-4000-8000-000000000000",
+   "classes": [
+    "norm_acento"
+   ],
+   "front_matter": "completo",
+   "title": "Emergencia",
+   "aliases": [
+    "Emergência"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Emergência\n",
+   "na_lixeira": false,
+   "sobre": "Alias que dobra para o próprio title por acento — §28."
+  },
+  {
+   "id": "a1000016-a11a-4000-8000-000000000000",
+   "classes": [
+    "norm_nfc_nfd"
+   ],
+   "front_matter": "completo",
+   "title": "Pediatria",
+   "aliases": [
+    "Neonatologia",
+    "Neonatologia"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Pediatria\n",
+   "na_lixeira": false,
+   "sobre": "Mesmo alias em NFC e NFD: dobram ou não?"
+  },
+  {
+   "id": "a1000017-a11a-4000-8000-000000000000",
+   "classes": [
+    "norm_espaco_externo"
+   ],
+   "front_matter": "completo",
+   "title": "Ortopedia",
+   "aliases": [
+    "   Traumatologia   "
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Ortopedia\n",
+   "na_lixeira": false,
+   "sobre": "Espaço externo deve ser recortado antes da identidade."
+  },
+  {
+   "id": "a1000018-a11a-4000-8000-000000000000",
+   "classes": [
+    "norm_espaco_interno"
+   ],
+   "front_matter": "completo",
+   "title": "Terapia intensiva",
+   "aliases": [
+    "Terapia  intensiva",
+    "UTI"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# UTI\n",
+   "na_lixeira": false,
+   "sobre": "Espaço interno dobrado: `semantic_identity` NÃO colapsa, então NÃO dobra com o title."
+  },
+  {
+   "id": "a100001e-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_vazio"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos A",
+   "aliases": [
+    "",
+    "Válido"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# A\n",
+   "na_lixeira": false,
+   "sobre": "String vazia na lista."
+  },
+  {
+   "id": "a100001f-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_espacos"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos B",
+   "aliases": [
+    "   ",
+    "Válido B"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# B\n",
+   "na_lixeira": false,
+   "sobre": "Item só com espaços."
+  },
+  {
+   "id": "a1000020-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_newline"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos C",
+   "aliases": [
+    "quebra\nlinha"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# C\n",
+   "na_lixeira": false,
+   "sobre": "Quebra de linha dentro do alias."
+  },
+  {
+   "id": "a1000021-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_controle"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos D",
+   "aliases": [
+    "controle\u0007aqui"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# D\n",
+   "na_lixeira": false,
+   "sobre": "Caractere de controle (BEL, U+0007)."
+  },
+  {
+   "id": "a1000022-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_nao_textual"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos E",
+   "aliases": "LISTA_MISTA",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# E\n",
+   "na_lixeira": false,
+   "sobre": "Lista com item numérico: ['Válido', 42]."
+  },
+  {
+   "id": "a1000023-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_mapa"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos F",
+   "aliases": "MAPA",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# F\n",
+   "na_lixeira": false,
+   "sobre": "Mapa no lugar de lista."
+  },
+  {
+   "id": "a1000024-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_scalar"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos G",
+   "aliases": "SCALAR",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# G\n",
+   "na_lixeira": false,
+   "sobre": "Scalar no lugar de lista."
+  },
+  {
+   "id": "a1000025-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_numero"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos H",
+   "aliases": "NUMERO",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# H\n",
+   "na_lixeira": false,
+   "sobre": "`aliases: 42`."
+  },
+  {
+   "id": "a1000026-a11a-4000-8000-000000000000",
+   "classes": [
+    "inv_muito_longo"
+   ],
+   "front_matter": "completo",
+   "title": "Inválidos I",
+   "aliases": "LONGO",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# I\n",
+   "na_lixeira": false,
+   "sobre": "Alias acima do teto de 512 caracteres."
+  },
+  {
+   "id": "a1000028-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_title_title"
+   ],
+   "front_matter": "completo",
+   "title": "Colisão dupla",
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Um\n",
+   "na_lixeira": false,
+   "sobre": "title A == title B (par com n41)."
+  },
+  {
+   "id": "a1000029-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_title_title"
+   ],
+   "front_matter": "completo",
+   "title": "Colisão dupla",
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Dois\n",
+   "na_lixeira": false,
+   "sobre": "A outra metade."
+  },
+  {
+   "id": "a100002a-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_alias_title"
+   ],
+   "front_matter": "completo",
+   "title": "Ponte",
+   "aliases": [
+    "Fístula"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Ponte\n",
+   "na_lixeira": false,
+   "sobre": "alias de A == title de B (par com n43)."
+  },
+  {
+   "id": "a100002b-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_alias_title"
+   ],
+   "front_matter": "completo",
+   "title": "Fístula",
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Fístula\n",
+   "na_lixeira": false,
+   "sobre": "A outra metade: o title que colide com o alias de n42."
+  },
+  {
+   "id": "a100002c-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_alias_alias"
+   ],
+   "front_matter": "completo",
+   "title": "Alfa",
+   "aliases": [
+    "Compartilhado"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Alfa\n",
+   "na_lixeira": false,
+   "sobre": "alias A == alias B (par com n45)."
+  },
+  {
+   "id": "a100002d-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_alias_alias"
+   ],
+   "front_matter": "completo",
+   "title": "Beta",
+   "aliases": [
+    "Compartilhado"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Beta\n",
+   "na_lixeira": false,
+   "sobre": "A outra metade."
+  },
+  {
+   "id": "a100002e-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_dois_aliases_mesma_nota"
+   ],
+   "front_matter": "completo",
+   "title": "Multiplicidade",
+   "aliases": [
+    "Sinônimo",
+    "sinonimo"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Multiplicidade\n",
+   "na_lixeira": false,
+   "sobre": "Dois aliases da MESMA nota dobram: não pode virar dois candidatos."
+  },
+  {
+   "id": "a100002f-a11a-4000-8000-000000000000",
+   "classes": [
+    "col_title_e_alias_mesma_nota"
+   ],
+   "front_matter": "completo",
+   "title": "Espelho",
+   "aliases": [
+    "espelho"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Espelho\n",
+   "na_lixeira": false,
+   "sobre": "alias == próprio title (§28): uma nota, nunca dois candidatos."
+  },
+  {
+   "id": "a1000032-a11a-4000-8000-000000000000",
+   "classes": [
+    "lixeira_viva"
+   ],
+   "front_matter": "completo",
+   "title": "Disputado",
+   "aliases": [
+    "Reivindicado"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Viva\n",
+   "na_lixeira": false,
+   "sobre": "Nota viva que detém o nome."
+  },
+  {
+   "id": "a1000033-a11a-4000-8000-000000000000",
+   "classes": [
+    "lixeira_morta"
+   ],
+   "front_matter": "completo",
+   "title": "Disputado",
+   "aliases": [
+    "Reivindicado"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Na lixeira\n",
+   "na_lixeira": true,
+   "sobre": "Mesmo nome, mas na lixeira: não participa. Restaurar cria AMBÍGUO."
+  },
+  {
+   "id": "a100003c-a11a-4000-8000-000000000000",
+   "classes": [
+    "nota_antiga"
+   ],
+   "front_matter": "minimo",
+   "title": null,
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Nota antiga\n\nFront matter só com id.\n",
+   "na_lixeira": false,
+   "sobre": "Nota anterior a tudo isto. Não pode exigir migração."
+  },
+  {
+   "id": "a100003d-a11a-4000-8000-000000000000",
+   "classes": [
+    "sem_front_matter"
+   ],
+   "front_matter": "ausente",
+   "title": null,
+   "aliases": "AUSENTE",
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Sem front matter\n\nArquivo de outro editor.\n",
+   "na_lixeira": false,
+   "sobre": "Nem bloco note_it existe."
+  },
+  {
+   "id": "a100003e-a11a-4000-8000-000000000000",
+   "classes": [
+    "yaml_de_terceiro"
+   ],
+   "front_matter": "terceiro",
+   "title": "Com YAML externo",
+   "aliases": [
+    "Externo"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Externo\n",
+   "na_lixeira": false,
+   "sobre": "Aliases convivendo com chaves de outra ferramenta."
+  },
+  {
+   "id": "a100003f-a11a-4000-8000-000000000000",
+   "classes": [
+    "properties_aliases_concorrente"
+   ],
+   "front_matter": "completo",
+   "title": "Concorrência",
+   "aliases": [
+    "Canônico"
+   ],
+   "tags": [],
+   "propriedades": [
+    {
+     "chave": "aliases",
+     "valor": "Concorrente, Outro"
+    }
+   ],
+   "conteudo": "# Concorrência\n",
+   "na_lixeira": false,
+   "sobre": "§38: `properties.aliases` existindo AO LADO do campo canônico. Não pode ter o mesmo significado."
+  },
+  {
+   "id": "a1000040-a11a-4000-8000-000000000000",
+   "classes": [
+    "editor_externo"
+   ],
+   "front_matter": "completo",
+   "title": "Escrita fora",
+   "aliases": [
+    "Adotado de fora"
+   ],
+   "tags": [],
+   "propriedades": [],
+   "conteudo": "# Fora\n",
+   "na_lixeira": false,
+   "sobre": "§37: aliases escritos por outra ferramenta são adotados?"
+  }
+ ]
+}

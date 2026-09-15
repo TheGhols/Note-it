@@ -1969,6 +1969,37 @@ disco, e a garantia de que uma nota antiga sem o campo continua abrindo.
 **Parada.** Se a opção escolhida criar um segundo formato de metadados
 concorrendo com tags/properties, PARAR — §9 do escopo proíbe a terceira fonte.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-064.** Venceu a **chave de
+front matter própria fora de `properties`**: `aliases`, uma lista YAML de textos
+simples no topo, irmã de `title`, `tags` e `properties`. `title` e `aliases`
+formam **um único espaço de nomes sem precedência** — o conjunto de candidatos é
+de UUIDs, então uma nota que casa por título e por alias conta uma vez, e um
+alias de A que colide com o título de B produz AMBÍGUO, nunca preferência pelo
+título. Teto de 16 aliases por nota, aplicado **na gravação** e recusando apenas
+o que eleva a contagem; 512 caracteres por alias, o mesmo teto de `title`.
+Duplicatas semânticas são deduplicadas no conjunto de nomes e preservadas no
+arquivo. **Sem migração**: ausência do campo é conjunto vazio, e nenhuma nota
+existente é reescrita. A parada não foi acionada — não nasce um segundo formato
+genérico de metadados, e `properties.aliases` continua sendo uma property comum,
+sem semântica de nome.
+
+Evidência em `docs/alias-semantics-measurement.md`, sobre o corpus versionado
+`docs/alias-corpus.json` (46 notas), medida com o binário real de `91a70d2`. As
+três medições que decidiram: das 45 notas vivas, a opção do campo próprio abre
+**45**, a de valor delimitado em property abre 37 e falha em 3, e a de property
+com lista abre **10 e falha em 35** — com a gravação também falhando, porque
+`NoteProperty.value` é `String` e uma sequência não desserializa. Um alias
+legítimo com vírgula — `"Choque, abordagem inicial"` — é **irrecuperável** sob a
+opção delimitada: dividido por vírgula devolve três itens em vez de dois. No
+campo de topo, a lista sobrevive intacta a uma gravação feita por um binário que
+não conhece o campo.
+
+Revisão adversarial independente em três passagens: 2 major na primeira, 1 na
+segunda — cada correção verificada pela passagem seguinte — e 0 blocker, 0 major,
+0 minor na terceira. Nenhum `.rs`, `.ts` ou `.css` alterado; `Cargo.lock` e
+`ui/pnpm-lock.yaml` byte-idênticos; sem bump de versão, sem pacote, sem
+instalação — a 6.0 não é unidade de promoção (ADR-062).
+
 ### 6.0.B — Contrato de sintaxe de links
 
 **Objetivo.** Fixar a gramática de `[[nota]]`, `[[nota#seção]]`, `[[nota^bloco]]`
@@ -3283,8 +3314,8 @@ frase mínima, e a reserva que este roadmap tinha feito para uma ADR só sobre a
 visão deixou de ser necessária.
 
 As nove reservas da Fase 6 foram deslocadas para **ADR-063 a ADR-070** por causa
-disso. Delas, a ADR-063 foi escrita na 6.0.A; as demais continuam sendo reservas
-de ADRs **ainda não escritas**. Nenhum número já publicado mudou, e escrever ADR
+disso. Delas, a ADR-063 foi escrita na 6.0.A e a ADR-064 na 6.0.A.2; as demais
+continuam sendo reservas de ADRs **ainda não escritas**. Nenhum número já publicado mudou, e escrever ADR
 superficial só para preencher documentação continua proibido pelo §17 do
 mandato.
 
@@ -3293,7 +3324,7 @@ mandato.
 | ADR-061 | GUI principal, Core canônico, paridade semântica ≠ visual | — | **escrita** |
 | ADR-062 | Versionamento `0.MINOR.PATCH` e promoção da versão diária | — | **escrita** |
 | ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A — **escrita** |
-| ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 |
+| ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 — **escrita** |
 | ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B |
 | ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C |
 | ADR-067 | Superfície gráfica: painéis numa janela de nota | 6.A.5 em diante | 6.0.D |

@@ -4065,3 +4065,610 @@ campo novo no front matter **não** exige manifesto de backup v4, porque o C-5 d
 roadmap trata de artefatos novos no store e um campo não é um artefato. Os dois
 minor que sobraram — a validade de um `title` estrangeiro longo, vista do lado
 da regra e do lado do teste — foram fechados nesta versão.
+
+## ADR-064: Uma nota carrega vários nomes numa lista de primeiro nível, e nenhum deles é mais forte que os outros
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.A.2.
+
+**Contexto.** A ADR-063 deu à nota um nome declarado — `title`, no topo do front
+matter — e deixou explicitamente em aberto "o formato YAML exato, o limite por
+nota, a precedência entre título e alias, e o que fazer quando um alias de A é o
+título de B". Esta ADR fecha exatamente esses quatro pontos e nada além deles.
+
+**Problema.** Uma nota tem um nome, mas as pessoas a chamam por vários. "Acidente
+vascular cerebral" é "AVC" e é "derrame". Sem um lugar para o segundo nome, ou o
+usuário escolhe um e perde os outros, ou empurra os sinônimos para dentro do
+texto, onde nenhuma referência os alcança.
+
+### Premissas congeladas pela ADR-063
+
+Não reabertas aqui, e esta ADR não as contradiz em nenhum ponto:
+
+```text
+identidade canônica   o UUID do arquivo <uuid>.md, conferido contra note_it.id
+identidade nomeável   title, no topo do front matter, opcional
+rótulo derivado       label_for continua sendo apresentação e NUNCA resolve
+normalização          semantic_identity, a única do projeto
+colisão               RESOLVIDO / NÃO RESOLVIDO / AMBÍGUO, nunca escolha arbitrária
+espaço de nomes       notas vivas; a lixeira não participa
+renomear              não cria alias automaticamente, não grava em outra nota
+```
+
+### Evidência
+
+Medição completa em `docs/alias-semantics-measurement.md`, sobre
+`docs/alias-corpus.json` (46 notas, sha256
+`77153bd790699d45b233bb70bebe25702830e37c64e5de18d0ec7949de4e76a8`), executada
+com o binário real de `91a70d2`. Três números decidem:
+
+```text
+MEDIDO — a nota abre? (45 notas vivas)
+  A  properties com valor delimitado    37 abrem,  3 FALHAM, 5 irrepresentáveis
+  B  properties com lista               10 abrem, 35 FALHAM
+  C  campo próprio de primeiro nível    45 abrem,  0 falham
+
+MEDIDO — downgrade por um binário que não conhece o campo
+  A  chave e nomes preservados
+  B  a própria gravação FALHA
+  C  chave, nomes e title preservados
+
+MEDIDO — a vírgula
+  ["Choque, abordagem inicial", "Estado de choque"]
+  A  vira "Choque, abordagem inicial, Estado de choque"
+     dividido por vírgula -> TRÊS itens. Não reconstrói.
+  C  dois escalares YAML independentes. A vírgula é conteúdo.
+```
+
+O achado que não estava previsto: nas três falhas da opção A e nas trinta e
+cinco da opção B, **não são os aliases que se perdem — é a nota inteira que
+deixa de abrir**, porque a desserialização do front matter falha e
+`NoteDocument::parse` devolve `Err`.
+
+### Opções avaliadas
+
+| Critério | (A) properties delimitada | (B) properties com lista | **(C) campo de primeiro nível** |
+| --- | --- | --- | --- |
+| Clareza semântica | um texto que finge ser lista | lista de verdade | lista de verdade |
+| Markdown portátil | sim, mas o formato é privado | sim | sim |
+| Downgrade | preserva | **a gravação falha** | **preserva** |
+| Round-trip | preserva | impossível | **preserva** |
+| Binário antigo abre a nota | 37/45 | **10/45** | **45/45** |
+| Editor externo | precisa conhecer o delimitador | — | lista YAML comum |
+| Ambiguidade de serialização | **vírgula é irrecuperável** | nenhuma | nenhuma |
+| Blast radius | nenhum no tipo | `NoteProperty`, serde, filtro, CLI, TUI, MCP, bridge | nenhum em tipo existente |
+| Contrato 4.0B | intacto | **reaberto** | intacto |
+| Validação | herda a de property, com efeito fatal | herdaria nova | própria, alinhada a tags |
+| Migração | nenhuma | nenhuma | nenhuma |
+| Duas fontes de verdade | risco alto: colide com property do usuário | mesmo risco | nenhuma: níveis distintos |
+| Legibilidade do YAML | ruim com nomes longos | boa | boa |
+| Autocomplete futuro | precisa reparsear a String | direto | direto |
+| Paridade GUI/TUI/CLI/MCP | igual nas quatro | igual, após reabrir contrato | igual nas quatro |
+
+### Decisão
+
+**Os nomes adicionais de uma nota vivem em `aliases`, uma lista YAML de textos
+simples, no topo do front matter, irmã de `title`, `tags` e `properties`. É a
+opção C. `title` e `aliases` formam um único espaço de nomes da nota, sem
+precedência entre si.**
+
+O campo fica no topo, e não dentro de `note_it`, pela mesma razão medida na
+ADR-063: o bloco reservado não preserva chave desconhecida e um campo novo ali
+seria apagado por qualquer binário anterior a ele. `note_it` é bookkeeping de
+máquina; nome é metadado de autoria do usuário, e é ao lado de `tags` e
+`properties` que ele pertence.
+
+### Formato YAML canônico
+
+Uma nota com exatamente três aliases, em disco:
+
+```yaml
+---
+note_it:
+  version: 1
+  id: "550e8400-e29b-41d4-a716-446655440000"
+  color: "yellow"
+  paper_type: "blank"
+  paper_intensity: "normal"
+  font_size: 15
+  created_at: "2026-08-26T14:00:00Z"
+  updated_at: "2026-08-26T14:05:00Z"
+title: "Acidente vascular cerebral"
+aliases:
+  - "AVC"
+  - "Derrame"
+  - "Acidente vascular encefálico"
+tags:
+  - Neurologia
+properties:
+  fonte: Harrison
+---
+
+# AVC
+
+Déficit neurológico focal súbito.
+```
+
+O exemplo acima é a forma que uma pessoa escreve à mão. O que o serializador do
+Note-it **produz** é o mesmo documento YAML noutro estilo — sequência sem recuo,
+escalares sem aspas onde elas não são necessárias, e chaves de topo em ordem
+alfabética, porque `unknown` é um `BTreeMap`:
+
+```yaml
+aliases:
+- AVC
+- Derrame
+- Acidente vascular encefálico
+title: Acidente vascular cerebral
+```
+
+Os dois são o mesmo valor e a equivalência é o ponto: `docs/markdown-format.md`
+já registra que formatação exata não faz parte do modelo de valor do serde. O
+que a decisão fixa é a **chave, o nível, o tipo e a ordem dos itens** — não o
+estilo com que o YAML é impresso.
+
+```text
+chave          aliases
+nível          primeiro nível do front matter, irmã de title/tags/properties
+tipo YAML      sequência de escalares textuais
+ordem          preservada como escrita; é apresentação e nunca desempata nada
+duplicatas     deduplicadas por semantic_identity; a primeira grafia vence
+vazio          `aliases: []` é idêntico a ausente
+omissão        quando o conjunto é vazio, a chave não é escrita
+```
+
+A omissão do campo vazio segue o que `tags` e `properties` já fazem
+(`skip_serializing_if`), e é o que garante que nenhuma nota existente ganhe uma
+linha por causa desta decisão.
+
+### Validação
+
+Um alias é válido quando, **depois de recortado nas pontas**, ele:
+
+```text
+não é vazio nem só espaços
+não contém quebra de linha nem caractere de controle
+não excede 512 caracteres Unicode
+```
+
+São as mesmas três regras que a ADR-063 fixou para `title`, que por sua vez são
+as que `metadata.rs` já aplica a um valor de propriedade — um alias é um nome, e
+um nome é um texto de uma linha. Nenhuma quarta filosofia de validação nasce
+aqui.
+
+A assimetria entre ler e gravar é a mesma da ADR-063, e foi medida:
+
+- **na leitura**, um alias inválido **nunca derruba a nota**. Ele simplesmente
+  não é um nome. Os demais itens da lista continuam valendo — um item ruim não
+  invalida os bons, porque punir os outros nomes por causa de um não protege
+  ninguém. O valor em disco é preservado como está;
+- **numa edição de aliases**, isto é, na operação em que o usuário fornece a
+  lista, um alias inválido é recusado com erro, antes de tocar o arquivo. É a
+  única gravação que valida: uma reserialização não recebe entrada e portanto
+  não tem o que recusar — ver *A lista armazenada e o conjunto de nomes*, logo
+  abaixo.
+
+Quando `aliases` **não é uma sequência** — um mapa, um escalar, um número — não
+há item nenhum a validar: a nota **não tem aliases**, abre normalmente, e o
+valor é preservado intacto. Medido: nas nove formas malformadas testadas, as
+nove notas abriram e as nove mantiveram o valor após uma gravação real.
+
+### Normalização
+
+`semantic_identity` de `metadata.rs:38`, sem segunda função e sem terceira
+semântica, aplicada depois do recorte, exatamente como tags, properties e
+`title`. Reconfirmado sobre dados de alias:
+
+```text
+Sinônimo  sinonimo  SINÔNIMO            uma identidade
+Neonatologia em NFC e em NFD            uma identidade
+"   Traumatologia   "  Traumatologia    uma identidade
+Präoperativ  praoperativ                uma identidade
+Terapia intensiva                       identidade própria
+Terapia  intensiva  (espaço dobrado)    identidade DIFERENTE
+血圧                                    identidade própria
+```
+
+Duas limitações herdadas ficam **registradas e não corrigidas aqui**, porque
+mudá-las mudaria a semântica que tags e properties já usam: espaço interno não é
+colapsado, e a dobra de acento cobre Latin-1 Supplement e Latin Extended-A, de
+modo que um precomposto fora desses blocos só dobra se chegar decomposto.
+
+### Limites
+
+```text
+MAX_ALIASES         16 por nota — teto de GRAVAÇÃO
+tamanho de um alias 512 caracteres Unicode, o mesmo teto de title
+```
+
+**O teto de cardinalidade vale na gravação e não na leitura**, e essa assimetria
+é obrigatória, não uma conveniência. Se ele valesse na leitura, uma nota
+estrangeira com quarenta aliases obrigaria o Note-it a escolher quais dezesseis
+contam — e qualquer critério para essa escolha é desempate por posição na lista,
+que esta ADR proíbe textualmente duas seções abaixo. Então: **na leitura, todo
+alias válido da lista é um nome, sem limite de quantidade**; na gravação, o
+Note-it recusa passar de dezesseis.
+
+A alternativa — recusar a nota inteira acima do teto — foi medida no
+comportamento que já existe e é exatamente o que não se quer repetir: uma nota
+com **33 tags não abre hoje**, porque `NoteTags::try_new` roda na desserialização
+e devolve erro. Um campo de nomes que torne a nota ilegível por ter nomes demais
+seria a mesma falha que esta família de ADRs vem recusando desde a 6.0.A.
+
+**O teto recusa o que aumenta, nunca o que corrige.** Uma edição de aliases é
+recusada quando ela **eleva** a contagem acima de dezesseis; é aceita quando
+mantém ou **reduz** a contagem, mesmo que o resultado ainda esteja acima do
+teto. Sem essa qualificação, uma nota importada com quarenta aliases ficaria
+impossível de arrumar: remover um alias levaria a lista a trinta e nove, ainda
+acima do teto, e a operação que tenta respeitar o limite seria recusada por ele.
+Um estado que a interface não consegue desfazer não é um limite, é uma armadilha.
+
+O teto de caracteres não é um número novo: é o de `title`, que é o de um valor
+de propriedade. Um nome é um nome, tenha ele a posição de principal ou não.
+
+O teto de 16 é escolhido, e a justificativa é esta. Um alias é um **nome**, não
+uma faceta de classificação: uma nota que precisa de trinta e dois nomes não
+está sendo nomeada, está sendo etiquetada, e para isso existem `tags`. O caso
+mais pesado que o corpus considera realista — uma doença com sigla, nome
+estrangeiro, sinônimos clínicos e forma antiga — chega a sete. Dezesseis dá mais
+do que o dobro de folga sobre esse caso e ainda mantém legível o front matter de
+uma nota aberta num editor qualquer. Deliberadamente é metade de `MAX_TAGS`, e a
+metade é a própria mensagem: nome é mais escasso que faceta.
+
+### A lista armazenada e o conjunto de nomes são coisas diferentes
+
+Esta distinção é o que impede a decisão de se contradizer, e ela precisa vir
+antes das regras de duplicata e de limite.
+
+```text
+LISTA ARMAZENADA   o que está no arquivo, na ordem em que está, com tudo
+                   que está — inclusive item inválido e grafia repetida
+
+CONJUNTO DE NOMES  derivado na leitura: recortar, validar, deduplicar por
+                   semantic_identity. É o que resolve. Nunca é persistido.
+```
+
+Ao longo desta ADR, **edição de aliases** significa a operação em que o usuário
+fornece uma lista nova, e **reserialização** significa qualquer outra gravação da
+nota — salvar o corpo, mudar a cor, acrescentar uma tag. Só a primeira valida,
+deduplica e aplica o teto; a segunda não toca na lista.
+
+**O Note-it preserva a lista armazenada em toda reserialização.** Salvar o corpo, mudar a cor, acrescentar uma tag — nenhuma dessas
+operações toca na lista. Só uma operação que o usuário iniciou *sobre os
+aliases* escreve uma lista nova, e é nesse momento, e só nele, que a validação e
+a deduplicação chegam ao disco.
+
+Isto **diverge deliberadamente do que `NoteTags` faz hoje**, e a divergência foi
+medida. Uma nota estrangeira com as tags `Sinônimo`, `sinonimo` e `SINÔNIMO` é
+lida pelo Core como uma tag só, e **uma edição de corpo regrava o arquivo com as
+outras duas apagadas** — porque `NoteTags::try_new` roda na desserialização e
+`serialize()` reescreve o campo inteiro a cada gravação. Para tags isso nunca foi
+prometido de outro jeito. Para nomes, a ADR-063 prometeu o contrário, com todas
+as letras: *"o Note-it não recorta, não trunca e não corrige o valor de ninguém
+para fazê-lo caber"*. Apagar dois nomes do arquivo de outra ferramenta como
+efeito colateral de digitar uma letra no corpo seria quebrar essa promessa.
+
+As regras de **validade** continuam sendo as mesmas três de `title` — nenhuma
+quarta filosofia de validação nasce aqui. O que difere é **quando a
+normalização vai para o disco**: nas tags, em toda gravação; nos nomes, só na
+gravação que o usuário pediu.
+
+### Duplicatas dentro da mesma nota
+
+Duas grafias que dobram para a mesma identidade **são o mesmo nome** e não
+disputam nada — diferente de duas chaves de property iguais, que são dois
+valores disputando uma chave e por isso o Core recusa a nota.
+
+```text
+no conjunto de nomes      deduplicadas por semantic_identity; a primeira
+                          grafia da lista é a que representa o nome
+na lista armazenada       preservadas através de qualquer reserialização
+numa edição de aliases    a lista escrita já sai deduplicada, sem erro
+```
+
+O mesmo vale para um alias que dobra para o **próprio `title`** da nota: ele
+some do conjunto de nomes por deduplicação e continua no arquivo até que o
+usuário o remova. Em nenhum dos dois casos a nota vira dois candidatos — ver a
+regra de colisão.
+
+### Nota sem `title`, mas com alias
+
+**Um alias resolve independentemente de haver `title`.** O espaço de nomes de
+uma nota é o conjunto
+
+```text
+nomes(nota) = { title, se válido } ∪ { aliases válidos }
+```
+
+e a resolução nunca pergunta de qual dos dois lados o nome veio.
+
+A alternativa — alias só valendo como apelido de um `title` existente — foi
+considerada e recusada por uma razão concreta: ela cria uma falha silenciosa.
+O usuário escreve um alias numa nota sem título, o alias não resolve, e nada em
+lugar nenhum diz por quê. Toda esta família de ADRs existe para não ter esse
+tipo de comportamento.
+
+### Colisão
+
+A regra da ADR-063 vale sem emenda, e o que esta ADR acrescenta é que o conjunto
+de candidatos é **de notas, não de nomes**:
+
+```text
+para cada nota viva:
+    se semantic_identity de qualquer nome da nota == semantic_identity da consulta:
+        acrescentar o UUID da nota ao conjunto
+
+deduplicar o conjunto por UUID
+
+0 UUIDs  -> NÃO RESOLVIDO
+1 UUID   -> RESOLVIDO
+2 ou mais-> AMBÍGUO, com todos os candidatos na resposta
+```
+
+A matriz completa. Ela enumera o que **cada situação resolve**, e por isso
+inclui linhas que não são colisão nenhuma — os casos em que dois nomes casam
+dentro da *mesma* nota e o conjunto de UUIDs continua com um elemento só:
+
+| Situação | Resultado |
+| --- | --- |
+| `A.title` == `B.title` | AMBÍGUO |
+| `A.alias` == `B.title` | AMBÍGUO |
+| `A.title` == `B.alias` | AMBÍGUO |
+| `A.alias` == `B.alias` | AMBÍGUO |
+| `A.alias1` == `A.alias2` | **RESOLVIDO** para A — uma nota, um candidato |
+| `A.title` == `A.alias` | **RESOLVIDO** para A — uma nota, um candidato |
+| três ou mais notas casando, por qualquer combinação de nomes | AMBÍGUO, com os três ou mais candidatos |
+| uma nota casando por `title` **e** por alias ao mesmo tempo | conta **uma vez**: o conjunto é de UUIDs |
+
+**`title` não ganha de alias.** Se a consulta "Infarto" casa com o alias da nota
+A e com o `title` da nota B, o resultado é AMBÍGUO entre A e B — não "B, porque
+title é o nome principal". Preferir o título seria exatamente a escolha
+silenciosa que a ADR-063 proíbe, e a ordem dos aliases dentro da lista tampouco
+desempata coisa alguma.
+
+### Lixeira e restauração
+
+O espaço de nomes é o das notas vivas — medido: a nota na lixeira não aparece na
+listagem. Excluir tira os nomes da nota do espaço; restaurar os devolve. Como a
+lixeira preserva a nota byte a byte, **uma restauração pode criar ambiguidade**,
+e a resposta é a mesma de sempre: a referência passa a ser AMBÍGUO. Restaurar
+nunca é bloqueado, adiado, nem resolvido renomeando ou removendo aliases da nota
+restaurada.
+
+### Renomeação
+
+Congelado pela ADR-063 e reafirmado: trocar o `title` **não** acrescenta o nome
+antigo aos aliases. Alias é nome atual, não registro histórico. Um usuário que
+queira manter o nome anterior o escreve como alias — é uma ação dele, e o
+contrato diz que alias nunca é inferido nem persistido sem ação do usuário.
+
+Remover um alias faz aquele nome deixar de resolver para aquela nota, e nada
+mais: o UUID não se move, o arquivo não é renomeado, nenhuma outra nota é
+gravada.
+
+### Timestamps
+
+Alterar aliases é alteração de **metadado semântico de autoria do usuário**, a
+mesma classe de `tags`, `properties` e `title`. Portanto **não move `updated_at`
+nem `created_at`**. Isso não é analogia: é a regra que a ADR-033 já escreveu
+para essa classe — "a mudança apenas semântica não afeta nenhum carimbo de data
+e hora" — e o teste `semantic_metadata_never_moves_created_or_updated_at` já a
+guarda.
+
+A consequência conhecida, dita para que não seja redescoberta: gravar um alias
+reescreve o arquivo e move o `mtime` dele. A ordenação lê `updated_at` e só cai
+para `mtime` quando não há carimbo legível (ADR-027.1), então nomear não promove
+a nota a "editada mais recentemente" — salvo numa nota que nunca teve carimbo,
+onde isso já acontece hoje ao mudar de cor.
+
+### Compatibilidade com versões antigas
+
+Total, e sem tocar em nenhuma nota. Medido: com o campo presente, as 45 notas
+vivas do corpus abrem no binário 0.1.3, e uma gravação real preserva a lista
+inteira. Nota com front matter mínimo e nota sem front matter nenhum continuam
+abrindo. A ausência do campo é o estado definido de "nota sem nomes
+adicionais".
+
+### Compatibilidade com editores externos
+
+**Um `aliases` escrito em outra ferramenta é adotado**, pela mesma regra que a
+ADR-063 deu ao `title`: se a pessoa declarou nomes alternativos, ela os
+declarou, e o Note-it os lê sem gravar nada para isso. As três regras de
+validade não dependem de quem escreveu o valor — um item estrangeiro inválido
+não é um nome, e continua onde está.
+
+### `properties.aliases` não é alias
+
+A fonte canônica é **uma só**: a chave de topo. Uma property chamada `aliases` é
+uma property comum, do usuário, sem nenhuma semântica de nome — os dois vivem em
+níveis diferentes do YAML e não há como confundi-los. Medido: uma nota com as
+duas coisas abre normalmente e cada uma fica no seu lugar.
+
+A chave **não** é reservada e **não** é recusada em `properties`: reservá-la
+quebraria dados de quem já a usa, e a decisão não precisa disso para ser
+inequívoca.
+
+### Migração
+
+**Nenhuma, e é decisão, não omissão.** Nenhuma nota existente é reescrita,
+nenhuma ganha `aliases: []`, nenhum carimbo se move. Ausência significa conjunto
+vazio, como já vale para `tags` e `properties`, que `docs/markdown-format.md`
+descreve como "nunca migradas em massa".
+
+### Backup
+
+Nada muda. Medido no código: `backup.rs` não desserializa front matter — zero
+ocorrências de `NoteDocument::parse` ou `NoteFrontMatter` — e copia diretórios
+inteiros. Aliases viajam dentro do próprio `.md`, que já é copiado byte a byte.
+`MANIFEST_VERSION` continua em 3: um campo novo em front matter não é um
+artefato novo no store, e o C-5 do roadmap trata de artefatos.
+
+### Consequências
+
+Positivas. Uma nota passa a ter tantos nomes quantos a pessoa use para ela, num
+formato que qualquer editor Markdown lê e escreve. Nenhum tipo do domínio muda,
+então o contrato 4.0B fica intacto e a implementação futura é pequena: um campo
+no wrapper, uma validação no espírito de `NoteTags`, e o conjunto de nomes
+entrando na resolução. Downgrade é seguro hoje, sem uma linha de código. As
+quatro superfícies recebem a mesma semântica porque ela mora inteira no Core.
+
+Negativas, e são reais. **O Note-it passa a reivindicar `aliases` no topo**, uma
+chave que hoje ele só atravessa: uma biblioteca importada de outra ferramenta
+chega com nomes que o usuário não declarou aqui, e com as colisões que trouxer —
+cobertas pela política, mas visíveis. **Um alias inválido é silencioso na
+leitura**: ele simplesmente não resolve, e só a superfície de edição pode dizer
+por quê. **O teto de 16 é um julgamento**, calibrado sobre um corpus sintético e
+não sobre uso real; se ele apertar, subir é barato e descer não é. E **o espaço
+de nomes fica mais denso**: mais nomes por nota significa mais chance de AMBÍGUO,
+que é o resultado correto, mas é um resultado que o usuário vai encontrar mais
+vezes do que encontraria só com títulos.
+
+### Opções rejeitadas
+
+#### (A) Propriedade com valor delimitado
+
+```text
+ENTRADA:
+  uma nota cujos nomes alternativos são, legitimamente,
+      "Choque, abordagem inicial"   e   "Estado de choque"
+
+AÇÃO:
+  gravar no formato da opção A e reler com `noteit ler --json`.
+
+RESULTADO (MEDIDO):
+  properties["aliases"] == "Choque, abordagem inicial, Estado de choque"
+  dividir por vírgula devolve TRÊS itens:
+      ["Choque", "abordagem inicial", "Estado de choque"]
+
+VIOLAÇÃO:
+  os aliases originais não são reconstrutíveis. Salvar a alternativa exigiria
+  inventar uma segunda gramática de escaping dentro de um valor de property —
+  um mini-formato privado dentro de um campo que o roadmap descreve como
+  texto do usuário. A saída "proibir vírgula em alias" não é aceitável: a
+  vírgula é pontuação comum de português e nada no produto a proíbe em title.
+```
+
+E um segundo contraexemplo, que é pior porque não custa os aliases e sim a nota:
+
+```text
+ENTRADA:
+  uma nota de quem já usava, por conta própria, uma property `aliases`,
+  e que agora recebe o alias canônico no mesmo mapa.
+
+AÇÃO:
+  abrir a nota com o binário atual.
+
+RESULTADO (MEDIDO):
+  rc=1 — "Failed to parse YAML front matter: properties: a nota não pode ter
+  chaves de propriedade semanticamente duplicadas"
+
+VIOLAÇÃO:
+  a nota inteira deixa de abrir. Identidade estrutural e metadado livre do
+  usuário no mesmo mapa transformam uma coincidência de nome de chave em
+  perda de acesso ao texto. O mesmo acontece, medido, quando um alias contém
+  quebra de linha ou caractere de controle: a validação de property recusa o
+  valor e derruba o front matter inteiro.
+```
+
+#### (B) Properties passa a aceitar lista
+
+```text
+ENTRADA:
+  qualquer nota com
+      properties:
+        aliases:
+          - AVC
+          - Derrame
+
+AÇÃO:
+  abrir com o binário 0.1.3 — isto é, com qualquer versão já instalada.
+
+RESULTADO (MEDIDO):
+  35 das 45 notas do corpus FALHAM ao abrir, com
+  "Failed to parse YAML front matter: properties.aliases:
+   invalid type: sequence, expected a string"
+  e a tentativa de gravação falha pelo mesmo motivo.
+
+VIOLAÇÃO:
+  não é blast radius de refatoração, é incompatibilidade de formato: toda nota
+  escrita no formato novo fica ilegível para todo binário existente, e não há
+  downgrade nenhum. Some-se a isso que `NoteProperty.value: String` atravessa a
+  fronteira publicada de três superfícies — `src/webview_bridge.rs` o serializa
+  direto, `noteit-cli/src/machine.rs` e `noteit-mcp/src/contract.rs` o repetem
+  no contrato — de modo que a mudança reabre o contrato 4.0B para resolver um
+  problema que a opção C resolve sem tocar em tipo nenhum.
+```
+
+#### (C) — ESCOLHIDA
+
+#### Uma quarta forma, considerada e descartada sem medição nova
+
+`note_it.aliases`, dentro do bloco reservado, foi considerada e é dominada por
+evidência que já existe: a ADR-063 mediu que o bloco `note_it` não preserva
+chave desconhecida, e um campo de nomes apagado em silêncio por um binário
+anterior é a pior falha possível para este contrato. Não foi remedida porque
+nada mudou desde aquela medição.
+
+### Riscos remanescentes
+
+```text
+o teto de 16 é julgamento calibrado em corpus sintético
+alias inválido é silencioso na leitura; só a edição explica
+importar biblioteca externa traz nomes e colisões não declarados aqui
+espaço de nomes mais denso produz AMBÍGUO com mais frequência
+espaço interno não colapsa: "Terapia  intensiva" é outro nome
+```
+
+### Fora de escopo
+
+Esta ADR **não** decide: a gramática de `[[...]]`, escaping, ou o que `#`, `^`,
+`|` e `]]` significam dentro de um nome — isso é a 6.0.B, e os aliases do corpus
+que contêm esses caracteres estão lá como **dados de identidade**, não como
+sintaxe. Também não decide índice, cache ou estrutura de resolução, não desenha
+UI de chips nem autocomplete, e não cria tipo Rust, campo serde, comando de CLI
+ou tool de MCP.
+
+### Dependências futuras
+
+```text
+6.0.B    gramática de links; precisa saber que um nome pode conter # ^ | e ]]
+6.A.1    resolvedor; implementa o conjunto de candidatos por UUID descrito acima
+6.A.3    aliases em produção; reutiliza docs/alias-corpus.json como fixture
+```
+
+Nenhum código foi escrito nesta fase. `model.rs`, `metadata.rs`, `search.rs`,
+`filter.rs`, `write.rs`, `storage.rs`, `trash.rs` e `backup.rs` estão
+byte-idênticos à baseline `91a70d2`.
+
+### Revisão
+
+Revisão adversarial independente, em contexto separado, no padrão da 5.0D.4A,
+em três passagens. A cadeia convergiu: cada correção foi verificada, e a última
+não abriu frente nova.
+
+**Primeira passagem — 0 blocker, 2 major, 3 minor, 1 nit.** O major decisivo
+apontou uma contradição entre duas promessas desta própria ADR: ela mandava
+deduplicar aliases na gravação **e** prometia preservar o que veio de outra
+ferramenta, sem notar que `serialize()` reescreve o campo inteiro em qualquer
+gravação — inclusive numa edição de corpo. A correção não foi remendar a regra e
+sim criar a distinção que faltava, entre **lista armazenada** e **conjunto de
+nomes**, com duas medições novas para sustentá-la: uma nota estrangeira com três
+grafias da mesma tag tem duas delas apagadas por uma edição de corpo, e uma nota
+com 33 tags não abre. O segundo major mostrou que um teto de cardinalidade
+aplicado na leitura obrigaria a escolher *quais* nomes contam, o que é desempate
+por ordem — proibido nesta mesma ADR. Daí o teto ser de gravação.
+
+**Segunda passagem — 0 blocker, 1 major, 2 minor, 1 nit.** O major era filho da
+correção anterior: com o teto na gravação, uma nota importada com quarenta
+aliases não poderia ser reduzida, porque remover um ainda deixaria trinta e nove
+acima do limite. Daí a regra passar a recusar o que **eleva** a contagem e
+aceitar o que a mantém ou reduz. Os minor eram de vocabulário — a palavra
+"gravação" tinha ganhado dois sentidos — e foram fechados definindo os termos
+uma vez.
+
+**Terceira passagem — 0 blocker, 0 major, 0 minor, 0 nit.** As seis edições de
+alias sobre uma nota de quarenta foram exercitadas uma a uma e nenhuma produz
+estado inescapável; o vocabulário foi varrido ocorrência por ocorrência.
+
+O núcleo da decisão — a opção C, o espaço de nomes único sem precedência, a
+deduplicação por UUID e a recusa de escolher em silêncio — atravessou as três
+passagens sem emenda.
