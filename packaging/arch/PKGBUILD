@@ -19,9 +19,9 @@
 # To move it forward: set _commit to the SHA you want and _revision to
 # `git rev-list --count <SHA>`. `_appver` follows `Cargo.toml` on its own.
 pkgname=note-it
-_commit=79332043dfbf2271d9746feb1723126beeb211ad
-_revision=223
-_appver=0.1.1
+_commit=d85d19ddf66ec20ea01fcbd0b96480cdb28c52b4
+_revision=227
+_appver=0.1.2
 pkgver=${_appver}.r${_revision}.g${_commit:0:8}
 pkgrel=1
 pkgdesc="Minimalist sticky notes for Linux Wayland"
