@@ -2044,6 +2044,24 @@ teste produz exatamente os mesmos bytes ao ser lido e reescrito).
 envelope de reescrita da 5.0D.4B e a colisão não puder ser resolvida por
 precedência declarada, PARAR e apresentar evidência.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-065.** A gramática usa
+`[[nota]]`, `#` para seção, `^` para bloco, `|` para texto de exibição e
+`![[...]]` para embed, com backslash escape obrigatório para pontuação
+estrutural literal. `[[entrada|saída]]` é display text; a nota literal
+`entrada|saída` é `[[entrada\|saída]]`. Nota, seção e bloco da nota atual,
+limites, malformed, embed, escaping e a separação parse/resolução ficaram
+fechados. A precedência compartilhada exclui front matter, code span, fences,
+código indentado, comentários/HTML opaco, autolinks, links e imagens Markdown e
+linhas matemáticas; permite wikilinks no conteúdo de wrappers HTML canônicos,
+alerts e lados de flashcards. O corpus normativo
+`docs/link-syntax-corpus.json` contém 110 casos positivos, negativos,
+contextuais, adversariais e de escala.
+
+Esta conclusão é **somente contrato**: parser, renderização, backlinks,
+navegação, autocomplete, UI, IDs de bloco e embeds continuam não
+implementados. Nenhum código de produção, dependência, lockfile, versão ou
+packaging mudou.
+
 ### 6.0.C — Contrato do índice de relações
 
 **Objetivo.** Decidir se existe índice, de que tipo, e com que orçamento —
@@ -3325,7 +3343,7 @@ mandato.
 | ADR-062 | Versionamento `0.MINOR.PATCH` e promoção da versão diária | — | **escrita** |
 | ADR-063 | Identidade nomeável da nota | Toda a 6.A | C-2, 6.0.A — **escrita** |
 | ADR-064 | Semântica e formato de alias | 6.A.3 | C-2, 6.0.A.2 — **escrita** |
-| ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B |
+| ADR-065 | Gramática de wikilink, seção, bloco e embed | 6.A.2 em diante | 6.0.B — **escrita** |
 | ADR-066 | Índice de relações e revisão de ADR-027 com número | 6.A.4, 6.A.7 | C-3, 6.0.C |
 | ADR-067 | Superfície gráfica: painéis numa janela de nota | 6.A.5 em diante | 6.0.D |
 | ADR-068 | Política de histórico de versões e retenção | 6.D.1 | 6.D.1 |
