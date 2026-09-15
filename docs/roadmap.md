@@ -2239,14 +2239,21 @@ idêntico antes e depois de qualquer execução manual; `Cargo.lock` e
 
 ### 6.A.1 — Resolvedor de identidade no Core
 
-**Estado auditado: PARCIAL (`5b9aa11`).** O código satisfaz resultado tipado,
-normalização por `semantic_identity`, colisão sem escolha, zero escrita, store e
-nome vazios e ordenação estável de candidatos. Os testes cobrem acento/case,
-colisão, nome vazio e ordenação. A leitura, porém, usa `load_note(&id)?`: uma nota
-ilegível aborta a resolução em vez de retornar os demais candidatos com
-`ReadWarning`, como este contrato exige. Também faltam testes próprios para
-store vazio, Unicode composto/decomposto, fingerprint antes/depois e duas
-resoluções idênticas. Próxima implementação: **6.A.1.R1**.
+**CONCLUÍDA em 15/09/2026 (6.A.1.R1).** A auditoria de `5b9aa11` registrou que a
+leitura usava `load_note(&id)?`, de modo que uma nota ilegível abortava a
+resolução inteira. Fechado: `resolve_note_name_with_warnings` devolve a resolução
+ao lado dos `ReadWarning` acumulados e `resolve_note_name` mantém a assinatura
+descartando-os — o mesmo par que `list_notes_by_recency` já usava. Nenhum conceito
+novo de aviso foi criado; `ReadWarning`/`ReadWarningKind::UnreadableNote` já
+existiam em `warning.rs`. Uma nota ilegível vira aviso, não derruba a resolução
+das demais e nunca vira candidata: nomes que não puderam ser lidos são
+desconhecidos, não correspondentes. Um scan impossível continua sendo erro.
+
+As provas que faltavam existem: store vazio devolve `Unresolved` sem avisos e sem
+escrita; Unicode composto e decomposto nomeiam a mesma nota e colidem entre si;
+o fingerprint do store — conteúdo, `mtime` e árvore de arquivos — é idêntico antes
+e depois de oito consultas; e dezesseis repetições das três respostas mostram que
+a ordem dos candidatos é a resposta, não a ordem em que os arquivos foram lidos.
 
 **Objetivo.** Uma função no Core que, dado um nome, devolve exatamente uma de
 três respostas: resolvido para um `Uuid`, ambíguo com a lista de candidatos, ou
@@ -2286,6 +2293,41 @@ Cobertura dos casos da tabela da 6.0.A.
 não estiver escrita e testada, PARAR.
 
 ### 6.A.2 — Parser de wikilinks no Core
+
+**CONCLUÍDA em 15/09/2026.** O parser vive em `noteit-core/src/link.rs`. É puro e
+não consulta store — o módulo importa apenas `serde`, `Cow` e `Range`, e um teste
+parseia o mesmo corpo com o store vazio e com as notas criadas exigindo resultado
+idêntico: um corpo significa a mesma coisa em qualquer máquina. Os 110 casos
+normativos de `docs/link-syntax-corpus.json` rodam no Core lidos de `docs/`, sem
+cópia que possa divergir, e cada referência de cada caso é afirmada também em
+`raw`, componentes raw e `[start_byte, end_byte)` — não apenas os quatro
+`lossless_examples`. Um teste separado impede que um caso passe por ser ignorado.
+
+A propriedade lossless reconstrói a fonte byte a byte. Os adversariais do
+contrato passam: 2 MiB sem fechamento, 10.000 links, `[[a]]]]`, `[[]]`, limites de
+componente 512/513, interior raw 3.074/3.075, Unicode, e 4.000 documentos
+pseudoaleatórios de alfabeto hostil com semente fixa — nenhum pânico, nenhum byte
+perdido.
+
+Parsear 64 KiB custa **0,934 ms** (release, mediana de 200 execuções, ~67 MiB/s),
+e o custo por byte cresce entre 0,55× e 1,10× numa faixa de 32× de tamanho —
+linear, como a ADR-065 promete. Não havia orçamento numérico pré-aprovado para 64
+KiB, então a baseline foi registrada como fato e nenhum teto foi inventado.
+Medições em `noteit-core/tests/link_parser_performance.rs`, ignorado por padrão e
+release-only, no padrão da 5.0D.4B. Nenhuma dependência nova; `Cargo.lock` e
+`ui/pnpm-lock.yaml` byte-idênticos.
+
+Os próprios adversariais encontraram **três** crescimentos quadráticos antes do
+gate, todos corrigidos: o destino de link Markdown lia até o fim do documento a
+cada `]`, `autolink` procurava `>` até o fim do arquivo a cada `<`, e uma linha de
+crases descasadas revarria o parágrafo por execução.
+
+Duas leituras que o corpus não fixa ficaram registradas no código: um nome escrito
+mas vazio (`[[ #x]]`) é componente que falhou, enquanto a ausência total do nome
+(`[[#x]]`) é *self*; e o reconhecedor de linha matemática repete as duas regras de
+`noteit-tui/src/math/document.rs` porque o Core não pode depender de uma superfície
+acima dele — os casos `math-calculation` e `math-declaration` são o que mantém as
+duas afirmações juntas.
 
 **Objetivo.** Reconhecer a gramática da 6.0.B sobre Markdown, produzindo
 referências tipadas com posição na fonte, sem alterar um byte do documento.
