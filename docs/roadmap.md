@@ -2101,6 +2101,13 @@ de abertura de painel já em 1.000 notas, o índice em memória vira obrigatóri
 a subfase 6.A.4 ganha escopo; se exceder mesmo em memória, PARAR e reprojetar
 antes de 6.A.7.
 
+**CONCLUÍDA em 15/09/2026 — PASS. Decisão na ADR-066.** Stores temporários de
+100/1.000/5.000/20.000 notas mediram p95 de full scan em 98,56 ms / 996,86 ms /
+4.836,38 ms / 17.107,58 ms; atualização de uma origem ficou abaixo de 1,99 ms
+p95. Escolhido índice derivado em memória, incremental, reconstruível e
+invalidado por `NoteRevision`, sem arquivo em `StorePaths`. Orçamentos e memória
+estão em `docs/relation-index-measurement.md`; zero trabalho síncrono por tecla.
+
 ### 6.0.D — Contrato de superfície gráfica
 
 **Objetivo.** Decidir onde backlinks, outline, inspector, relacionadas,

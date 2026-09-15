@@ -5075,3 +5075,87 @@ competidora. O nit observou que `non_escapable`, lido isoladamente, ainda
 incluía CR/LF depois de barra; a restrição física já os recusava, mas a EBNF foi
 tornada autossuficiente excluindo-os também. Estado final: zero blocker e zero
 major conhecidos.
+
+## ADR-066: Relações ficam num índice derivado em memória, nunca no caminho da tecla
+
+**Status.** Aceita. **Data.** 15/09/2026. **Fase.** 6.0.C.
+
+### Contexto e medição
+
+A ADR-027 recusou índice para busca porque mil notas eram pesquisadas em cerca
+de 40 ms. Relação inversa é outra carga: precisa extrair toda referência e
+produzir destino→origens com proveniência e contexto. A condição de revisão da
+própria ADR-027 foi satisfeita com números novos em
+`docs/relation-index-measurement.md`.
+
+O protótipo descartável, fora do workspace, criou stores de 100, 1.000, 5.000 e
+20.000 notas, com ~2,2 KiB e seis referências por nota. Duas rodadas de warmup e
+nove medidas deram p95 de varredura/rebuild de 98,56/177,57 ms, 996,86/1.020,61
+ms, 4.836,38/4.541,58 ms e 17.107,58/19.080,77 ms. Abrir um backlink por scan
+sob demanda custou 134,40 ms, 951,11 ms, 5.088,72 ms e 17.421,54 ms p95.
+
+Atualizar uma origem ficou abaixo de 1,99 ms p95 em todas as escalas; remoção,
+abaixo de 0,03 ms; restauração, abaixo de 1,99 ms. A memória profunda aproximada
+das quatro estruturas Python foi 271 KiB, 2,74 MiB, 13,54 MiB e 54,33 MiB. O
+contexto limitado a 96 caracteres domina o último valor. Esses números são
+conservadores de um protótipo Python, não uma previsão de layout Rust.
+
+### Decisão
+
+A opção A, varredura sob demanda sem índice, é recusada: já em 1.000 notas o
+p95 de 951 ms viola qualquer abertura interativa de painel e cresce para 17,4 s.
+
+A opção B é escolhida. A 6.A.4 implementará, no Core, um índice de relações:
+
+- **derivado, descartável e reconstruível** a partir das notas;
+- **em memória**, sem arquivo novo em `StorePaths`;
+- **incremental**, substituindo somente a origem cuja revisão mudou;
+- invalidado exclusivamente por `NoteRevision`;
+- com origem→destinos, destino→origens, proveniência e contexto mínimo limitado;
+- sem fonte de verdade própria: excluir o índice perde performance temporária,
+  nunca informação;
+- com falha degradando backlinks/derivados, nunca leitura ou edição da nota.
+
+O precedente é `semantic::InMemoryIndex`: ordem determinística, substituição
+atômica por nota, sincronização do que falta e remoção do que sumiu. A estrutura
+de relações não reutiliza vetores nem persistência de cache semântico; reutiliza
+as propriedades arquiteturais e a autoridade do Core.
+
+### Orçamentos congelados
+
+Na máquina de referência e na carga de 20.000 notas/120.000 referências:
+
+| Superfície/operação | Orçamento p95 | Regra |
+| --- | ---: | --- |
+| abertura de nota | 0 ms síncronos de relações | nota abre sem esperar hidratação/rebuild |
+| painel de backlinks, índice pronto | 50 ms | leitura do mapa e projeção limitada |
+| painel frio | shell em 50 ms | resultado pode ser progressivo; rebuild fica fora da UI |
+| update após edição confirmada | 10 ms | uma origem, enfileirada após nova `NoteRevision` |
+| custo síncrono por tecla | **0 ms / zero trabalho** | nenhuma extração ou reindexação por tecla |
+| rebuild total | 25 s p95 | assíncrono, cancelável/substituível e sem bloquear nota |
+| memória do índice | 64 MiB | inclui os dois mapas, revisão e contexto limitado |
+
+Os números viram benchmark/asserção em 6.A.4. Digitação não agenda trabalho
+por caractere: somente uma revisão canônica confirmada torna uma origem elegível
+para update, com coalescência de revisões obsoletas.
+
+### Persistência, backup e superfícies
+
+Não há persistência. O p95 de rebuild de 19,08 s em Python cabe no orçamento
+assíncrono de 25 s com 24% de folga e a atualização incremental é barata. Persistir acrescentaria
+formato, invalidação, migração, restauração e manifesto de backup sem recuperar
+informação alguma. Portanto C-5 não é acionado, nenhum novo arquivo entra em
+backup e CLI/TUI/GUI/MCP consultam a mesma autoridade em memória no Core; uma
+superfície sem processo residente pode reconstruir ou degradar a feature.
+
+### Revisão adversarial
+
+A revisão 6.0.C atacou viés de cache, carga irreal, decisão anterior ao número,
+memória Python apresentada como Rust, persistência por conveniência, duplicação
+do índice semântico e reindexação por tecla. R1 encontrou 4 MAJOR: margem
+pós-hoc estreita, reprodutibilidade insuficiente, contexto por par confundido
+com ocorrência e ausência de resolução/avisos na carga. A correção elevou o
+rebuild a 25 s, registrou dados brutos/fórmula/hashes e tornou os limites e a
+nova medição Rust obrigatórios. R2: 0 BLOCKER, 0 MAJOR. Zero por tecla permanece
+regra, não estimativa.
+
