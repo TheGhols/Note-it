@@ -93,6 +93,18 @@ atualizada e um smoke test nela.
 ## [Não lançado]
 
 ### Adicionado
+- **Fundação arquitetural 6.0 fechada.** ADR-063 a ADR-067 agora decidem
+  identidade, aliases, sintaxe, índice de relações e superfícies gráficas antes
+  das features. A 6.0.C mediu 100/1.000/5.000/20.000 notas e escolheu índice
+  derivado em memória, sem persistência e com zero reindexação síncrona por
+  tecla. A 6.0.D fixa matriz 220/300/400/600/900 px, exclusividade, foco,
+  Escape e alternativa a hover. Esta entrega de fechamento é documental.
+- **Primeira implementação da Fase 6, ainda parcial como feature.** O commit
+  `5b9aa11` adicionou `title`, `aliases`, validação e resolução tipada de nomes
+  no Core. A auditoria 6.0.E encontrou que 6.A.1 ainda precisa degradar uma nota
+  ilegível para `ReadWarning` e provar fingerprint/determinismo; CLI, TUI, ponte
+  GUI e wikilinks para aliases também permanecem pendentes. Não há parser,
+  renderer, navegação, backlinks ou índice de relações em produção.
 - **Fase 5.0D.5 — Paridade Semântica: Matemática e Flashcards.** A semântica do editor gráfico foi portada para a TUI, não reinterpretada, e a paridade é provada por fixtures cruzadas.
   - **Motor de matemática portado (`noteit-tui/src/math/`):** Mesmo lexer, mesma gramática, mesma avaliação de cima para baixo, mesmos agregadores contíguos, mesma leitura contextual de percentual, mesma tabela de unidades com os mesmos fatores exatos, mesmos sete códigos de erro com as mesmas palavras e mesma formatação pt-BR com vírgula decimal e sem separador de milhar. As ausências deliberadas do canônico foram preservadas: não há moeda, não há `xícara`, não há `alqueire` — uma conversão cujo resultado depende de qual definição o leitor tinha em mente é pior do que nenhuma.
   - **Segurança por gramática, não por filtro:** `constructor`, `__proto__`, `window.location` e `fetch(...)` não são entrada perigosa a ser filtrada — são insoletráveis, porque não há token para ponto, colchete, string ou chamada. Variáveis vivem num mapa sem chaves herdadas, limites de tamanho e de tokens são exatos, e todo resultado é finito ou erro. Mensagens de erro são constantes e nunca ecoam a nota.
