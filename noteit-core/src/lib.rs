@@ -18,6 +18,7 @@ pub mod embedding;
 pub mod filter;
 pub mod hashing;
 pub mod lexical;
+pub mod link;
 pub mod metadata;
 pub mod model;
 pub mod permissions;
@@ -46,6 +47,7 @@ mod visible_text;
 
 pub use chrono;
 pub use filter::{NoteFilter, NoteSelectorError};
+pub use link::{parse_references, NoteReference, ReferenceKind};
 pub use metadata::{
     MetadataCatalog, NoteMetadata, NoteProperties, NoteProperty, NoteTags, PropertyKeyCatalogEntry,
     TagCatalogEntry, MAX_ALIASES, MAX_NOTE_NAME_CHARS,
